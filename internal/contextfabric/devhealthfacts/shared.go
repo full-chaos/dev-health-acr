@@ -1391,7 +1391,11 @@ import (
 // v270 -> v271: an edge's fact and a stub node's label name a work item, project
 // or team in reader words, not by its raw source id (CHAOS-12619). An answer saved
 // earlier can show a raw id in a path's why_relevant.
-const QueryVersion = "devhealthfacts.clickhouse.v271"
+//
+// v271 -> v272: an evidence ref's label names its subject in reader words, or by
+// the name the answer holds, never by a UUID or a raw provider id (CHAOS-12620).
+// An answer saved earlier can carry such a label.
+const QueryVersion = "devhealthfacts.clickhouse.v272"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

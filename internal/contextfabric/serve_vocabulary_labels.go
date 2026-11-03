@@ -25,6 +25,10 @@ import (
 //   - coverage.sources[].label and .state_label are stamped from the structured
 //     source and state, so a stored row reads today's words. They are existing
 //     fields that every pin accepts, so enabled does not gate them.
+//   - evidence_ref_labels saved before CHAOS-12620 ("<noun>: <ref id>") are
+//     restated in reader words (ReaderEvidenceLabels). Like the series words
+//     this is not a shed word: every tier carries it, the input's fallback and
+//     the routes' unstamped projection included, so no tier serves a raw id.
 //   - a stored row's raw source ids in subject labels, why_relevant and graph
 //     driver text read in reader words (withReaderSubjectText, CHAOS-12619);
 //     like the series words they need no flag and shed with nothing.
@@ -42,6 +46,7 @@ import (
 func ServeVocabularyLabels(result InvestigationResult, enabled bool, maxBytes int64) (InvestigationResult, contractsv1.ContextFabricVocabularyLabelsTier) {
 	result.VocabularyLabels = nil
 	result.RenderShapes = withDriverSeriesWords(result.RenderShapes)
+	result = ReaderEvidenceLabels(result)
 	result = withReaderSubjectText(result)
 	stamped := withStampedSourceWords(result)
 	tier := contractsv1.ContextFabricVocabularyLabelsOff
