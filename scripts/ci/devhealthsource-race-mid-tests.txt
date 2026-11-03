@@ -5,7 +5,7 @@
 # this one each land near 250s of tests. The rest job skips every listed name, so a test
 # absent from all lists runs there. A name in the mid list that no longer exists fails
 # scripts/ci/race-split.sh (race-partition, verify).
+# CHAOS-12667: TestWindowPassOverA60msRoundTrip (142s) moved to the fourth race job.
 TestLiveMembershipStatementRunsPerTick
 TestLiveWholeClickHouseSourceTickStaysUnderTheByteLimit
 TestRemovedBlockerLinkRuleStaysUnderTheProjectorStatementCap
-TestWindowPassOverA60msRoundTrip

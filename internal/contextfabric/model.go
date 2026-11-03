@@ -697,6 +697,12 @@ type FactTable struct {
 	// declaration while a direct reader keeps it until a contract version drops
 	// it (CHAOS-12533).
 	DirectOnly bool `json:"direct_only,omitempty"`
+	// Detail declares a detail table (CHAOS-12554): it never takes part in the
+	// single-table pick, so it cannot make a fact ambiguous or displace the
+	// table every claim of the fact gets, and a claim carries it only when the
+	// table is asked for by name (attachDetailTable). A detail table is still
+	// an answer table, so it cannot also be DirectOnly.
+	Detail bool `json:"detail,omitempty"`
 	// DirectOnlyColumns are the measures of an attached table that an answer
 	// does not show, because the source cannot yet tell their zero from
 	// missing. Each one must be a declared measure.
@@ -789,6 +795,9 @@ func (t FactTable) Validate() error {
 		if !measureColumns[name] {
 			return fmt.Errorf("fact table direct-only column %q is not a declared measure", name)
 		}
+	}
+	if t.Detail && t.DirectOnly {
+		return fmt.Errorf("fact table is declared both a detail table and direct-only")
 	}
 	if t.Shape == FactTableRanking {
 		if t.OrderBy == "" || !containsString(t.Measures, t.OrderBy) {
@@ -1036,6 +1045,11 @@ type CanonicalFact struct {
 	SourceState    SourceState          `json:"source_state"`
 	Source         string               `json:"source"`
 	SourceVersion  string               `json:"source_version"`
+	// DetailTables names the fact's declared detail tables in the synthesis
+	// input (CHAOS-12554), which leaves every table field out: a claim asks for
+	// one by naming it with value null (namesDetailTable). Set only by
+	// synthesisprompt.ModelFacingFacts; empty on every fact a provider reads.
+	DetailTables []string `json:"detail_tables,omitempty"`
 }
 
 func (f CanonicalFact) Validate(requireEvidence bool) error {
