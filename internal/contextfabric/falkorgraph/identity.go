@@ -51,6 +51,15 @@ const (
 	propValidTo               = "valid_to"
 	propValidToNs             = "valid_to_ns"
 	propSearchText            = "search_text"
+	// propProjectionOwned (CHAOS-12649) marks a node the owned writer wrote
+	// (projectEntity). A stub a relationship created never carries it, so the
+	// count check counts projected nodes, not referenced ones.
+	propProjectionOwned = "projection_owned"
+	// watermarkOwnedMarkedWalk (CHAOS-12649) is set on a source's watermark by
+	// the first batch of a walk from zero, and kept by every later batch: every
+	// owned node of that source was then written with propProjectionOwned, so its
+	// owned count can be compared with the source.
+	watermarkOwnedMarkedWalk = "owned_marked_walk"
 
 	labelSubject   = "Subject"
 	labelRelation  = "Relates"       // generic edge label; specific type lives in the relation_type property

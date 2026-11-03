@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -92,6 +93,34 @@ var (
 // terminates the container after the last test.
 func sharedDevHealthClickHouse(t *testing.T) (string, clickhousedriver.Conn) {
 	t.Helper()
+	if external := strings.TrimSpace(os.Getenv(clickHouseAddrEnv)); external != "" {
+		return externalDevHealthClickHouse(t, external)
+	}
+	return containerDevHealthClickHouse(t)
+}
+
+// externalDevHealthClickHouse is the shared fixture on a ClickHouse already
+// running at addr (clickHouseAddrEnv): no container is started.
+func externalDevHealthClickHouse(t *testing.T, addr string) (string, clickhousedriver.Conn) {
+	t.Helper()
+	sharedDevHealthClickHouseOnce.Do(func() {
+		admin, err := openPingedAdmin(context.Background(), addr)
+		if err != nil {
+			sharedDevHealthClickHouseErr = err
+			return
+		}
+		sharedDevHealthClickHouseAddr, sharedDevHealthClickHouseAdmin = addr, admin
+		sharedDevHealthClickHouseTerminate = func() { logCleanupErr("close admin connection", admin.Close()) }
+	})
+	if sharedDevHealthClickHouseErr != nil {
+		t.Fatalf("external ClickHouse: %v", sharedDevHealthClickHouseErr)
+	}
+	return sharedDevHealthClickHouseAddr, sharedDevHealthClickHouseAdmin
+}
+
+// containerDevHealthClickHouse starts the shared ClickHouse container.
+func containerDevHealthClickHouse(t *testing.T) (string, clickhousedriver.Conn) {
+	t.Helper()
 	chfixture.RequireContainers(t)
 	sharedDevHealthClickHouseOnce.Do(func() {
 		ctx := context.Background()
@@ -153,6 +182,35 @@ func sharedDevHealthClickHouse(t *testing.T) (string, clickhousedriver.Conn) {
 		t.Fatalf("shared ClickHouse container: %v", sharedDevHealthClickHouseErr)
 	}
 	return sharedDevHealthClickHouseAddr, sharedDevHealthClickHouseAdmin
+}
+
+// clickHouseAddrEnv names a ClickHouse (user acr, password acr) the shared
+// fixture uses instead of starting one, for a run beside a ClickHouse container
+// started by name (a Mac-local proof, CHAOS-12649). Unset, the fixture starts the
+// pinned image, as CI does. Each test still gets its own database.
+const clickHouseAddrEnv = "ACR_TEST_CLICKHOUSE_ADDR"
+
+// openPingedAdmin opens the admin connection to an external ClickHouse and waits
+// for it to answer.
+func openPingedAdmin(ctx context.Context, addr string) (clickhousedriver.Conn, error) {
+	admin, err := clickhousedriver.Open(&clickhousedriver.Options{
+		Addr: []string{addr}, Auth: clickhousedriver.Auth{Database: "default", Username: "acr", Password: "acr"}, DialTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("open native ClickHouse connection: %w", err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		pingErr := admin.Ping(ctx)
+		if pingErr == nil {
+			return admin, nil
+		}
+		if time.Now().After(deadline) {
+			logCleanupErr("close admin connection", admin.Close())
+			return nil, fmt.Errorf("clickhouse not ready for connections: %w", pingErr)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // seedTwoTenantRepoIDCollision inserts one colliding repos row per

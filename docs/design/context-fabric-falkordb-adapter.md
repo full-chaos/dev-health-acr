@@ -314,8 +314,25 @@ Two consequences worth writing down:
    observed_at_ns:   1767225600000000000,                 -- comparison (see §5)
    valid_from_ns:    ..., valid_to_ns: ...,
    search_text:      "<label + aliases + previous names>" -- fulltext-indexed
+   projection_owned: true                                 -- the owned writer only
+   property_source_synced_at_ns: 1793001600000000000      -- the row's sync stamp
 })
 ```
+
+`projection_owned` (CHAOS-12649) is written by the owned writer
+(`projectEntity`) and never by the stub a relationship creates for an endpoint
+the batch does not carry. The projection count check counts marked nodes only,
+so a referenced stub never reads as a projected node. The source's
+`_AcrWatermark` carries `owned_marked_walk: true` from the first batch of a walk
+from zero on (later batches keep it). Until then every owned node of that source
+may predate the marker, so its count check reads `unknown`, never a gap.
+
+`property_source_synced_at_ns` (CHAOS-12649) is the row's `last_synced`, the
+column the projection walk pages on, written by the producer of a table that
+pages on its rows' own `last_synced` (repositories, work items, pull requests,
+deployments, pull request reviews, CI runs). The count check compares source
+rows and owned nodes per UTC day of it, because the walk loses contiguous ranges
+of that stamp. `observed_at` is the row's own time and is not used for this.
 
 Documents and episodes are the same shape under `:Content` / `:Episode`
 labels, with `body` / `goal` / `outcome` / `summary` folded into `search_text`

@@ -10029,7 +10029,9 @@
           "cohort_driver_contribution",
           "dated_fact_trend",
           "investment_theme_share",
-          "comparison_side_by_side"
+          "comparison_side_by_side",
+          "completion_forecast",
+          "completion_forecast_percentiles"
         ]
       },
       {
@@ -10062,7 +10064,15 @@
           "unresolvable_measure_roles",
           "no_plottable_measure",
           "shape_budget_spent",
-          "not_plan_authorized"
+          "not_plan_authorized",
+          "not_forecast_intent",
+          "no_completion_distribution",
+          "more_than_one_scope",
+          "distribution_unusable",
+          "forecast_curve_drawn",
+          "no_forecast_percentiles",
+          "too_many_scopes",
+          "forecast_percentiles_unprovable"
         ]
       },
       {
@@ -10178,7 +10188,9 @@
               "cohort_driver_contribution",
               "dated_fact_trend",
               "investment_theme_share",
-              "comparison_side_by_side"
+              "comparison_side_by_side",
+              "completion_forecast",
+              "completion_forecast_percentiles"
             ]
           },
           {
@@ -18792,11 +18804,17 @@
         "closed_vocabulary": [
           "completed",
           "cancelled",
-          "failed"
+          "failed",
+          "unknown"
         ]
       },
       {
         "key": "sources_checked",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "sources_unknown",
         "type": "int",
         "presence": "required"
       },
@@ -18807,6 +18825,16 @@
       },
       {
         "key": "gap_count",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "days_compared",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "day_gap_count",
         "type": "int",
         "presence": "required"
       },

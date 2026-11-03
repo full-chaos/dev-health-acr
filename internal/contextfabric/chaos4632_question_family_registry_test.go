@@ -87,10 +87,10 @@ func TestEveryRenderKindIsProducedOrDeclaredUnproduced(t *testing.T) {
 	}
 	for _, definition := range QuestionFamilyDefinitions() {
 		for _, kind := range definition.RenderKinds {
-			if kind == contractsv1.ContextFabricRenderKindSeries {
-				// series is the ONE kind with a producer today
-				// (render_shapes.go:307,386 -- see
-				// ContextFabricRenderKindSeries' own doc comment).
+			if kind == contractsv1.ContextFabricRenderKindSeries || kind == contractsv1.ContextFabricRenderKindForecast {
+				// series and forecast have producers: the series rules in
+				// render_shapes.go, and completionForecastShape
+				// (render_shape_forecast.go, CHAOS-12608).
 				continue
 			}
 			if _, ok := declaredUnproduced[kind]; !ok {
