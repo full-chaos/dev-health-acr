@@ -47,7 +47,13 @@ import (
 // (see reuse_key_completeness_test.go's RequirementDerivationVersion entry), so
 // the bump costs nothing today; it is made because the marker's whole purpose
 // is to be wrong the moment it is not bumped.
-const RequirementDerivationVersion = "requirement-derivation.v2"
+//
+// v2 -> v3: the investment producer declares allocation_breakdown for the
+// organization (CHAOS-12601), so that requirement derives SERVED with the
+// investment fact kind, where before it derived UNAVAILABLE for "no declaring
+// producer". A semantic snapshot derived under v2 carries the old row, and a
+// continuation must not replay it (Codex r2, executed).
+const RequirementDerivationVersion = "requirement-derivation.v3"
 
 // RequirementDerivationSummary is the requirement layer's telemetry row.
 //
