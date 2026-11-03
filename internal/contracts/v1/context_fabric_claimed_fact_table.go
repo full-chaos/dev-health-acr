@@ -2,6 +2,8 @@ package v1
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 )
@@ -238,6 +240,73 @@ type ContextFabricClaimedFactTable struct {
 	// schema, as for MeasureUnits: the server states it from the declarations
 	// (withDeclaredCadence) and never offers it to the model to write.
 	Cadence ContextFabricFactTableCadence `json:"cadence,omitempty" jsonschema:"-"`
+	// ColumnVocabularies (CHAOS-12639) maps each key or observation column
+	// whose values are tokens of a closed vocabulary to that vocabulary, so a
+	// consumer reads each cell's served word from vocabulary_labels under
+	// `<vocabulary>:<value>` and never keeps a word table of its own
+	// (CHAOS-4690). jsonschema:"-": stated by the server from the producer's
+	// declaration (withDeclaredColumnWords), never model-authored.
+	//
+	// A map, not a list of entries: a column has one vocabulary, so a second
+	// entry for it is not representable, and the map adds one string leaf to
+	// the MCP untrusted-content list where a list of entries would add two,
+	// against that list's fixed bound.
+	ColumnVocabularies map[string]ContextFabricVocabulary `json:"column_vocabularies,omitempty" jsonschema:"-"`
+	// WordColumns (CHAOS-12639) maps each id column to the observation column
+	// of the same row that carries its served word (a repository's handle
+	// beside its canonical id), so a consumer shows the word and keeps the id
+	// out of sight. jsonschema:"-", and a map, as for ColumnVocabularies.
+	WordColumns map[string]string `json:"word_columns,omitempty" jsonschema:"-"`
+}
+
+// contextFabricColumnVocabularies is the CLOSED set of vocabularies a column's
+// values may be declared in: the ones whose values are cell tokens of a claimed
+// table, each served in vocabulary_labels. Any other vocabulary names a field,
+// a status or a unit, never a cell.
+var contextFabricColumnVocabularies = [...]ContextFabricVocabulary{
+	ContextFabricVocabularyInvestmentTheme,
+	ContextFabricVocabularySubcategory,
+}
+
+// ValidContextFabricColumnVocabulary reports whether vocabulary may be declared
+// for a column's values.
+func ValidContextFabricColumnVocabulary(vocabulary ContextFabricVocabulary) bool {
+	for _, member := range contextFabricColumnVocabularies {
+		if vocabulary == member {
+			return true
+		}
+	}
+	return false
+}
+
+// ContextFabricColumnVocabularyNames returns the vocabularies a column may be
+// declared in, in published order.
+func ContextFabricColumnVocabularyNames() [len(contextFabricColumnVocabularies)]ContextFabricVocabulary {
+	return contextFabricColumnVocabularies
+}
+
+// HasKey reports whether name is a declared key column of this table.
+func (t ContextFabricClaimedFactTable) HasKey(name string) bool {
+	for _, key := range t.Key {
+		if key == name {
+			return true
+		}
+	}
+	return false
+}
+
+// ColumnVocabulary returns the declared vocabulary of one column's values, or
+// false when the table declares none.
+func (t ContextFabricClaimedFactTable) ColumnVocabulary(column string) (ContextFabricVocabulary, bool) {
+	vocabulary, ok := t.ColumnVocabularies[column]
+	return vocabulary, ok
+}
+
+// WordColumn returns the column that carries the served word of an id column,
+// or false when the table declares none.
+func (t ContextFabricClaimedFactTable) WordColumn(column string) (string, bool) {
+	word, ok := t.WordColumns[column]
+	return word, ok
 }
 
 // HasMeasure reports whether name is a declared measure of this table.
@@ -336,7 +405,46 @@ func (t ContextFabricClaimedFactTable) Validate() error {
 			return fmt.Errorf("a cadence is meaningful only for a time_series table, not %q", t.Shape)
 		}
 	}
-	return t.validateMeasureUnits()
+	if err := t.validateMeasureUnits(); err != nil {
+		return err
+	}
+	return t.validateColumnWords()
+}
+
+// validateColumnWords holds the word declarations to the table's own columns
+// (CHAOS-12639). A vocabulary is declared only for a key or observation column,
+// from the closed column set: a measure holds numbers, never tokens. A word
+// column is another observation of the same table, beside a key or observation
+// column, and is not itself an id column with a word column. Each refusal would
+// point a consumer at a word the producer never declared. The columns are read
+// in sorted order, so a refusal names the same column every time.
+//
+// No count bound of its own is needed: each entry names a different declared
+// column, so there are never more entries than columns.
+func (t ContextFabricClaimedFactTable) validateColumnWords() error {
+	tokenColumn := func(name string) bool { return t.HasKey(name) || t.HasObservation(name) }
+	for _, column := range slices.Sorted(maps.Keys(t.ColumnVocabularies)) {
+		vocabulary := t.ColumnVocabularies[column]
+		if !tokenColumn(column) {
+			return fmt.Errorf("declared table states a vocabulary for %q, which is not one of its key or observation columns", column)
+		}
+		if !ValidContextFabricColumnVocabulary(vocabulary) {
+			return fmt.Errorf("declared table vocabulary %q of column %q is not one a column may be declared in", vocabulary, column)
+		}
+	}
+	for _, column := range slices.Sorted(maps.Keys(t.WordColumns)) {
+		word := t.WordColumns[column]
+		if !tokenColumn(column) {
+			return fmt.Errorf("declared table states a word column for %q, which is not one of its key or observation columns", column)
+		}
+		if !t.HasObservation(word) || word == column {
+			return fmt.Errorf("declared table word column %q of column %q is not another of its observations", word, column)
+		}
+		if _, isID := t.WordColumns[word]; isID {
+			return fmt.Errorf("declared table word column %q is itself an id column with a word column", word)
+		}
+	}
+	return nil
 }
 
 // CadenceAligned reports whether rows keep the table's cadence. For `day`,
