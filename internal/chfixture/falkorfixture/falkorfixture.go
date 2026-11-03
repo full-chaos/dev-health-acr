@@ -65,6 +65,9 @@ func startRetrying(ctx context.Context, t logger, image string, opts []Option, c
 // mapping with what is left of total, provided at least floor is left. Every other failure is final.
 func startRetryingWithin(ctx context.Context, t logger, image string, opts []Option, create startFunc, strategy strategyFunc, total, floor time.Duration) (testcontainers.Container, error) {
 	t.Helper()
+	// CHAOS-12855: a create that finds no image after testcontainers' pull is started again, as startterm.Generic
+	// does; it covers the restart below too.
+	create = startterm.RetryImageMissing(create)
 	began := time.Now()
 	req := request(image, opts)
 	req.WaitingFor = strategy(total)

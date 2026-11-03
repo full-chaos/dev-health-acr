@@ -101,6 +101,23 @@ func postgresRun(ctx context.Context, image string, opts []testcontainers.Contai
 	})
 }
 
+// RetryImageMissing wraps a create the way Generic retries it: a start whose create finds no image is started
+// again (see startUntilImageServes); every other result is handed back as create returned it. It is for the one
+// fixture that hands testcontainers.GenericContainer to its own terminate wrapper (falkorfixture) and so cannot
+// call Generic. A failed create of a missing image made no container; any container it did return is terminated
+// before the next start.
+func RetryImageMissing(create func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error)) func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+	return func(ctx context.Context, req testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+		return startUntilImageServes(ctx, func() (testcontainers.Container, error) {
+			c, err := create(ctx, req)
+			if err != nil && imageMissingAtCreate(err) && !isNil(c) {
+				return nil, TerminateFailed(c, err)
+			}
+			return c, err
+		})
+	}
+}
+
 // imageMissingAtCreate reports a start that the daemon refused at create because the image is not there.
 // testcontainers v0.44 (attemptToPullImage) reads the pull stream into io.Discard, so a registry error reported
 // inside the stream is dropped: the pull returns nil with no image, and only the create sees it ("No such image").

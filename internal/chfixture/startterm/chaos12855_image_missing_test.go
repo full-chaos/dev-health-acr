@@ -141,3 +141,31 @@ func TestPostgresStartsAgainWhenCreateFindsNoImageAfterThePull(t *testing.T) {
 		t.Fatalf("starts=%d pauses=%d, want 2 and 1", script.calls, *pauses)
 	}
 }
+
+func TestRetryImageMissingTerminatesARefusedContainerAndHandsBackEverythingElseAsCreated(t *testing.T) {
+	pauses, _ := quietRetries(t, nil)
+	refused, served := &fakeContainer{}, &fakeContainer{}
+	calls := 0
+	create := RetryImageMissing(func(context.Context, testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
+		calls++
+		if calls == 1 {
+			return refused, imageMissing()
+		}
+		return served, nil
+	})
+	got, err := create(context.Background(), testcontainers.GenericContainerRequest{})
+	if err != nil || got != testcontainers.Container(served) || calls != 2 || *pauses != 1 {
+		t.Fatalf("container=%v err=%v starts=%d pauses=%d, want the second container after 2 starts", got, err, calls, *pauses)
+	}
+	if refused.terminated.Load() != 1 || served.terminated.Load() != 0 {
+		t.Fatalf("terminated refused=%d served=%d, want 1 and 0", refused.terminated.Load(), served.terminated.Load())
+	}
+
+	// Any other failure is the caller's: its container comes back untouched, for the caller's own terminate.
+	failed := &fakeContainer{}
+	probeErr := errors.New("published port unreachable")
+	got, err = RetryImageMissing(genericReturning(failed, probeErr))(context.Background(), testcontainers.GenericContainerRequest{})
+	if !errors.Is(err, probeErr) || got != testcontainers.Container(failed) || failed.terminated.Load() != 0 {
+		t.Fatalf("container=%v err=%v terminated=%d, want the failed container back untouched", got, err, failed.terminated.Load())
+	}
+}
