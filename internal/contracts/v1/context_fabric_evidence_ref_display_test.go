@@ -39,6 +39,15 @@ func TestAnEvidenceLabelNeverShowsARawID(t *testing.T) {
 			{"gitlab:acme/live-e2e", "Project: acme/live-e2e"},
 			{"github:ci-metrics-executed-proof/repo", "Project: ci-metrics-executed-proof/repo"},
 			{"jira:OPS", "Project: OPS"},
+			// CHAOS-12716 (lead ruling, 2026-11-03): an org-scoped source id
+			// ("<org UUID>:gitlab:<id>") reads as its native id; the org scope is
+			// part of the provider prefix. A bare UUID under it is still the noun.
+			{"gitlab:70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", "Project: 71133891"},
+			{"70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", "Project: 71133891"},
+			// A scope UUID that starts with a letter is still a scope, not a
+			// provider token: the provider after it is dropped too.
+			{"c67b1602-31db-4422-8dec-a4a02bbcc513:gitlab:71133891", "Project: 71133891"},
+			{"gitlab:70d529e0-3c06-4597-8480-794fd02328b6:c67b1602-31db-4422-8dec-a4a02bbcc513", "Project"},
 		},
 		ContextFabricEvidenceEntityOrganization: {{"70d529e0-3c06-4597-8480-794fd02328b6", "Organization"}},
 		ContextFabricEvidenceEntityCommit:       {{"3f9c2ab", "Commit: 3f9c2ab"}},
@@ -60,8 +69,12 @@ func TestAnEvidenceLabelNeverShowsARawID(t *testing.T) {
 		ContextFabricEvidenceEntityDeploymentIncidentV2: {
 			{displayRepoUUID + ":3530993037:INC-42:native", "Deployment/incident link: 3530993037, INC-42"},
 		},
-		ContextFabricEvidenceEntityProjectTeamV2: {{"linear:c67b1602-31db-4422-8dec-a4a02bbcc513:linear%3ACHAOS:native", "Project/team link: CHAOS"}},
-		ContextFabricEvidenceEntityReviewV2:      {{displayRepoUUID + ":1042:approval-42", "Review: #1042"}},
+		ContextFabricEvidenceEntityProjectTeamV2: {
+			{"linear:c67b1602-31db-4422-8dec-a4a02bbcc513:linear%3ACHAOS:native", "Project/team link: CHAOS"},
+			// The live askdev-1 ref (CHAOS-12716): a GitLab project's org-scoped id.
+			{"gitlab:70d529e0-3c06-4597-8480-794fd02328b6%3Agitlab%3A71133891:gl%3Afull.chaos:provider_access", "Project/team link: 71133891, full.chaos"},
+		},
+		ContextFabricEvidenceEntityReviewV2: {{displayRepoUUID + ":1042:approval-42", "Review: #1042"}},
 		// The retired un-encoded joins cannot be split back: the noun alone.
 		ContextFabricEvidenceEntityWorkItemDependency: {{"jira:A:jira:B:blocks", "Work item dependency"}},
 		ContextFabricEvidenceEntityWorkItemHierarchy:  {{displayRepoUUID + ":linear:CHAOS-2:linear:CHAOS-1", "Work item hierarchy"}},

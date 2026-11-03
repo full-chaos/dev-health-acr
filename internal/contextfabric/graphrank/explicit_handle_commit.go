@@ -52,7 +52,7 @@ func namedHandles(request contextfabric.InvestigationRequest, bound []BoundHandl
 	if turnStatesKind(request, frame, bound[0].Kind) {
 		return handle, handleOwed
 	}
-	if committedScopeAnchorShadowsHandle(bound, committed, frame) || committedTeamShadowsHandle(bound, committed, frame) {
+	if committedScopeAnchorShadowsHandle(request, bound, committed, frame) || committedTeamShadowsHandle(request, bound, committed, frame) {
 		return handle, handleMentioned
 	}
 	return nil, handleNotNamed
@@ -88,8 +88,8 @@ func severalNamedHandles(request contextfabric.InvestigationRequest, bound []Bou
 		return handles, handleOwed
 	}
 	// A turn that states another kind, the repository's included, is untouched,
-	// as in CHAOS-12523.
-	if frame != nil && frame.SubjectExpression.Named != nil && frame.SubjectExpression.Named.ExpectedKind != nil {
+	// as in CHAOS-12523, however it stated it (CHAOS-12631).
+	if turnStatesAnotherKind(request, frame, kind) {
 		return nil, handleNotNamed
 	}
 	return handles, handleMentioned
@@ -100,40 +100,50 @@ func severalNamedHandles(request contextfabric.InvestigationRequest, bound []Bou
 // named frame that asks for no other kind. A team reaches a pull request or a CI
 // run only through the repositories it owns, and a work item through no column,
 // so the handle is read in what the team owns or across what the caller reads.
-func committedTeamShadowsHandle(bound []BoundHandle, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) bool {
+func committedTeamShadowsHandle(request contextfabric.InvestigationRequest, bound []BoundHandle, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) bool {
 	if len(bound) != 1 || !IsCensusKindRegistered(bound[0].Kind) || len(committed) != 1 || committed[0].Kind != contextfabric.SubjectTeam {
 		return false
 	}
-	if frame != nil {
-		if frame.SubjectExpression.Kind != contextfabric.SubjectExpressionNamed {
-			return false
-		}
-		// A turn that states a kind is decided by turnStatesKind; one that states
-		// another, the team's included, is untouched.
-		if named := frame.SubjectExpression.Named; named != nil && named.ExpectedKind != nil {
-			return false
-		}
+	if frame != nil && frame.SubjectExpression.Kind != contextfabric.SubjectExpressionNamed {
+		return false
 	}
-	return true
+	// A turn that states a kind is decided by turnStatesKind; one that states
+	// another, the team's included, is untouched (statedKind, CHAOS-12631).
+	_, stated := statedKind(request, frame)
+	return !stated
 }
 
-// turnStatesKind reports a turn that says its answer is about a subject of kind: the
-// frame's expected kind, which the model's requested kind fills, or a lone
-// expected_kinds. The two must not disagree.
-func turnStatesKind(request contextfabric.InvestigationRequest, frame *contextfabric.QuestionFrame, kind contextfabric.SubjectKind) bool {
-	var framed *contextfabric.SubjectKind
+// statedKind is the kind a turn says its answer is about: the frame's expected
+// kind, which the model's requested kind fills, or else a lone expected_kinds.
+// The frame wins when both are present. A frame that is not a named one states
+// no kind. It is the one reading of a stated kind: the owed test and every
+// "states another kind" exit take it (CHAOS-12631).
+func statedKind(request contextfabric.InvestigationRequest, frame *contextfabric.QuestionFrame) (contextfabric.SubjectKind, bool) {
 	if frame != nil {
 		if frame.SubjectExpression.Kind != contextfabric.SubjectExpressionNamed {
-			return false
+			return "", false
 		}
-		if named := frame.SubjectExpression.Named; named != nil {
-			framed = named.ExpectedKind
+		if named := frame.SubjectExpression.Named; named != nil && named.ExpectedKind != nil {
+			return *named.ExpectedKind, true
 		}
 	}
-	if framed != nil {
-		return *framed == kind
+	if len(request.ExpectedKinds) == 1 {
+		return request.ExpectedKinds[0], true
 	}
-	return len(request.ExpectedKinds) == 1 && request.ExpectedKinds[0] == kind
+	return "", false
+}
+
+// turnStatesKind reports a turn that says its answer is about a subject of kind.
+func turnStatesKind(request contextfabric.InvestigationRequest, frame *contextfabric.QuestionFrame, kind contextfabric.SubjectKind) bool {
+	stated, ok := statedKind(request, frame)
+	return ok && stated == kind
+}
+
+// turnStatesAnotherKind reports a turn that says its answer is about a subject of
+// a kind other than kind.
+func turnStatesAnotherKind(request contextfabric.InvestigationRequest, frame *contextfabric.QuestionFrame, kind contextfabric.SubjectKind) bool {
+	stated, ok := statedKind(request, frame)
+	return ok && stated != kind
 }
 
 // commitNamedHandle answers for the handle a turn names beside a committed

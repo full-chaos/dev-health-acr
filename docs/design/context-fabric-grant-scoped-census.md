@@ -47,9 +47,12 @@ the count, the set read and the row read all carry it. A requested narrowing
 ANDs a second clause (`census_repo_N`) beside it.
 
 An owner wildcard in a grant admits what the graph gate admits for that owner:
-a valid two-part slug (`reposlug.NamePattern`), not only the prefix. `acme/*`
-does not cover `acme/group/secret` or `acme/trailing-`, because
-`NormalizeRepositorySlug` refuses both. A requested filter keeps its prefix: it
+a valid repository key (`reposlug.SlugPattern`: 2 to 20 segments, at most 255
+bytes), not only the prefix. `acme/*` covers `acme/web`, `acme/group/web` and
+`acme/group/sub/web` (a GitLab group grant reaches its subgroups), and does not
+cover `acme/trailing-` or `acme2/web`, because `NormalizeRepositorySlug` refuses
+the first and the prefix `acme/` excludes the second. The wildcard owner is one
+segment: `acme/group/*` is not a scope and refuses the census. A requested filter keeps its prefix: it
 has a post-filter, and its statement stays byte-identical.
 
 `ErrCensusGrantNotApplied` ends the read, with no statement, for: more than 200
@@ -264,7 +267,9 @@ gate admits it by that repository, and so does the census.
 - `HAVING min(...)`: an id is in only when every row carrying it passes.
 - An owner grant admits what the gate admits. The library's owner match reads the
   first path part only, but its link aggregate tests the two-part slug grammar
-  first, so `acme/*` does not reach `acme/group/secret` or `acme/trailing-`. Real
+  first (a gap in dev-health-go; the pull-request census above widened, this
+path stays two-part and fails closed), so on this path `acme/*` does not reach
+`acme/group/secret` or `acme/trailing-`. Real
   ClickHouse pins it (`TestAWorkItemOwnerGrantAdmitsWhatTheGateAdmitsOnClickHouse`),
   and a unit test pins the grammar in the statement, for a library bump.
 - A census with no handle stays refused: a count inside the link arm would miss the
@@ -411,8 +416,8 @@ this change the `CHAOS` prefix alone was accepted in a sentence.
   of statements do not change. The difference stays inside the 0.11 to 1.28 ms range
   above, across an empty list and 50 ids. The 50 ms gate stands and the live run
   measures it.
-- **A slug the grant cannot hold.** `NormalizeRepositorySlug` accepts owner/name
-  only. A grant entry of another shape refuses that caller's census; it never
+- **A slug the grant cannot hold.** `NormalizeRepositorySlug` accepts a 2 to 20
+  segment key of at most 255 bytes. A grant entry of another shape refuses that caller's census; it never
   widens it.
 - **A stale native link.** Ops never removes a native row, so a link removed at the
   provider keeps granting until ops can retract it (CHAOS-12456 ruling 2).

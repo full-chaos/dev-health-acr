@@ -48,7 +48,7 @@ func uniquePacketCategories(categories []PacketCategory) bool {
 // ContextPacket.Repository): only an owner/repo slug is required, with
 // optional repo_id and remote_url metadata.
 func (r RepositoryRef) Validate() error {
-	if !repositorySlugPattern.MatchString(r.Slug) || !stringLengthBetween(r.Slug, 1, 512) {
+	if !validRepositorySlug(r.Slug) {
 		return fmt.Errorf("slug violates v1 bounds")
 	}
 	if !stringLengthBetween(r.RepoID, 0, 128) || !optionalURI(r.RemoteURL, 2048) {

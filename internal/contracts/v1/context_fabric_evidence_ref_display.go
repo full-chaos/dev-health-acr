@@ -18,11 +18,32 @@ var evidenceUUIDForm = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-
 // token before the first ':'. No provider is named.
 var evidenceProviderToken = regexp.MustCompile(`^[a-z][a-z0-9._-]*:`)
 
-// evidenceKey is a raw source id as a reader names it: the provider token dropped
-// (linear:CHAOS-2311 reads CHAOS-2311, gh:owner/repo#7 reads owner/repo#7). A UUID
-// names nothing a reader knows and reads as "".
-func evidenceKey(raw string) string {
+// evidenceKeyBefore12716 is how an evidence label read a raw source id from
+// CHAOS-12620 until CHAOS-12716: the provider token dropped, a UUID as "", and an
+// org scope kept. A result saved in that time holds labels made with it
+// (ContextFabricEvidenceRefStoredLabel).
+func evidenceKeyBefore12716(raw string) string {
 	key := evidenceProviderToken.ReplaceAllString(strings.TrimSpace(raw), "")
+	if evidenceUUIDForm.MatchString(key) {
+		return ""
+	}
+	return key
+}
+
+// ContextFabricSourceKey is a raw source id as a reader names it, for an evidence
+// label and a graph end alike (contextfabric.ReadableSourceID): one function, so the
+// two never read the same id differently (CHAOS-12716). The provider prefix is
+// dropped: linear:CHAOS-2311 reads CHAOS-2311, gh:owner/repo#7 reads owner/repo#7.
+// An organization or repository scope ("<uuid>:") counts as part of that prefix,
+// before the provider or after it, so an org-scoped source id reads as its native
+// id: "<org UUID>:gitlab:71133891" and "gitlab:<org UUID>:gitlab:71133891" read
+// 71133891 (lead ruling, 2026-11-03). A UUID names nothing a reader knows and reads
+// as "", for the caller's kind word.
+func ContextFabricSourceKey(raw string) string {
+	key := evidenceProviderToken.ReplaceAllString(withoutLeadingUUID(strings.TrimSpace(raw)), "")
+	if scoped := withoutLeadingUUID(key); scoped != key {
+		key = evidenceProviderToken.ReplaceAllString(scoped, "")
+	}
 	if evidenceUUIDForm.MatchString(key) {
 		return ""
 	}
@@ -64,8 +85,8 @@ func evidenceNotUUID(value string) string {
 
 // evidenceIDDisplay is the part of an evidence label after the noun, or "" for the
 // noun alone. segments are an encoded (".v2") id's decoded segments, nil for any
-// other type.
-func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, segments []string, name ContextFabricEvidenceSubjectName) string {
+// other type. key reads a raw source id (ContextFabricSourceKey).
+func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, segments []string, name ContextFabricEvidenceSubjectName, key func(string) string) string {
 	named := func(kind ContextFabricSubjectKind, rawID string) string {
 		if name == nil || strings.TrimSpace(rawID) == "" {
 			return ""
@@ -104,9 +125,9 @@ func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, se
 	case ContextFabricEvidenceEntityCI, ContextFabricEvidenceEntityDeployment:
 		return evidenceNotUUID(withoutLeadingUUID(id))
 	case ContextFabricEvidenceEntityWorkItem:
-		return evidenceKey(withoutLeadingUUID(id))
+		return key(withoutLeadingUUID(id))
 	case ContextFabricEvidenceEntityTeam:
-		return evidenceKey(id)
+		return key(id)
 	case ContextFabricEvidenceEntityProject:
 		// The name the answer holds; else the source id with the provider
 		// dropped (acme/live-e2e, OPS); a UUID-shaped id reads as the noun alone
@@ -114,7 +135,7 @@ func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, se
 		if value := named(ContextFabricSubjectProject, id); value != "" {
 			return value
 		}
-		return evidenceKey(id)
+		return key(id)
 	case ContextFabricEvidenceEntityRepository:
 		return named(ContextFabricSubjectRepository, id)
 	case ContextFabricEvidenceEntityOrganization:
@@ -130,15 +151,15 @@ func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, se
 		// minted inside ACR: nothing a reader names.
 		return ""
 	case ContextFabricEvidenceEntityWorkItemDependencyV2:
-		return evidenceJoin(evidenceKey(segment(0)), evidenceKey(segment(1)))
+		return evidenceJoin(key(segment(0)), key(segment(1)))
 	case ContextFabricEvidenceEntityWorkItemHierarchyV2:
-		return evidenceJoin(evidenceKey(segment(1)), evidenceKey(segment(2)))
+		return evidenceJoin(key(segment(1)), key(segment(2)))
 	case ContextFabricEvidenceEntityWorkItemTeamV2:
-		return evidenceJoin(evidenceKey(segment(1)), evidenceKey(segment(2)))
+		return evidenceJoin(key(segment(1)), key(segment(2)))
 	case ContextFabricEvidenceEntityDeploymentIncidentV2:
 		return evidenceJoin(evidenceNotUUID(segment(1)), evidenceNotUUID(segment(2)))
 	case ContextFabricEvidenceEntityProjectTeamV2:
-		return evidenceJoin(evidenceKey(segment(1)), evidenceKey(segment(2)))
+		return evidenceJoin(key(segment(1)), key(segment(2)))
 	case ContextFabricEvidenceEntityReviewV2:
 		return repositoryNumber(segment(0), segment(1))
 	}
@@ -150,10 +171,18 @@ func evidenceIDDisplay(entityType ContextFabricEvidenceEntityType, id string, se
 // ContextFabricEvidenceRefStoredLabel is a stored evidence label for a reader. A
 // result saved before CHAOS-12620 keeps the "<noun>: <ref id>" label it was made
 // with, and a by-id read serves it with no rebuild; a label that is exactly that
-// old form reads as ContextFabricEvidenceRefLabelNamed. Any other stored label
-// stands, so a label made after the change, with its name, is served as made.
+// old form, or exactly the label the display made before CHAOS-12716 with the same
+// names, reads as ContextFabricEvidenceRefLabelNamed. Any other stored label stands,
+// so a label made after the change, with its name, is served as made.
 func ContextFabricEvidenceRefStoredLabel(refID, stored string, name ContextFabricEvidenceSubjectName) string {
-	if before, ok := evidenceRefLabelBefore12620(refID); ok && stored == before {
+	before, ok := evidenceRefLabelBefore12620(refID)
+	if !ok || stored != before {
+		// A result saved from CHAOS-12620 until CHAOS-12716 holds the label the
+		// display made then, an org-scoped source id with its org UUID; a label
+		// that is exactly that is restated as well (codex r1 of CHAOS-12716).
+		before, ok = evidenceRefLabel(refID, name, evidenceKeyBefore12716)
+	}
+	if ok && stored == before {
 		if label, _ := ContextFabricEvidenceRefLabelNamed(refID, name); label != "" {
 			return label
 		}

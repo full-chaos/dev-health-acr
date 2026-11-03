@@ -325,8 +325,8 @@ func runDoctorLive() doctorReport {
 }
 
 // runDoctorLiveHosted is the live check for the hosted transport: it holds no
-// process credential, so it checks what /readyz checks -- the hosted API's
-// liveness route answers with the process configuration alone.
+// process credential, so it checks the hosted API's /healthz liveness route,
+// which answers with the process configuration alone.
 func runDoctorLiveHosted(report doctorReport) doctorReport {
 	if !report.APIURLValid || !report.Transport.Valid {
 		report.LiveCheck = &doctorLiveCheck{Reachable: false, Detail: "local configuration is not valid; live check skipped"}
