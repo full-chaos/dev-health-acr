@@ -621,6 +621,9 @@ func (e *Engine) finalizeResult(
 	// The measure units come from the declarations, never from a claim's own
 	// table, and are stated before any shape reads a table (CHAOS-11984).
 	result.ClaimedFacts = withDeclaredMeasureUnits(result.ClaimedFacts, e.measureUnitsOf)
+	// Where each cell's word comes from, from the declarations alone
+	// (CHAOS-12639).
+	result.ClaimedFacts = withDeclaredColumnWords(result.ClaimedFacts, e.columnWordsOf)
 	// The cadence too, and only where the rows keep it (CHAOS-11985).
 	result.ClaimedFacts = withDeclaredCadence(result.ClaimedFacts, e.renderShapeOptions.TableCadence)
 	renderShapes, _ := selectRenderShapes(result, frame, e.renderShapeOptions)
