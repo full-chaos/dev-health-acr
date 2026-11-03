@@ -2,6 +2,7 @@ package contextfabric_test
 
 import (
 	"bytes"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -44,7 +45,8 @@ func TestRenderShapeSummaryAndSkippedLinesCertify(t *testing.T) {
 	rules := []contractsv1.ContextFabricRenderShapeRule{
 		contractsv1.ContextFabricRenderRuleCohortAttentionScore, contractsv1.ContextFabricRenderRuleCohortDriverContribution,
 		contractsv1.ContextFabricRenderRuleDatedFactTrend, contractsv1.ContextFabricRenderRuleInvestmentThemeShare,
-		contractsv1.ContextFabricRenderRuleComparisonSideBySide,
+		contractsv1.ContextFabricRenderRuleComparisonSideBySide, contractsv1.ContextFabricRenderRuleCompletionForecast,
+		contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles,
 	}
 	reasons := contextfabric.RenderShapeSkipReasonLineVocabulary()
 	ok := contextfabric.RenderShapeSelectionEvent{Shape: contractsv1.ContextFabricShapeOpen, MembersTruncated: 2, TrendsOmitted: 3, ComparisonMeasuresLeftOut: 4, TablesCadenceWithheld: 6}
@@ -55,8 +57,8 @@ func TestRenderShapeSummaryAndSkippedLinesCertify(t *testing.T) {
 	telemetry, ctx := cohortTelemetry(&buf)
 	telemetry.RecordRenderShapeSelection(ctx, storage.Principal{OrgID: "org_1"}, ok)
 	lines := bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n"))
-	if len(lines) != 6 {
-		t.Fatalf("a selection of five skipped rules writes the summary and five skip lines, got %d: %s", len(lines), buf.String())
+	if len(lines) != 8 {
+		t.Fatalf("a selection of seven skipped rules writes the summary and seven skip lines, got %d: %s", len(lines), buf.String())
 	}
 	if got := jsonKeys(t, lines[0]); !reflect.DeepEqual(got, renderShapeSummaryLegacyKeys) {
 		t.Fatalf("summary key sequence = %v, want %v", got, renderShapeSummaryLegacyKeys)
@@ -66,7 +68,7 @@ func TestRenderShapeSummaryAndSkippedLinesCertify(t *testing.T) {
 	}
 	certifyRequestLine(t, buf.Bytes(), eventspec.RenderShapeSelectionSummary, map[string]any{
 		"org_id": "org_1", "question_shape": string(contractsv1.ContextFabricShapeOpen), "render_shapes_selected": 0,
-		"render_shape_rules_skipped": 5, "render_shape_members_truncated": 2, "render_shape_trends_omitted": 3,
+		"render_shape_rules_skipped": 7, "render_shape_members_truncated": 2, "render_shape_trends_omitted": 3,
 		"render_shape_comparison_measures_left_out": 4, "render_shape_tables_cadence_withheld": 6, "render_shape_accounting": "ok",
 	})
 	for i, rule := range rules {
@@ -291,4 +293,18 @@ func TestAnUndeclaredMemberInASelectedShapeRowIsRefused(t *testing.T) {
 		t.Fatalf("the fixture did not contain the member to extend: %s", raw)
 	}
 	certifyRefused(t, mutated, eventspec.RenderShapeSelectionSummary, "a list row carrying an undeclared member")
+}
+
+// CHAOS-12587: the detail-tables line carries the names of the tables the
+// claims carry, in the declared shape.
+func TestDetailTablesLineCertifies(t *testing.T) {
+	var buf bytes.Buffer
+	telemetry, ctx := cohortTelemetry(&buf)
+	telemetry.RecordDetailTablesAttached(ctx, storage.Principal{OrgID: "org_1"}, contextfabric.DetailTablesAttachedEvent{Claims: 2, Tables: []string{"repository_breakdown", "subcategory_breakdown"}, Omitted: 1})
+	line := certifyRequestLine(t, buf.Bytes(), eventspec.DetailTablesAttached, map[string]any{
+		"org_id": "org_1", "detail_table_claims": 2, "detail_tables_omitted": 1,
+	})
+	if got := fmt.Sprint(line["detail_tables"]); got != "[repository_breakdown subcategory_breakdown]" {
+		t.Fatalf("detail_tables = %s, want both names in order", got)
+	}
 }

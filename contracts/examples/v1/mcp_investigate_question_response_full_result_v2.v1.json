@@ -215,6 +215,7 @@
       "structured.principal_drivers[].affected_subjects[].label",
       "structured.key_facts[].subject.label",
       "structured.key_facts[].field",
+      "structured.key_facts[].completion_forecast.work_scope_id",
       "structured.key_facts[].value.string",
       "structured.key_facts[].rows[].fields{}.string",
       "structured.key_facts[].table.field",

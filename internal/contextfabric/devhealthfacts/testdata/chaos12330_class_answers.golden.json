@@ -54,7 +54,8 @@
       "require_ranking": false,
       "render_kinds": [
         "table",
-        "series"
+        "series",
+        "forecast"
       ],
       "fact_kinds": [
         "health"
@@ -201,7 +202,8 @@
       "require_ranking": false,
       "render_kinds": [
         "table",
-        "series"
+        "series",
+        "forecast"
       ],
       "fact_kinds": [
         "health"
@@ -348,7 +350,8 @@
       "require_ranking": false,
       "render_kinds": [
         "table",
-        "series"
+        "series",
+        "forecast"
       ],
       "fact_kinds": [
         "health"

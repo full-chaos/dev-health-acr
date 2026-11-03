@@ -304,6 +304,19 @@ shape fallback. The decision and its basis (`model`, `shape_fallback`,
 `handle_state`, `none`) are the Info line `context fabric window
 classification`, which also carries the model's own sanitized pick.
 
+**An unknown window pick is dropped, not refused (CHAOS-12617).** The output
+schema keeps the `window_class` and `window_confidence` enums, as providers
+read them. But the schema gate of the LLM generator (`llmGenerator.check`) and
+of the supplied path (`SuppliedInterpreter.decode`) used to refuse a whole
+otherwise-valid interpretation for one string outside its enum. That gate now
+validates a copy of the reply without such a pick
+(`withoutUnknownWindowPicks`, `genkitruntime/unknown_window_pick.go`), and
+writes one Info line that names the fields, never the value. The decode reads
+the reply as written, so the sanitizer leaves the class unset and sets
+`window_class_unrecognized`, as on the file-exchange parser. A pick that is
+not a string, and every other violation, still refuse. There is no wire
+change and no version bump.
+
 **Every current-axis answer states its window (CHAOS-11601).** When the
 question names no period and its window class carries no default
 (`state_snapshot`, or no class), `composeEffectiveWindow` returns no window and

@@ -336,6 +336,8 @@ func goVarName(e Event) string {
 		return "ProjectedRowsByFactKind"
 	case DualTableFacts.ID:
 		return "DualTableFacts"
+	case DetailTablesAttached.ID:
+		return "DetailTablesAttached"
 	case ModelRowsStripped.ID:
 		return "ModelRowsStripped"
 	case DriverSourceStateCorrected.ID:
@@ -440,6 +442,8 @@ func goVarName(e Event) string {
 		return "SuppliedSynthesisDecision"
 	case GraphCountCheckFinished.ID:
 		return "GraphCountCheckFinished"
+	case PlanOperandReads.ID:
+		return "PlanOperandReads"
 	case WindowClassification.ID:
 		return "WindowClassification"
 	case InferredWindowGate.ID:

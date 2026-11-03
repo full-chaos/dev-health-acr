@@ -105,7 +105,7 @@ needs n-absent race-devhealthsource-mid=ABSENT
 
 # lists NAME: the real `go test -list` of the fixture packages as legs 6 (source) and 7 (facts).
 mkdir -p "$tmp/lists"
-list_of() { (cd "$fx" && go test -list . "./internal/contextfabric/$1") | grep '^Test' | LC_ALL=C sort -u; }
+list_of() { (cd "$fx" && go test -list . "./internal/contextfabric/$1") | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u; }
 write_lists() {
   local dir="$1"
   mkdir -p "$dir"
@@ -121,7 +121,7 @@ defer_both='[{"shard":6},{"shard":7}]'
 both='drop=[{"shard":6},{"shard":7}]'
 none='drop=[]'
 
-# a covering job renamed away from `isolated-dedicated devhealthsource`: 2 of 3 left.
+# a covering job renamed away from `isolated-dedicated devhealthsource`: 3 of 4 left.
 sed '/^  race-devhealthsource-mid:/,/^  [a-z0-9-]*:/ s/isolated-dedicated devhealthsource/isolated-dedicated devhealthsourcX/' "$workflow" >"$tmp/ci-fewer-covering.yml"
 cmp -s "$workflow" "$tmp/ci-fewer-covering.yml" && { echo 'SETUP FAILED: ci-fewer-covering.yml equals ci.yml' >&2; exit 1; }
 

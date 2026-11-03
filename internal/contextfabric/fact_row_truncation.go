@@ -409,14 +409,33 @@ func applyFactRowTruncation(result InvestigationResult, perTable, declared int) 
 	if served >= declared {
 		return result, served, tables, false
 	}
-	sentence, ok := contractsv1.ContextFabricFactRowTruncationLimitation(served, declared, perTable)
-	if !ok {
-		return result, served, tables, false
+	// A distribution the cut withholds whole keeps no rows, so it has its own
+	// sentence, and the per-table sentence counts only the tables it describes
+	// (CHAOS-12608): with the distribution's rows in the count, a cut that
+	// withheld only a distribution served fewer rows than one table's cap and
+	// the per-table sentence refused to compose, so the lever never applied.
+	withheldRows := 0
+	for index := range claims {
+		if result.ClaimedFacts[index].Rows != nil && claims[index].Rows == nil && result.ClaimedFacts[index].Table != nil &&
+			result.ClaimedFacts[index].Table.Shape == contractsv1.ContextFabricFactTableShapeDistribution {
+			withheldRows += len(result.ClaimedFacts[index].Rows)
+		}
+	}
+	var sentences []string
+	if tables.Total > tables.DistributionWithheld {
+		sentence, ok := contractsv1.ContextFabricFactRowTruncationLimitation(served, declared-withheldRows, perTable)
+		if !ok {
+			return result, served, tables, false
+		}
+		sentences = append(sentences, sentence)
+	}
+	if tables.DistributionWithheld > 0 {
+		sentences = append(sentences, contractsv1.ContextFabricDistributionWithheldLimitation)
 	}
 	result.ClaimedFacts = claims
 	var evicted int
 	result.Completeness.Outcomes, evicted = appendLeverOutcomeRow(result.Completeness.Outcomes, factRowTruncationOutcomeRow(served, declared))
-	composed, displaced := appendBoundedLimitations(result.Limitations, []string{sentence})
+	composed, displaced := appendBoundedLimitations(result.Limitations, sentences)
 	composed, evictionDisplaced := withOutcomeEvictionLimitation(composed, evicted)
 	result.Limitations = composed
 	result.LimitationsDisplaced += displaced + evictionDisplaced

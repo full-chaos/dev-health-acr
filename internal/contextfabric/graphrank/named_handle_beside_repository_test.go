@@ -686,3 +686,20 @@ func TestAKeyWhosePrefixIsNotHeldNamesNoHandleBesideARepository(t *testing.T) {
 		})
 	}
 }
+
+// CHAOS-12633: the GitLab spellings take the same path as "pull request N":
+// the handle binds as pull_request_number and commits beside its repository.
+func TestAMergeRequestHandleCommitsBesideItsRepository(t *testing.T) {
+	t.Parallel()
+	for _, noun := range []string{"merge request !747", "MR !747", "merge request 747"} {
+		for caller, principal := range besideCallers(t) {
+			t.Run(noun+" "+caller, func(t *testing.T) {
+				t.Parallel()
+				turn := runBeside(t, besideWorld{principal: principal, question: besideQuestion(noun), frame: statedFrame(contextfabric.SubjectPullRequest), census: &besideCensus{rows: besideRows()}})
+				if got := besideCommittedIDs(turn.resolution); !slices.Contains(got, scopeAnchorRepoID) || !slices.Contains(got, besidePRInRepo) {
+					t.Fatalf("committed = %v, want the repository and pull request 747", got)
+				}
+			})
+		}
+	}
+}
