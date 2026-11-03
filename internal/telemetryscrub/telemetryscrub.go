@@ -446,7 +446,9 @@ func looksLikeUserinfo(before string) bool {
 			return true
 		}
 	}
-	return false
+	// Digits only before the first "/": a host:port/path prefix when "@" starts a path segment (a handle),
+	// otherwise the text may be a password that holds "/" (fail closed).
+	return !strings.HasSuffix(before, "/")
 }
 
 func redactUserinfo(s string) string {
