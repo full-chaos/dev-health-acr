@@ -391,3 +391,77 @@ func TestTheInvestmentAllocationFamilyAuthorizesTheSankey(t *testing.T) {
 		t.Fatalf("investment_allocation's render kinds %v do not name sankey", definition.RenderKinds)
 	}
 }
+
+// The lead's ruling on CHAOS-12582 (option 1): the answer-size row cut keeps a
+// breakdown's first rows, and a cut can take every row of one theme, which no
+// sum can see. Cut to its first 5 rows, this table loses only the infra -> risk
+// link, and every theme left still adds up. So the cut withholds a
+// repository_theme_breakdown table whole, never cuts it, and the answer says
+// so; the sankey then has no table to draw.
+func TestTheRowCutWithholdsARepositoryFlowTableWhole(t *testing.T) {
+	t.Parallel()
+	result := repositoryFlowResult(repositoryFlowLinks())
+	prefix := result
+	prefix.ClaimedFacts = []ClaimedFact{result.ClaimedFacts[0]}
+	prefix.ClaimedFacts[0].Rows = result.ClaimedFacts[0].Rows[:5]
+	if shapes, _ := selectRenderShapes(prefix, repositoryFlowFrameOf(), sankeyOn); len(sankeysOf(shapes)) != 1 {
+		t.Fatalf("the repro: a table cut to its first 5 rows still draws a sankey, so only the cut rule can stop it (shapes %+v)", shapes)
+	}
+
+	declared := len(result.ClaimedFacts[0].Rows)
+	cut, served, rules, applied := applyFactRowTruncation(result, 5, declared)
+	if !applied {
+		t.Fatal("a cap under the table's rows applied no cut")
+	}
+	if claim := cut.ClaimedFacts[0]; claim.Rows != nil || claim.Table != nil {
+		t.Fatalf("rows = %d, table = %v; want the table withheld whole", len(claim.Rows), claim.Table)
+	}
+	if served != 0 || rules.Total != 1 || rules.RepositoryFlowWithheld != 1 {
+		t.Fatalf("served = %d, rules = %+v; want one table withheld whole", served, rules)
+	}
+	stated := false
+	for _, limitation := range cut.Limitations {
+		stated = stated || limitation == contractsv1.ContextFabricRepositoryFlowWithheldLimitation
+	}
+	if !stated {
+		t.Fatalf("limitations %q do not say the table was left out", cut.Limitations)
+	}
+	if len(result.ClaimedFacts[0].Rows) != declared || result.ClaimedFacts[0].Table == nil {
+		t.Fatal("the input claim was written: the cut must work on a copy")
+	}
+	if err := cut.ClaimedFacts[0].Validate(); err != nil {
+		t.Fatalf("the claim after the cut: Validate() = %v", err)
+	}
+	shapes, event := selectRenderShapes(cut, repositoryFlowFrameOf(), sankeyOn)
+	if len(sankeysOf(shapes)) != 0 || repositoryFlowSkipOf(t, event) != RenderShapeSkipNoRepositoryFlowTable {
+		t.Fatalf("after the cut: shapes %+v, skip %q", shapes, repositoryFlowSkipOf(t, event))
+	}
+	if whole, _, _, cutAny := applyFactRowTruncation(result, declared, declared); cutAny || len(whole.ClaimedFacts[0].Rows) != declared {
+		t.Fatal("a cap at the table's rows changed the table")
+	}
+}
+
+// Beside a table the cap cuts, the per-table sentence counts only the tables it
+// describes: the withheld table's rows are not among its declared rows.
+func TestAWithheldRepositoryFlowTableIsNotCountedAsCut(t *testing.T) {
+	t.Parallel()
+	result := repositoryFlowResult(repositoryFlowLinks())
+	other := claimedTableFact("claim_other_breakdown", contractsv1.ContextFabricFactTableShapeBreakdown, 10)
+	result.ClaimedFacts = append(result.ClaimedFacts, other)
+	declared := len(result.ClaimedFacts[0].Rows) + len(other.Rows)
+	cut, served, rules, applied := applyFactRowTruncation(result, 5, declared)
+	if !applied || served != 5 || rules.Total != 2 || rules.RepositoryFlowWithheld != 1 || rules.SourcePrefix != 1 {
+		t.Fatalf("applied = %v, served = %d, rules = %+v", applied, served, rules)
+	}
+	want, ok := contractsv1.ContextFabricFactRowTruncationLimitation(5, len(other.Rows), 5)
+	if !ok {
+		t.Fatal("the per-table sentence does not compose for 5 of 10 rows")
+	}
+	found := map[string]bool{}
+	for _, limitation := range cut.Limitations {
+		found[limitation] = true
+	}
+	if !found[want] || !found[contractsv1.ContextFabricRepositoryFlowWithheldLimitation] {
+		t.Fatalf("limitations %q, want %q and the withheld sentence", cut.Limitations, want)
+	}
+}
