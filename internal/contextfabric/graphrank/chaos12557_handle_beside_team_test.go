@@ -36,6 +36,7 @@ type teamWorld struct {
 	ownedOK   bool
 	ownedErr  error
 	nodes     []CandidateNode
+	edit      func(*contextfabric.InvestigationRequest)
 }
 
 func teamRows() []besideRow {
@@ -98,6 +99,9 @@ func runTeam(t *testing.T, w teamWorld) teamTurn {
 	request := testRequest()
 	request.Question = w.question
 	request.Options.MaxSubjectCandidates = 10
+	if w.edit != nil {
+		w.edit(&request)
+	}
 	resolution, _, _, _, err := ResolveSubjectsWithCommitBasis(context.Background(), w.principal, request, testInterpreted(teamWorldLabel), deps, nil, nil, w.frame, "")
 	if err != nil {
 		t.Fatalf("ResolveSubjectsWithCommitBasis: %v", err)
