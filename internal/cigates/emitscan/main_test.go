@@ -11,12 +11,14 @@ import (
 )
 
 // maxExportListExecs is the most `go list -export -deps` commands one run of the tests may start, counted at the exec.
-// Worst case over every test order is 14: 7 execs that do not depend on order (ExportDataIsBuiltFromTheParsedBytes 2,
-// ExportCacheIsKeyedByTheParsedBytes 2, and one each in OverlayDirectoryIsRemoved, ExportDataIsListedOnce and
-// GoListRunsWithTheResolvedGo), plus one load of the module's fixture key per stretch between stand-in go tests (5 of
-// them empty the cache, so 6 stretches), plus 1 for the shared real-tree scan. File order gives 10; shuffle seeds gave
-// 13-14. An unshared load starts 36. Adding a test that starts go list raises the bound: recount, do not just raise.
-const maxExportListExecs = 16
+// Worst case over every test order is 17: 9 execs that do not depend on order (ExportDataIsBuiltFromTheParsedBytes 2,
+// ExportDataIsBuiltFromTheParsedBytesThroughASymlinkedRoot 2, ExportCacheIsKeyedByTheParsedBytes 2, and one each in
+// OverlayDirectoryIsRemoved, ExportDataIsListedOnce and GoListRunsWithTheResolvedGo), plus one load of the module's
+// fixture key per stretch between stand-in go tests (6 of them empty the cache, so 7 stretches), plus 1 for the shared
+// real-tree scan. The symlinked-root test (CHAOS-12749) added 2 execs and one cache-emptying test; CI's shuffle seed
+// 20260727 then started 17. An unshared load starts 36. Adding a test that starts go list raises the bound: recount, do
+// not just raise.
+const maxExportListExecs = 19
 
 func TestMain(m *testing.M) {
 	code := m.Run()

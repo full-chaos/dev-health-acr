@@ -1,0 +1,157 @@
+---
+# Re-pin the recorded O4 oracle outcome on a hosted runner (CHAOS-12808).
+#
+# `make o4-oracle-repin` replays the committed capture (testdata/venue) through
+# the real fact providers on a ClickHouse seeded from its scrubbed extract, and
+# writes the outcome into testdata/venue/manifest.json. It needs Docker, so it
+# runs here, never on a developer machine or a shared host. The capture itself
+# (`make o4-oracle-capture`) starts no container and is taken on a venue; this
+# workflow never calls a venue.
+#
+# A dispatch runs at the ref it is dispatched on. It uploads the re-pinned
+# manifest and its diff for review; it commits nothing. The recorded gate then
+# runs on the re-pinned manifest in the same job, so a green run shows the
+# outcome it uploads.
+name: o4-oracle-repin
+
+"on":
+  workflow_dispatch:
+    inputs:
+      arm64:
+        # Off (the default): the amd64 job, which the pin is taken on. On: the
+        # same job on an arm64 hosted runner instead, to show the pin does not
+        # depend on the architecture (CHAOS-12808: no fused multiply-add in the
+        # sums). The contract check allows a literal hosted label per job only,
+        # so the arm64 run is its own job.
+        description: run on the arm64 hosted runner (ubuntu-24.04-arm) instead of amd64
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: o4-oracle-repin-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Container-starting tests run only under this switch (internal/chfixture
+  # RequireContainers). test-workflow-contract.sh pins it.
+  ACR_CONTAINER_TESTS: '1'
+  GOFLAGS: -trimpath
+  GOPROXY: https://proxy.golang.org|direct
+
+jobs:
+  repin:
+    name: re-pin the recorded O4 outcome
+    if: ${{ !inputs.arm64 }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      # The seeded store pulls the mirrored ClickHouse image, as race-factoracle
+      # in ci.yml does.
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: o4-repin-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.3'
+          cache: false
+      # docker/login-action v4.5.1. GHCR mirror pulls only.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The preflight of ci.yml's mirror-preflight job, run here because a
+      # dispatch-only workflow cannot depend on that job: fail before the pull
+      # when a mirrored image does not resolve.
+      - name: Verify every mirrored image is resolvable before the pull
+        run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
+      - name: Re-pin the recorded outcome
+        run: make o4-oracle-repin
+      - name: Record the manifest diff
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/o4-repin
+          cp internal/contextfabric/factoracle/testdata/venue/manifest.json .tmp/o4-repin/manifest.json
+          git diff -- internal/contextfabric/factoracle/testdata/venue/manifest.json > .tmp/o4-repin/manifest.diff || true
+          git diff --stat -- internal/contextfabric/factoracle/testdata/venue/manifest.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the recorded gate on the re-pinned manifest
+        # The same exec wrapper as the Makefile's GOTEST_EXEC.
+        run: go test -exec "$PWD/scripts/ci/testcontainers-session-exec.sh" -count=1 -timeout 20m -run '^TestOracleOnTheSeededStore$' -v ./internal/contextfabric/factoracle
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: o4-repin-manifest
+          path: .tmp/o4-repin/
+          # .tmp/ is a dot-directory: upload-artifact drops hidden paths
+          # unless they are opted in (see the container-reports upload in ci.yml).
+          include-hidden-files: true
+          if-no-files-found: error
+
+  repin-arm64:
+    name: re-pin the recorded O4 outcome (arm64)
+    if: inputs.arm64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    env:
+      # The seeded store pulls the mirrored ClickHouse image, as race-factoracle
+      # in ci.yml does.
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: o4-repin-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      # actions/checkout v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.3'
+          cache: false
+      # docker/login-action v4.5.1. GHCR mirror pulls only.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # The preflight of ci.yml's mirror-preflight job, run here because a
+      # dispatch-only workflow cannot depend on that job: fail before the pull
+      # when a mirrored image does not resolve.
+      - name: Verify every mirrored image is resolvable before the pull
+        run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
+      - name: Re-pin the recorded outcome
+        run: make o4-oracle-repin
+      - name: Record the manifest diff
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/o4-repin
+          cp internal/contextfabric/factoracle/testdata/venue/manifest.json .tmp/o4-repin/manifest.json
+          git diff -- internal/contextfabric/factoracle/testdata/venue/manifest.json > .tmp/o4-repin/manifest.diff || true
+          git diff --stat -- internal/contextfabric/factoracle/testdata/venue/manifest.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Run the recorded gate on the re-pinned manifest
+        # The same exec wrapper as the Makefile's GOTEST_EXEC.
+        run: go test -exec "$PWD/scripts/ci/testcontainers-session-exec.sh" -count=1 -timeout 20m -run '^TestOracleOnTheSeededStore$' -v ./internal/contextfabric/factoracle
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: o4-repin-manifest-arm64
+          path: .tmp/o4-repin/
+          # .tmp/ is a dot-directory: upload-artifact drops hidden paths
+          # unless they are opted in (see the container-reports upload in ci.yml).
+          include-hidden-files: true
+          if-no-files-found: error

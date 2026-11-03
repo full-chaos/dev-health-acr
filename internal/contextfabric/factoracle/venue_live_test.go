@@ -22,17 +22,21 @@ func rootList(name string) []string {
 	return out
 }
 
-// venueConfig reads the venue from the environment. A missing value fails
-// the run: a live run that did not happen is never a pass.
-func venueConfig(t *testing.T) VenueConfig {
+// venueEnv reads one required venue variable. A missing value fails the run:
+// a live run that did not happen is never a pass.
+func venueEnv(t *testing.T, name string) string {
 	t.Helper()
-	need := func(name string) string {
-		value := os.Getenv(name)
-		if value == "" {
-			t.Fatalf("%s is not set", name)
-		}
-		return value
+	value := os.Getenv(name)
+	if value == "" {
+		t.Fatalf("%s is not set", name)
 	}
+	return value
+}
+
+// venueWindow is the oracle window: MaxWindowDays ending at the next UTC
+// midnight, or at ACR_O4_WINDOW_END.
+func venueWindow(t *testing.T) Window {
+	t.Helper()
 	end := time.Now().UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
 	if raw := os.Getenv("ACR_O4_WINDOW_END"); raw != "" {
 		parsed, err := time.Parse("2006-01-02", raw)
@@ -41,11 +45,19 @@ func venueConfig(t *testing.T) VenueConfig {
 		}
 		end = parsed.UTC()
 	}
+	return Window{Start: end.Add(-MaxWindowDays * 24 * time.Hour), End: end}
+}
+
+// venueConfig reads the venue from the environment. A missing value fails
+// the run: a live run that did not happen is never a pass.
+func venueConfig(t *testing.T) VenueConfig {
+	t.Helper()
+	need := func(name string) string { return venueEnv(t, name) }
 	return VenueConfig{
 		MCPURL: need("ACR_O4_MCP_URL"), TokenFile: need("ACR_O4_TOKEN_FILE"),
 		ClickHouseDSNFile: need("ACR_O4_CLICKHOUSE_DSN_FILE"), ClickHouseAddr: os.Getenv("ACR_O4_CLICKHOUSE_ADDR"),
 		OrgID:    need("ACR_O4_ORG_ID"),
-		Window:   Window{Start: end.Add(-MaxWindowDays * 24 * time.Hour), End: end},
+		Window:   venueWindow(t),
 		OpsBuild: os.Getenv("ACR_O4_OPS_BUILD"), AcrBuild: os.Getenv("ACR_O4_ACR_BUILD"),
 		// The roots the venue is known not to serve on a path. A root that is
 		// unavailable and not named here fails the run.

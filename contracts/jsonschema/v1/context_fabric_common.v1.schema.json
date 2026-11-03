@@ -3338,6 +3338,30 @@
                   "required": [
                     "table"
                   ]
+                },
+                {
+                  "properties": {
+                    "table": {
+                      "properties": {
+                        "shape": {
+                          "const": "breakdown"
+                        },
+                        "key": {
+                          "const": [
+                            "repository",
+                            "theme"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "shape",
+                        "key"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "table"
+                  ]
                 }
               ]
             }
@@ -3374,6 +3398,41 @@
             "properties": {
               "rows": {
                 "maxItems": 366
+              }
+            }
+          }
+        },
+        {
+          "description": "CHAOS-12580 row bound, class repository_flow: a breakdown keyed by (repository, theme), a team's repository_theme_breakdown, holds every link of up to 64 repositories over the 5 canonical themes.",
+          "$comment": "row-bound-class: repository_flow",
+          "if": {
+            "properties": {
+              "table": {
+                "properties": {
+                  "shape": {
+                    "const": "breakdown"
+                  },
+                  "key": {
+                    "const": [
+                      "repository",
+                      "theme"
+                    ]
+                  }
+                },
+                "required": [
+                  "shape",
+                  "key"
+                ]
+              }
+            },
+            "required": [
+              "table"
+            ]
+          },
+          "then": {
+            "properties": {
+              "rows": {
+                "maxItems": 320
               }
             }
           }

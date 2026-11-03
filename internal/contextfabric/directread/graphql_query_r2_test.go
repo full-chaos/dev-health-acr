@@ -40,16 +40,23 @@ func TestGraphQLTwoOperationRootOverlapIsPinned(t *testing.T) {
 		root, strict, other       string
 		onlyStrict, onlyOther     []string // outputs admitted by one candidate only
 		strictOnlyVars, otherOnly []string // variable paths only one candidate has
+		// scoped are candidates tried between strict and other: the strict
+		// document under its own name, with its own scope rules and measures.
+		scoped      []string
+		scopedRules []string // the variable paths whose rules differ from strict's
 	}
 	pairs := []pair{
 		{root: "capacityForecast", strict: "capacityCompletionDistribution", other: "capacityForecast", onlyOther: []string{"capacityForecast.backlogSize", "capacityForecast.completionDistribution.days[*].cumulativeShare", "capacityForecast.completionDistribution.horizonDays", "capacityForecast.completionDistribution.items[*].cumulativeShare", "capacityForecast.completionDistribution.runs", "capacityForecast.completionDistribution.unfinishedRuns", "capacityForecast.computedAt", "capacityForecast.forecastId", "capacityForecast.highVariance", "capacityForecast.historyDays", "capacityForecast.insufficientHistory", "capacityForecast.p50Date", "capacityForecast.p50Days", "capacityForecast.p50Items", "capacityForecast.p85Date", "capacityForecast.p85Days", "capacityForecast.p85Items", "capacityForecast.p95Date", "capacityForecast.p95Days", "capacityForecast.p95Items", "capacityForecast.targetDate", "capacityForecast.targetItems", "capacityForecast.teamId", "capacityForecast.throughputMean", "capacityForecast.throughputStddev", "capacityForecast.workScopeId"}},
 		{root: "catalog", strict: "acrRepositoryScopes", other: "catalogValues", otherOnly: []string{"dimension"}},
 		{
 			root: "analytics", strict: "investmentBreakdown", other: "investmentFull",
+			scoped:      []string{"investmentBreakdownRepository", "investmentBreakdownTeam"},
+			scopedRules: []string{"batch.breakdowns[*].measure", "batch.filters.scope.ids", "batch.filters.scope.level"},
 			onlyStrict: []string{
 				"analytics.evidenceQualityDistribution", "analytics.evidenceQualityStats.__typename",
 				"analytics.evidenceQualityStats.bandCounts", "analytics.evidenceQualityStats.mean",
 				"analytics.evidenceQualityStats.stddev", "analytics.evidenceQualityStats.total",
+				"analytics.evidenceQualityStats.uncategorizedCount",
 			},
 			onlyOther: []string{
 				"analytics.sankey.__typename", "analytics.sankey.coverage.__typename", "analytics.sankey.coverage.repoCoverage",
@@ -66,10 +73,33 @@ func TestGraphQLTwoOperationRootOverlapIsPinned(t *testing.T) {
 	}
 	for _, p := range pairs {
 		root, _ := policy.Root(p.root)
-		if got := root.Operations(); !slices.Equal(got, []string{p.strict, p.other}) {
-			t.Fatalf("%s candidates %v, want [%s %s]", p.root, got, p.strict, p.other)
+		want := append(append([]string{p.strict}, p.scoped...), p.other)
+		if got := root.Operations(); !slices.Equal(got, want) {
+			t.Fatalf("%s candidates %v, want %v", p.root, got, want)
 		}
 		a, b := lookup(p.strict), lookup(p.other)
+		// A scoped candidate is the strict one but for its scope rules (and the
+		// scope constraints, pinned by the scoped investment tests).
+		for _, name := range p.scoped {
+			s := lookup(name)
+			if s.Scope(directread.CallerRestricted).Served || s.CostClass != a.CostClass || s.DeadlineSeconds != a.DeadlineSeconds || s.MaxInFlightPerOrg != a.MaxInFlightPerOrg {
+				t.Fatalf("%s: caller class, cost, deadline or concurrency differs from %s", name, a.Name)
+			}
+			if got := keyDiff(outputSet(a), outputSet(s)); len(got) != 0 || len(keyDiff(outputSet(s), outputSet(a))) != 0 {
+				t.Errorf("%s: outputs differ from %s", name, a.Name)
+			}
+			va, vs := normalizedRules(a), normalizedRules(s)
+			var differ []string
+			for path, rule := range va {
+				if other, ok := vs[path]; !ok || !reflect.DeepEqual(rule, other) {
+					differ = append(differ, path)
+				}
+			}
+			sort.Strings(differ)
+			if len(va) != len(vs) || !slices.Equal(differ, p.scopedRules) {
+				t.Errorf("%s: variable rules differing from %s: %v, want %v", name, a.Name, differ, p.scopedRules)
+			}
+		}
 		for _, op := range []*directread.OperationPolicy{a, b} {
 			if op.Scope(directread.CallerRestricted).Served {
 				t.Fatalf("%s is served to a restricted caller: the overlap now differs by caller class", op.Name)

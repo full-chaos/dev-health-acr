@@ -86,6 +86,8 @@ func goVarName(e Event) string {
 	switch e.ID {
 	case AnswerDisplay.ID:
 		return "AnswerDisplay"
+	case RepositoryThemeBreakdownWithheld.ID:
+		return "RepositoryThemeBreakdownWithheld"
 	case RetainedRankingAccounting.ID:
 		return "RetainedRankingAccounting"
 	case RankedCutSummary.ID:
@@ -448,6 +450,8 @@ func goVarName(e Event) string {
 		return "GraphCountCheckFinished"
 	case PlanOperandReads.ID:
 		return "PlanOperandReads"
+	case PlanSubjectObligationReads.ID:
+		return "PlanSubjectObligationReads"
 	case WindowClassification.ID:
 		return "WindowClassification"
 	case InferredWindowGate.ID:

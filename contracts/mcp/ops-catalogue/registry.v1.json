@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "51652ba7abd6f036948d87cdca62b3479a7ad30d",
+    "commit": "0b763a859e3e5c0df154d133738b20eb23d78fbb",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
     "schema_path": "contracts/graphql/v1/schema.graphql"
   },
@@ -455,9 +455,31 @@
     },
     {
       "operation": "investmentBreakdown",
-      "document": "query InvestmentBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query InvestmentBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredInvestmentBreakdownDocument",
+      "digest": "91d44e116c4830e0c296cc55dc5294ce0741e411f2d9a9269ea44812fcabc211",
+      "kind": "query"
+    },
+    {
+      "operation": "investmentBreakdown",
+      "document": "query InvestmentBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredInvestmentBreakdownV1Document",
       "digest": "964b2e867a1e37c09382552eb0af394758fa10d68081a560ebc0f36c28cc3501",
+      "kind": "query",
+      "legacy": true
+    },
+    {
+      "operation": "investmentBreakdownRepository",
+      "document": "query InvestmentBreakdownRepository($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredInvestmentBreakdownRepositoryDocument",
+      "digest": "d896c57f2425e5eb54262cbb01fdd7d0bf6c17249b8c0d4c140d4d33b492a3e6",
+      "kind": "query"
+    },
+    {
+      "operation": "investmentBreakdownTeam",
+      "document": "query InvestmentBreakdownTeam($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredInvestmentBreakdownTeamDocument",
+      "digest": "41128827a7bb7324a6fe3b4f771830ab39b236b237ab182406c30c5151aaf722",
       "kind": "query"
     },
     {

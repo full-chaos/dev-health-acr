@@ -72,8 +72,8 @@ func mutationRows(t *testing.T, in inputs) []registryRow {
 // acr's recomputation, and every row's kind equals acr's parse.
 func TestVendoredDigestsRecompute(t *testing.T) {
 	in := vendoredInputs(t)
-	if len(in.Registry.Rows) != 101 {
-		t.Fatalf("vendored registry has %d rows, the dump at ops 51652ba7 has 101", len(in.Registry.Rows))
+	if len(in.Registry.Rows) != 104 {
+		t.Fatalf("vendored registry has %d rows, the dump at ops 0b763a85 has 104", len(in.Registry.Rows))
 	}
 	for _, row := range in.Registry.Rows {
 		if got := directread.DocumentDigest(row.Document); got != row.Digest {
@@ -165,9 +165,9 @@ func TestServedCounts(t *testing.T) {
 		}
 		return n
 	}
-	wantUnrestricted := []string{"acrRepositoryScopes", "capacityCompletionDistribution", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad", "complexityTimeseries", "compoundingRisk", "home", "hotspots", "investmentBreakdown", "investmentFull", "recommendations", "securityOverview", "sourceHealth", "throughputForecast", "workGraphArtifacts", "workGraphEdges", "workGraphFlow", "workItemTeamAttributions"}
+	wantUnrestricted := []string{"acrRepositoryScopes", "capacityCompletionDistribution", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad", "complexityTimeseries", "compoundingRisk", "home", "hotspots", "investmentBreakdown", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentFull", "recommendations", "securityOverview", "sourceHealth", "throughputForecast", "workGraphArtifacts", "workGraphEdges", "workGraphFlow", "workItemTeamAttributions"}
 	if got := names(cat.Operations(directread.CallerUnrestricted)); !slices.Equal(got, wantUnrestricted) {
-		t.Fatalf("unrestricted = %v (%d), want the 16 of design D.3 plus home, recommendations, workItemTeamAttributions and sourceHealth, minus the dark securityAlerts", got, len(got))
+		t.Fatalf("unrestricted = %v (%d), want the 16 of design D.3 plus home, recommendations, workItemTeamAttributions, sourceHealth and the scoped investmentBreakdownTeam and investmentBreakdownRepository (CHAOS-12691), minus the dark securityAlerts", got, len(got))
 	}
 	if got := names(cat.Operations(directread.CallerRestricted)); !slices.Equal(got, []string{"compoundingRisk", "hotspots"}) {
 		t.Fatalf("restricted = %v, want the 2 of POLICY-ARTIFACT-v0", got)

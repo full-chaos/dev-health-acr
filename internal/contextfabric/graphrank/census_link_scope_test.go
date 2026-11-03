@@ -241,11 +241,12 @@ func TestTheScopedCensusRecordsItsAdmittedSatisfiersForThisCallOnly(t *testing.T
 }
 
 // TestAReuseRecheckDoesNotCarryALinkAdmission: answer reuse rechecks a stored
-// answer's subjects as exact hints under the new request's scope. The hint
-// path tests a work item by its own node, so a work item the scoped census
-// admitted through its link is not re-admitted by the recheck: the stored
-// answer is not reused and the turn runs fresh, where the census and its link
-// walk run again. Nothing of the earlier admission is carried.
+// answer's subjects as exact hints under the new request's scope. The recheck
+// tests a work item by its own node (every other work item hint goes through
+// the link since CHAOS-12706, hint_link_scope.go), so a work item the scoped
+// census admitted through its link is not re-admitted by the recheck: the
+// stored answer is not reused and the turn runs fresh, where the census and its
+// link walk run again. Nothing of the earlier admission is carried.
 func TestAReuseRecheckDoesNotCarryALinkAdmission(t *testing.T) {
 	t.Parallel()
 	deps := linkScopeBackend().deps()

@@ -257,10 +257,12 @@ func sdlDefaultInt(v *ast.Value) (int64, bool) {
 // variable against the SDL type it narrows: the limit must be one the edge
 // enforces for that type, an enum allowlist must sit inside the SDL enum, and
 // an SDL default (what an OMITTED variable becomes; the edge validates only
-// supplied values) must not step outside the limit. The one exception is the
-// cost clamp: an Int default above Max is set to Max when the client omits it
-// (applyCostClamps, operation_edge.go). It returns the violations and how many
-// limited variables it checked.
+// supplied values) must not step outside the limit. The exceptions: the cost
+// clamp, an Int default above Max is set to Max when the client omits it
+// (applyCostClamps, operation_edge.go); an enum the operation refuses when
+// omitted (refusedWhenOmitted), whose default is never served; and min_items,
+// which the edge applies to an omitted list too. It returns the violations and
+// how many limited variables it checked.
 func limitViolations(f sdlFixture) ([]string, int) {
 	var out []string
 	checked := 0
@@ -269,7 +271,7 @@ func limitViolations(f sdlFixture) ([]string, int) {
 			if !rule.Allowed || rule.Source != directread.SourceClient {
 				continue
 			}
-			limited := rule.Min != nil || rule.Max != nil || rule.MaxItems > 0 || rule.MaxLength > 0 || len(rule.AllowedValues) > 0
+			limited := rule.Min != nil || rule.Max != nil || rule.MinItems > 0 || rule.MaxItems > 0 || rule.MaxLength > 0 || len(rule.AllowedValues) > 0
 			if !limited {
 				continue
 			}
@@ -300,6 +302,9 @@ func limitViolations(f sdlFixture) ([]string, int) {
 			if rule.MaxItems > 0 && !isList {
 				out = append(out, fmt.Sprintf("%s: max_items on a type that is not a list (%s)", where, node.typ))
 			}
+			if rule.MinItems > 0 && !isList {
+				out = append(out, fmt.Sprintf("%s: min_items on a type that is not a list (%s)", where, node.typ))
+			}
 			if rule.MaxLength > 0 && (def.Kind != ast.Scalar || slices.Contains([]string{"Int", "Float", "Boolean"}, named.NamedType)) {
 				out = append(out, fmt.Sprintf("%s: max_length is enforced on string-like scalars only, the SDL type is %s", where, node.typ))
 			}
@@ -322,7 +327,7 @@ func limitViolations(f sdlFixture) ([]string, int) {
 					out = append(out, fmt.Sprintf("%s: the SDL default holds %d items, above max_items %d", where, len(node.def.Children), rule.MaxItems))
 				}
 			case !isList && def.Kind == ast.Enum && node.def.Kind == ast.EnumValue:
-				if len(rule.AllowedValues) > 0 && !slices.Contains(rule.AllowedValues, node.def.Raw) {
+				if len(rule.AllowedValues) > 0 && !slices.Contains(rule.AllowedValues, node.def.Raw) && !refusedWhenOmitted(op, rule.Path) {
 					out = append(out, fmt.Sprintf("%s: the SDL default %s is not an allowed value, so an omitted variable serves what a supplied one is refused", where, node.def.Raw))
 				}
 			case !isList && isInt:
@@ -341,6 +346,15 @@ func limitViolations(f sdlFixture) ([]string, int) {
 		}
 	}
 	return out, checked
+}
+
+// refusedWhenOmitted reports an unconditional requires_value constraint on
+// path with no default: an omitted (or null) variable is refused at the edge,
+// so its SDL default is never served.
+func refusedWhenOmitted(op *directread.OperationPolicy, path string) bool {
+	return slices.ContainsFunc(op.Constraints, func(c directread.Constraint) bool {
+		return c.Kind == directread.ConstraintRequiresValue && c.Path == "" && c.Other == path && c.OtherDefault == ""
+	})
 }
 
 func TestNarrowedLimitsAgreeWithTheSDL(t *testing.T) {

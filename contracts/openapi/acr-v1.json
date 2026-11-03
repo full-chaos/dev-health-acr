@@ -2348,6 +2348,9 @@
                           "max": {
                             "type": "integer"
                           },
+                          "min_items": {
+                            "type": "integer"
+                          },
                           "max_items": {
                             "type": "integer"
                           },

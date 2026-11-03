@@ -17,6 +17,9 @@ type EngineOptions struct {
 	// InvestmentTreemapEnabled turns on the investment_theme_share rule
 	// (CHAOS-12521). See Config.ContextFabricInvestmentTreemapEnabled.
 	InvestmentTreemapEnabled bool
+	// InvestmentSankeyEnabled turns on the investment_repository_flow rule
+	// (CHAOS-12582). See Config.ContextFabricInvestmentSankeyEnabled.
+	InvestmentSankeyEnabled bool
 	// ComparisonTableEnabled turns on the comparison_side_by_side rule
 	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
 	ComparisonTableEnabled bool
@@ -706,6 +709,12 @@ type EngineTelemetry interface {
 	// they name as serving their sides, and how many of those the plan read
 	// only because of them. Plain counts, no kind names.
 	RecordOperandReadKinds(ctx context.Context, principal storage.Principal, operandRows, kindsNamed, kindsAdded int)
+	// RecordSubjectObligationReadKinds (CHAOS-12710) reports, for a turn
+	// whose derived rows hold at least one committed-subject read row that
+	// requires its kinds, how many such rows there were, how many distinct
+	// kinds they require, and which of those the fact request gained only
+	// because of them. The kinds are fact-kind vocabulary tokens.
+	RecordSubjectObligationReadKinds(ctx context.Context, principal storage.Principal, subjectRows, kindsNamed int, kindsAdded []FactKind)
 	// RecordWindowClassification (CHAOS-12595) reports the window-class
 	// decision a current-axis turn with no request window draws its default
 	// from: the model's own sanitized pick, the class decided, its source,
@@ -1498,8 +1507,10 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 			ComparisonSideBySide: options.ComparisonTableEnabled,
 			LandscapePosition:    options.LandscapeQuadrantEnabled,
 			CompletionForecast:   options.CompletionForecastEnabled,
-			FieldScope:           factFieldScopeLookup(options.FactCapabilities),
-			TableCadence:         declaredCadenceOf(options.FactCapabilities),
+			// CHAOS-12582.
+			InvestmentRepositoryFlow: options.InvestmentSankeyEnabled,
+			FieldScope:               factFieldScopeLookup(options.FactCapabilities),
+			TableCadence:             declaredCadenceOf(options.FactCapabilities),
 		},
 		measureUnitsOf:                              declaredMeasureUnitsOf(options.FactCapabilities),
 		columnWordsOf:                               declaredColumnWordsOf(options.FactCapabilities),
@@ -3882,9 +3893,20 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// fills a kind that is otherwise absent. A work-item tuple reads its own
 	// fixed set and gains nothing here.
 	operandReadRequirements := operandReadFactRequirements(derivedRequirements, workItemTuple)
-	mergedFactRequirements := mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements, operandReadRequirements)
+	// CHAOS-12710: the kinds a COMMITTED subject's own read obligations
+	// require are READ, not only planned, for the same reason as the operand
+	// group above: a single named subject has no cohort, so plan.FactKinds
+	// never reaches this request. A named team asked about its state planned
+	// the model's kinds only and its health cell ended
+	// requirement_read_not_planned. Appended LAST and fill-only; a work-item
+	// tuple gains nothing.
+	subjectObligationRequirements := subjectObligationFactRequirements(derivedRequirements, workItemTuple)
+	mergedFactRequirements := mergeFactRequirements(statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements, operandReadRequirements, subjectObligationRequirements)
 	if operandRows := OperandReadRowCount(derivedRequirements); operandRows > 0 && !workItemTuple && e.telemetry != nil {
 		e.telemetry.RecordOperandReadKinds(ctx, principal, operandRows, len(operandReadRequirements), operandKindsAbsentFrom(operandReadRequirements, statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements))
+	}
+	if subjectRows := SubjectObligationRowCount(derivedRequirements); subjectRows > 0 && !workItemTuple && e.telemetry != nil {
+		e.telemetry.RecordSubjectObligationReadKinds(ctx, principal, subjectRows, len(subjectObligationRequirements), requirementKindsAbsentFrom(subjectObligationRequirements, statusComposedRequirements, graphContext.FactRequirements, cohortRankingRequirements, operandReadRequirements))
 	}
 	factRequest := CanonicalFactRequest{
 		workItemTuple:            workItemTuple,

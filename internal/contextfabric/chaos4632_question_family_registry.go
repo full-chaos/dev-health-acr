@@ -580,11 +580,14 @@ var questionFamilyDefinitions = []QuestionFamilyDefinition{
 		// in DeclaredUnproducedRenderKinds, which is what makes this
 		// declaration honest rather than a promise. table and series are
 		// what these questions already allowed, as above.
+		// CHAOS-12582: sankey, one team's effort from its repositories to the
+		// themes, behind its own switch (investment_repository_flow).
 		RenderKinds: []contractsv1.ContextFabricRenderKind{
 			contractsv1.ContextFabricRenderKindTable,
 			contractsv1.ContextFabricRenderKindSeries,
 			contractsv1.ContextFabricRenderKindTreemap,
 			contractsv1.ContextFabricRenderKindSunburst,
+			contractsv1.ContextFabricRenderKindSankey,
 		},
 		Budget:           PlanBudgetSingleSubject,
 		CompatibleShapes: []InvestigationShape{ShapeSingleSubject, ShapeOpen},
@@ -706,7 +709,14 @@ func LookupQuestionFamily(family QuestionFamily) (QuestionFamilyDefinition, bool
 // {allocate_investment} is served investment_allocation from the team's own fact
 // (CHAOS-12606), where it was a scoped_cohort_status. Stored answers planned
 // under v6 for these questions must not be replayed.
-const QuestionFamilyTableVersion = "question-family.v7"
+//
+// v7 -> v8: a committed subject's own required read obligations are planned
+// (CHAOS-12710): a single named team, project or repository asked about its
+// state now reads health, and a pull request's state reads pull_requests,
+// where the v7 plan left the cell unread and the answer degraded. The reuse
+// lookup runs before planning, so stored answers planned under v7 for these
+// questions must not be replayed.
+const QuestionFamilyTableVersion = "question-family.v8"
 
 func allStructureNeedKinds() []StructureNeedKind {
 	wire := contractsv1.ContextFabricStructureNeedKindVocabulary()

@@ -573,6 +573,67 @@ func OperandReadRowCount(rows []DerivedRequirement) int {
 	return count
 }
 
+// SubjectObligationRequiredKinds is what a COMMITTED subject's own read
+// obligations REQUIRE (CHAOS-12710 Fix A, which amends the CHAOS-12596 ruling
+// for this case only).
+//
+// Before this, a single named team asked about its state planned the model's
+// kinds only. health/subject/team serves from [health] alone and nothing
+// planned it, so the row published requirement_read_not_planned and the
+// completeness authority corrected the answer to degraded on that row.
+//
+// REQUIRED, NOT SERVING. A kind is required by a read obligation when the
+// obligation cannot be met without it: the row's completion quantifier asks
+// for as many independent serving sources as the row has serving kinds
+// (readQuantifierThreshold), so every one of them must be read. health over a
+// team is one kind under at_least_one, so health is required. state over a
+// team is six kinds under corroborated (two), so no single state kind is
+// required and none is added. That is what keeps this rule apart from the
+// all-read-rows union, which stays parked (CHAOS-12602).
+//
+// COMMITTED SUBJECTS ONLY: role subject, the frame's one named subject or the
+// organization scope. Member and group rows add nothing; operand rows have
+// their own widening (OperandReadRowServingKinds). An unavailable row has no
+// FactKinds, and a quantifier this package does not recognise adds nothing,
+// so an unknown standard never widens a read.
+//
+// The kinds are the obligation seed's kinds for the committed subject's kind
+// (a row's FactKinds are seed.KindsFor), never a served fact. Deduplicated,
+// vocabulary order, nil when nothing is required.
+func SubjectObligationRequiredKinds(rows []DerivedRequirement) []FactKind {
+	var kinds []FactKind
+	for _, row := range rows {
+		if subjectObligationRequiresEveryKind(row) {
+			kinds = append(kinds, row.FactKinds...)
+		}
+	}
+	return sortedFactKinds(kinds)
+}
+
+// SubjectObligationRowCount is the number of committed-subject read rows that
+// require their kinds, the population the subject-obligation telemetry line
+// is emitted for.
+func SubjectObligationRowCount(rows []DerivedRequirement) int {
+	count := 0
+	for _, row := range rows {
+		if subjectObligationRequiresEveryKind(row) {
+			count++
+		}
+	}
+	return count
+}
+
+// subjectObligationRequiresEveryKind is the one predicate both functions
+// above use: a served read row of the committed subject whose quantifier
+// cannot be met without every kind it names.
+func subjectObligationRequiresEveryKind(row DerivedRequirement) bool {
+	if row.Kind != ObligationKindRead || row.Role != SubjectRoleSubject || !row.Served() || len(row.FactKinds) == 0 {
+		return false
+	}
+	threshold, recognised := readQuantifierThreshold(string(row.Quantifier))
+	return recognised && len(row.FactKinds) <= threshold
+}
+
 // dimensionsOfFactKinds reads the §13.3 requirement dimension off the
 // producers' own declarations: the set of FactCapability.Dimension values
 // carried by the kinds that actually serve this cell.

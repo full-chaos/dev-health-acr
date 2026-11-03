@@ -121,8 +121,11 @@ type RootReport struct {
 	Residual map[string]float64 `json:"residual,omitempty"`
 	// Retired lists the compares a root does not make, each with the reason
 	// and the follow-up that restores it. A retired compare is not coverage.
-	Retired  []string          `json:"retired,omitempty"`
-	Excluded map[string]string `json:"excluded,omitempty"`
+	Retired []string `json:"retired,omitempty"`
+	// NotRecorded lists the generated shapes the run left out, each with the
+	// reason (Oracle.NotRecorded). A shape left out is not coverage.
+	NotRecorded []string          `json:"not_recorded,omitempty"`
+	Excluded    map[string]string `json:"excluded,omitempty"`
 
 	// The cases of each path by outcome, the output paths a served answer
 	// gave a value for, and the ops output paths the value pairs compared.

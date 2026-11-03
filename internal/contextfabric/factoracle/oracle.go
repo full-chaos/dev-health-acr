@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
@@ -85,6 +86,13 @@ type Oracle struct {
 	// measurement of the ops side. The recorded mode sets it for a root whose
 	// recorded replies the policy no longer lets the oracle ask for.
 	OpsRetired map[string]string
+	// NotRecorded names, per operation, why the recorded mode has no case
+	// for it (an operation registered after the capture). Every generated
+	// shape of a listed operation is left out of the run and stated on its
+	// root (RootReport.NotRecorded); the other candidates of the root run in
+	// full. A listed operation with a case is an error, so the list cannot
+	// outlive the capture that records the operation.
+	NotRecorded map[string]string
 	// RepositoryEffort is, after Run, the acr repository mix per repository
 	// id and theme.
 	RepositoryEffort map[string]map[string]float64
@@ -465,6 +473,13 @@ func (o *Oracle) Run(ctx context.Context) (*Report, error) {
 			if shape.Root != root.Field {
 				continue
 			}
+			if why, listed := o.NotRecorded[shape.Operation]; listed {
+				if len(byShape[shape.ID()]) > 0 {
+					return nil, fmt.Errorf("shape %s has a case, but operation %s is listed as not recorded (%s): remove it from the list", shape.ID(), shape.Operation, why)
+				}
+				rr.NotRecorded = append(rr.NotRecorded, shape.ID()+": "+why)
+				continue
+			}
 			if len(byShape[shape.ID()]) == 0 {
 				return nil, fmt.Errorf("shape %s has no case: a generated shape that is not run is not a pass", shape.ID())
 			}
@@ -625,6 +640,18 @@ func (o *Oracle) generatedCases(ctx context.Context) ([]ShapeCase, error) {
 		switch shape.Operation {
 		case "investmentBreakdown", "investmentFull":
 			sets = append(sets, investmentVariables(o.Window, "THEME"), investmentVariables(o.Window, "SUBCATEGORY"), investmentVariables(o.Window, "WORK_TYPE"))
+		case "investmentBreakdownTeam", "investmentBreakdownRepository":
+			level, id, serr := o.scopedInvestmentSubject(shape.Operation, team)
+			if serr != nil {
+				return nil, serr
+			}
+			// COUNT and ISSUE_SIZE: the owner-share pair compares both, and the
+			// scoped entries are the only ones that serve ISSUE_SIZE (CHAOS-12691).
+			for _, measure := range []string{"COUNT", "ISSUE_SIZE"} {
+				for _, dimension := range []string{"THEME", "SUBCATEGORY", "WORK_TYPE"} {
+					sets = append(sets, scopedInvestmentVariables(o.Window, dimension, measure, level, id))
+				}
+			}
 		case "capacityForecast", "capacityCompletionDistribution":
 			sets = append(sets, map[string]any{"input": map[string]any{"teamId": team, "historyDays": 90, "simulations": 1000}})
 		case "capacityForecasts":
@@ -707,6 +734,64 @@ func (o *Oracle) variableValues(operation, path string) ([]string, error) {
 		return values, nil
 	}
 	return nil, fmt.Errorf("operation %s has no allowed variable %s", operation, path)
+}
+
+// scopedInvestmentSubject is the one subject a scoped investment breakdown
+// asks for (CHAOS-12808), as the policy entries of CHAOS-12691 take it:
+// exactly one id, bound to the team or the repository subject.
+//
+//   - TEAM: ops scopes a team by the repositories it owns (team_repo_ownership
+//     with D5988 owner shares), so a team that owns no repository on the
+//     window's last day has nothing to measure. The subject is the team the
+//     capacity shapes use (chosen, "team:<id>") when it owns a repository, or
+//     else the first owning team in id order.
+//   - REPO: the first repository, in id order, that the TEAM subject owns, so
+//     the two scopes read the same rows.
+//
+// A store with no owned repository can measure neither scope: the run stops.
+func (o *Oracle) scopedInvestmentSubject(operation, chosen string) (string, string, error) {
+	reading, err := o.Store.OwnerShares(o.Window.End.Add(-24 * time.Hour))
+	if err != nil {
+		return "", "", fmt.Errorf("operation %s: reading the owners: %w", operation, err)
+	}
+	owned := map[string][]string{}
+	for repo, owners := range reading.Owners {
+		for _, owner := range owners {
+			if owner.Share > 0 {
+				owned[owner.Team] = append(owned[owner.Team], repo)
+			}
+		}
+	}
+	team := strings.TrimPrefix(chosen, "team:")
+	if len(owned[team]) == 0 {
+		owners := map[string]bool{}
+		for id := range owned {
+			owners[id] = true
+		}
+		team = ""
+		if sorted := sortedKeys(owners); len(sorted) > 0 {
+			team = sorted[0]
+		}
+	}
+	if team == "" {
+		return "", "", fmt.Errorf("operation %s: no team owns a repository on %s, so no scope can be measured", operation, o.Window.lastDay())
+	}
+	if operation == "investmentBreakdownTeam" {
+		return "TEAM", "team:" + team, nil
+	}
+	repos := owned[team]
+	sort.Strings(repos)
+	return "REPO", "repository:" + repos[0], nil
+}
+
+// scopedInvestmentVariables are investmentVariables with the given measure and
+// the one-id scope filter of a scoped entry.
+func scopedInvestmentVariables(w Window, dimension, measure, level, id string) map[string]any {
+	variables := investmentVariables(w, dimension)
+	batch := variables["batch"].(map[string]any)
+	batch["breakdowns"].([]any)[0].(map[string]any)["measure"] = measure
+	batch["filters"] = map[string]any{"scope": map[string]any{"level": level, "ids": []any{id}}}
+	return variables
 }
 
 func investmentVariables(w Window, dimension string) map[string]any {

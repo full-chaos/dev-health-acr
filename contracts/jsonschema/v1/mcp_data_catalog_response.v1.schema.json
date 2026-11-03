@@ -182,6 +182,10 @@
                       "type": "integer",
                       "description": "Largest allowed number."
                     },
+                    "min_items": {
+                      "type": "integer",
+                      "description": "Fewest items a list variable must hold; an omitted or null list holds none."
+                    },
                     "max_items": {
                       "type": "integer",
                       "description": "Most items a list variable may hold."
@@ -626,6 +630,9 @@
                             "type": "integer"
                           },
                           "max": {
+                            "type": "integer"
+                          },
+                          "min_items": {
                             "type": "integer"
                           },
                           "max_items": {

@@ -89,6 +89,7 @@ var ByID = map[string]Event{
 	"contextfabric.plan_carry_outcome":                    PlanCarryOutcome,
 	"contextfabric.plan_narrowing":                        PlanNarrowing,
 	"contextfabric.plan_operand_reads":                    PlanOperandReads,
+	"contextfabric.plan_subject_obligation_reads":         PlanSubjectObligationReads,
 	"contextfabric.prior_consulted":                       PriorConsulted,
 	"contextfabric.prior_degradation":                     PriorDegradation,
 	"contextfabric.prior_degradation_pointer_dangling":    PriorDegradationPointerDangling,
@@ -149,6 +150,7 @@ var ByID = map[string]Event{
 	"devhealthfacts.owning_teams_truncated":               OwningTeamsTruncated,
 	"devhealthfacts.project_owning_team_rollup":           ProjectOwningTeamRollup,
 	"devhealthfacts.pull_request_project_native_first":    PullRequestProjectNativeFirst,
+	"devhealthfacts.repository_theme_breakdown_withheld":  RepositoryThemeBreakdownWithheld,
 	"devhealthfacts.rule_basis_day_absent":                DeficiencyRuleBasisDayAbsent,
 	"devhealthfacts.rule_basis_day_invalid":               DeficiencyRuleBasisDayInvalid,
 	"devhealthfacts.subject_id_shape_rejected":            SubjectIDShapeRejected,
@@ -5807,6 +5809,63 @@ func (f PlanOperandReadsFields) SlogArgs() []any {
 	}
 }
 
+// PlanSubjectObligationReadsFields is contextfabric.plan_subject_obligation_reads's generated typed construction interface
+// (CHAOS-5516): one Go field per Field PlanSubjectObligationReads.Fields declares in spec.go.
+type PlanSubjectObligationReadsFields struct {
+	OrgID       string
+	SubjectRows int
+	KindsNamed  int
+	KindsAdded  int
+	AddedKinds  []string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every PlanSubjectObligationReadsFields uniformly, set ONLY by NewPlanSubjectObligationReadsFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewPlanSubjectObligationReadsFields is the generated constructor for PlanSubjectObligationReadsFields -- every
+// field PlanSubjectObligationReads.Fields declares is a required parameter.
+func NewPlanSubjectObligationReadsFields(orgID string, subjectRows int, kindsNamed int, kindsAdded int, addedKinds []string) PlanSubjectObligationReadsFields {
+	valid := true
+	if addedKinds == nil {
+		valid = false
+	}
+	return PlanSubjectObligationReadsFields{
+		OrgID:       orgID,
+		SubjectRows: subjectRows,
+		KindsNamed:  kindsNamed,
+		KindsAdded:  kindsAdded,
+		AddedKinds:  addedKinds,
+		constructed: valid,
+	}
+}
+
+// IsConstructed reports whether f was built by NewPlanSubjectObligationReadsFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f PlanSubjectObligationReadsFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns PlanSubjectObligationReads's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f PlanSubjectObligationReadsFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"subject_rows", f.SubjectRows,
+		"kinds_named", f.KindsNamed,
+		"kinds_added", f.KindsAdded,
+		"added_kinds", contextfabric.SanitizeLogStrings(f.AddedKinds),
+	}
+}
+
 // PriorConsultedFields is contextfabric.prior_consulted's generated typed construction interface
 // (CHAOS-5516): one Go field per Field PriorConsulted.Fields declares in spec.go.
 type PriorConsultedFields struct {
@@ -9818,6 +9877,50 @@ func (f PullRequestProjectNativeFirstFields) SlogArgs() []any {
 		"dropped_links", f.DroppedLinks,
 		"dropped_rows", f.DroppedRows,
 		"pull_request_covered_rows", f.PullRequestCoveredRows,
+	}
+}
+
+// RepositoryThemeBreakdownWithheldFields is devhealthfacts.repository_theme_breakdown_withheld's generated typed construction interface
+// (CHAOS-5516): one Go field per Field RepositoryThemeBreakdownWithheld.Fields declares in spec.go.
+type RepositoryThemeBreakdownWithheldFields struct {
+	Reason string
+	Team   string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every RepositoryThemeBreakdownWithheldFields uniformly, set ONLY by NewRepositoryThemeBreakdownWithheldFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewRepositoryThemeBreakdownWithheldFields is the generated constructor for RepositoryThemeBreakdownWithheldFields -- every
+// field RepositoryThemeBreakdownWithheld.Fields declares is a required parameter.
+func NewRepositoryThemeBreakdownWithheldFields(reason string, team string) RepositoryThemeBreakdownWithheldFields {
+	return RepositoryThemeBreakdownWithheldFields{
+		Reason:      reason,
+		Team:        team,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewRepositoryThemeBreakdownWithheldFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f RepositoryThemeBreakdownWithheldFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns RepositoryThemeBreakdownWithheld's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f RepositoryThemeBreakdownWithheldFields) SlogArgs() []any {
+	return []any{
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"team", contextfabric.SanitizeLogAttr(f.Team),
 	}
 }
 

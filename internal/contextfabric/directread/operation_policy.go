@@ -48,7 +48,8 @@ package directread
 //	Refusal says which code to answer. Source says who sets the value:
 //	client, acr_principal_org (orgId from the principal, never the client),
 //	acr_forced (ForcedValue). Enum rules carry AllowedValues and
-//	RefusedValues (value -> code). Min/Max, MaxItems, MaxLength are clamps.
+//	RefusedValues (value -> code). Min/Max, MinItems, MaxItems, MaxLength
+//	are clamps.
 //	Subject (SubjectConversion) converts an acr subject id to the ops form:
 //	(SubjectConversion).ToOps(acrID) (string, error).
 //
@@ -60,8 +61,9 @@ package directread
 //	    person_scope_not_served, not the "who" object's code);
 //	  - an enum value in RefusedValues answers that entry's code; a value
 //	    in neither AllowedValues nor RefusedValues is variable_not_allowed;
-//	  - Min/Max bound integers, MaxItems bounds lists, MaxLength bounds
-//	    each string (variable_out_of_range);
+//	  - Min/Max bound integers, MinItems and MaxItems bound lists, MaxLength
+//	    bounds each string (variable_out_of_range); MinItems refuses an
+//	    omitted or null list too, which is the empty SDL default;
 //	  - acr_principal_org and acr_forced values are set by acr; a client
 //	    value on such a path is refused (variable_not_allowed);
 //	  - for a restricted caller, CallerScope.ForcedVariablePath is set to
@@ -316,7 +318,10 @@ type OperationPolicy struct {
 	withheld  map[string]bool
 }
 
-// VariableRule is the rule for one input path.
+// VariableRule is the rule for one input path. MinItems is the fewest items
+// a list must hold; it applies also when the client omits the list or sends
+// null, and the loader admits it only on a client list whose SDL default is
+// empty or absent, so an omitted list holds no item (validateMinItems).
 type VariableRule struct {
 	Path          string             `json:"path"`
 	Type          string             `json:"type"`
@@ -330,6 +335,7 @@ type VariableRule struct {
 	RefusedValues []ValueRefusal     `json:"refused_values,omitempty"`
 	Min           *int64             `json:"min,omitempty"`
 	Max           *int64             `json:"max,omitempty"`
+	MinItems      int                `json:"min_items,omitempty"`
 	MaxItems      int                `json:"max_items,omitempty"`
 	MaxLength     int                `json:"max_length,omitempty"`
 	Subject       *SubjectConversion `json:"subject,omitempty"`
@@ -726,6 +732,9 @@ func validateOperation(op *OperationPolicy) error {
 				return fmt.Errorf("variable %q: allowed value %q not in the enum", v.Path, av)
 			}
 		}
+		if err := validateMinItems(v); err != nil {
+			return err
+		}
 	}
 	for _, pv := range op.PersonVariables {
 		i, ok := op.variables[pv.Path]
@@ -862,6 +871,30 @@ func validateOperation(op *OperationPolicy) error {
 				return fmt.Errorf("constraint %s names unknown path %q", con.Kind, p)
 			}
 		}
+	}
+	return nil
+}
+
+// validateMinItems holds a MinItems rule to what the edge can apply: a client
+// list outside any list (one instance per request), at most MaxItems, whose
+// SDL default is empty or absent, so an omitted or null list holds no item
+// and is refused with the rest.
+func validateMinItems(v VariableRule) error {
+	switch {
+	case v.MinItems == 0:
+		return nil
+	case v.MinItems < 0:
+		return fmt.Errorf("variable %q: min_items %d is negative", v.Path, v.MinItems)
+	case !v.Allowed || v.Source != SourceClient:
+		return fmt.Errorf("variable %q: min_items on a variable the client does not set", v.Path)
+	case !isListType(v.Type):
+		return fmt.Errorf("variable %q: min_items on a type that is not a list", v.Path)
+	case strings.Contains(v.Path, "[*]"):
+		return fmt.Errorf("variable %q: min_items inside a list", v.Path)
+	case v.MaxItems > 0 && v.MinItems > v.MaxItems:
+		return fmt.Errorf("variable %q: min_items %d above max_items %d", v.Path, v.MinItems, v.MaxItems)
+	case !slices.Contains([]string{"", "[]", "null"}, v.EffectiveDefault()):
+		return fmt.Errorf("variable %q: min_items needs an empty or absent SDL default, got %s", v.Path, v.EffectiveDefault())
 	}
 	return nil
 }

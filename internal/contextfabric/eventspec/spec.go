@@ -2173,6 +2173,25 @@ var PlanOperandReads = Event{
 	},
 }
 
+// PlanSubjectObligationReads is the Info line of what a committed subject's own required read obligations added to the fact read (CHAOS-12710).
+var PlanSubjectObligationReads = Event{
+	ID:                       "contextfabric.plan_subject_obligation_reads",
+	Msg:                      "context fabric plan subject obligation reads",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: recorded once, when the plan is built and the committed subject has a read row that requires its kinds.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "subject_rows", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_named", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "kinds_added", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "added_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(factKindArr[:]), Applicability: "the kinds the fact read gained only because the committed subject's read obligations require them, in fact-kind vocabulary order; empty when an earlier group already asked for every required kind. Its length is kinds_added"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // WindowClassification is the Info line of the window-class decision a current-axis turn with no request window draws its default from (CHAOS-12595).
 var WindowClassification = Event{
 	ID:                       "contextfabric.window_classification",
@@ -3588,6 +3607,23 @@ var TeamLinkedMixSet = Event{
 	},
 }
 
+// RepositoryThemeBreakdownWithheld is the Info line of a team investment read that withheld the team's repository_theme_breakdown (CHAOS-12580): a repository with no name (its word would be an id), two repositories sharing one handle, a linked read cut at its bound, or more links than the table's row bound. The answer keeps theme_breakdown.
+var RepositoryThemeBreakdownWithheld = Event{
+	ID:                       "devhealthfacts.repository_theme_breakdown_withheld",
+	Msg:                      "devhealthfacts.repository_theme_breakdown_withheld",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	Fields: []Field{
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"repository_without_name", "repository_name_shared", "linked_repositories_over_bound", "rows_over_bound"}},
+		{Key: "team", Type: FieldString, Presence: PresenceRequired},
+		{Key: "repository", Type: FieldString, Presence: PresenceConditional, Applicability: "written when reason=repository_without_name or reason=repository_name_shared"},
+		{Key: "bound", Type: FieldInt, Presence: PresenceConditional, Applicability: "written when reason=linked_repositories_over_bound or reason=rows_over_bound"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: "written when the request context carries a request ID"},
+	},
+}
+
 // TeamPRLinkStateNativeFirst is the Info line of the fallback-only rule of the team pull request link state: how many pull requests and linked ones the repositories read hold, and how many a fallback link suppressed.
 var TeamPRLinkStateNativeFirst = Event{
 	ID:                       "devhealthfacts.team_pr_link_state_native_first",
@@ -4970,7 +5006,7 @@ var (
 	graphqlQueryReadBudgets  = []string{"bytes_ceiling", "rows_ceiling", "time_ceiling", "unknown"}
 	graphqlQueryOperations   = []string{
 		"acrRepositoryScopes", "capacityCompletionDistribution", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad",
-		"complexityTimeseries", "compoundingRisk", "hotspots", "investmentBreakdown", "investmentFull",
+		"complexityTimeseries", "compoundingRisk", "hotspots", "investmentBreakdown", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentFull",
 		"securityOverview", "throughputForecast", "workGraphArtifacts", "workGraphEdges",
 		"workGraphFlow",
 	}
@@ -5943,6 +5979,7 @@ var All = []Event{
 	FactReadFailed,
 	TeamLinkedMixNativeFirst,
 	TeamLinkedMixSet,
+	RepositoryThemeBreakdownWithheld,
 	TeamPRLinkStateNativeFirst,
 	ProjectOwningTeamRollup,
 	PullRequestProjectNativeFirst,
@@ -5966,6 +6003,7 @@ var All = []Event{
 	WindowGatedForConfirmation,
 	WindowCanonicalizationOutcome,
 	PlanOperandReads,
+	PlanSubjectObligationReads,
 	WindowClassification,
 	InferredWindowGate,
 	InterpretationTerms,

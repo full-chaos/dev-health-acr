@@ -27,6 +27,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/hintsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/memoryinvestigation"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -278,6 +279,7 @@ func seedScopedOrganization(t *testing.T, ctx context.Context, direct clickhouse
 		{"gh:acme/other#5", "acme/other", "github", "issue", "ghprojv2:PVT_checkout", "Checkout"}, // own repository acme/other, in the project, native to acme/svc
 		{"gh:acme/svc#6", "acme/svc", "github", "issue", "", "Heuristic neighbour"},               // own repository acme/svc, heuristic to acme/svc
 		{"gitlab:acme/gl#7", "acme/gl", "gitlab", "issue", "", "Bump the runner"},                 // own repository acme/gl, native to acme/svc
+		{"gh:acme/svc#8", "acme/svc", "github", "issue", "", "Own column only"},                   // CHAOS-12706: own repository acme/svc, no link
 	}
 	// Fillers: work items the search for any of the keys finds, so the
 	// resolution stalls (more hits than the search returns) and the census
@@ -547,6 +549,118 @@ func TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	// CHAOS-12706: a receipt for a work item under a requested repository
+	// scope is admitted through its link, on the real stores and the real
+	// adapter: exactly where the keyed link read admits it, committed on the
+	// caller's canonical id. Before the change the hint loop tested the
+	// issue's own repository against the scope, so the GitHub and GitLab
+	// issues of other repositories linked into acme/svc were dropped, and the
+	// GitHub issue of acme/svc with no link was admitted.
+	t.Run("receipt: a work item hint is admitted where the keyed link read admits it", func(t *testing.T) {
+		resolveReceipt := func(t *testing.T, id string, principal storage.Principal, slugs []string) (bool, contextfabric.CommitBasis) {
+			t.Helper()
+			subjectBinding, err := adapter.ResolveInvestigationBinding(ctx, principal)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := contextfabric.InvestigationRequest{
+				SchemaVersion: contextfabric.InvestigationRequestSchemaV1, RequestID: "request_scoped_receipt", Question: "What is its status now?",
+				TimeContext: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				RequestedScope: contextfabric.RequestedScope{RepositorySlugs: slugs, SubjectHints: []contextfabric.SubjectHint{
+					{Kind: contextfabric.SubjectWorkItem, ID: id, Source: string(hintsource.PriorSubjectReceipt)},
+				}},
+				Options: contextfabric.InvestigationOptions{
+					MaxSubjectCandidates: 10, MaxCohortMembers: 50, MaxRelationshipPaths: 50,
+					MaxDrivers: 10, MaxEvidenceRefs: 100, MaxSerializedBytes: 262144, AllowClarification: true,
+				},
+				Consumer: contextfabric.ConsumerInfo{Name: "test", Version: "v1", Surface: "test"},
+			}
+			interpreted := contextfabric.InterpretedQuestion{
+				Shape: contextfabric.ShapeOpen, RequestedJudgment: "status",
+				TimeContext:      contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+				FactRequirements: []contextfabric.FactRequirement{{Kind: contextfabric.FactStatus}},
+			}
+			resolution, _, bases, _, err := adapter.ResolveSubjects(ctx, principal, request, interpreted, subjectBinding, nil, nil, nil, "")
+			if err != nil {
+				t.Fatalf("ResolveSubjects(receipt %s, %v): %v", id, slugs, err)
+			}
+			subject := contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: id}
+			for _, committed := range resolution.Committed {
+				if committed.Kind == contextfabric.SubjectWorkItem && committed.CanonicalID == id {
+					return true, bases[graphrank.SubjectKey(subject)]
+				}
+			}
+			return false, ""
+		}
+		org := storage.Principal{OrgID: s.orgID, Subject: "u", CredentialID: "c"}
+		// Pinned rows, so the differential below cannot pass on an empty read.
+		for _, c := range []struct {
+			name, item string
+			scope      []string
+			want       bool
+		}{
+			{"Linear issue, native link into the scope", "linear:CHAOS-10", []string{"acme/svc"}, true},
+			{"Jira issue, native link to a GitLab merge request in the scope", "jira:CHAOS-11", []string{"acme/gl"}, true},
+			{"GitHub issue of another repository, native link into the scope", "gh:acme/other#5", []string{"acme/svc"}, true},
+			{"GitLab issue of another repository, native link into the scope", "gitlab:acme/gl#7", []string{"acme/svc"}, true},
+			{"GitHub issue of the scoped repository with no link: its own column admits nothing", "gh:acme/svc#8", []string{"acme/svc"}, false},
+			{"Jira issue linked outside the scope", "jira:CHAOS-13", []string{"acme/svc"}, false},
+			{"repository-less issue with a text link only", "linear:CHAOS-12", []string{"acme/svc"}, false},
+			{"no scope: unchanged", "gh:acme/svc#8", nil, true},
+		} {
+			committed, basis := resolveReceipt(t, s.workItem(t, c.item), org, c.scope)
+			if committed != c.want || (committed && basis != contextfabric.CommitBasisCallerCanonicalID) {
+				t.Errorf("%s: committed %t basis %q, want committed %t on the caller's canonical id", c.name, committed, basis, c.want)
+			}
+		}
+		// The differential: for every named item, scope and caller, the receipt
+		// commits exactly when the real keyed link read lists the item.
+		var named []string
+		for id := range s.items {
+			if !strings.HasPrefix(id, "linear:CHAOS-9") {
+				named = append(named, id)
+			}
+		}
+		sort.Strings(named)
+		principals := []storage.Principal{
+			org,
+			{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/svc"}},
+			{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/svc", "acme/other"}},
+			{OrgID: s.orgID, Subject: "u", CredentialID: "c", RepositoryScopes: []string{"acme/gl"}},
+		}
+		admitted, refused := 0, 0
+		for _, principal := range principals {
+			for _, slugs := range [][]string{{"acme/svc"}, {"acme/gl"}, {"acme/other"}} {
+				reachCtx, finish, err := adapter.withProjectReach(ctx, key, principal)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, item := range named {
+					id := s.workItem(t, item)
+					tiers, complete, err := adapter.linkScopedWorkItemsOf(reachCtx, key, principal, contextfabric.RequestedScope{RepositorySlugs: slugs}, []string{id})
+					if err != nil || !complete {
+						t.Fatalf("keyed read of %s: complete %t err %v", item, complete, err)
+					}
+					want := tiers[id] != ""
+					committed, basis := resolveReceipt(t, id, principal, slugs)
+					if committed != want || (committed && basis != contextfabric.CommitBasisCallerCanonicalID) {
+						t.Errorf("grants %v scope %v %s: receipt committed %t basis %q, keyed read %v: want the receipt committed exactly where the read admits the item", principal.RepositoryScopes, slugs, item, committed, basis, tiers)
+					}
+					if want {
+						admitted++
+					} else {
+						refused++
+					}
+				}
+				finish()
+			}
+		}
+		t.Logf("receipt differential: %d admitted, %d refused", admitted, refused)
+		if admitted < 8 || refused < 20 {
+			t.Fatalf("receipt differential: %d admitted, %d refused: too few to stand for the rule", admitted, refused)
+		}
+	})
 
 	t.Run("the census population is the repository walk's members", func(t *testing.T) {
 		for _, principal := range []storage.Principal{
