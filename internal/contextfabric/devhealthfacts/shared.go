@@ -1401,10 +1401,15 @@ import (
 // answer saved under v272 serves raw theme tokens and ids with no word to show
 // in their place.
 //
-// v273 -> v274: a team investment fact on a single-team read carries
+// v273 -> v274: a stored issue-to-pull-request fact names its work item end by
+// its key when the read has already given the pull request end its label
+// (CHAOS-12715). An answer saved earlier can show the raw work item id in a
+// path's why_relevant.
+//
+// v274 -> v275: a team investment fact on a single-team read carries
 // repository_theme_breakdown, its effort split by repository (CHAOS-12580). An
-// answer saved under v273 has no such table.
-const QueryVersion = "devhealthfacts.clickhouse.v274"
+// answer saved under v274 has no such table.
+const QueryVersion = "devhealthfacts.clickhouse.v275"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

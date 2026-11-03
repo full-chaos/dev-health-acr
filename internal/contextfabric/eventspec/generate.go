@@ -104,6 +104,8 @@ func goVarName(e Event) string {
 		return "PageHintLookup"
 	case WorkItemKeyPrefixUnread.ID:
 		return "WorkItemKeyPrefixUnread"
+	case RepositoryReferenceRow.ID:
+		return "RepositoryReferenceRow"
 	case Corroboration.ID:
 		return "Corroboration"
 	case CorroborationSummary.ID:

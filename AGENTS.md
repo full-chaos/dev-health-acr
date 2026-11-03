@@ -187,7 +187,7 @@ JUnit reports and checks every other job succeeded.
 rest job skips every listed name, so a new test cannot drop out). For `devhealthsource` every test
 must also be named in one race list (`devhealthsource-race-rest-tests.txt` for the rest job,
 CHAOS-12667): a new test fails `race-split.sh verify` until its author places it, by its real span,
-which each race job's budget guard prints beside main's. On a pull request the `plan` job runs
+which each race job's budget guard prints beside main's. `internal/api` races alone in two halves (`race-api`, `race-api-heavy`, split by `scripts/ci/api-heavy-tests.txt`), each under the 420s it had in the shared shard (CHAOS-12717). On a pull request the `plan` job runs
 `scripts/ci/reached-shards.sh`: a `unit`/`race*` shard runs only when its `test-shard.sh` package
 list holds a package the change reaches (its test binary imports a changed package, its tests walk
 the module tree, or its test source names a changed file). Pushes to `main`, any other event, and a

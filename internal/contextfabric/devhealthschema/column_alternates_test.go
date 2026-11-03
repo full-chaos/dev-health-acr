@@ -51,3 +51,21 @@ func TestTeamMetricsDailyCountersAcceptUInt32AndFloat64(t *testing.T) {
 		t.Fatal("the repository counter stays an integer: the alternate must not leak")
 	}
 }
+
+// ops migration 146 makes the landscape cycle Nullable(Float64): an identity
+// with no merged pull request in its window holds NULL. acr serves the column
+// before and after the migration, and a fixture is rendered for each type.
+func TestLandscapeCycleAcceptsFloat64AndNullableFloat64(t *testing.T) {
+	for _, typ := range []string{"Float64", "Nullable(Float64)"} {
+		if !devhealthschema.AcceptsColumnType("ic_landscape_rolling_30d", "cycle_p50_30d_hours", typ) {
+			t.Fatalf("cycle_p50_30d_hours must accept %s", typ)
+		}
+		ddl := devhealthschema.DDLWithColumnType("", "ic_landscape_rolling_30d", "cycle_p50_30d_hours", typ)
+		if !strings.Contains(ddl, "cycle_p50_30d_hours "+typ+",") {
+			t.Fatalf("DDL for %s does not carry the type: %s", typ, ddl)
+		}
+	}
+	if devhealthschema.AcceptsColumnType("ic_landscape_rolling_30d", "x_raw", "Nullable(Float64)") {
+		t.Fatal("the alternate must not leak to another landscape column")
+	}
+}

@@ -362,6 +362,39 @@ attaches, so each prefix is read once per turn, a failed read included. Measured
 local stack: 40 to 130 ms under a one- to five-repository grant, 4 to 8 ms with no
 grant.
 
+### A GitHub reference names an issue or a pull request (CHAOS-12642)
+
+GitHub issues and pull requests share one number space, so `owner/repo#8` can name
+either, and the text cannot tell which. The sync also stores each GitHub pull
+request as a work item `ghpr:owner/repo#8`, so the work item reading alone commits
+that mirror, not the pull request. Before the prefix read, a turn reads the stored
+rows for each reference with `#`, through the census and under the caller's grant,
+in this order (lead ruling, CHAOS-12642):
+
+| Stored rows | Handle | Rule on the line |
+| --- | --- | --- |
+| a `git_pull_requests` row with that number, in a `github` repository of that name | `pull_request_repo_reference`, kind `pull_request` | `pull_request_row` |
+| else a work item with that key | `work_item_repo_reference`, as before | `work_item_row` |
+| neither | `work_item_repo_reference`; the census proves the absence | `not_found` |
+| a read that failed or did not close | `work_item_repo_reference`, as before | `unread` |
+
+The repository name compares trimmed and lower-cased. GitLab writes `!` for a merge
+request and `#` for an issue, so a `!` reference is never read as a pull request,
+and a GitLab repository never holds the pull request row. Each reference costs at
+most two census reads, the turn's memo keeps them, and a call makes at most 8
+census reads for references, the prefix read's budget; a reference past it is
+unread. `graphrank.repository_reference_row` logs at Info, once per turn, how
+many references each rule decided; counts only.
+
+`find_subjects` handle mode reads a whole `owner/repo#N` handle the same way: one
+pull request census first, and a row makes the handle the pull request. The direct
+read line names the decision in `reference_row` (`pull_request_row`,
+`work_item_reading`, `unread`). It reads only an unanchored handle of a caller
+who is not repository-restricted: a restricted caller is refused on the key shape
+before any read (CHAOS-7200), and with an anchor the census of a refused anchor
+must not show through the kind, so an anchored reference keeps the work item
+reading.
+
 `find_subjects` handle mode keeps one whole key of any prefix
 (`BindWorkItemKey`). A key in a sentence is refused there for every prefix; before
 this change the `CHAOS` prefix alone was accepted in a sentence.

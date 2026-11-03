@@ -1450,6 +1450,11 @@ type ContextFabricSubjectResolution struct {
 	// what the terminal says in place of "found no candidate". The sentence is the
 	// only form that leaves the process.
 	CensusLimitation string `json:"-"`
+	// ExactLabelKind (CHAOS-12600) is the kind a bare-name comparison was
+	// resolved under because each side matched exactly one subject of that kind
+	// by its full label, or "". The answer states it as a fixed limitation
+	// sentence, which is the only form that leaves the process.
+	ExactLabelKind ContextFabricSubjectKind `json:"-"`
 	// WorkItemLinkScopeUnread (CHAOS-12505) is set when the census of the
 	// question's work-item handle under a requested repository scope ran and the
 	// keyed link read that scopes it failed or was cut. Nothing then shows that

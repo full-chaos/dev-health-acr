@@ -117,6 +117,7 @@ isolated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/factoracle"
   "github.com/full-chaos/dev-health-acr/internal/mcp"
   "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+  "github.com/full-chaos/dev-health-acr/internal/api"
 )
 
 # CHAOS-5977: dedicated_isolated_packages is a SUBSET of isolated_packages
@@ -166,12 +167,22 @@ isolated_packages=(
 # internal/contracts/v1 joins them (race-contracts-v1): 143-367s in race shard 4
 # depending on runner speed, 360s against the 357s guard; alone it has its own
 # 440s budget (GOTEST_CONTRACTS_V1_TIMEOUT).
+# CHAOS-12717: internal/api joins them (race-api, race-api-heavy). In race
+# shard 3 it sat at the 357s guard of the 420s shard budget: 357.045s on main
+# bc763284 (run 41577399086, job 125725078315, guard failed), 362.3s on #1956
+# (run 41570348478, job 125703785496, guard failed), 339.1s on main db3d95ab
+# (run 41573471807, job 125713561261), 214s on a PR run, with
+# internal/contextfabric/falkorgraph at 300-304s in the same shard. Its 830
+# tests run nearly serially (span sum ~346s of 339.1s), so it is split in two
+# by scripts/ci/api-heavy-tests.txt (race-split.sh api) and each half runs
+# alone under the SAME 420s budget (GOTEST_API_TIMEOUT): no budget raise.
 dedicated_isolated_packages=(
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
   "github.com/full-chaos/dev-health-acr/internal/contextfabric/factoracle"
   "github.com/full-chaos/dev-health-acr/internal/mcp"
   "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+  "github.com/full-chaos/dev-health-acr/internal/api"
 )
 
 # CHAOS-7282: unit_dedicated_packages is a SUBSET of isolated_packages naming
