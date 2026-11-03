@@ -146,4 +146,92 @@ if command -v jq >/dev/null; then
   if [ "$rc" -eq 2 ]; then echo "ok   empty-allowlist-rc2"; else echo "FAIL empty-allowlist-rc2 rc=$rc"; fails=$((fails + 1)); fi
 fi
 
+# CHAOS-12667: real span report. A parent whose parallel subtests outlive its own function reports a small Elapsed, so the
+# guard names the slowest tests by (last event of T or T/...) - (T's last run/cont). Reporting only: the exit code is the
+# one the package and per-test checks give.
+if command -v jq >/dev/null; then
+  ev() { # time action test [elapsed]; time is seconds after 19:25:00 with a fraction, e.g. 57.5848234
+    local t test_field=""
+    t="$(printf '2026-11-02T19:%02d:%09.7fZ' $(( ${1%.*} / 60 )) "$(awk -v x="$1" 'BEGIN { printf "%.7f", x - 60 * int(x / 60) }')")"
+    [ -n "${3:-}" ] && test_field=",\"Test\":\"$3\""
+    printf '{"Time":"%s","Action":"%s","Package":"example/a"%s%s}\n' "$t" "$2" "$test_field" "${4:+,\"Elapsed\":$4}"
+  }
+  sp="$tmp/span.json"
+  spexpect() { # name want_rc want_pattern [env assignment]
+    local name="$1" want="$2" pat="$3" rc=0 out
+    out="$(env RACE_SLOW_TESTS="$allow" ${4:+"$4"} "$guard" --json 6000 "$sp" 2>&1)" || rc=$?
+    if [ "$rc" -ne "$want" ] || ! grep -q -- "$pat" <<<"$out"; then
+      echo "FAIL $name: rc=$rc want=$want pattern='$pat'"; printf '    %s\n' "${out//$'\n'/$'\n    '}"
+      fails=$((fails + 1))
+    else
+      echo "ok   $name"
+    fi
+  }
+  # parent passes at 1.0s (Elapsed 1) while its two parallel subtests run until 11.5s after the parent started
+  { ev 0.5 run TestP; ev 0.6 run TestP/a; ev 0.7 pause TestP/a; ev 0.8 run TestP/b; ev 0.9 pause TestP/b
+    ev 1.0 pass TestP 1; ev 1.1 cont TestP/a; ev 1.2 cont TestP/b; ev 11.4 pass TestP/a 10.3; ev 11.5 pass TestP/b 10.3
+    ev 11.6 pass "" 11.6; } >"$sp"
+  spexpect span-counts-parallel-subtests 0 'span *11\.0 *elapsed *1\.0 *TestP$'
+  spexpect span-header-names-the-package 0 'by real span (s), reported Elapsed beside it \[example/a\]'
+  # a paused top-level parallel test starts at its cont: run at 0, pause, cont at 20, pass at 25 -> span 5
+  { ev 0 run TestPaused; ev 0.1 pause TestPaused; ev 20 cont TestPaused; ev 25 pass TestPaused 5; ev 26 pass "" 26; } >"$sp"
+  spexpect paused-test-starts-at-cont 0 'span *5\.0 *elapsed *5\.0 *TestPaused$'
+  # sub-second precision is kept
+  { ev 0.0000001 run TestFine; ev 0.5848234 pass TestFine 0.58; ev 1 pass "" 1; } >"$sp"
+  spexpect sub-second-precision 0 'span *0\.6 *elapsed *0\.6 *TestFine$'
+  # the report never changes the exit code: a failing per-test limit still fails, with the report printed
+  { ev 0 run TestGiant; ev 310 pass TestGiant 310; ev 311 pass "" 311; } >"$sp"
+  spexpect report-printed-when-guard-fails 1 'span *310\.0 *elapsed *310\.0 *TestGiant$'
+  # baseline: package and per-test deltas, and a test absent in the baseline is new
+  { ev 0 run TestP; ev 10 pass TestP 1; ev 0 run TestOld; ev 3 pass TestOld 3; ev 11 pass "" 11; } >"$tmp/base.json"
+  { ev 0 run TestP; ev 14 pass TestP 1; ev 0 run TestNew; ev 2 pass TestNew 2; ev 0 run TestOld; ev 3 pass TestOld 3; ev 20 pass "" 20; } >"$sp"
+  spexpect baseline-delta-per-test 0 'span *14\.0 *elapsed *1\.0 *TestP *| baseline *10\.0 *delta +4\.0' RACE_BASELINE_JSON="$tmp/base.json"
+  spexpect baseline-unchanged-test-delta-zero 0 'TestOld *| baseline *3\.0 *delta +0\.0' RACE_BASELINE_JSON="$tmp/base.json"
+  spexpect baseline-absent-test-is-new 0 'TestNew .*| new' RACE_BASELINE_JSON="$tmp/base.json"
+  spexpect baseline-package-delta 0 'package time: now 20\.0s, baseline 11\.0s, delta +9\.0s' RACE_BASELINE_JSON="$tmp/base.json"
+  spexpect baseline-unreadable-file-warns 0 '::warning::shard-budget-guard: no main baseline for /nonexistent' RACE_BASELINE_JSON=/nonexistent
+  spexpect no-baseline-says-so 0 'no baseline set (RACE_BASELINE_JSON)'
+  # an unreadable baseline file never changes the exit code: a failing input still fails, with the warning
+  { ev 0 run TestGiant; ev 310 pass TestGiant 310; ev 311 pass "" 311; } >"$sp"
+  spexpect baseline-missing-failing-input-rc1 1 '::warning::shard-budget-guard: no main baseline for /nonexistent' RACE_BASELINE_JSON=/nonexistent
+  # Codex #1967 r1: the report's temporary directory failing (mktemp -d) is a warning, never an exit: a passing input
+  # stays 0 and a failing input stays 1. The shim fails only `mktemp -d`; the guard's own plain mktemp calls work.
+  mkdir -p "$tmp/nodir"
+  cat >"$tmp/nodir/mktemp" <<'SHIM'
+#!/bin/sh
+for a in "$@"; do [ "$a" = -d ] && { echo "mktemp: no directory" >&2; exit 1; }; done
+exec /usr/bin/mktemp "$@"
+SHIM
+  chmod +x "$tmp/nodir/mktemp"
+  { ev 0 run TestP; ev 14 pass TestP 1; ev 20 pass "" 20; } >"$sp"
+  rc_nd=0; PATH="$tmp/nodir:$PATH" RACE_SLOW_TESTS="$allow" "$guard" --json 6000 "$sp" >"$tmp/nd.out" 2>&1 || rc_nd=$?
+  if [ "$rc_nd" -eq 0 ] && grep -q 'no temporary directory for the real span report' "$tmp/nd.out"; then echo "ok   report-tempdir-failure-passing-input-rc0"
+  else echo "FAIL report-tempdir-failure-passing-input-rc0 rc=$rc_nd"; cat "$tmp/nd.out"; fails=$((fails + 1)); fi
+  { ev 0 run TestGiant; ev 310 pass TestGiant 310; ev 311 pass "" 311; } >"$sp"
+  rc_nd=0; PATH="$tmp/nodir:$PATH" RACE_SLOW_TESTS="$allow" "$guard" --json 6000 "$sp" >"$tmp/nd.out" 2>&1 || rc_nd=$?
+  if [ "$rc_nd" -eq 1 ] && grep -q 'no temporary directory for the real span report' "$tmp/nd.out"; then echo "ok   report-tempdir-failure-failing-input-rc1"
+  else echo "FAIL report-tempdir-failure-failing-input-rc1 rc=$rc_nd"; cat "$tmp/nd.out"; fails=$((fails + 1)); fi
+  # Codex #1967 r2: a failing cleanup never changes the result. The shim fails every `rm`; the guard still exits with
+  # the status it reached (0 on a passing input, 1 on a failing one).
+  mkdir -p "$tmp/norm"
+  printf '#!/bin/sh\necho "rm: denied" >&2\nexit 1\n' >"$tmp/norm/rm"; chmod +x "$tmp/norm/rm"
+  { ev 0 run TestP; ev 14 pass TestP 1; ev 20 pass "" 20; } >"$sp"
+  rc_rm=0; PATH="$tmp/norm:$PATH" RACE_SLOW_TESTS="$allow" "$guard" --json 6000 "$sp" >"$tmp/rm.out" 2>&1 || rc_rm=$?
+  if [ "$rc_rm" -eq 0 ]; then echo "ok   failing-cleanup-passing-input-rc0"
+  else echo "FAIL failing-cleanup-passing-input-rc0 rc=$rc_rm"; cat "$tmp/rm.out"; fails=$((fails + 1)); fi
+  { ev 0 run TestGiant; ev 310 pass TestGiant 310; ev 311 pass "" 311; } >"$sp"
+  rc_rm=0; PATH="$tmp/norm:$PATH" RACE_SLOW_TESTS="$allow" "$guard" --json 6000 "$sp" >"$tmp/rm.out" 2>&1 || rc_rm=$?
+  if [ "$rc_rm" -eq 1 ]; then echo "ok   failing-cleanup-failing-input-rc1"
+  else echo "FAIL failing-cleanup-failing-input-rc1 rc=$rc_rm"; cat "$tmp/rm.out"; fails=$((fails + 1)); fi
+  # Codex #1967 r2: a test with no end event (a cut-off transcript) is a lower bound, and says so.
+  { ev 0 run TestDone; ev 1 pass TestDone 1; ev 2 run TestHung; ev 10 output TestHung; } >"$sp"
+  spexpect unfinished-test-is-a-lower-bound 1 'TestHung  (no end event: ran at least this long)'
+  # Codex #1967 r3: a cut-off run has no package time, so the report prints no package delta, whatever the baseline holds.
+  { ev 0 run TestDone; ev 31 pass TestDone 31; ev 31 pass "" 31; } >"$tmp/base31.json"
+  { ev 0 run TestDone; ev 1 pass TestDone 1; ev 2 run TestCutOff; ev 9 output TestCutOff; } >"$sp"
+  spexpect cut-off-run-has-no-package-delta 1 'package time: not measured in this run; no package delta' RACE_BASELINE_JSON="$tmp/base31.json"
+  out_co="$(RACE_SLOW_TESTS="$allow" RACE_BASELINE_JSON="$tmp/base31.json" "$guard" --json 6000 "$sp" 2>&1 || true)"
+  if grep -q 'package time: now' <<<"$out_co"; then echo "FAIL cut-off-run-prints-no-measured-delta"; fails=$((fails + 1)); else echo "ok   cut-off-run-prints-no-measured-delta"; fi
+fi
+
 [ "$fails" -eq 0 ]

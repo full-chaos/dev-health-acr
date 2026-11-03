@@ -110,3 +110,12 @@ func ParseContextFabricFactRowTruncationLimitation(limitation string) (served, d
 	}
 	return served, declared, perTable, true
 }
+
+// ContextFabricDistributionWithheldLimitation is the disclosure of a
+// completion distribution the answer-size row cut left out whole (CHAOS-12607,
+// CHAOS-12608). A distribution is never cut -- a shorter one is a different
+// forecast -- so it is withheld, and this says so; the forecast's percentiles
+// stay on the fact. It is its own sentence rather than part of the per-table
+// one: a withheld table keeps no rows at all, which that sentence's counts do
+// not describe.
+const ContextFabricDistributionWithheldLimitation = "This answer leaves out the completion forecast's distribution of simulation runs, because the assembled answer exceeded the size budget; the forecast's percentile days are still stated."

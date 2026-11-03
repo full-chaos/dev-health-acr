@@ -215,6 +215,8 @@ var MCPInvestigateQuestionUntrustedFields = []string{
 	// prompt bounds claimed_fact.field), so it is model-facing text, not a
 	// service-issued vocabulary (codex round-5 R5-6).
 	"structured.key_facts[].field",
+	// CHAOS-12608: the forecast's work scope is a provider identifier.
+	"structured.key_facts[].completion_forecast.work_scope_id",
 	"structured.key_facts[].value.string",
 	// CHAOS-4347: Rows is the SAME producer-sourced fact data as Value,
 	// just shaped as a table instead of one scalar -- same reasoning,
@@ -358,6 +360,8 @@ var MCPInvestigationResultUntrustedFields = []string{
 	"structured.subject_resolution.clarification_prompt",
 	"structured.subject_resolution.candidates[].match_reasons[]",
 	"structured.claimed_facts[].field",
+	// CHAOS-12608: the forecast's work scope is a provider identifier.
+	"structured.claimed_facts[].completion_forecast.work_scope_id",
 	"structured.claimed_facts[].fact_id",
 	"structured.claimed_facts[].derived_from[].fact_id",
 	"structured.claimed_facts[].derived_from[].field",

@@ -20,6 +20,9 @@ type EngineOptions struct {
 	// ComparisonTableEnabled turns on the comparison_side_by_side rule
 	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
 	ComparisonTableEnabled bool
+	// CompletionForecastEnabled turns on the completion_forecast rule
+	// (CHAOS-12608). See Config.CompletionDistributionEnabled.
+	CompletionForecastEnabled bool
 	// FactCapabilities are the field declarations that rule reads each field's
 	// scope from, and that every claimed table reads its measure units from
 	// (CHAOS-11984).
@@ -1486,6 +1489,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		renderShapeOptions: RenderShapeOptions{
 			InvestmentThemeShare: options.InvestmentTreemapEnabled,
 			ComparisonSideBySide: options.ComparisonTableEnabled,
+			CompletionForecast:   options.CompletionForecastEnabled,
 			FieldScope:           factFieldScopeLookup(options.FactCapabilities),
 			TableCadence:         declaredCadenceOf(options.FactCapabilities),
 		},

@@ -1,0 +1,230 @@
+package contextfabric
+
+import (
+	"strconv"
+
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
+
+// The words of the completion forecast (CHAOS-12608). They are served, never
+// derived from a model, and agreed with the seam that draws them.
+const (
+	completionForecastTitle       = "Completion forecast"
+	completionForecastAxisLabel   = "Days to complete"
+	completionForecastValueLabel  = "Share of runs finished"
+	completionForecastSeriesLabel = "Share of runs finished"
+)
+
+// completionForecastShape is the completion_forecast rule (CHAOS-12608,
+// CHAOS-4613 rulings 3 and 5): the Monte Carlo completion curve of ONE team
+// forecast, drawn from the claimed team workload fact's completion
+// distribution, every row once, in row order. It is positive-evidence only:
+// this turn's own validated frame must ask for completion or remaining work,
+// the plan must authorize the forecast kind, and exactly one claimed team
+// workload fact must carry a distribution. A team with several scopes that
+// carry one gets no curve, and the claims carry each scope's percentiles: the
+// answer does not choose a scope for the reader. A distribution the producer
+// did not serve (no run finished within the horizon, over its cap, malformed,
+// not stored) is no claim table here, so it is never drawn as a flat line.
+func completionForecastShape(result InvestigationResult, frame *QuestionFrame) (*contractsv1.ContextFabricRenderShape, RenderShapeSkipReason) {
+	if result.Cohort != nil || cohortRenderIntent(frame) {
+		return nil, RenderShapeSkipCohortAnswer
+	}
+	if frame == nil || !(frame.HasObligation(ObligationCompletion) || frame.HasObligation(ObligationRemainingWork)) {
+		return nil, RenderShapeSkipNotForecastIntent
+	}
+	if !planAuthorizesRenderKind(result.AnswerPlan, contractsv1.ContextFabricRenderKindForecast) {
+		return nil, RenderShapeSkipNotPlanAuthorized
+	}
+	var fact *ClaimedFact
+	for index := range result.ClaimedFacts {
+		candidate := &result.ClaimedFacts[index]
+		if candidate.Kind != FactWorkload || candidate.Subject.Kind != contractsv1.ContextFabricSubjectTeam || !declaresCompletionDistribution(candidate) {
+			continue
+		}
+		if fact == nil {
+			fact = candidate
+			continue
+		}
+		// Two claims of one fact state one forecast (Codex #1949 r1): only a
+		// second scope withholds the curve. The first claim of a scope is
+		// the one drawn.
+		if forecastScopeOf(*fact) != forecastScopeOf(*candidate) {
+			return nil, RenderShapeSkipMoreThanOneScope
+		}
+	}
+	if fact == nil {
+		return nil, RenderShapeSkipNoCompletionDistribution
+	}
+	if len(fact.Rows) > contractsv1.ContextFabricRenderPointsMax(contractsv1.ContextFabricRenderKindForecast) {
+		return nil, RenderShapeSkipDistributionUnusable
+	}
+	points := make([]contractsv1.ContextFabricRenderPoint, 0, len(fact.Rows))
+	for index, row := range fact.Rows {
+		day := row.Fields[contractsv1.ContextFabricRenderForecastAxisField]
+		share, numeric := renderNumericCell(row.Fields[contractsv1.ContextFabricRenderForecastShareField])
+		if day.Integer == nil || !numeric || share < 0 || share > 1 {
+			return nil, RenderShapeSkipDistributionUnusable
+		}
+		rowIndex := index
+		points = append(points, contractsv1.ContextFabricRenderPoint{
+			Label: strconv.FormatInt(*day.Integer, 10),
+			Value: share,
+			Source: contractsv1.ContextFabricRenderPointSource{
+				Kind:     contractsv1.ContextFabricRenderSourceClaimedFactTableRow,
+				ClaimID:  fact.ClaimID,
+				RowIndex: &rowIndex,
+				Field:    contractsv1.ContextFabricRenderForecastShareField,
+			},
+		})
+	}
+	shape := &contractsv1.ContextFabricRenderShape{
+		Kind:       contractsv1.ContextFabricRenderKindForecast,
+		SelectedBy: contractsv1.ContextFabricRenderRuleCompletionForecast,
+		Title:      completionForecastTitle,
+		AxisKind:   contractsv1.ContextFabricRenderAxisCategory,
+		AxisLabel:  completionForecastAxisLabel,
+		ValueLabel: completionForecastValueLabel,
+		ValueUnit:  contractsv1.ContextFabricRenderValueUnitRatio,
+		Series: []contractsv1.ContextFabricRenderSeries{{
+			Key:    contractsv1.ContextFabricRenderForecastShareField,
+			Label:  completionForecastSeriesLabel,
+			Points: points,
+		}},
+	}
+	// A chart never costs an answer: the shape is proved against the contract
+	// here, as the treemap's is.
+	proved := *shape
+	proved.ShapeID = "rs_proof"
+	probe := result
+	probe.RenderShapes = []contractsv1.ContextFabricRenderShape{proved}
+	if err := contractsv1.ValidateRenderShapesForResult(probe); err != nil {
+		return nil, RenderShapeSkipDistributionUnusable
+	}
+	return shape, ""
+}
+
+// forecastScopeOf is the stored forecast a claim states: its team and its
+// summary's work scope (contractsv1.ContextFabricForecastScope).
+func forecastScopeOf(claim ClaimedFact) contractsv1.ContextFabricForecastScope {
+	scope := ""
+	if claim.CompletionForecast != nil {
+		scope = claim.CompletionForecast.WorkScopeID
+	}
+	return contractsv1.ContextFabricForecastScopeOf(claim.Subject, scope)
+}
+
+// declaresCompletionDistribution is the reading the contract's validator holds
+// a forecast to: the claim's rows are its declared completion distribution.
+func declaresCompletionDistribution(fact *ClaimedFact) bool {
+	table := fact.Table
+	if table == nil || len(fact.Rows) == 0 || table.Field != contractsv1.ContextFabricRenderForecastTableField || table.Shape != contractsv1.ContextFabricFactTableShapeDistribution {
+		return false
+	}
+	return len(table.Key) == 1 && table.Key[0] == contractsv1.ContextFabricRenderForecastAxisField && table.HasMeasure(contractsv1.ContextFabricRenderForecastShareField)
+}
+
+// The words of the forecast percentiles table (CHAOS-12608).
+const (
+	forecastPercentilesTitle      = "Completion forecast percentiles"
+	forecastPercentilesAxisLabel  = "Percentile"
+	forecastPercentilesValueLabel = "Days to complete"
+)
+
+// forecastPercentileFields are the percentiles a table row states, in order.
+var forecastPercentileFields = []string{
+	contractsv1.ContextFabricForecastSummaryP50Days,
+	contractsv1.ContextFabricForecastSummaryP85Days,
+	contractsv1.ContextFabricForecastSummaryP95Days,
+}
+
+// forecastPercentilesShape is the completion_forecast_percentiles rule
+// (CHAOS-12608, CHAOS-4613 ruling 3 as amended by the lead): when no curve is
+// drawn, the P50/P85/P95 days of every claimed team scope whose forecast
+// serves them, one series per claim, each point cited to that claim's
+// completion forecast summary. It needs percentiles, not a distribution, so a
+// scope with no stored distribution or with every run at the horizon still
+// has its row. The same positive evidence as the curve gates it, and the plan
+// must authorize a table.
+func forecastPercentilesShape(result InvestigationResult, frame *QuestionFrame) (*contractsv1.ContextFabricRenderShape, RenderShapeSkipReason) {
+	if result.Cohort != nil || cohortRenderIntent(frame) {
+		return nil, RenderShapeSkipCohortAnswer
+	}
+	if frame == nil || !(frame.HasObligation(ObligationCompletion) || frame.HasObligation(ObligationRemainingWork)) {
+		return nil, RenderShapeSkipNotForecastIntent
+	}
+	if !planAuthorizesRenderKind(result.AnswerPlan, contractsv1.ContextFabricRenderKindTable) {
+		return nil, RenderShapeSkipNotPlanAuthorized
+	}
+	var series []contractsv1.ContextFabricRenderSeries
+	drawn := map[contractsv1.ContextFabricForecastScope]struct{}{}
+	for _, claim := range result.ClaimedFacts {
+		summary := claim.CompletionForecast
+		if claim.Kind != FactWorkload || claim.Subject.Kind != contractsv1.ContextFabricSubjectTeam || summary == nil {
+			continue
+		}
+		// One row per stored forecast (Codex #1949 r1): a second claim of a
+		// scope already drawn states the same percentiles.
+		if _, repeated := drawn[forecastScopeOf(claim)]; repeated {
+			continue
+		}
+		var points []contractsv1.ContextFabricRenderPoint
+		for _, field := range forecastPercentileFields {
+			days, ok := summary.Number(field)
+			// A day count past 2^53 cannot be plotted as the number it is
+			// (Codex #1949 r1); it gets no point, as a cell would not.
+			if !ok || days > contractsv1.ContextFabricRenderPointExactIntegerBound {
+				continue
+			}
+			word, known := contractsv1.ContextFabricForecastPercentileLabel(field)
+			if !known {
+				return nil, RenderShapeSkipForecastPercentilesUnprovable
+			}
+			points = append(points, contractsv1.ContextFabricRenderPoint{
+				Label: word,
+				Value: float64(days),
+				Source: contractsv1.ContextFabricRenderPointSource{
+					Kind:    contractsv1.ContextFabricRenderSourceClaimedFactForecastSummary,
+					ClaimID: claim.ClaimID,
+					Field:   field,
+				},
+			})
+		}
+		if len(points) == 0 {
+			continue
+		}
+		drawn[forecastScopeOf(claim)] = struct{}{}
+		label := summary.WorkScopeID
+		if label == "" {
+			label = claim.Subject.Label
+		}
+		series = append(series, contractsv1.ContextFabricRenderSeries{
+			Key:    claim.ClaimID,
+			Label:  clampRenderLabel(label),
+			Points: points,
+		})
+	}
+	if len(series) == 0 {
+		return nil, RenderShapeSkipNoForecastPercentiles
+	}
+	if len(series) > contractsv1.ContextFabricRenderSeriesMaxCount {
+		return nil, RenderShapeSkipTooManyScopes
+	}
+	shape := &contractsv1.ContextFabricRenderShape{
+		Kind:       contractsv1.ContextFabricRenderKindTable,
+		SelectedBy: contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles,
+		Title:      forecastPercentilesTitle,
+		AxisKind:   contractsv1.ContextFabricRenderAxisCategory,
+		AxisLabel:  forecastPercentilesAxisLabel,
+		ValueLabel: forecastPercentilesValueLabel,
+		Series:     series,
+	}
+	proved := *shape
+	proved.ShapeID = "rs_proof"
+	probe := result
+	probe.RenderShapes = []contractsv1.ContextFabricRenderShape{proved}
+	if err := contractsv1.ValidateRenderShapesForResult(probe); err != nil {
+		return nil, RenderShapeSkipForecastPercentilesUnprovable
+	}
+	return shape, ""
+}

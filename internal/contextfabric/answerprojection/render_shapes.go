@@ -134,6 +134,38 @@ func (s projectedRenderSources) carries(source contractsv1.ContextFabricRenderPo
 			return ok && scalarPlotsAs(cell, value)
 		}
 		return false
+	case contractsv1.ContextFabricRenderSourceClaimedFactTableRow:
+		// CHAOS-12608 (Codex #1949 r1): the declared table's own rows,
+		// whatever time series rides beside them, as contracts/v1 resolves
+		// this source.
+		if source.RowIndex == nil {
+			return false
+		}
+		for _, fact := range s.facts {
+			if fact.ClaimID != source.ClaimID {
+				continue
+			}
+			if *source.RowIndex < 0 || *source.RowIndex >= len(fact.Rows) {
+				return false
+			}
+			cell, ok := fact.Rows[*source.RowIndex].Fields[source.Field]
+			return ok && scalarPlotsAs(cell, value)
+		}
+		return false
+	case contractsv1.ContextFabricRenderSourceClaimedFactForecastSummary:
+		// CHAOS-12608 (Codex #1949 r1): a number of the projected fact's
+		// completion forecast summary.
+		for _, fact := range s.facts {
+			if fact.ClaimID != source.ClaimID {
+				continue
+			}
+			if fact.CompletionForecast == nil {
+				return false
+			}
+			days, ok := fact.CompletionForecast.Number(source.Field)
+			return ok && scalarPlotsAs(contractsv1.ContextFabricScalarValue{Integer: &days}, value)
+		}
+		return false
 	case contractsv1.ContextFabricRenderSourceClaimedFactValue:
 		for _, fact := range s.facts {
 			if fact.ClaimID == source.ClaimID {
