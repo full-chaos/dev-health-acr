@@ -89,3 +89,34 @@ func TestAPlanWithABlankDetailTableIsRefusedAtLoad(t *testing.T) {
 		t.Fatalf("a blank table name: err = %v, want the plan refused", err)
 	}
 }
+
+// Every fact that lists the table gets its own claim, in request order (Codex r1 on #2005: a
+// claim from the first listing fact alone passed every case above).
+func TestEveryFactThatListsTheTableIsClaimed(t *testing.T) {
+	request := `{"subject_resolution":{"committed":[{"kind":"team","canonical_id":"team:a","label":"A"}]},
+"canonical_facts":[
+ {"id":"fact_a","kind":"investment","subject":{"kind":"team","canonical_id":"team:a","label":"A"},"fields":{"attribution_basis":{"string":"owned_repository"}},"detail_tables":["repository_theme_breakdown"],"evidence_ref_ids":["ev_a"]},
+ {"id":"fact_b","kind":"investment","subject":{"kind":"team","canonical_id":"team:b","label":"B"},"fields":{"attribution_basis":{"string":"owned_repository"}},"detail_tables":["repository_theme_breakdown"],"evidence_ref_ids":["ev_b"]}]}`
+	plan := &ServiceSynthesis{Status: "complete", DirectJudgment: "j", CurrentState: "c", DeterministicAnswer: "d", ClaimDetailTables: []string{"repository_theme_breakdown"}}
+	reply, err := buildSynthesisReply(&ServiceQuestion{Synthesis: plan}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Claims []oracleClaim `json:"claimed_facts"`
+	}
+	if err := json.Unmarshal([]byte(reply), &out); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, claim := range out.Claims[1:] {
+		got = append(got, claim.ClaimID+" "+claim.FactID+" "+claim.Field)
+	}
+	want := []string{
+		"claim_oracle_02 fact_a repository_theme_breakdown",
+		"claim_oracle_03 fact_b repository_theme_breakdown",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("table claims:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
