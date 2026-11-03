@@ -17,6 +17,9 @@ type EngineOptions struct {
 	// InvestmentTreemapEnabled turns on the investment_theme_share rule
 	// (CHAOS-12521). See Config.ContextFabricInvestmentTreemapEnabled.
 	InvestmentTreemapEnabled bool
+	// InvestmentSunburstEnabled turns on the investment_subcategory_share rule
+	// (CHAOS-12554). See Config.ContextFabricInvestmentSunburstEnabled.
+	InvestmentSunburstEnabled bool
 	// InvestmentSankeyEnabled turns on the investment_repository_flow rule
 	// (CHAOS-12582). See Config.ContextFabricInvestmentSankeyEnabled.
 	InvestmentSankeyEnabled bool
@@ -1503,10 +1506,11 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		regimeAOffersDisabled:       options.RegimeAOffersDisabled,
 		anchorBindingShadowDisabled: options.DisableAnchorBindingShadow,
 		renderShapeOptions: RenderShapeOptions{
-			InvestmentThemeShare: options.InvestmentTreemapEnabled,
-			ComparisonSideBySide: options.ComparisonTableEnabled,
-			LandscapePosition:    options.LandscapeQuadrantEnabled,
-			CompletionForecast:   options.CompletionForecastEnabled,
+			InvestmentThemeShare:       options.InvestmentTreemapEnabled,
+			InvestmentSubcategoryShare: options.InvestmentSunburstEnabled,
+			ComparisonSideBySide:       options.ComparisonTableEnabled,
+			LandscapePosition:          options.LandscapeQuadrantEnabled,
+			CompletionForecast:         options.CompletionForecastEnabled,
 			// CHAOS-12582.
 			InvestmentRepositoryFlow: options.InvestmentSankeyEnabled,
 			FieldScope:               factFieldScopeLookup(options.FactCapabilities),
