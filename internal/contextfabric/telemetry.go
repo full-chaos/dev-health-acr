@@ -447,6 +447,21 @@ func (t SlogEngineTelemetry) RecordOperandReadKinds(ctx context.Context, princip
 	t.logger.InfoContext(ctx, "context fabric plan operand reads", args...)
 }
 
+// RecordSubjectObligationReadKinds (CHAOS-12710) logs at Info: two counts, the
+// count of added kinds and the added kinds themselves, each a fact-kind
+// vocabulary token.
+func (t SlogEngineTelemetry) RecordSubjectObligationReadKinds(ctx context.Context, principal storage.Principal, subjectRows, kindsNamed int, kindsAdded []FactKind) {
+	added := make([]string, 0, len(kindsAdded))
+	for _, kind := range kindsAdded {
+		added = append(added, string(kind))
+	}
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "subject_rows", subjectRows, "kinds_named", kindsNamed,
+		"kinds_added", len(kindsAdded), "added_kinds", SanitizeLogStrings(added),
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric plan subject obligation reads", args...)
+}
+
 // RecordWindowClassification (CHAOS-12595) logs at Info: every field is a
 // closed vocabulary member or a bool, never question text.
 func (t SlogEngineTelemetry) RecordWindowClassification(ctx context.Context, principal storage.Principal, modelClass WindowClass, outcome WindowClassOutcome) {

@@ -18,10 +18,11 @@ const maxCensusRepositoryFilter = 200
 const requestedOwnerClause = "startsWith(lower(trimBoth(repo)), {%s:String})"
 
 // grantOwnerClause tests an owner wildcard of a grant, which has no post-filter.
-// It admits what the graph gate admits for that owner, a valid two-part slug,
-// and not only the prefix: acme/* does not cover acme/group/secret, because
-// NormalizeRepositorySlug refuses that slug (codex r2, CHAOS-12455).
-const grantOwnerClause = "(startsWith(lower(trimBoth(repo)), {%s:String}) AND match(lower(trimBoth(repo)), '^[^/]+/" + reposlug.NamePattern + "$'))"
+// It admits what the graph gate admits for that owner, a valid repository key
+// at any depth below it, and not only the prefix: acme/* covers acme/group/web
+// and does not cover acme/trailing-, because NormalizeRepositorySlug refuses
+// that slug (codex r2, CHAOS-12455).
+const grantOwnerClause = "(startsWith(lower(trimBoth(repo)), {%s:String}) AND match(lower(trimBoth(repo)), '^" + reposlug.SlugPattern + "$') AND length(trimBoth(repo)) <= 255 AND arrayAll(s -> length(s) <= 100, splitByChar('/', trimBoth(repo))))"
 
 // withRepositoryFilter ANDs a repository restriction onto predicate so the
 // census count and satisfier set are computed inside the caller's narrowing.
@@ -79,7 +80,7 @@ func repositoryClauses(slugs []string, bindingPrefix, ownerClause string) ([]str
 		name := fmt.Sprintf("%s_%d", bindingPrefix, i)
 		if owner, wildcard := strings.CutSuffix(value, "/*"); wildcard {
 			normalized, err := auth.NormalizeRepositorySlug(owner + "/x")
-			if err != nil || owner == "" {
+			if err != nil || owner == "" || strings.Contains(owner, "/") {
 				return nil, nil, false
 			}
 			owner, _, _ = strings.Cut(normalized, "/")

@@ -150,3 +150,13 @@ func TestValidateCreateInputAcceptsADotLeadingRepositoryScopeAndRefusesTraversal
 		require.ErrorIs(t, ValidateCreateInput(input), ErrInvalidInput, refused)
 	}
 }
+
+func TestValidateCreateInputAcceptsNestedRepositoryScopesUpToTwentySegments(t *testing.T) {
+	input := validResourceTestInput()
+	input.RepositoryScopes = []string{"acme/grp/web", "acme/grp/sub/web", "owner/*", strings.Repeat("g/", 19) + "x"}
+	require.NoError(t, ValidateCreateInput(input))
+	for _, refused := range []string{strings.Repeat("g/", 20) + "x", "acme/grp/*", "acme/*/web", "acme/../web", "acme//web", "acme/grp/", strings.Repeat("a", 100) + "/" + strings.Repeat("b", 100) + "/" + strings.Repeat("c", 54)} {
+		input.RepositoryScopes = []string{refused}
+		require.ErrorIs(t, ValidateCreateInput(input), ErrInvalidInput, refused)
+	}
+}

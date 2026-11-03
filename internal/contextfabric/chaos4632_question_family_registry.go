@@ -709,7 +709,14 @@ func LookupQuestionFamily(family QuestionFamily) (QuestionFamilyDefinition, bool
 // {allocate_investment} is served investment_allocation from the team's own fact
 // (CHAOS-12606), where it was a scoped_cohort_status. Stored answers planned
 // under v6 for these questions must not be replayed.
-const QuestionFamilyTableVersion = "question-family.v7"
+//
+// v7 -> v8: a committed subject's own required read obligations are planned
+// (CHAOS-12710): a single named team, project or repository asked about its
+// state now reads health, and a pull request's state reads pull_requests,
+// where the v7 plan left the cell unread and the answer degraded. The reuse
+// lookup runs before planning, so stored answers planned under v7 for these
+// questions must not be replayed.
+const QuestionFamilyTableVersion = "question-family.v8"
 
 func allStructureNeedKinds() []StructureNeedKind {
 	wire := contractsv1.ContextFabricStructureNeedKindVocabulary()

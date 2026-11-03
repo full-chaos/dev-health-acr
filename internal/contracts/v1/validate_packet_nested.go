@@ -17,7 +17,7 @@ func (s ResolvedScope) validate(open bool) error {
 	if !stringLengthBetween(s.RepoID, 1, 128) {
 		return fmt.Errorf("repo_id violates v1 bounds")
 	}
-	if !repositorySlugPattern.MatchString(s.RepoSlug) {
+	if !validRepositorySlug(s.RepoSlug) {
 		return fmt.Errorf("repo_slug violates v1 bounds")
 	}
 	if !stringLengthBetween(s.Branch, 0, 512) || !stringLengthBetween(s.CommitSHA, 0, 64) {
