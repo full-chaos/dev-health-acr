@@ -200,7 +200,15 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	cohort, cohortOmitted, cohortReasonsOmitted, cohortGroupsOmitted, cohortSelectionBasis := projectCohort(result, bounds, index, clamp, &facts)
 	factsOmitted := countProjectedFactsOmitted(result, facts)
 	clarification, candidatesOmitted, candidateReasonsOmitted := projectClarification(result, bounds, clamp)
-	limitations, limitationsOmitted := boundedLimitationsWithin(restateWorkItemListed(result, cohort, bounds), clamp, bounds.MaxSerializedBytes/NarrativeByteShareDivisor)
+	// CHAOS-4415: shapes are carried after the cohort and the facts they
+	// cite have been cut, never before -- a shape is admitted only when
+	// this projection still lets its reader check every number it plots.
+	// They are projected before the limitations because the quadrant's line
+	// (CHAOS-12626) is served exactly while the quadrant is: kept past both
+	// caps with it, and gone without it, taking no caveat's place.
+	renderShapes, renderShapesOmitted := projectRenderShapes(result, cohort, facts)
+	limitationSource, retainLimitation := limitationsToBound(result, cohort, bounds, renderShapes)
+	limitations, limitationsOmitted := boundedNarrativeRetaining(limitationSource, clamp, retainLimitation, bounds.MaxSerializedBytes/NarrativeByteShareDivisor)
 	// The engine's own displacement counts too (CHAOS-3746 round-16).
 	// limitations_omitted means "limitations this investigation produced
 	// that you are not reading", and a caveat the engine dropped at the
@@ -217,10 +225,6 @@ func Project(result contractsv1.ContextFabricInvestigationResult, budget Budget)
 	// not a second independently-declared cap.
 	coverageDetails, coverageDetailsOmitted := projectCoverageDetails(result)
 	coverageOmitted += coverageDetailsOmitted
-	// CHAOS-4415: shapes are carried after the cohort and the facts they
-	// cite have been cut, never before -- a shape is admitted only when
-	// this projection still lets its reader check every number it plots.
-	renderShapes, renderShapesOmitted := projectRenderShapes(result, cohort, facts)
 	evidence := index.ids()
 	evidenceOmitted := countUnindexedEvidence(result, index)
 	// CHAOS-4690: EvidenceRefLabels is filtered to EXACTLY the refs this
@@ -1025,8 +1029,8 @@ func boundedNarrativeWithin(values []string, clamp *clamper, maxBytes int) ([]st
 	return boundedNarrativeRetaining(values, clamp, nil, maxBytes)
 }
 
-// boundedLimitations is boundedNarrative with a RETENTION PRIORITY: if the
-// list must be cut, the retrieval-degradation disclosure is kept.
+// The limitations are bounded with a RETENTION PRIORITY (limitationsToBound):
+// if the list must be cut, the retrieval-degradation disclosure is kept.
 //
 // Without it the disclosure is precisely the entry that gets dropped. The
 // engine appends it last, and the cut keeps a prefix -- so on a legacy
@@ -1038,14 +1042,6 @@ func boundedNarrativeWithin(values []string, clamp *clamper, maxBytes int) ([]st
 //
 // The displacement is counted in limitations_omitted like every other drop,
 // because the entry it displaces is genuinely gone.
-func boundedLimitations(values []string, clamp *clamper) ([]string, int) {
-	return boundedNarrativeRetaining(values, clamp, contractsv1.IsContextFabricRetrievalDegradedLimitation, 0)
-}
-
-// boundedLimitationsWithin is boundedLimitations that also yields to maxBytes.
-func boundedLimitationsWithin(values []string, clamp *clamper, maxBytes int) ([]string, int) {
-	return boundedNarrativeRetaining(values, clamp, contractsv1.IsContextFabricRetrievalDegradedLimitation, maxBytes)
-}
 
 // boundedNarrativeRetaining is the shared implementation. retain, when
 // non-nil, names entries that must survive the count cap and the byte cap.
@@ -1448,13 +1444,14 @@ func fitNarrativeBytes(entries []clampedNarrative, maxBytes int, retain func(str
 	keep := make([]bool, len(entries))
 	used := 1
 	placed := false
+	// Every required entry is placed before any other (CHAOS-12626: the
+	// retrieval disclosure and the quadrant's line can both be required).
 	if retain != nil {
 		for i, entry := range entries {
 			if retain(entry.value) {
 				keep[i] = true
 				used += cost[i]
 				placed = true
-				break
 			}
 		}
 	}
@@ -1492,41 +1489,46 @@ func encodedNarrativeCost(value string) int {
 	return len(encoded) + 1
 }
 
-// retainPastTheCut moves the first dropped entry matching retain into kept,
-// displacing kept's LAST entry, and returns the result. It is a no-op when
-// nothing dropped matches or when a matching entry already survived.
-//
-// Only one entry is ever rescued, because only one is ever needed: the
-// caller's predicate names a single disclosure and the list is already
-// deduplicated by the time this runs.
+// retainPastTheCut moves every dropped entry matching retain into kept, each
+// displacing the LAST kept entry that does not match, and returns the result.
+// It is a no-op when nothing dropped matches. The list is deduplicated by the
+// time this runs, so each required disclosure is rescued once (CHAOS-12626: the
+// retrieval disclosure and the quadrant's line can both be required).
 func retainPastTheCut(kept, dropped []clampedNarrative, retain func(string) bool) []clampedNarrative {
-	for _, entry := range kept {
-		if retain(entry.value) {
-			return kept
-		}
-	}
+	out := kept
+	copied := false
 	for _, entry := range dropped {
 		if !retain(entry.value) {
 			continue
 		}
-		rescued := append([]clampedNarrative(nil), kept[:len(kept)-1]...)
-		return append(rescued, entry)
+		if !copied {
+			out = append([]clampedNarrative(nil), kept...)
+			copied = true
+		}
+		for i := len(out) - 1; i >= 0; i-- {
+			if !retain(out[i].value) {
+				out = append(out[:i], out[i+1:]...)
+				break
+			}
+		}
+		out = append(out, entry)
 	}
-	return kept
+	return out
 }
 
-// claimsAChartPlots names the claims the answer's treemaps, tables and forecast
-// curves plot (CHAOS-12521, CHAOS-12513, CHAOS-12608). An investment answer need
-// not have a driver, a comparison's drivers need not cite every cell, and a
-// forecast's drivers need not cite its distribution, so no driver brings those
-// facts and the chart would be dropped. The server built the chart from those
-// claims, so the chart is the citation. Only these kinds: a claim no such chart
-// plots stays out, and a dropped shape stays a counted drop.
+// claimsAChartPlots names the claims the answer's treemaps, tables, forecast
+// curves and quadrants plot (CHAOS-12521, CHAOS-12513, CHAOS-12608, CHAOS-12626).
+// An investment answer need not have a driver, a comparison's drivers need not
+// cite every cell, and a forecast's drivers need not cite its distribution, so no
+// driver brings those facts and the chart would be dropped. The server built the
+// chart from those claims, so the chart is the citation. Only these kinds: a claim
+// no such chart plots stays out, and a dropped shape stays a counted drop.
 func claimsAChartPlots(shapes []contractsv1.ContextFabricRenderShape) map[string]struct{} {
 	plotted := map[string]struct{}{}
 	for _, shape := range shapes {
 		switch shape.Kind {
-		case contractsv1.ContextFabricRenderKindTreemap, contractsv1.ContextFabricRenderKindTable, contractsv1.ContextFabricRenderKindForecast:
+		case contractsv1.ContextFabricRenderKindTreemap, contractsv1.ContextFabricRenderKindTable, contractsv1.ContextFabricRenderKindForecast,
+			contractsv1.ContextFabricRenderKindQuadrant:
 		default:
 			continue
 		}
@@ -1537,6 +1539,42 @@ func claimsAChartPlots(shapes []contractsv1.ContextFabricRenderShape) map[string
 		}
 	}
 	return plotted
+}
+
+// limitationsToBound is the list Project bounds and the entries it keeps past
+// both caps: the retrieval disclosure always, and the quadrant's line
+// (CHAOS-12626) exactly while the projected shapes carry the quadrant. Without
+// the quadrant the line is removed before the bound, so it takes no caveat's
+// place and is not counted as omitted: the dropped shape is.
+func limitationsToBound(result contractsv1.ContextFabricInvestigationResult, cohort *contractsv1.ContextFabricProjectedCohort, bounds Budget, shapes []contractsv1.ContextFabricRenderShape) ([]string, func(string) bool) {
+	source := restateWorkItemListed(result, cohort, bounds)
+	if !carriesQuadrant(shapes) {
+		return withoutSentence(source, contractsv1.ContextFabricLandscapePositionLimitation), contractsv1.IsContextFabricRetrievalDegradedLimitation
+	}
+	return source, func(limitation string) bool {
+		return contractsv1.IsContextFabricRetrievalDegradedLimitation(limitation) || limitation == contractsv1.ContextFabricLandscapePositionLimitation
+	}
+}
+
+// carriesQuadrant reports that the projected shapes hold the quadrant.
+func carriesQuadrant(shapes []contractsv1.ContextFabricRenderShape) bool {
+	for _, shape := range shapes {
+		if shape.SelectedBy == contractsv1.ContextFabricRenderRuleLandscapePosition {
+			return true
+		}
+	}
+	return false
+}
+
+// withoutSentence removes every copy of one sentence.
+func withoutSentence(sentences []string, sentence string) []string {
+	kept := sentences[:0:0]
+	for _, each := range sentences {
+		if each != sentence {
+			kept = append(kept, each)
+		}
+	}
+	return kept
 }
 
 // projectionCarriesUncited is the allow-list: which claim kinds this projection

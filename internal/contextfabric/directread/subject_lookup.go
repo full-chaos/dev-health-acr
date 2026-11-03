@@ -180,6 +180,10 @@ type FindTelemetry struct {
 	// (CHAOS-7158): "admitted" or "refused" (a refused, unreadable or missing
 	// anchor). Empty without an anchor. It never reaches the caller.
 	Anchor string
+	// ReferenceRow is what the stored rows decided for a handle that is a
+	// GitHub repository reference with "#" (CHAOS-12642): "pull_request_row",
+	// "work_item_reading" or "unread". Empty for every other handle.
+	ReferenceRow string
 }
 
 // FindRecorder receives one FindTelemetry per call.
@@ -246,6 +250,9 @@ type findPlan struct {
 	// anchorDecision receives the gate decision on the anchor for telemetry
 	// (a pointer, so the value copies of the plan share it).
 	anchorDecision *string
+	// referenceRow is the stored-row decision for a GitHub "#" reference
+	// handle (CHAOS-12642), for the line.
+	referenceRow string
 }
 
 func planFind(request FindRequest) (findPlan, error) {
@@ -361,6 +368,7 @@ func (l *SubjectLookup) Find(ctx context.Context, principal storage.Principal, r
 		if plan.anchorDecision != nil {
 			telemetry.Anchor = *plan.anchorDecision
 		}
+		telemetry.ReferenceRow = plan.referenceRow
 		switch {
 		case errors.Is(err, ErrFindScopeRequired):
 			// The typed refusal keeps its reason on the Info line
@@ -403,6 +411,10 @@ func (l *SubjectLookup) Find(ctx context.Context, principal storage.Principal, r
 	binding, bindErr := l.graph.ResolveInvestigationBinding(ctx, principal)
 	if bindErr != nil {
 		return l.emptyOrUnavailable(plan, bindErr)
+	}
+
+	if plan.mode == FindModeHandle {
+		l.decideReferenceRow(ctx, principal, &plan)
 	}
 
 	var admitted []FoundSubject
@@ -658,6 +670,9 @@ func FindLogArgs(principal storage.Principal, telemetry FindTelemetry) []any {
 	}
 	if telemetry.Anchor != "" {
 		args = append(args, "anchor", contextfabric.SanitizeLogAttr(telemetry.Anchor))
+	}
+	if telemetry.ReferenceRow != "" {
+		args = append(args, "reference_row", contextfabric.SanitizeLogAttr(telemetry.ReferenceRow))
 	}
 	return args
 }

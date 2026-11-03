@@ -1391,7 +1391,21 @@ import (
 // v270 -> v271: an edge's fact and a stub node's label name a work item, project
 // or team in reader words, not by its raw source id (CHAOS-12619). An answer saved
 // earlier can show a raw id in a path's why_relevant.
-const QueryVersion = "devhealthfacts.clickhouse.v271"
+//
+// v271 -> v272: an evidence ref's label names its subject in reader words, or by
+// the name the answer holds, never by a UUID or a raw provider id (CHAOS-12620).
+// An answer saved earlier can carry such a label.
+//
+// v272 -> v273: a claimed table states where each cell's word comes from: the
+// theme column's vocabulary and each id column's word column (CHAOS-12639). An
+// answer saved under v272 serves raw theme tokens and ids with no word to show
+// in their place.
+//
+// v273 -> v274: a stored issue-to-pull-request fact names its work item end by
+// its key when the read has already given the pull request end its label
+// (CHAOS-12715). An answer saved earlier can show the raw work item id in a
+// path's why_relevant.
+const QueryVersion = "devhealthfacts.clickhouse.v274"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

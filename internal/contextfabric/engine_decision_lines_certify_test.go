@@ -16,7 +16,7 @@ import (
 var (
 	renderShapeSummaryLegacyKeys = []string{
 		"time", "level", "msg", "org_id", "question_shape", "render_shapes_selected", "render_shape_rules_skipped",
-		"render_shape_members_truncated", "render_shape_trends_omitted", "render_shape_comparison_measures_left_out", "render_shape_tables_cadence_withheld", "render_shape_accounting", "selected_shapes", "request_id",
+		"render_shape_members_truncated", "render_shape_trends_omitted", "render_shape_comparison_measures_left_out", "render_shape_landscape_sides_left_out", "render_shape_tables_cadence_withheld", "render_shape_accounting", "selected_shapes", "request_id",
 	}
 	renderShapeSkippedLegacyKeys = []string{
 		"time", "level", "msg", "org_id", "question_shape", "render_shape_rule", "render_shape_skip_reason", "request_id",
@@ -45,11 +45,11 @@ func TestRenderShapeSummaryAndSkippedLinesCertify(t *testing.T) {
 	rules := []contractsv1.ContextFabricRenderShapeRule{
 		contractsv1.ContextFabricRenderRuleCohortAttentionScore, contractsv1.ContextFabricRenderRuleCohortDriverContribution,
 		contractsv1.ContextFabricRenderRuleDatedFactTrend, contractsv1.ContextFabricRenderRuleInvestmentThemeShare,
-		contractsv1.ContextFabricRenderRuleComparisonSideBySide, contractsv1.ContextFabricRenderRuleCompletionForecast,
-		contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles,
+		contractsv1.ContextFabricRenderRuleComparisonSideBySide, contractsv1.ContextFabricRenderRuleLandscapePosition,
+		contractsv1.ContextFabricRenderRuleCompletionForecast, contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles,
 	}
 	reasons := contextfabric.RenderShapeSkipReasonLineVocabulary()
-	ok := contextfabric.RenderShapeSelectionEvent{Shape: contractsv1.ContextFabricShapeOpen, MembersTruncated: 2, TrendsOmitted: 3, ComparisonMeasuresLeftOut: 4, TablesCadenceWithheld: 6}
+	ok := contextfabric.RenderShapeSelectionEvent{Shape: contractsv1.ContextFabricShapeOpen, MembersTruncated: 2, TrendsOmitted: 3, ComparisonMeasuresLeftOut: 4, LandscapeSidesLeftOut: 5, TablesCadenceWithheld: 6}
 	for i, rule := range rules {
 		ok.Skipped = append(ok.Skipped, contextfabric.RenderShapeSkip{Rule: rule, Reason: contextfabric.RenderShapeSkipReason(reasons[i])})
 	}
@@ -57,8 +57,8 @@ func TestRenderShapeSummaryAndSkippedLinesCertify(t *testing.T) {
 	telemetry, ctx := cohortTelemetry(&buf)
 	telemetry.RecordRenderShapeSelection(ctx, storage.Principal{OrgID: "org_1"}, ok)
 	lines := bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte("\n"))
-	if len(lines) != 8 {
-		t.Fatalf("a selection of seven skipped rules writes the summary and seven skip lines, got %d: %s", len(lines), buf.String())
+	if len(lines) != 9 {
+		t.Fatalf("a selection of eight skipped rules writes the summary and eight skip lines, got %d: %s", len(lines), buf.String())
 	}
 	if got := jsonKeys(t, lines[0]); !reflect.DeepEqual(got, renderShapeSummaryLegacyKeys) {
 		t.Fatalf("summary key sequence = %v, want %v", got, renderShapeSummaryLegacyKeys)
@@ -68,8 +68,8 @@ func TestRenderShapeSummaryAndSkippedLinesCertify(t *testing.T) {
 	}
 	certifyRequestLine(t, buf.Bytes(), eventspec.RenderShapeSelectionSummary, map[string]any{
 		"org_id": "org_1", "question_shape": string(contractsv1.ContextFabricShapeOpen), "render_shapes_selected": 0,
-		"render_shape_rules_skipped": 7, "render_shape_members_truncated": 2, "render_shape_trends_omitted": 3,
-		"render_shape_comparison_measures_left_out": 4, "render_shape_tables_cadence_withheld": 6, "render_shape_accounting": "ok",
+		"render_shape_rules_skipped": 8, "render_shape_members_truncated": 2, "render_shape_trends_omitted": 3,
+		"render_shape_comparison_measures_left_out": 4, "render_shape_landscape_sides_left_out": 5, "render_shape_tables_cadence_withheld": 6, "render_shape_accounting": "ok",
 	})
 	for i, rule := range rules {
 		certifyRequestLine(t, buf.Bytes(), eventspec.RenderShapeRuleSkipped, map[string]any{

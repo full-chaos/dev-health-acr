@@ -367,7 +367,11 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// table and time_series_table.
 		// CHAOS-11985: 265 -> 267 -- table.cadence and time_series_table.cadence,
 		// a closed vocabulary.
-		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 273},
+		// CHAOS-12608: 267 -> 273 -- claimed_facts[].completion_forecast's six
+		// strings, as on the result. CHAOS-12639: 273 -> 277 --
+		// column_vocabularies{} (a closed vocabulary) and word_columns{}
+		// (untrusted like key[]), on both table and time_series_table.
+		{name: "answer_projection", root: "answer", prefix: "structured", untrusted: MCPInvestigateQuestionUntrustedFields, expectedPaths: 277},
 		// CHAOS-4087: 213 -> 217 -- CommitDecisionDigest contributed four
 		// new string leaves (commit_gate, subject.kind, subject.canonical_id,
 		// subject.label).
@@ -459,8 +463,9 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// projection.
 		// CHAOS-12608: 388 -> 394 -- claimed_facts[].completion_forecast's six
 		// strings (work_scope_id, state, computed_at, three dates), as on the
-		// projection (267 -> 273).
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 394},
+		// projection (267 -> 273). CHAOS-12639: 394 -> 398 -- the same four
+		// column word leaves as the projection.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 398},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -545,6 +550,11 @@ func trustedBecauseClosed(path string) bool {
 	// vocabulary the server copies from the producer's declaration. Matched on
 	// its full suffix, not the bare leaf "unit".
 	if strings.HasSuffix(path, ".measure_units[].unit") {
+		return true
+	}
+	// column_vocabularies{} values are a closed column vocabulary the server
+	// copies from the producer's declaration (CHAOS-12639).
+	if strings.HasSuffix(path, ".column_vocabularies{}") {
 		return true
 	}
 	// table.cadence and time_series_table.cadence are

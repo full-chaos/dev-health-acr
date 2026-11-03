@@ -88,6 +88,35 @@ func TestPullRequestNumberPredicate(t *testing.T) {
 	}
 }
 
+// CHAOS-12642: a reference value adds its repository, by name, among GitHub
+// repositories only; a malformed reference is refused, never read as a number.
+func TestPullRequestReferencePredicate(t *testing.T) {
+	t.Parallel()
+	predicate, err := pullRequestNumberPredicate(" Acme/Widget#8")
+	if err != nil {
+		t.Fatalf("pullRequestNumberPredicate: %v", err)
+	}
+	if !strings.Contains(predicate.SQL, "p.number = {census_handle_pr_number:UInt32}") || !strings.Contains(predicate.SQL, "provider = 'github'") || !strings.Contains(predicate.SQL, "lower(trimBoth(repo)) = {census_handle_pr_repository:String}") {
+		t.Fatalf("SQL = %s", predicate.SQL)
+	}
+	got := map[string]any{}
+	for _, binding := range predicate.Bindings {
+		got[binding.Name] = binding.Value
+	}
+	if got["census_handle_pr_number"] != uint32(8) || got["census_handle_pr_repository"] != "acme/widget" {
+		t.Fatalf("bindings = %v", got)
+	}
+	for _, bad := range []string{"#8", "acme/widget#", "acme/widget#x", "acme/widget#8#9"} {
+		if _, err := pullRequestNumberPredicate(bad); err == nil {
+			t.Errorf("pullRequestNumberPredicate(%q): want error", bad)
+		}
+	}
+	plain, err := pullRequestNumberPredicate("8")
+	if err != nil || strings.Contains(plain.SQL, "repos") {
+		t.Fatalf("a bare number = %s, %v; want no repository clause", plain.SQL, err)
+	}
+}
+
 func TestCanonicalIDValue(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
