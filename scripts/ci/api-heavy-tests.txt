@@ -1,0 +1,34 @@
+# internal/api race job 2 (heavy, CHAOS-12717): tests run only in race-api-heavy (-run of this list);
+# race-api runs every other test of the package (-skip of this list), so a test absent from this
+# list, a new one included, runs there and nothing can drop. Names are exact top-level test names
+# of internal/api, one per line. Cut by measured span under -race on main db3d95ab (race shard 3,
+# run 41573471807; 830 tests, span sum 345.7 s of 339.1 s package time, nearly serial): the 16
+# slowest tests by span plus the whole Postgres/replica group (14 tests, 51.4 s), 25 tests,
+# 178.7 s; the rest job keeps 167.1 s. Each half runs alone under the 420 s budget
+# (GOTEST_API_TIMEOUT) whose 85% guard is 357 s. A name that no longer exists fails
+# scripts/ci/race-split.sh api verify.
+TestABrowserCreateWithoutASubmissionIDIsRefusedOnPostgres
+TestABudgetLeverRowLeavesTheCorrectionWithNoDecidingPair
+TestACancelOnOneReplicaStopsTheOthersRunOnPostgres
+TestACancelOnTheOtherReplicaStopsTheRun
+TestAClientTurnIsNeverRefusedForAWord
+TestALeasedRunOutlivesItsConnectionAndAttachesOnTheOtherReplica
+TestAModelCallThatWouldOutlastTheRequestIsEndedInTimeToServeADegradedAnswer
+TestASlowAccessReadExhaustsTheCreateBudgetBeforeAdmission
+TestAWaitBudgetEndsAStalledModelCallInsideTheBudgetAndServesADegradedAnswer
+TestChaos4735BudgetRefusal413CarriesNoServerAuthoredProse
+TestHostedReadRoutesUsePostgresAndClickHouseAdapters
+TestLostRunsAreTakenOverOnceAcrossReplicasOnPostgres
+TestNoRotationRateFillsTheTrackedSubjects
+TestResultFeedbackRoutes_aFloodWithheldResultTakesNoFeedback
+TestStoredResultIsServedOnlyWhenTheLiveGrantAdmitsEverySubject
+TestStoredTupleFloodedEvidenceExpansionNamesTheDecisiveTuple
+TestStoredWorkItemPGBoundaries
+TestSubmissionOnPostgresAcrossTwoInstances
+TestSuppliedInterpretationFollowUpIsServedByAFreshEngineOverPostgres
+TestTheLeaseColumnsAreAllOrNothingOnPostgres
+TestTheRunEventShapesHaveNoNullHoleOnPostgres
+TestTheRunLogIsBoundedAndGoesWithItsRecordOnPostgres
+TestTheRunLogSurvivesItsReplicaOnPostgres
+TestThreadRoutesOnPostgresAcrossTwoInstances
+TestWorkItemFreshEnginePostgresReuseAcrossInstances
