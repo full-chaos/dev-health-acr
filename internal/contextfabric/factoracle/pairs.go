@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -218,7 +219,37 @@ func compareInvestment(ctx context.Context, o *Oracle, rr *RootReport) error {
 		}
 		rr.find(Finding{Pair: "ops_reply_vs_store", Key: theme, Detail: fmt.Sprintf("ops answered %s, the store rows give %s", formatFloat(ops[theme]), formatFloat(fromStore[theme]))})
 	}
+	compareUncategorizedCount(o, rr, root)
 	return compareInvestmentAcr(ctx, o, rr, ops)
+}
+
+// compareUncategorizedCount holds ops V2's evidenceQualityStats.uncategorizedCount
+// against the units the store reading gates in the same scope and window
+// (Store.GatedUnits; CHAOS-12836). The theme compare alone cannot see a
+// disagreement on which units are gated when the gated units' uniform shares
+// cancel out; the count can. A reply that holds no count is a finding too.
+func compareUncategorizedCount(o *Oracle, rr *RootReport, root map[string]any) {
+	const path = "analytics.evidenceQualityStats.uncategorizedCount"
+	rr.touch(path)
+	rr.Compared++
+	// A nil map reads as no count; typedLeaf gives LeafNull for a missing or
+	// null value and an error for a value that is not an integer.
+	stats, _ := root["evidenceQualityStats"].(map[string]any)
+	leaf, err := typedLeaf(LeafInt, stats["uncategorizedCount"])
+	if err != nil {
+		rr.find(Finding{Pair: "ops_reply_vs_store", Key: "uncategorizedCount", Path: path, Detail: "the ops uncategorizedCount is not an integer"})
+		return
+	}
+	if leaf.T == LeafNull {
+		rr.find(Finding{Pair: "ops_reply_vs_store", Key: "uncategorizedCount", Path: path, Detail: "the ops answer holds no uncategorizedCount"})
+		return
+	}
+	counted, _ := strconv.ParseInt(leaf.V, 10, 64) // typedLeaf parsed it
+	if gated := o.Store.GatedUnits(o.Window); counted != gated {
+		rr.find(Finding{Pair: "ops_reply_vs_store", Key: "uncategorizedCount", Path: path, Detail: fmt.Sprintf("ops counts %d uncategorized units, the store gates %d", counted, gated)})
+		return
+	}
+	rr.Matches++
 }
 
 // compareInvestmentFacts is what root analytics compares without an ops
