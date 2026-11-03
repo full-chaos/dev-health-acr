@@ -15,7 +15,12 @@ func keyFindings(findings []emitscan.Finding) string {
 	for _, finding := range findings {
 		switch finding.Rule {
 		case emitscan.RuleProtectedKey, emitscan.RuleLogKey, emitscan.RuleBenignKind:
-			out = append(out, finding.Rule+":"+finding.Detail)
+			detail := finding.Detail
+			if finding.Rule == emitscan.RuleLogKey {
+				// an R9 detail is "unresolvable key: <expr text>": the text is checked by the site-pin tests
+				detail, _, _ = strings.Cut(detail, ": ")
+			}
+			out = append(out, finding.Rule+":"+detail)
 		}
 	}
 	sort.Strings(out)
