@@ -316,6 +316,9 @@ func TestEveryFamilyRouteSourceIsUsed(t *testing.T) {
 	// TestCarriedOutcomeDoesNotKeepThePreCarryRoute -- named here for the
 	// same reason the disposition exemptions are, not silently skipped.
 	used[FamilyRouteSourceCarried] = true
+	// Produced by RouteFrameFamily rather than a table row, and asserted by
+	// TestATeamsChildrenAllocationQuestionServesTheFamily (CHAOS-12606).
+	used[FamilyRouteScopeAllocation] = true
 	for _, member := range FamilyRouteSourceVocabulary() {
 		if !used[member] {
 			t.Errorf("source %q is declared but nothing produces it", member)

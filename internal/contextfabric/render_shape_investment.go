@@ -90,7 +90,7 @@ func investmentThemeShareShape(result InvestigationResult, frame *QuestionFrame)
 	if result.AnswerPlan == nil || result.AnswerPlan.Family != QuestionFamilyInvestmentAllocation {
 		return nil, RenderShapeSkipNotInvestmentAllocation
 	}
-	if result.Cohort != nil || cohortRenderIntent(frame) || !familyTakesShape(result.AnswerPlan.Family, result.Interpretation.Shape) {
+	if result.Cohort != nil || ((cohortRenderIntent(frame) || !familyTakesShape(result.AnswerPlan.Family, result.Interpretation.Shape)) && !scopeAllocationAnswer(frame)) {
 		return nil, RenderShapeSkipCohortAnswer
 	}
 	// Positive evidence: the rule fires only on this turn's own validated frame
@@ -233,6 +233,18 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 	}
 	result.RenderShapes = kept
 	return result
+}
+
+// scopeAllocationAnswer reports an answer of the scope-anchor allocation route
+// over a team's children (CHAOS-12606): a children_of_scope frame with one goal.
+// Its frame is a cohort variant and its shape label may say cohort, but the
+// question is the anchor's own split, so neither is cohort intent here. The
+// treemap rule has already required the family investment_allocation (which
+// only that route serves for such a frame: the precedence table has no row for
+// it, and a model's pick of it is downgraded), no cohort, and the
+// allocate_investment goal, so one goal is that goal alone.
+func scopeAllocationAnswer(frame *QuestionFrame) bool {
+	return frame != nil && frame.SubjectExpression.Kind == SubjectExpressionChildrenOfScope && len(frame.Goals) == 1
 }
 
 // withoutCompletionForecasts is claims with no forecast summary, on a copy when

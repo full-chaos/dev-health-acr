@@ -108,6 +108,12 @@ const (
 	// subject of a guessed kind, beside the named operands it actually
 	// asked about.
 	CohortKindNoMemberKind CohortKindBasis = "no_member_kind"
+	// CohortKindAnchorFactOnly: the served family answers from the scope
+	// anchor's own fact (GraphDiscoveryRequest.AnchorFactOnly, CHAOS-12606), so
+	// the frame's member kind names no member set to discover. It is this
+	// seam's own, like frame_absent: the frame is a cohort variant with a
+	// servable kind, and what refuses the cohort is the route, not the frame.
+	CohortKindAnchorFactOnly CohortKindBasis = "anchor_fact_only"
 )
 
 var cohortKindBases = [...]CohortKindBasis{
@@ -116,6 +122,7 @@ var cohortKindBases = [...]CohortKindBasis{
 	CohortKindNotACohortVariant,
 	CohortKindNoMemberKind,
 	CohortKindMemberKindUnservable,
+	CohortKindAnchorFactOnly,
 }
 
 // WHERE THE ALLOW-LIST WENT, and why it is not here any more.

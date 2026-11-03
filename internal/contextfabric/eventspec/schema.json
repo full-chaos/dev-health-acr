@@ -8385,7 +8385,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v6"
+          "question-family.v7"
         ]
       },
       {
@@ -9446,7 +9446,7 @@
         "presence": "required",
         "closed_vocabulary": [
           "",
-          "question-family.v6"
+          "question-family.v7"
         ]
       },
       {
@@ -9673,7 +9673,8 @@
           "",
           "projected",
           "precedence",
-          "carried"
+          "carried",
+          "scope_allocation"
         ]
       },
       {
@@ -12335,7 +12336,7 @@
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "question-family.v6"
+          "question-family.v7"
         ]
       },
       {
