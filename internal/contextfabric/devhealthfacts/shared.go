@@ -1388,11 +1388,15 @@ import (
 // allocation_breakdown for the organization (CHAOS-12601). An answer saved under
 // v269 can read complete with no breakdown served.
 //
-// v270 -> v271: a claimed table states where each cell's word comes from: the
+// v270 -> v271: an edge's fact and a stub node's label name a work item, project
+// or team in reader words, not by its raw source id (CHAOS-12619). An answer saved
+// earlier can show a raw id in a path's why_relevant.
+//
+// v271 -> v272: a claimed table states where each cell's word comes from: the
 // theme column's vocabulary and each id column's word column (CHAOS-12639). An
-// answer saved under v270 serves raw theme tokens and ids with no word to show
+// answer saved under v271 serves raw theme tokens and ids with no word to show
 // in their place.
-const QueryVersion = "devhealthfacts.clickhouse.v271"
+const QueryVersion = "devhealthfacts.clickhouse.v272"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

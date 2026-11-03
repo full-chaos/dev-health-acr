@@ -2294,6 +2294,24 @@ var GatedOfferResolution = Event{
 	},
 }
 
+// GatedOfferResolutionFailure is the Warn line beside a "failed" gated offer
+// resolution (CHAOS-12681): why the offers-only pass failed, by a closed class
+// and never by the error's text. The turn then gates on the window alone.
+var GatedOfferResolutionFailure = Event{
+	ID:                       "contextfabric.gated_offer_resolution_failure",
+	Msg:                      "context fabric gated offer resolution failed",
+	Level:                    LevelWarn,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: written only beside a failed gated offer resolution, and the window gate ends the pass.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "error_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.GatedOfferErrorClassVocabulary()},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // CohortStructureGate is the Info line of the class conditional structure gate: which side of the family decision one offer material landed on, and the shape the interpreter reported.
 var CohortStructureGate = Event{
 	ID:                       "contextfabric.cohort_structure_gate",
@@ -5928,6 +5946,7 @@ var All = []Event{
 	ConfirmedNeedLedgerWindow,
 	StructureNeedsDisclosed,
 	GatedOfferResolution,
+	GatedOfferResolutionFailure,
 	CohortStructureGate,
 	WindowGateOfferDisclosure,
 	WindowExpandOfferRedeemed,

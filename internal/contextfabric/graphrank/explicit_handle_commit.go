@@ -42,6 +42,9 @@ func namedHandles(request contextfabric.InvestigationRequest, bound []BoundHandl
 	if len(request.SubjectHandles) > 0 {
 		return request.SubjectHandles, handleOwed
 	}
+	if len(bound) > 1 {
+		return severalNamedHandles(request, bound, committed, frame)
+	}
 	if len(bound) != 1 {
 		return nil, handleNotNamed
 	}
@@ -49,10 +52,69 @@ func namedHandles(request contextfabric.InvestigationRequest, bound []BoundHandl
 	if turnStatesKind(request, frame, bound[0].Kind) {
 		return handle, handleOwed
 	}
-	if committedScopeAnchorShadowsHandle(bound, committed, frame) {
+	if committedScopeAnchorShadowsHandle(bound, committed, frame) || committedTeamShadowsHandle(bound, committed, frame) {
 		return handle, handleMentioned
 	}
 	return nil, handleNotNamed
+}
+
+// severalNamedHandles is what a turn that binds more than one handle names beside
+// what it committed (CHAOS-12557): handles of one census kind beside one committed
+// repository. A turn that states the kind owes them; one that states none only
+// mentions them, so the repository's answer stands.
+func severalNamedHandles(request contextfabric.InvestigationRequest, bound []BoundHandle, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) ([]contractsv1.ContextFabricRequestedHandle, handleClaim) {
+	kind := bound[0].Kind
+	handles := make([]contractsv1.ContextFabricRequestedHandle, 0, len(bound))
+	for _, b := range bound {
+		if b.Kind != kind || !IsCensusKindRegistered(kind) {
+			return nil, handleNotNamed
+		}
+		handles = append(handles, contractsv1.ContextFabricRequestedHandle{Kind: b.Kind, PatternID: b.Grammar, Value: b.Value})
+	}
+	repositories := 0
+	for _, subject := range committed {
+		if subject.Kind != contextfabric.SubjectRepository {
+			return nil, handleNotNamed
+		}
+		repositories++
+	}
+	if repositories != 1 {
+		return nil, handleNotNamed
+	}
+	if frame != nil && frame.SubjectExpression.Kind != contextfabric.SubjectExpressionNamed {
+		return nil, handleNotNamed
+	}
+	if turnStatesKind(request, frame, kind) {
+		return handles, handleOwed
+	}
+	// A turn that states another kind, the repository's included, is untouched,
+	// as in CHAOS-12523.
+	if frame != nil && frame.SubjectExpression.Named != nil && frame.SubjectExpression.Named.ExpectedKind != nil {
+		return nil, handleNotNamed
+	}
+	return handles, handleMentioned
+}
+
+// committedTeamShadowsHandle is committedScopeAnchorShadowsHandle for a team
+// (CHAOS-12557): one census-kind handle beside exactly one committed team, in a
+// named frame that asks for no other kind. A team reaches a pull request or a CI
+// run only through the repositories it owns, and a work item through no column,
+// so the handle is read in what the team owns or across what the caller reads.
+func committedTeamShadowsHandle(bound []BoundHandle, committed []contextfabric.SubjectRef, frame *contextfabric.QuestionFrame) bool {
+	if len(bound) != 1 || !IsCensusKindRegistered(bound[0].Kind) || len(committed) != 1 || committed[0].Kind != contextfabric.SubjectTeam {
+		return false
+	}
+	if frame != nil {
+		if frame.SubjectExpression.Kind != contextfabric.SubjectExpressionNamed {
+			return false
+		}
+		// A turn that states a kind is decided by turnStatesKind; one that states
+		// another, the team's included, is untouched.
+		if named := frame.SubjectExpression.Named; named != nil && named.ExpectedKind != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // turnStatesKind reports a turn that says its answer is about a subject of kind: the
@@ -98,6 +160,9 @@ func commitNamedHandle(ctx context.Context, principal storage.Principal, request
 	if claim == handleNotNamed {
 		return resolution, nil
 	}
+	if len(handles) > 1 && len(request.SubjectHandles) == 0 {
+		return severalHandlesBesideRepository(ctx, principal, request, deps, resolution, bases, digests, handles, claim), nil
+	}
 	if len(handles) > 1 {
 		// One subject per request: several handles cannot each be anchored
 		// on the one repository, so the caller is asked to send one.
@@ -125,7 +190,7 @@ func commitNamedHandle(ctx context.Context, principal storage.Principal, request
 	named := anchor
 	switch {
 	case repositories == 0:
-		return resolution, nil
+		return handleBesideTeam(ctx, principal, request, deps, resolution, bases, digests, handle, claim, anchored)
 	case !anchored:
 		anchor = contextfabric.SubjectRef{}
 	case repositories > 1 && claim == handleMentioned:
@@ -142,11 +207,23 @@ func commitNamedHandle(ctx context.Context, principal storage.Principal, request
 		candidate, ok = explicitHandleCandidate(ctx, principal, request, deps, census.satisfier)
 	}
 	if !ok {
-		return unresolvedNamedHandle(ctx, principal, request, deps, resolution, bases, digests, handle, claim, anchored, census)
+		return unresolvedNamedHandle(ctx, principal, request, deps, resolution, bases, digests, handle, claim, anchored, census, contextfabric.SubjectRepository)
 	}
+	resolution = commitNamedSatisfier(resolution, bases, digests, handle.Kind, candidate, anchor)
+	if !anchored && repositories == 1 {
+		resolution.NamedRepositoryLinkLimitation = namedRepositoryLinkLimitation(ctx, request, deps, named, candidate.Subject)
+	}
+	return resolution, nil
+}
+
+// commitNamedSatisfier commits the handle's one satisfier beside what the turn
+// committed, and takes every other committed subject of the handle's kind out of
+// the answer: it is about another subject. The digest carries the anchor's own
+// search facts.
+func commitNamedSatisfier(resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, kind contextfabric.SubjectKind, candidate contextfabric.SubjectCandidate, anchor contextfabric.SubjectRef) contextfabric.SubjectResolution {
 	kept := make([]contextfabric.SubjectRef, 0, len(resolution.Committed)+1)
 	for _, subject := range resolution.Committed {
-		if subject.Kind == handle.Kind {
+		if subject.Kind == kind {
 			delete(bases, contextfabric.SubjectMapKey(subject))
 			delete(digests, contextfabric.SubjectMapKey(subject))
 			for i := range resolution.Candidates {
@@ -167,10 +244,7 @@ func commitNamedHandle(ctx context.Context, principal storage.Principal, request
 	resolution.Candidates = append(resolution.Candidates, candidate)
 	bases.Record(candidate.Subject, contextfabric.CommitBasisStatistical)
 	digests.Record(candidate.Subject, digest)
-	if !anchored && repositories == 1 {
-		resolution.NamedRepositoryLinkLimitation = namedRepositoryLinkLimitation(ctx, request, deps, named, candidate.Subject)
-	}
-	return resolution, nil
+	return resolution
 }
 
 // namedRepositoryLinkLimitation says whether a pull request link joins a work
@@ -219,7 +293,7 @@ func namedRepositoryLinkLimitation(ctx context.Context, request contextfabric.In
 // complete zero is stated in the census's own scope. A mentioned handle changes
 // nothing else. An owed handle takes the repository out of the answer, and a complete
 // count of several is listed.
-func unresolvedNamedHandle(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, handle contractsv1.ContextFabricRequestedHandle, claim handleClaim, anchored bool, census namedCensus) (contextfabric.SubjectResolution, *BoundHandle) {
+func unresolvedNamedHandle(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, handle contractsv1.ContextFabricRequestedHandle, claim handleClaim, anchored bool, census namedCensus, anchorKind contextfabric.SubjectKind) (contextfabric.SubjectResolution, *BoundHandle) {
 	ka := KindAttestation{
 		Kind: handle.Kind, Complete: true, Count: census.outcome.Count, HandleApplied: true, AnchorApplied: anchored,
 		SatisfierCanonicalID: census.outcome.SatisfierCanonicalID, SatisfierCanonicalIDs: census.outcome.SatisfierCanonicalIDs,
@@ -246,7 +320,14 @@ func unresolvedNamedHandle(ctx context.Context, principal storage.Principal, req
 		}
 		return resolution, nil
 	}
-	resolution = demoteRepositoryAnchors(request, resolution, bases, digests, handle.Kind, "The "+handleKindLabel(handle.Kind)+" "+handle.Value+" could not be matched to exactly one record in the repository")
+	where := "in the repository"
+	if anchorKind == contextfabric.SubjectTeam {
+		where = "in the repositories the team owns"
+		if !anchored {
+			where = "in what you can read"
+		}
+	}
+	resolution = demoteAnchors(request, resolution, bases, digests, anchorKind, handle.Kind, "The "+handleKindLabel(handle.Kind)+" "+handle.Value+" could not be matched to exactly one record "+where)
 	if absent {
 		resolution.CensusLimitation = censusAbsenceLimitation(principal, request, ka)
 		return resolution, &BoundHandle{Kind: handle.Kind, Value: handle.Value}
@@ -348,19 +429,8 @@ type namedCensus struct {
 }
 
 func namedHandleCensus(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, kind contextfabric.SubjectKind, value string, anchor contextfabric.SubjectRef, anchored bool) namedCensus {
-	roundCtx, cancel := context.WithTimeout(contextfabric.ScopeCensusToCaller(ctx, principal), evidenceRoundDeadline)
-	defer cancel()
 	explicit := len(request.SubjectHandles) > 0
-	var outcome CensusOutcome
-	var err error
-	func() {
-		defer func() {
-			if recover() != nil {
-				err = errCensusPanicked
-			}
-		}()
-		outcome, err = grantEnforced(deps.CensusFunc)(roundCtx, principal.OrgID, kind, value, true, anchor.Kind, anchor.CanonicalID, anchored)
-	}()
+	outcome, err := handleCensusOutcome(ctx, principal, deps, kind, value, anchor, anchored)
 	if err != nil {
 		if !errors.Is(err, ErrCensusAnchorUnsupported) {
 			emitEvidenceCensusCommit(deps.ResolutionTracer, request.RequestID, contextfabric.SubjectRef{Kind: kind}, "refused", false, censusCommitErrorReason, explicit)
@@ -373,6 +443,20 @@ func namedHandleCensus(ctx context.Context, principal storage.Principal, request
 		return namedCensus{outcome: outcome, complete: complete}
 	}
 	return namedCensus{satisfier: contextfabric.SubjectRef{Kind: kind, CanonicalID: outcome.SatisfierCanonicalID}, outcome: outcome, complete: complete}
+}
+
+// handleCensusOutcome is one keyed census of a handle, inside the caller's grant,
+// under the round's deadline, a panic read as an error. It traces nothing: its
+// callers decide what the outcome was.
+func handleCensusOutcome(ctx context.Context, principal storage.Principal, deps ResolveDeps, kind contextfabric.SubjectKind, value string, anchor contextfabric.SubjectRef, anchored bool) (outcome CensusOutcome, err error) {
+	roundCtx, cancel := context.WithTimeout(contextfabric.ScopeCensusToCaller(ctx, principal), evidenceRoundDeadline)
+	defer cancel()
+	defer func() {
+		if recover() != nil {
+			err = errCensusPanicked
+		}
+	}()
+	return grantEnforced(deps.CensusFunc)(roundCtx, principal.OrgID, kind, value, true, anchor.Kind, anchor.CanonicalID, anchored)
 }
 
 func explicitHandleCandidate(ctx context.Context, principal storage.Principal, request contextfabric.InvestigationRequest, deps ResolveDeps, subject contextfabric.SubjectRef) (contextfabric.SubjectCandidate, bool) {
@@ -409,18 +493,24 @@ func explicitHandleCandidate(ctx context.Context, principal storage.Principal, r
 // subject is not an answer about the one named), out of Committed: they stay
 // in Candidates as ambiguous and the prompt names the repositories.
 func demoteRepositoryAnchors(request contextfabric.InvestigationRequest, resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, handleKind contextfabric.SubjectKind, question string) contextfabric.SubjectResolution {
+	return demoteAnchors(request, resolution, bases, digests, contextfabric.SubjectRepository, handleKind, question)
+}
+
+// demoteAnchors is demoteRepositoryAnchors for an anchor of anchorKind: a
+// repository, or a team a handle was named beside (CHAOS-12557).
+func demoteAnchors(request contextfabric.InvestigationRequest, resolution contextfabric.SubjectResolution, bases contextfabric.CommitBasisSet, digests contextfabric.CommitDecisionDigestSet, anchorKind, handleKind contextfabric.SubjectKind, question string) contextfabric.SubjectResolution {
 	kept := make([]contextfabric.SubjectRef, 0, len(resolution.Committed))
 	labels := make([]string, 0, len(resolution.Committed))
 	demoted := map[string]bool{}
 	for _, subject := range resolution.Committed {
-		if subject.Kind != contextfabric.SubjectRepository && subject.Kind != handleKind {
+		if subject.Kind != anchorKind && subject.Kind != handleKind {
 			kept = append(kept, subject)
 			continue
 		}
 		demoted[SubjectKey(subject)] = true
 		delete(bases, contextfabric.SubjectMapKey(subject))
 		delete(digests, contextfabric.SubjectMapKey(subject))
-		if subject.Kind != contextfabric.SubjectRepository {
+		if subject.Kind != anchorKind {
 			continue
 		}
 		label := subject.Label
