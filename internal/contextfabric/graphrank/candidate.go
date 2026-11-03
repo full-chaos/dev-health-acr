@@ -200,17 +200,25 @@ func NodeCandidate(principal storage.Principal, scope contextfabric.RequestedSco
 	}, true
 }
 
-// SubjectTerms collects the distinct, order-preserving, case-insensitively
-// deduped search terms a ResolveSubjects call should try: every interpreted
-// subject term plus every requested-scope subject hint's label. Ported
-// unchanged from zepgraph.subjectTerms.
-func SubjectTerms(request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion) []string {
+// subjectTermInputs is what SubjectTerms dedups: every interpreted subject term
+// and every subject hint's label, in order, with every spelling kept
+// (CHAOS-12663 reads which spellings the question typed).
+func subjectTermInputs(request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion) []string {
 	values := append([]string(nil), interpreted.SubjectTerms...)
 	for _, hint := range request.RequestedScope.SubjectHints {
 		if strings.TrimSpace(hint.Label) != "" {
 			values = append(values, hint.Label)
 		}
 	}
+	return values
+}
+
+// SubjectTerms collects the distinct, order-preserving, case-insensitively
+// deduped search terms a ResolveSubjects call should try: every interpreted
+// subject term plus every requested-scope subject hint's label. Ported
+// unchanged from zepgraph.subjectTerms.
+func SubjectTerms(request contextfabric.InvestigationRequest, interpreted contextfabric.InterpretedQuestion) []string {
+	values := subjectTermInputs(request, interpreted)
 	seen := make(map[string]struct{})
 	result := make([]string, 0, len(values))
 	for _, value := range values {

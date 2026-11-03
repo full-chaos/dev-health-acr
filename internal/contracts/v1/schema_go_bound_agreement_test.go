@@ -294,6 +294,7 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.ClaimedCompletionForecast.properties.simulation_count.minimum":    0,
 		"common#$defs.ClaimedCompletionForecast.properties.horizon_days.minimum":        0,
 		"common#$defs.ClaimedCompletionForecast.properties.unfinished_runs.minimum":     0,
+		"common#$defs.ClaimedCompletionForecast.properties.target_items.minimum":        0,
 		"common#$defs.ClaimedCompletionForecast.properties.forecast_p50_days.minimum":   0,
 		"common#$defs.ClaimedCompletionForecast.properties.forecast_p85_days.minimum":   0,
 		"common#$defs.ClaimedCompletionForecast.properties.forecast_p95_days.minimum":   0,

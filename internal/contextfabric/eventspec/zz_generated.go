@@ -67,6 +67,7 @@ var ByID = map[string]Event{
 	"contextfabric.fact_table_declarations_capped":        FactTableDeclarationsCapped,
 	"contextfabric.frame_validation":                      FrameValidation,
 	"contextfabric.gated_offer_resolution":                GatedOfferResolution,
+	"contextfabric.gated_offer_resolution_failure":        GatedOfferResolutionFailure,
 	"contextfabric.graphql_query":                         GraphQLQuery,
 	"contextfabric.grouped_cohort_completeness":           GroupedCohortCompleteness,
 	"contextfabric.inferred_window_gate":                  InferredWindowGate,
@@ -4259,6 +4260,50 @@ func (f GatedOfferResolutionFields) SlogArgs() []any {
 	return []any{
 		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
 		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+	}
+}
+
+// GatedOfferResolutionFailureFields is contextfabric.gated_offer_resolution_failure's generated typed construction interface
+// (CHAOS-5516): one Go field per Field GatedOfferResolutionFailure.Fields declares in spec.go.
+type GatedOfferResolutionFailureFields struct {
+	OrgID      string
+	ErrorClass string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every GatedOfferResolutionFailureFields uniformly, set ONLY by NewGatedOfferResolutionFailureFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewGatedOfferResolutionFailureFields is the generated constructor for GatedOfferResolutionFailureFields -- every
+// field GatedOfferResolutionFailure.Fields declares is a required parameter.
+func NewGatedOfferResolutionFailureFields(orgID string, errorClass string) GatedOfferResolutionFailureFields {
+	return GatedOfferResolutionFailureFields{
+		OrgID:       orgID,
+		ErrorClass:  errorClass,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewGatedOfferResolutionFailureFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f GatedOfferResolutionFailureFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns GatedOfferResolutionFailure's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f GatedOfferResolutionFailureFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
 	}
 }
 
@@ -13270,8 +13315,11 @@ type GraphCountCheckFinishedFields struct {
 	Pass              int
 	Outcome           string
 	SourcesChecked    int
+	SourcesUnknown    int
 	KindsCompared     int
 	GapCount          int
+	DaysCompared      int
+	DayGapCount       int
 	RelationsCompared int
 	EdgeGapCount      int
 	RelationsDeferred int
@@ -13290,15 +13338,18 @@ type GraphCountCheckFinishedFields struct {
 
 // NewGraphCountCheckFinishedFields is the generated constructor for GraphCountCheckFinishedFields -- every
 // field GraphCountCheckFinished.Fields declares is a required parameter.
-func NewGraphCountCheckFinishedFields(orgIDHash string, instance string, pass int, outcome string, sourcesChecked int, kindsCompared int, gapCount int, relationsCompared int, edgeGapCount int, relationsDeferred int, errorCount int, durationMs int) GraphCountCheckFinishedFields {
+func NewGraphCountCheckFinishedFields(orgIDHash string, instance string, pass int, outcome string, sourcesChecked int, sourcesUnknown int, kindsCompared int, gapCount int, daysCompared int, dayGapCount int, relationsCompared int, edgeGapCount int, relationsDeferred int, errorCount int, durationMs int) GraphCountCheckFinishedFields {
 	return GraphCountCheckFinishedFields{
 		OrgIDHash:         orgIDHash,
 		Instance:          instance,
 		Pass:              pass,
 		Outcome:           outcome,
 		SourcesChecked:    sourcesChecked,
+		SourcesUnknown:    sourcesUnknown,
 		KindsCompared:     kindsCompared,
 		GapCount:          gapCount,
+		DaysCompared:      daysCompared,
+		DayGapCount:       dayGapCount,
 		RelationsCompared: relationsCompared,
 		EdgeGapCount:      edgeGapCount,
 		RelationsDeferred: relationsDeferred,
@@ -13326,8 +13377,11 @@ func (f GraphCountCheckFinishedFields) SlogArgs() []any {
 		"pass", f.Pass,
 		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
 		"sources_checked", f.SourcesChecked,
+		"sources_unknown", f.SourcesUnknown,
 		"kinds_compared", f.KindsCompared,
 		"gap_count", f.GapCount,
+		"days_compared", f.DaysCompared,
+		"day_gap_count", f.DayGapCount,
 		"relations_compared", f.RelationsCompared,
 		"edge_gap_count", f.EdgeGapCount,
 		"relations_deferred", f.RelationsDeferred,

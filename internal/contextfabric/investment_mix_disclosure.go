@@ -105,6 +105,7 @@ func completionForecastOf(fact CanonicalFact) *contractsv1.ContextFabricClaimedC
 	summary.SimulationCount = number("simulation_count")
 	summary.HorizonDays = number("horizon_days")
 	summary.UnfinishedRuns = number("unfinished_runs")
+	summary.TargetItems = number("target_items")
 	summary.P50Days = number("forecast_p50_days")
 	summary.P85Days = number("forecast_p85_days")
 	summary.P95Days = number("forecast_p95_days")

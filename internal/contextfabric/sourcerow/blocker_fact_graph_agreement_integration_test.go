@@ -64,7 +64,11 @@ func TestBlockerFactsAgreeWithProjectedBlocksEdges(t *testing.T) {
 		}
 		for _, relationship := range batch.Relationships {
 			if relationship.Type == contractsv1.ContextFabricRelationshipBlocks {
-				graph[relationship.From.Label+" blocks "+relationship.To.Label] = true
+				// The ends are named by their raw ids, read back from their
+				// canonical ids; their labels are the reader form (CHAOS-12619).
+				from, _ := contextfabric.RawSubjectLabel(relationship.From.Kind, relationship.From.CanonicalID)
+				to, _ := contextfabric.RawSubjectLabel(relationship.To.Kind, relationship.To.CanonicalID)
+				graph[from+" blocks "+to] = true
 			}
 		}
 		cursor = batch.NextCursor

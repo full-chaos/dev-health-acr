@@ -45,7 +45,13 @@ SELECT ?, ?, concat('linear:B-', leftPad(toString(number), 4, '0')), 'T-B', 'pro
 		cursor = b.NextCursor
 		for _, r := range b.Relationships {
 			if r.Type == contractsv1.ContextFabricRelationshipOwnedByTeam && r.From.Kind == contractsv1.ContextFabricSubjectWorkItem {
-				edges[r.From.Label+"->"+r.To.Label] = true
+				// The work item end is named by its raw id, read back from its
+				// canonical id; its label is the reader form (CHAOS-12619).
+				raw, ok := contextfabric.RawSubjectLabel(r.From.Kind, r.From.CanonicalID)
+				if !ok || r.From.Label != contextfabric.ReadableSourceID(r.From.Kind, raw) {
+					t.Fatalf("work item end %+v: label is not the reader form of its raw id", r.From)
+				}
+				edges[raw+"->"+r.To.Label] = true
 			}
 		}
 	}

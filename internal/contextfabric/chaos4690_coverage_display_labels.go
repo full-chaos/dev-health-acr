@@ -57,8 +57,9 @@ func applyCoverageDisplayLabels(result *InvestigationResult) int {
 	closure := contractsv1.ContextFabricEvidenceRefClosure(*result)
 	labels := make(map[string]string, len(closure))
 	fallbacks := 0
+	names := evidenceSubjectNames(*result)
 	for ref := range closure {
-		label, known := contractsv1.ContextFabricEvidenceRefLabel(ref)
+		label, known := contractsv1.ContextFabricEvidenceRefLabelNamed(ref, names)
 		labels[ref] = label
 		if !known {
 			fallbacks++
