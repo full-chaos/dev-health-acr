@@ -183,6 +183,9 @@ func vocabularySources(t *testing.T) map[ContextFabricVocabulary][][]string {
 		// CHAOS-12639: the canonical themes are the parents of the canonical
 		// subcategories, a source apart from the theme word map itself.
 		ContextFabricVocabularyInvestmentTheme: {subcategoryThemes(subcategories[:])},
+		ContextFabricVocabularyCompletionDistributionState: {
+			closedVocabularyStrings(ContextFabricCompletionDistributionStates()), schema("ClaimedCompletionForecast", "state"),
+		},
 	}
 }
 
@@ -375,8 +378,19 @@ func TestEveryVocabularyLabelKeyHasTheServedShape(t *testing.T) {
 }
 
 // The map holds only values in one result, so the whole registry is its
-// ceiling. Stated as a measurement against the serving budget: the registry
-// must stay a small share of the 65,536 bytes an answer gets.
+// worst-case ceiling, never what one answer sends:
+// contextfabric.ServeVocabularyLabels (serve_vocabulary_labels.go:45) composes
+// the map by walking the result's own fields, and vocabularyWords.add
+// (serve_vocabulary_labels.go:226) sets one key per value found there. No
+// production code reads ContextFabricVocabularyNames or the entry lists. Stated
+// as a measurement against the serving budget: the registry must stay a small
+// share of the 65,536 bytes an answer gets.
+//
+// The share is one sixth (lead ruling on acr #1961, CHAOS-12639). One eighth
+// held until the completion distribution states (CHAOS-12608) and the
+// investment theme words (CHAOS-12639) landed together: main alone measured
+// about 8,100 bytes, and the merge 8,405 bytes in 170 entries (12.8%), over
+// the 8,192 of one eighth.
 func TestTheWholeRegistryFitsInASmallShareOfTheAnswerBudget(t *testing.T) {
 	const budget = 65536
 	all := map[string]string{}
@@ -396,8 +410,8 @@ func TestTheWholeRegistryFitsInASmallShareOfTheAnswerBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(encoded) > budget/8 {
-		t.Errorf("the whole registry is %d bytes (%d entries), over an eighth of the %d-byte answer budget", len(encoded), len(all), budget)
+	if len(encoded) > budget/6 {
+		t.Errorf("the whole registry is %d bytes (%d entries), over a sixth of the %d-byte answer budget", len(encoded), len(all), budget)
 	}
 	t.Logf("whole registry: %d entries, %d bytes, %.1f%% of %d", len(all), len(encoded), float64(len(encoded))*100/budget, budget)
 }

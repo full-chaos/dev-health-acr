@@ -190,6 +190,7 @@ func composeVocabularyLabels(result InvestigationResult) map[string]string {
 		words.subcategoryRows(fact)
 		words.columnVocabularyRows(fact.Table, fact.Rows)
 		words.columnVocabularyRows(fact.TimeSeriesTable, fact.TimeSeriesRows)
+		words.completionForecastState(fact)
 	}
 
 	if window := result.EffectiveEvidenceWindow; window != nil {
@@ -238,6 +239,14 @@ func (w *vocabularyWords) noteWhen(held bool, note contractsv1.ContextFabricAnsw
 func (w *vocabularyWords) subjectKind(kind contractsv1.ContextFabricSubjectKind) {
 	w.add(contractsv1.ContextFabricVocabularySubjectKind, string(kind))
 	w.add(contractsv1.ContextFabricVocabularySubjectKindPlural, string(kind))
+}
+
+// completionForecastState words the state of a claim's completion forecast
+// summary (CHAOS-12608).
+func (w *vocabularyWords) completionForecastState(fact contractsv1.ContextFabricClaimedFact) {
+	if fact.CompletionForecast != nil {
+		w.add(contractsv1.ContextFabricVocabularyCompletionDistributionState, string(fact.CompletionForecast.State))
+	}
 }
 
 // subcategoryRows words the subcategory of each row of a claimed

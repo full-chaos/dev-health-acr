@@ -7,6 +7,8 @@
 # STANDING RULE: a NEW memory row whose bound is the ClickHouse server peak skips under the race
 # detector with the raceDetectorEnabled build-tag pair (race_detector_on/off helper), and runs in a
 # unit leg (5 or 7), which proves it ran. A row whose bound is Go heap is not skipped.
+# CHAOS-12667: the linked investment memory test (107s) and the reached-repositories test (34s)
+# moved here from the heavy job (test2json span, main 5cb92237): heavy ~675s, fourth ~685s of tests.
 TestCHAOS4363ProjectRollupsAgainstRealClickHouse
 TestCHAOS5931ProjectWorkloadP50AgainstRealClickHouse
 TestCHAOS7073WorkUnitOutsideCurrentMembershipRunIsExcluded
@@ -41,3 +43,5 @@ TestTeamPullRequestsAreServedAsRollupBesideTheExpandedPullRequests
 TestWindowPRCycleMedianIsOverPullRequestsNotDailyMedians
 TestTeamProjectReachFollowsOnlyAnIdOnOneRowOnRealClickHouse
 TestAnAmbiguousLinkIdContributesToNoFactRead
+TestTeamLinkedInvestmentStatementMemoryOnTheProdShape
+TestTeamProjectReachedRepositoriesFollowOwnedProjectsNotOrganizationSizeOnRealClickHouse

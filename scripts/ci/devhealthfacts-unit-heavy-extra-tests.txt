@@ -2,6 +2,9 @@
 # that unit leg 7 runs instead of leg 10, to keep both legs under 75% of the 1530s guard.
 # Cut by measured seconds: median of go-unit-shard-10 over 7 green main runs, 2026-10-20.
 # Every name must be in the mid or the fourth list, exactly once (race-split.sh verify, partition).
+# CHAOS-12667: the two tests moved from the heavy to the fourth race job keep their unit leg 7.
 TestProjectThemeMixAgainstRealClickHouse
 TestScopeExpanderStatementsFollowTheRequestedScopeOnRealClickHouse
 TestTeamBlockerOldestAgeOnRealClickHouse
+TestTeamLinkedInvestmentStatementMemoryOnTheProdShape
+TestTeamProjectReachedRepositoriesFollowOwnedProjectsNotOrganizationSizeOnRealClickHouse

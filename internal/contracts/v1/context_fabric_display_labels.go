@@ -181,6 +181,11 @@ const (
 	// vocabulary. Its words are the theme words the render shapes already use
 	// (contextFabricInvestmentThemeLabels), from the one map.
 	ContextFabricVocabularyInvestmentTheme ContextFabricVocabulary = "investment_theme"
+	// ContextFabricVocabularyCompletionDistributionState words the state of a
+	// team forecast's completion distribution (CHAOS-12608): the state of a
+	// claim's completion forecast summary, so a reader is told why no curve
+	// is drawn in served words rather than a word table of its own.
+	ContextFabricVocabularyCompletionDistributionState ContextFabricVocabulary = "completion_distribution_state"
 )
 
 var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
@@ -206,6 +211,7 @@ var contextFabricVocabularyNames = [...]ContextFabricVocabulary{
 	ContextFabricVocabularyMeasureUnit,
 	ContextFabricVocabularySubcategory,
 	ContextFabricVocabularyInvestmentTheme,
+	ContextFabricVocabularyCompletionDistributionState,
 }
 
 // ContextFabricVocabularyNames returns the served vocabularies in published
@@ -397,6 +403,16 @@ var contextFabricVocabularyLabels = map[ContextFabricVocabulary]map[string]strin
 		string(ContextFabricMeasureUnitHours):  "hours",
 		string(ContextFabricMeasureUnitDays):   "days",
 		string(ContextFabricMeasureUnitPoints): "story points",
+	},
+	// CHAOS-12608: the state of a claim's completion forecast summary.
+	ContextFabricVocabularyCompletionDistributionState: {
+		"available":             "Distribution available",
+		"not_stored":            "No distribution stored for this forecast",
+		"no_run_within_horizon": "No simulated run finished within the forecast horizon",
+		"over_limit":            "Distribution too large to show whole",
+		"malformed":             "Stored distribution not usable",
+		"scope_ambiguous":       "Work scope of this forecast cannot be verified",
+		"unmatched":             "Forecast changed while the answer was read",
 	},
 	// The words the investment page has shown for these keys. Each is unique
 	// within its theme, which a sunburst ring needs.

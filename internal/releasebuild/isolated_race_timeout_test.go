@@ -280,4 +280,33 @@ func TestDevhealthsourceIsolation_ownRaceJobAndBudget(t *testing.T) {
 			t.Fatalf("race-devhealthsource-mid job must contain %q; block:\n%s", want, mid)
 		}
 	}
+	// CHAOS-12667: the fourth devhealthsource race job runs the fourth list
+	// through the same budget wrapper, compares with main's own artifact, and
+	// the aggregate verify job waits for it.
+	if !regexp.MustCompile(`(?m)^      - race-devhealthsource-fourth\s*$`).MatchString(ciSrc) {
+		t.Fatal("aggregate verify job must list race-devhealthsource-fourth in its needs")
+	}
+	fourthStart := strings.Index(ciSrc, "\n  race-devhealthsource-fourth:\n")
+	if fourthStart < 0 {
+		t.Fatal("ci.yml must define a race-devhealthsource-fourth job")
+	}
+	fourth := ciSrc[fourthStart+1:]
+	if next := regexp.MustCompile(`(?m)^  [A-Za-z0-9_-]+:\s*$`).FindStringIndex(fourth[3:]); next != nil {
+		fourth = fourth[:next[0]+3]
+	}
+	for _, want := range []string{
+		"name: race (devhealthsource fourth, isolated scope)",
+		"- mirror-preflight",
+		"isolated-dedicated devhealthsource",
+		"race-split.sh devhealthsource race-fourth)",
+		"race-split.sh devhealthsource verify",
+		"uses: ./.github/actions/race-baseline",
+		"artifact: race-json-race-devhealthsource-fourth",
+		"RACE_BASELINE_JSON: .tmp/race-baseline/race.json",
+		"name: race-json-race-devhealthsource-fourth",
+	} {
+		if !strings.Contains(fourth, want) {
+			t.Fatalf("race-devhealthsource-fourth job must contain %q; block:\n%s", want, fourth)
+		}
+	}
 }

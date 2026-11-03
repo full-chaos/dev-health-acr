@@ -283,15 +283,29 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		"common#$defs.ClaimedInvestmentMix.properties.rollup_basis.maxLength":              ContextFabricClaimedFieldMaxLength,
 		"common#$defs.ClaimedInvestmentMix.properties.work_unit_count.minimum":             0,
 		"common#$defs.ClaimedInvestmentMix.properties.project_own_work_unit_count.minimum": 0,
-		"common#$defs.ClaimedFactTable.properties.field.minLength":                         1,
-		"common#$defs.ClaimedFactTable.properties.field.maxLength":                         ContextFabricClaimedFieldMaxLength,
-		"common#$defs.ClaimedFactTable.properties.key.minItems":                            1,
-		"common#$defs.ClaimedFactTable.properties.key.maxItems":                            ContextFabricFactTableKeyMaxCount,
-		"common#$defs.ClaimedFactTable.properties.key.items.minLength":                     1,
-		"common#$defs.ClaimedFactTable.properties.key.items.maxLength":                     ContextFabricFactTableColumnMaxLength,
-		"common#$defs.ClaimedFactTable.properties.measures.maxItems":                       ContextFabricFactTableMeasuresMaxCount,
-		"common#$defs.ClaimedFactTable.properties.measures.items.minLength":                1,
-		"common#$defs.ClaimedFactTable.properties.measures.items.maxLength":                ContextFabricFactTableColumnMaxLength,
+		// CHAOS-12608: the completion forecast summary's own bounds
+		// (ContextFabricClaimedCompletionForecast.validate).
+		"common#$defs.ClaimedCompletionForecast.properties.computed_at.minLength":       1,
+		"common#$defs.ClaimedCompletionForecast.properties.computed_at.maxLength":       ContextFabricClaimedFieldMaxLength,
+		"common#$defs.ClaimedCompletionForecast.properties.work_scope_id.maxLength":     ContextFabricClaimedFieldMaxLength,
+		"common#$defs.ClaimedCompletionForecast.properties.forecast_p50_date.maxLength": ContextFabricClaimedFieldMaxLength,
+		"common#$defs.ClaimedCompletionForecast.properties.forecast_p85_date.maxLength": ContextFabricClaimedFieldMaxLength,
+		"common#$defs.ClaimedCompletionForecast.properties.forecast_p95_date.maxLength": ContextFabricClaimedFieldMaxLength,
+		"common#$defs.ClaimedCompletionForecast.properties.simulation_count.minimum":    0,
+		"common#$defs.ClaimedCompletionForecast.properties.horizon_days.minimum":        0,
+		"common#$defs.ClaimedCompletionForecast.properties.unfinished_runs.minimum":     0,
+		"common#$defs.ClaimedCompletionForecast.properties.forecast_p50_days.minimum":   0,
+		"common#$defs.ClaimedCompletionForecast.properties.forecast_p85_days.minimum":   0,
+		"common#$defs.ClaimedCompletionForecast.properties.forecast_p95_days.minimum":   0,
+		"common#$defs.ClaimedFactTable.properties.field.minLength":                      1,
+		"common#$defs.ClaimedFactTable.properties.field.maxLength":                      ContextFabricClaimedFieldMaxLength,
+		"common#$defs.ClaimedFactTable.properties.key.minItems":                         1,
+		"common#$defs.ClaimedFactTable.properties.key.maxItems":                         ContextFabricFactTableKeyMaxCount,
+		"common#$defs.ClaimedFactTable.properties.key.items.minLength":                  1,
+		"common#$defs.ClaimedFactTable.properties.key.items.maxLength":                  ContextFabricFactTableColumnMaxLength,
+		"common#$defs.ClaimedFactTable.properties.measures.maxItems":                    ContextFabricFactTableMeasuresMaxCount,
+		"common#$defs.ClaimedFactTable.properties.measures.items.minLength":             1,
+		"common#$defs.ClaimedFactTable.properties.measures.items.maxLength":             ContextFabricFactTableColumnMaxLength,
 		// CHAOS-4680: the third declared role, mapped declaratively for the
 		// identical reason key/measures above are.
 		"common#$defs.ClaimedFactTable.properties.observations.maxItems":        ContextFabricFactTableObservationsMaxCount,
@@ -359,17 +373,22 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// the resolution rule first, scoring "unreachable" rather than a
 		// proof). Each value is the named constant validateRenderShapes
 		// itself enforces.
-		"common#$defs.RenderShape.properties.series.minItems":         1,
-		"common#$defs.RenderShape.properties.series.maxItems":         ContextFabricRenderSeriesMaxCount,
-		"common#$defs.RenderSeries.properties.points.minItems":        1,
-		"common#$defs.RenderSeries.properties.points.maxItems":        ContextFabricRenderPointsMaxCount,
-		"common#$defs.RenderSeries.properties.key.minLength":          1,
-		"common#$defs.RenderSeries.properties.key.maxLength":          ContextFabricRenderLabelMaxLength,
-		"common#$defs.RenderPointSource.properties.signal.minLength":  1,
-		"common#$defs.RenderPointSource.properties.signal.maxLength":  ContextFabricRenderLabelMaxLength,
-		"common#$defs.RenderPointSource.properties.field.minLength":   1,
-		"common#$defs.RenderPointSource.properties.field.maxLength":   ContextFabricRenderSourceFieldMaxLength,
-		"common#$defs.RenderPointSource.properties.row_index.minimum": 0,
+		"common#$defs.RenderShape.properties.series.minItems":  1,
+		"common#$defs.RenderShape.properties.series.maxItems":  ContextFabricRenderSeriesMaxCount,
+		"common#$defs.RenderSeries.properties.points.minItems": 1,
+		// CHAOS-12608: a series admits the largest per-kind point cap; the
+		// RenderShape allOf holds every kind to its own (allOf.0 the
+		// default, allOf.1 the forecast; ContextFabricRenderPointsMax).
+		"common#$defs.RenderSeries.properties.points.maxItems":                                     ContextFabricRenderPointsMax(ContextFabricRenderKindForecast),
+		"common#$defs.RenderShape.allOf.0.then.properties.series.items.properties.points.maxItems": ContextFabricRenderPointsMaxCount,
+		"common#$defs.RenderShape.allOf.1.then.properties.series.items.properties.points.maxItems": ContextFabricRenderPointsMax(ContextFabricRenderKindForecast),
+		"common#$defs.RenderSeries.properties.key.minLength":                                       1,
+		"common#$defs.RenderSeries.properties.key.maxLength":                                       ContextFabricRenderLabelMaxLength,
+		"common#$defs.RenderPointSource.properties.signal.minLength":                               1,
+		"common#$defs.RenderPointSource.properties.signal.maxLength":                               ContextFabricRenderLabelMaxLength,
+		"common#$defs.RenderPointSource.properties.field.minLength":                                1,
+		"common#$defs.RenderPointSource.properties.field.maxLength":                                ContextFabricRenderSourceFieldMaxLength,
+		"common#$defs.RenderPointSource.properties.row_index.minimum":                              0,
 		// CHAOS-4413: claimed_facts_count/rows_count are not standalone
 		// floor checks the generic probe can isolate -- validateCompleteness
 		// enforces EXACT equality against len(claimed_facts) and the
