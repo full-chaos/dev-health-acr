@@ -1359,7 +1359,10 @@ distribution declares exactly one key column, an integer on every row, strictly
 ascending. It is never cut: the answer-size row cut withholds a distribution
 over its cap whole, table and declaration together
 (`tables_distribution_withheld` on the truncation line), and a producer serves
-a distribution past its cap as a state, not a shorter table. Adding a value to
+a distribution past its cap as a state, not a shorter table. A team's
+`repository_theme_breakdown` is withheld whole the same way (CHAOS-12582,
+`tables_repository_flow_withheld`), because a cut can take every link of one
+theme while every other theme still adds up. Adding a value to
 the frozen `ClaimedFactTable.shape` enum is a contract change: an MCP client
 that cached the previous output schema, and ask-dev on its previous pin,
 refuse an answer that carries the new shape until they move. So the

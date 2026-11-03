@@ -44,6 +44,10 @@ type AppConfig struct {
 	// config.Config.ContextFabricInvestmentTreemapEnabled: both doors that
 	// serve a result read it (contextfabric.WithoutDisabledRenderShapes).
 	ContextFabricInvestmentTreemapEnabled bool
+	// ContextFabricInvestmentSankeyEnabled mirrors
+	// config.Config.ContextFabricInvestmentSankeyEnabled (CHAOS-12582), for the
+	// same two doors.
+	ContextFabricInvestmentSankeyEnabled bool
 	// ContextFabricComparisonTableEnabled mirrors
 	// config.Config.ContextFabricComparisonTableEnabled, for the same two doors.
 	ContextFabricComparisonTableEnabled bool

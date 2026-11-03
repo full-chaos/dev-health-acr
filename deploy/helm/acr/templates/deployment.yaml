@@ -157,6 +157,9 @@ spec:
             # CHAOS-12521: always rendered, like the flag above. See values.yaml.
             - name: ACR_CONTEXT_FABRIC_INVESTMENT_TREEMAP_ENABLED
               value: {{ .Values.contextFabric.investmentTreemapEnabled | default false | quote }}
+            # CHAOS-12582: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED
+              value: {{ .Values.contextFabric.investmentSankeyEnabled | default false | quote }}
             # CHAOS-12513: always rendered, like the flag above. See values.yaml.
             - name: ACR_CONTEXT_FABRIC_COMPARISON_TABLE_ENABLED
               value: {{ .Values.contextFabric.comparisonTableEnabled | default false | quote }}

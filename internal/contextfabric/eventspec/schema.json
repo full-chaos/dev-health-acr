@@ -10115,7 +10115,8 @@
           "comparison_side_by_side",
           "landscape_position",
           "completion_forecast",
-          "completion_forecast_percentiles"
+          "completion_forecast_percentiles",
+          "investment_repository_flow"
         ]
       },
       {
@@ -10132,6 +10133,11 @@
           "fewer_than_two_shares",
           "cohort_answer",
           "theme_table_cut",
+          "not_repository_flow_question",
+          "no_repository_flow_table",
+          "several_repository_flow_tables",
+          "repository_count_outside_bounds",
+          "repository_flow_unprovable",
           "not_explicit_comparison",
           "fewer_than_two_sides",
           "too_many_sides",
@@ -10284,7 +10290,8 @@
               "comparison_side_by_side",
               "landscape_position",
               "completion_forecast",
-              "completion_forecast_percentiles"
+              "completion_forecast_percentiles",
+              "investment_repository_flow"
             ]
           },
           {
