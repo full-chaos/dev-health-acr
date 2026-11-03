@@ -2468,7 +2468,7 @@
           "pair": "workload",
           "key": "team on 2026-10-12",
           "path": "capacityForecasts.edges[*].node.throughputMean",
-          "detail": "ops float:26.83999333999334, acr float:84.12539528243057"
+          "detail": "ops float:26.839993339993338, acr float:84.12539528243057"
         },
         {
           "root": "capacityForecasts",

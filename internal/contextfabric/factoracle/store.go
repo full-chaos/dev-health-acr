@@ -379,7 +379,7 @@ func (s *Store) ExpectedRepositoryEffort(w Window) map[string]map[string]float64
 				out[repo] = map[string]float64{}
 			}
 			for theme, themeShare := range unit.latest.themes {
-				out[repo][theme] += themeShare * share
+				out[repo][theme] += float64(themeShare * share) // no fused multiply-add (arm64)
 			}
 		}
 	}
@@ -399,7 +399,7 @@ func (s *Store) Witnesses(w Window) Witnesses {
 	out := Witnesses{ClassSupersession: {}, ClassMembershipScope: {}, ClassNullableArgmax: {}}
 	add := func(class Class, gen unitGeneration, share float64) {
 		for theme, themeShare := range gen.themes {
-			out[class][theme] += themeShare * share
+			out[class][theme] += float64(themeShare * share) // no fused multiply-add (arm64)
 		}
 	}
 	for _, id := range s.unitIDs() {

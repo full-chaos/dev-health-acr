@@ -667,7 +667,9 @@ func compareWorkloadTeam(rr *RootReport, latest map[string]forecastNode, facts [
 		}
 		if leaf, err := typedLeaf(LeafFloat, n.row["throughputStddev"]); err == nil {
 			v, _ := leafFloat(leaf)
-			total.sq += v * v
+			// float64(): no fused multiply-add on arm64, so the sum is the same
+			// on every architecture (a pinned finding text holds it exactly).
+			total.sq += float64(v * v)
 		}
 		if prior, seen := scopeLatest[n.scope]; !seen || n.computed.V > prior.computed.V || (n.computed.V == prior.computed.V && n.id > prior.id) {
 			scopeLatest[n.scope] = n
