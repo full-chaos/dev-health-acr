@@ -3,6 +3,7 @@
 package emitscan_test
 
 import (
+	"runtime"
 	"testing"
 	"time"
 
@@ -30,7 +31,18 @@ func TestKeyScopeHelperLimitsKeepHeadroomOverTheRealTree(t *testing.T) {
 	if ceiling := int64(limitCPU) * int64(time.Second) / 3 / helperNanosPerNode; nodes > ceiling {
 		t.Errorf("the cpu limit %ds is under 3x the largest package: %d syntax nodes, at most %d fit", limitCPU, nodes, ceiling)
 	}
-	if rssKB<<10*3 > limitRSS {
-		t.Errorf("the resident-set limit %d MB is under 3x the largest helper (%d MB)", limitRSS>>20, rssKB>>10)
-	}
+	// CHAOS-12747: the resident set is read from /proc/<pid>/status, which darwin lacks, so there the reading is 0 and the
+	// headroom check measured nothing. It is its own subtest: skipped, with the reason, on darwin; on Linux a run that read no
+	// resident set fails, since a measurement that did not happen is not a pass.
+	t.Run("resident set headroom", func(t *testing.T) {
+		if runtime.GOOS == "darwin" {
+			t.Skip("darwin: the helper's resident set is read from /proc/<pid>/status, which darwin lacks, so its headroom is not measured; Linux CI measures it (CHAOS-12747)")
+		}
+		if rssKB <= 0 {
+			t.Fatalf("no helper's resident set was read (%d KB over %d helpers): the resident-set headroom check measured nothing", rssKB, helpers)
+		}
+		if rssKB<<10*3 > limitRSS {
+			t.Errorf("the resident-set limit %d MB is under 3x the largest helper (%d MB)", limitRSS>>20, rssKB>>10)
+		}
+	})
 }

@@ -1,0 +1,20 @@
+{{- /*
+CHAOS-12650: the start wrapper and postStart hook of the in-release FalkorDB when
+contextFabric.falkordb.persistence.appendOnly is on. The scripts are the chart's
+own files, rendered unchanged (scripts/deploy/test-falkordb-aof.sh executes the
+same files; scripts/deploy/test-helm.sh pins that the ConfigMap carries them).
+*/ -}}
+{{- if and .Values.contextFabric.falkordb.enabled .Values.contextFabric.falkordb.persistence.appendOnly }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "acr.fullname" . }}-falkordb-scripts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "acr.falkordbLabels" . | nindent 4 }}
+data:
+  falkordb-start.sh: |
+{{ .Files.Get "files/falkordb-start.sh" | indent 4 }}
+  falkordb-aof-on.sh: |
+{{ .Files.Get "files/falkordb-aof-on.sh" | indent 4 }}
+{{- end }}
