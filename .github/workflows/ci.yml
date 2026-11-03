@@ -362,6 +362,8 @@ jobs:
         run: scripts/ci/test-race-budget-cut.sh
       - name: Test the contracts/v1 race isolation
         run: scripts/ci/test-race-contracts-isolation.sh
+      - name: Test the internal/api race isolation
+        run: scripts/ci/test-race-api-isolation.sh
       - name: Test the reached-shard selection and the lane check that accepts its skips
         run: scripts/ci/test-reached-shards.sh
       - name: Test the devhealthsource unit split partition
@@ -2026,6 +2028,162 @@ jobs:
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
 
+  # CHAOS-12717: internal/api runs alone, in two halves split by
+  # scripts/ci/api-heavy-tests.txt (race-split.sh api). In race shard 3 it sat
+  # at the 357s guard of the 420s budget (357.045s main bc763284, 362.3s #1956,
+  # 339.1s main db3d95ab); each half keeps 420s (GOTEST_API_TIMEOUT).
+  race-api:
+    name: race (api, isolated scope)
+    # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
+    # same as race-devhealthfacts -- needs mirror-preflight.
+    needs:
+      - gomodcache
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-api')
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    # CHAOS-12667: actions: read lets the race-baseline step fetch main's last
+    # race-json artifact of this job, so the guard prints each test's change.
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.3'
+          cache: ${{ runner.environment == 'github-hosted' }}
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
+      # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
+      # job above.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify the heavy-test list names real tests
+        run: scripts/ci/race-split.sh api verify
+      # CHAOS-12667: main's last race-json of this job, for the guard's real span
+      # report. The token is used in this step only; it runs gh and nothing else.
+      - uses: ./.github/actions/race-baseline
+        with:
+          artifact: race-json-race-api
+          token: ${{ github.token }}
+      - name: Run isolated api race suite (rest half)
+        env:
+          RACE_BASELINE_JSON: .tmp/race-baseline/race.json
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh isolated-dedicated api)"
+          printf 'isolated (dedicated) packages:\n%s\n' "$packages"
+          timeout="$(make -s isolated-timeout PKG="$packages")"
+          export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh api rest)"
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'api (rest half)' "$packages"
+      # Keeps this job's test2json events so per-test cost under -race can be
+      # read. if: always() so a timed-out or failing job still leaves them.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-api
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
+
+  race-api-heavy:
+    name: race (api heavy, isolated scope)
+    # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
+    # same as race-devhealthfacts -- needs mirror-preflight.
+    needs:
+      - gomodcache
+      - mirror-preflight
+      - plan
+    if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-api-heavy')
+    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    # CHAOS-12667: actions: read lets the race-baseline step fetch main's last
+    # race-json artifact of this job, so the guard prints each test's change.
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      # actions/setup-go v6.5.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.3'
+          cache: ${{ runner.environment == 'github-hosted' }}
+      # Module cache: one gomodcache job fills it, every consumer restores it
+      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
+      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      - uses: ./.github/actions/go-modcache
+        if: ${{ runner.environment == 'github-hosted' }}
+        with: {mode: restore}
+      # docker/login-action v4.5.1. Same GHCR-mirror-only auth as the `race`
+      # job above.
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify the heavy-test list names real tests
+        run: scripts/ci/race-split.sh api verify
+      - name: Check the api heavy/rest split is a partition
+        run: scripts/ci/race-split.sh api partition
+      # CHAOS-12667: main's last race-json of this job, for the guard's real span
+      # report. The token is used in this step only; it runs gh and nothing else.
+      - uses: ./.github/actions/race-baseline
+        with:
+          artifact: race-json-race-api-heavy
+          token: ${{ github.token }}
+      - name: Run isolated api race suite (heavy half)
+        env:
+          RACE_BASELINE_JSON: .tmp/race-baseline/race.json
+        run: |
+          set -euo pipefail
+          packages="$(scripts/ci/test-shard.sh isolated-dedicated api)"
+          printf 'isolated (dedicated) packages:\n%s\n' "$packages"
+          timeout="$(make -s isolated-timeout PKG="$packages")"
+          export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh api heavy)"
+          RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'api (heavy half)' "$packages"
+      # Keeps this job's test2json events so per-test cost under -race can be
+      # read. if: always() so a timed-out or failing job still leaves them.
+      # actions/upload-artifact v7.0.1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: race-json-race-api-heavy
+          path: .tmp/race-json/race.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh
+
   race-factoracle-heavy:
     name: race (factoracle heavy, isolated scope)
     # Pulls a mirrored image via TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX below,
@@ -2724,6 +2882,8 @@ jobs:
       - race-factoracle
       - race-factoracle-heavy
       - race-mcp
+      - race-api
+      - race-api-heavy
       - race-contracts-v1
       - build
       - contracts
