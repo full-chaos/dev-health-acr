@@ -44,12 +44,16 @@ type operationDecl struct {
 	Notes        []string
 }
 
+// variableDecl declares one allowed variable. MinItems is the fewest items a
+// list holds, an omitted list included
+// (directread.VariableRule).
 type variableDecl struct {
 	Source        directread.VariableSource
 	ForcedValue   json.RawMessage
 	AllowedValues []string
 	RefusedValues []directread.ValueRefusal
 	Min, Max      *int64
+	MinItems      int
 	MaxItems      int
 	MaxLength     int
 	Subject       *directread.SubjectConversion

@@ -214,6 +214,7 @@ type CatalogVariable struct {
 	Default     string   `json:"default,omitempty"`
 	Min         *int64   `json:"min,omitempty"`
 	Max         *int64   `json:"max,omitempty"`
+	MinItems    int      `json:"min_items,omitempty"`
 	MaxItems    int      `json:"max_items,omitempty"`
 	MaxLength   int      `json:"max_length,omitempty"`
 	SubjectKind string   `json:"subject_kind,omitempty"`
@@ -696,7 +697,7 @@ func catalogOperation(op *OperationPolicy, class CallerClass, reason string) Cat
 		}
 		// A restricted caller's forced path stays listed: the caller may
 		// name a subset of its grant there; scope_class says acr bounds it.
-		v := CatalogVariable{Path: rule.Path, Type: rule.Type, Default: rule.EffectiveDefault(), Min: rule.Min, Max: rule.Max, MaxItems: rule.MaxItems, MaxLength: rule.MaxLength}
+		v := CatalogVariable{Path: rule.Path, Type: rule.Type, Default: rule.EffectiveDefault(), Min: rule.Min, Max: rule.Max, MinItems: rule.MinItems, MaxItems: rule.MaxItems, MaxLength: rule.MaxLength}
 		if rule.Kind == VariableKindEnum {
 			v.EnumValues = append([]string{}, rule.AllowedValues...)
 		}

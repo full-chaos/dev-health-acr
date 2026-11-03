@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 
 	dr "github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
 )
@@ -173,9 +175,9 @@ func investmentDecl(documentName string, exceptions map[string]string, disclosur
 			"batch.filters.scope.level": {
 				AllowedValues: []string{"ORG"},
 				RefusedValues: []dr.ValueRefusal{
-					{Value: "TEAM", Code: dr.RefusalBasisDependentShape, Reason: k14Reason + ": needsTeamJoin, [ops] analytics/investment.go:534-539, investmentquality.go:231-245"},
-					{Value: "REPO", Code: dr.RefusalBasisDependentShape, Reason: k14Reason + ": repository filter translation, [ops] analytics/filtertranslation.go:49-51,213-214"},
-					{Value: "SERVICE", Code: dr.RefusalVariableNotAllowed, Reason: "scope level SERVICE applies no filter at the data layer ([ops] analytics/filtertranslation.go:55-57)"},
+					{Value: "TEAM", Code: dr.RefusalBasisDependentShape, Reason: legacyLevelReasons["TEAM"]},
+					{Value: "REPO", Code: dr.RefusalBasisDependentShape, Reason: legacyLevelReasons["REPO"]},
+					scopeServiceRefusal,
 				},
 			},
 			"batch.filters.scope.ids":        client,
@@ -194,7 +196,7 @@ func investmentDecl(documentName string, exceptions map[string]string, disclosur
 		Constraints: []dr.Constraint{
 			{Kind: dr.ConstraintEmptyOrAbsent, Path: "batch.filters.scope.ids", Code: dr.RefusalBasisDependentShape, Reason: k14Reason + ": scope must be absent or ORG with no ids"},
 			{Kind: dr.ConstraintRequiresValue, Path: "batch.filters.scope", Other: "batch.filters.scope.level", Values: []string{"ORG"}, OtherDefault: "ORG", Code: dr.RefusalBasisDependentShape, Reason: k14Reason + ": scope level must be ORG"},
-			window("batch.breakdowns[*].dateRange.startDate", "batch.breakdowns[*].dateRange.endDate", analyticsWindowDays, false),
+			investmentWindow(),
 		},
 		Unrestricted:     served("basis-free shape only: [ops] analytics/investment.go:573-582,598 reads the latest work unit investments with no team join and no repository allocation (K14-A, V)"),
 		Restricted:       refusedFor("K14-A: forced scope inside the nested analytics batch is not proved; " + dr.BasisDependentShapeText),
@@ -203,18 +205,118 @@ func investmentDecl(documentName string, exceptions map[string]string, disclosur
 	}
 }
 
-func declaredPolicy() policyDeclaration {
-	breakdown := investmentDecl("InvestmentBreakdown", map[string]string{
-		"analytics.evidenceQualityDistribution":     "aggregate evidence-quality band counts, no person field ([ops] analytics/investmentquality.go; RM §8-9); computed only with useInvestment=true, which acr forces",
-		"analytics.evidenceQualityStats.bandCounts": "aggregate evidence-quality band counts, no person field ([ops] analytics/investmentquality.go; RM §8-9)",
-	}, nil)
+// investmentWindow is the window constraint of every investment entry.
+func investmentWindow() dr.Constraint {
+	return window("batch.breakdowns[*].dateRange.startDate", "batch.breakdowns[*].dateRange.endDate", analyticsWindowDays, false)
+}
+
+// investmentBreakdownExceptions are the written output exceptions of the
+// InvestmentBreakdown body, shared by its scoped copies.
+var investmentBreakdownExceptions = map[string]string{
+	"analytics.evidenceQualityDistribution":     "aggregate evidence-quality band counts, no person field ([ops] analytics/investmentquality.go; RM §8-9); computed only with useInvestment=true, which acr forces",
+	"analytics.evidenceQualityStats.bandCounts": "aggregate evidence-quality band counts, no person field ([ops] analytics/investmentquality.go; RM §8-9)",
+}
+
+// opsServesScopedInvestment is true once the vendored ops catalogue
+// (contracts/mcp/ops-catalogue) carries the registry rows
+// investmentBreakdownTeam and investmentBreakdownRepository (ops CHAOS-12698,
+// full-chaos/dev-health-ops#5574). Until then the two entries
+// (scopedInvestmentEntries) are generated and tested only against the
+// test-local catalogue of ops 14f54b41
+// (internal/contextfabric/directread/testdata/ops_14f54b41), and the ORG
+// entries keep their TEAM and REPO refusal reasons. A vendored registry with
+// the two rows and this false fails generation: every registry row must be
+// declared exactly once.
+const opsServesScopedInvestment = false
+
+// The ORG entries' TEAM and REPO scope-level reasons. scopedLevelReasons
+// names the entries that serve the level; legacyLevelReasons are the reasons
+// before they are served.
+var (
+	legacyLevelReasons = map[string]string{
+		"TEAM": k14Reason + ": needsTeamJoin, [ops] analytics/investment.go:534-539, investmentquality.go:231-245",
+		"REPO": k14Reason + ": repository filter translation, [ops] analytics/filtertranslation.go:49-51,213-214",
+	}
+	scopedLevelReasons = map[string]string{
+		"TEAM": k14Reason + ": scope level TEAM is served by investmentBreakdownTeam (one owned team id; ops scopes a team by the repositories it owns, team_repo_ownership with D5988 owner shares, CHAOS-12690)",
+		"REPO": k14Reason + ": scope level REPO is served by investmentBreakdownRepository (one repository id)",
+	}
+)
+
+// withLevelReasons replaces the TEAM and REPO scope-level refusal reasons of
+// an investment entry and changes nothing else.
+func withLevelReasons(decl operationDecl, reasons map[string]string) operationDecl {
+	const path = "batch.filters.scope.level"
+	level := decl.Variables[path]
+	level.RefusedValues = slices.Clone(level.RefusedValues)
+	for i, rv := range level.RefusedValues {
+		if reason, ok := reasons[rv.Value]; ok {
+			level.RefusedValues[i].Reason = reason
+		}
+	}
+	decl.Variables = withVariables(decl.Variables, map[string]variableDecl{path: level})
+	return decl
+}
+
+// scopedInvestmentDecl is the InvestmentBreakdown entry for ONE scope level
+// with ONE subject id (CHAOS-12691): the K14-A shape of investmentDecl, except
+// that batch.filters.scope.level must be the given level (absent is the SDL
+// default ORG and is refused) and batch.filters.scope.ids holds exactly one
+// id of the bound subject kind, checked by the subject gate. ops reads an
+// empty id list as no scope, the whole organization
+// ([ops] analytics/filtertranslation.go:47-50, 186-193 at 14f54b41).
+func scopedInvestmentDecl(documentName, level string, subject *dr.SubjectConversion, levelRefusals []dr.ValueRefusal, basis string) operationDecl {
+	decl := investmentDecl(documentName, investmentBreakdownExceptions, nil)
+	decl.Variables = withVariables(decl.Variables, map[string]variableDecl{
+		"batch.filters.scope.level": {AllowedValues: []string{level}, RefusedValues: levelRefusals},
+		"batch.filters.scope.ids":   {MinItems: 1, MaxItems: 1, Subject: subject},
+	})
+	decl.Constraints = []dr.Constraint{
+		{Kind: dr.ConstraintRequiresValue, Other: "batch.filters.scope.level", Values: []string{level}, Code: dr.RefusalVariableNotAllowed, Reason: "scope level must be " + level + " on " + documentName + "; an absent level is the SDL default ORG, served by investmentBreakdown"},
+		investmentWindow(),
+	}
+	decl.Unrestricted = served(basis)
+	return decl
+}
+
+// scopeServiceRefusal is the SERVICE level refusal every investment entry
+// shares.
+var scopeServiceRefusal = dr.ValueRefusal{Value: "SERVICE", Code: dr.RefusalVariableNotAllowed, Reason: "scope level SERVICE applies no filter at the data layer ([ops] analytics/filtertranslation.go:55-57)"}
+
+func levelServedBy(value, operation string) dr.ValueRefusal {
+	return dr.ValueRefusal{Value: value, Code: dr.RefusalVariableNotAllowed, Reason: "scope level " + value + " is served by " + operation}
+}
+
+// scopedInvestmentEntries are the team and the repository investment
+// breakdowns. Each binds one subject kind.
+func scopedInvestmentEntries() map[string]operationDecl {
+	return map[string]operationDecl{
+		"investmentBreakdownTeam": scopedInvestmentDecl("InvestmentBreakdownTeam", "TEAM", team,
+			[]dr.ValueRefusal{levelServedBy("ORG", "investmentBreakdown"), levelServedBy("REPO", "investmentBreakdownRepository"), scopeServiceRefusal},
+			"one owned team: [ops] analytics/filtertranslation.go:186-193 (14f54b41) scopes the investment path to the repositories the team owns (teamscope.RepoCondition over team_repo_ownership, D5988 owner shares; CHAOS-12690), never the work-item vote; the owner-share pair of CHAOS-12691 (internal/contextfabric/factoracle/owner_share_pair.go) is the proof; the team id passes the subject gate"),
+		"investmentBreakdownRepository": scopedInvestmentDecl("InvestmentBreakdownRepository", "REPO", repository,
+			[]dr.ValueRefusal{levelServedBy("ORG", "investmentBreakdown"), levelServedBy("TEAM", "investmentBreakdownTeam"), scopeServiceRefusal},
+			"one repository: [ops] analytics/filtertranslation.go:47-55 (14f54b41) filters the repository column of the investment rows by the id; the repository id passes the subject gate"),
+	}
+}
+
+func declaredPolicy() policyDeclaration { return declaredPolicyFor(opsServesScopedInvestment) }
+
+// declaredPolicyFor is the declaration with or without the scoped investment
+// entries (opsServesScopedInvestment).
+func declaredPolicyFor(scoped bool) policyDeclaration {
+	breakdown := investmentDecl("InvestmentBreakdown", investmentBreakdownExceptions, nil)
 	full := investmentDecl("InvestmentFull", nil, []dr.DisclosureField{
 		{Path: "analytics.sankey.coverage.teamCoverage", Rule: dr.DisclosurePartialWhenBelowOne},
 		{Path: "analytics.sankey.coverage.repoCoverage", Rule: dr.DisclosurePartialWhenBelowOne},
 	})
 	full.Notes = []string{"batch.sankey is refused in S1a (K14-A), so sankey is always null and the coverage disclosure never fires; completeness stays unknown"}
+	if scoped {
+		breakdown = withLevelReasons(breakdown, scopedLevelReasons)
+		full = withLevelReasons(full, scopedLevelReasons)
+	}
 
-	return policyDeclaration{
+	declaration := policyDeclaration{
 		Served: map[string]operationDecl{
 			"compoundingRisk": {
 				DocumentName: "CompoundingRisk",
@@ -532,6 +634,10 @@ func declaredPolicy() policyDeclaration {
 		},
 		NotServed: notServed(),
 	}
+	if scoped {
+		maps.Copy(declaration.Served, scopedInvestmentEntries())
+	}
+	return declaration
 }
 
 func notServed() map[string]notServedDecl {

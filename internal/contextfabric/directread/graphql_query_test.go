@@ -127,11 +127,12 @@ func rootVars(t *testing.T, op *directread.OperationPolicy) map[string]any {
 		opMerge(vars, "input.scope", "REPO")
 	case "throughputForecast":
 		vars["input"] = map[string]any{}
-	case "investmentBreakdown", "investmentFull":
-		vars["batch"] = map[string]any{"breakdowns": []any{map[string]any{
+	case "investmentBreakdown", "investmentFull", "investmentBreakdownTeam", "investmentBreakdownRepository":
+		// The scoped entries keep the scope opMinimalVariables names.
+		opMerge(vars, "batch.breakdowns", []any{map[string]any{
 			"dimension": "THEME", "measure": "COUNT",
 			"dateRange": map[string]any{"startDate": "2026-09-01", "endDate": "2026-09-28"},
-		}}}
+		}})
 	}
 	return vars
 }

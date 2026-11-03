@@ -249,9 +249,14 @@ func TestT12RestrictedWithoutGrantPortAndEmptyIntersection(t *testing.T) {
 // person_scope_not_served and sends nothing upstream.
 func TestT13EveryPersonVariableRefusedAtTheEdge(t *testing.T) {
 	cat, _ := directread.DefaultCatalogue()
+	t13PersonVariablesAtTheEdge(t, cat)
+}
+
+func t13PersonVariablesAtTheEdge(t *testing.T, cat *directread.Catalogue) {
+	t.Helper()
 	checked := 0
 	for _, op := range cat.Operations(directread.CallerUnrestricted) {
-		h := newOpHarness(t, func(opRecorded) (int, string) { return 200, opNullAnswer(op) }, opHarnessOptions{})
+		h := newOpHarness(t, func(opRecorded) (int, string) { return 200, opNullAnswer(op) }, opHarnessOptions{catalogue: cat})
 		for _, pv := range op.PersonVariables {
 			rule, ok := op.Variable(pv.Path)
 			if !ok {
@@ -339,12 +344,19 @@ func TestT2OrgIsolationEveryOperation(t *testing.T) {
 	}
 }
 
+// needsTeam reports an operation whose minimal variables name an org A
+// subject: a required subject path or a subject list with MinItems.
 func needsTeam(op *directread.OperationPolicy) bool {
 	for _, con := range op.Constraints {
 		if con.Kind == directread.ConstraintRequired {
 			if rule, ok := op.Variable(con.Path); ok && rule.Subject != nil {
 				return true
 			}
+		}
+	}
+	for _, rule := range op.Variables {
+		if rule.MinItems > 0 && rule.Subject != nil {
+			return true
 		}
 	}
 	return false

@@ -303,7 +303,11 @@ func TestT12GraphQLAliasesAddedRowIDsAndClassRefusal(t *testing.T) {
 // a GraphQL variable of the free query, is refused with zero requests; two
 // inline-literal positions as well.
 func TestT13GraphQLEveryPersonArgumentIsRefused(t *testing.T) {
-	h := newGQLHarness(t, gqlHarnessOptions{})
+	t13GraphQLPersonArguments(t, newGQLHarness(t, gqlHarnessOptions{}))
+}
+
+func t13GraphQLPersonArguments(t *testing.T, h *gqlHarness) {
+	t.Helper()
 	checked := 0
 	for field, ops := range gqlRootOps(t, h.policy) {
 		for _, op := range ops {
