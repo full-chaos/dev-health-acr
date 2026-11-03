@@ -249,14 +249,9 @@ func TestT12RestrictedWithoutGrantPortAndEmptyIntersection(t *testing.T) {
 // person_scope_not_served and sends nothing upstream.
 func TestT13EveryPersonVariableRefusedAtTheEdge(t *testing.T) {
 	cat, _ := directread.DefaultCatalogue()
-	t13PersonVariablesAtTheEdge(t, cat)
-}
-
-func t13PersonVariablesAtTheEdge(t *testing.T, cat *directread.Catalogue) {
-	t.Helper()
 	checked := 0
 	for _, op := range cat.Operations(directread.CallerUnrestricted) {
-		h := newOpHarness(t, func(opRecorded) (int, string) { return 200, opNullAnswer(op) }, opHarnessOptions{catalogue: cat})
+		h := newOpHarness(t, func(opRecorded) (int, string) { return 200, opNullAnswer(op) }, opHarnessOptions{})
 		for _, pv := range op.PersonVariables {
 			rule, ok := op.Variable(pv.Path)
 			if !ok {
@@ -292,14 +287,14 @@ func t13PersonVariablesAtTheEdge(t *testing.T, cat *directread.Catalogue) {
 
 // ---------------------------------------------------------------- T2
 
-// TestT2OrgIsolationEveryOperation: two organizations, all 20 operations.
+// TestT2OrgIsolationEveryOperation: two organizations, all 22 operations.
 // The orgId variable and X-DH-Internal-Org-Id are always the principal's
 // organization; the service never sees the other one.
 func TestT2OrgIsolationEveryOperation(t *testing.T) {
 	cat, _ := directread.DefaultCatalogue()
 	ops := cat.Operations(directread.CallerUnrestricted)
-	if len(ops) != 20 {
-		t.Fatalf("unrestricted catalogue has %d operations, want 20", len(ops))
+	if len(ops) != 22 {
+		t.Fatalf("unrestricted catalogue has %d operations, want 22", len(ops))
 	}
 	for _, op := range ops {
 		var orgPaths []string

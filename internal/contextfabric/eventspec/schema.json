@@ -6489,6 +6489,8 @@
           "compoundingRisk",
           "hotspots",
           "investmentBreakdown",
+          "investmentBreakdownRepository",
+          "investmentBreakdownTeam",
           "investmentFull",
           "securityOverview",
           "throughputForecast",

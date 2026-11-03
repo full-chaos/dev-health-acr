@@ -119,13 +119,7 @@ func generateAll(in inputs) (map[string][]byte, error) {
 }
 
 func readInputs(root string) (inputs, error) {
-	return readInputsAt(filepath.Join(root, registryPath), filepath.Join(root, schemaPath), declaredPolicy())
-}
-
-// readInputsAt reads a registry dump and an SDL from the given files; tests
-// use it for a test-local ops catalogue.
-func readInputsAt(registryFilePath, schemaFilePath string, policy policyDeclaration) (inputs, error) {
-	registryBytes, err := os.ReadFile(registryFilePath)
+	registryBytes, err := os.ReadFile(filepath.Join(root, registryPath))
 	if err != nil {
 		return inputs{}, fmt.Errorf("read registry: %w", err)
 	}
@@ -138,9 +132,9 @@ func readInputsAt(registryFilePath, schemaFilePath string, policy policyDeclarat
 	if len(registry.Rows) == 0 || registry.Source.Commit == "" {
 		return inputs{}, errors.New("registry has no rows or no source commit")
 	}
-	sdl, err := os.ReadFile(schemaFilePath)
+	sdl, err := os.ReadFile(filepath.Join(root, schemaPath))
 	if err != nil {
 		return inputs{}, fmt.Errorf("read schema: %w", err)
 	}
-	return inputs{Registry: registry, RegistryBytes: registryBytes, SDL: sdl, Policy: policy}, nil
+	return inputs{Registry: registry, RegistryBytes: registryBytes, SDL: sdl, Policy: declaredPolicy()}, nil
 }

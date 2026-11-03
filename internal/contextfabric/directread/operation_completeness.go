@@ -64,6 +64,8 @@ var operationCaps = map[string][]capSpec{
 	"home":                           {},
 	"hotspots":                       {{"input.limit", "hotspots.rows"}},
 	"investmentBreakdown":            {{"batch.breakdowns[*].topN", "analytics.breakdowns[*].items"}},
+	"investmentBreakdownTeam":        {{"batch.breakdowns[*].topN", "analytics.breakdowns[*].items"}},
+	"investmentBreakdownRepository":  {{"batch.breakdowns[*].topN", "analytics.breakdowns[*].items"}},
 	"investmentFull":                 {{"batch.breakdowns[*].topN", "analytics.breakdowns[*].items"}},
 	"recommendations":                {},
 	"securityOverview":               {},

@@ -217,17 +217,14 @@ var investmentBreakdownExceptions = map[string]string{
 	"analytics.evidenceQualityStats.bandCounts": "aggregate evidence-quality band counts, no person field ([ops] analytics/investmentquality.go; RM §8-9)",
 }
 
-// opsServesScopedInvestment is true once the vendored ops catalogue
-// (contracts/mcp/ops-catalogue) carries the registry rows
-// investmentBreakdownTeam and investmentBreakdownRepository (ops CHAOS-12698,
-// full-chaos/dev-health-ops#5574). Until then the two entries
-// (scopedInvestmentEntries) are generated and tested only against the
-// test-local catalogue of ops 14f54b41
-// (internal/contextfabric/directread/testdata/ops_14f54b41), and the ORG
-// entries keep their TEAM and REPO refusal reasons. A vendored registry with
-// the two rows and this false fails generation: every registry row must be
-// declared exactly once.
-const opsServesScopedInvestment = false
+// opsServesScopedInvestment serves the scoped investment entries
+// (scopedInvestmentEntries): the vendored ops catalogue carries their registry
+// rows from ops 0b763a85 (CHAOS-12698, full-chaos/dev-health-ops#5574), and
+// the ORG entries' TEAM and REPO refusal reasons name them. false is the
+// declaration before ops served them; a test holds the ORG entries of the two
+// byte-equal apart from those two reasons. A vendored registry with the rows
+// and this false fails generation: every registry row must be declared once.
+const opsServesScopedInvestment = true
 
 // The ORG entries' TEAM and REPO scope-level reasons. scopedLevelReasons
 // names the entries that serve the level; legacyLevelReasons are the reasons
@@ -264,7 +261,7 @@ func withLevelReasons(decl operationDecl, reasons map[string]string) operationDe
 // default ORG and is refused) and batch.filters.scope.ids holds exactly one
 // id of the bound subject kind, checked by the subject gate. ops reads an
 // empty id list as no scope, the whole organization
-// ([ops] analytics/filtertranslation.go:47-50, 186-193 at 14f54b41).
+// ([ops] analytics/filtertranslation.go:47-50, 186-193 at 0b763a85).
 func scopedInvestmentDecl(documentName, level string, subject *dr.SubjectConversion, levelRefusals []dr.ValueRefusal, basis string) operationDecl {
 	decl := investmentDecl(documentName, investmentBreakdownExceptions, nil)
 	decl.Variables = withVariables(decl.Variables, map[string]variableDecl{
@@ -293,10 +290,10 @@ func scopedInvestmentEntries() map[string]operationDecl {
 	return map[string]operationDecl{
 		"investmentBreakdownTeam": scopedInvestmentDecl("InvestmentBreakdownTeam", "TEAM", team,
 			[]dr.ValueRefusal{levelServedBy("ORG", "investmentBreakdown"), levelServedBy("REPO", "investmentBreakdownRepository"), scopeServiceRefusal},
-			"one owned team: [ops] analytics/filtertranslation.go:186-193 (14f54b41) scopes the investment path to the repositories the team owns (teamscope.RepoCondition over team_repo_ownership, D5988 owner shares; CHAOS-12690), never the work-item vote; the owner-share pair of CHAOS-12691 (internal/contextfabric/factoracle/owner_share_pair.go) is the proof; the team id passes the subject gate"),
+			"one owned team: [ops] analytics/filtertranslation.go:186-193 (0b763a85) scopes the investment path to the repositories the team owns (teamscope.RepoCondition over team_repo_ownership, D5988 owner shares; CHAOS-12690), never the work-item vote; the owner-share pair of CHAOS-12691 (internal/contextfabric/factoracle/owner_share_pair.go) is the proof; the team id passes the subject gate"),
 		"investmentBreakdownRepository": scopedInvestmentDecl("InvestmentBreakdownRepository", "REPO", repository,
 			[]dr.ValueRefusal{levelServedBy("ORG", "investmentBreakdown"), levelServedBy("TEAM", "investmentBreakdownTeam"), scopeServiceRefusal},
-			"one repository: [ops] analytics/filtertranslation.go:47-55 (14f54b41) filters the repository column of the investment rows by the id; the repository id passes the subject gate"),
+			"one repository: [ops] analytics/filtertranslation.go:47-55 (0b763a85) filters the repository column of the investment rows by the id; the repository id passes the subject gate"),
 	}
 }
 

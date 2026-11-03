@@ -97,6 +97,8 @@ var operationPurposes = map[string]string{
 	"compoundingRisk":                "Compounding delivery risk per repository or team per day, with the trend and the component scores.",
 	"hotspots":                       "Files with high change and complexity (hotspots) in a window, per repository.",
 	"investmentBreakdown":            "Investment (work themes and subcategories) as a time series or an org-level breakdown for a window.",
+	"investmentBreakdownTeam":        "Investment (work themes and subcategories) of one owned team, as a breakdown for a window: the repositories the team owns, by owner share.",
+	"investmentBreakdownRepository":  "Investment (work themes and subcategories) of one repository, as a breakdown for a window.",
 	"investmentFull":                 "Investment over a window: time series, org-level breakdowns and the batch coverage disclosure.",
 	"home":                           "The org-wide home summary: data freshness, metric deltas, tiles, signals, the limiting factor and data confidence.",
 	"recommendations":                "A team's stored recommendations over a lookback window, each with its rationale and evidence rows.",

@@ -14,33 +14,9 @@ import (
 )
 
 // The scoped investment entries investmentBreakdownTeam and
-// investmentBreakdownRepository (CHAOS-12691) are not in the vendored ops
-// catalogue yet: ops registers their documents in CHAOS-12698
-// (full-chaos/dev-health-ops#5574, head 14f54b41), and the vendored copy must
-// name a merged ops commit. Until it does, they are generated against a
-// test-local copy of the ops catalogue at 14f54b41: the registrydump output
-// and the SDL of that commit, verbatim, under
-// internal/contextfabric/directread/testdata/ops_14f54b41. The generated
-// artifact there is what the directread edge and graphql_query tests load.
-const (
-	scopedFixtureCommit   = "14f54b4184e1ec9e44883921ef2eb26bb83c3faf"
-	scopedFixtureDir      = repoRoot + "/internal/contextfabric/directread/testdata/ops_14f54b41"
-	scopedFixtureArtifact = scopedFixtureDir + "/operations.v1.json"
-	// writeScopedFixtureEnv=1 rewrites the fixture artifact.
-	writeScopedFixtureEnv = "ACR_WRITE_SCOPED_INVESTMENT_FIXTURE"
-)
-
-func scopedFixtureInputs(t *testing.T) inputs {
-	t.Helper()
-	in, err := readInputsAt(filepath.Join(scopedFixtureDir, "registry.v1.json"), filepath.Join(scopedFixtureDir, "schema.graphql"), declaredPolicyFor(true))
-	if err != nil {
-		t.Fatalf("read the ops %s fixture: %v", scopedFixtureCommit[:8], err)
-	}
-	if in.Registry.Source.Commit != scopedFixtureCommit {
-		t.Fatalf("fixture registry names ops %s, want %s", in.Registry.Source.Commit, scopedFixtureCommit)
-	}
-	return in
-}
+// investmentBreakdownRepository (CHAOS-12691) are generated from the vendored
+// ops catalogue, which carries their documents from ops 0b763a85 (CHAOS-12698,
+// full-chaos/dev-health-ops#5574).
 
 func decodeArtifact(t *testing.T, artifact []byte) map[string]directread.OperationPolicy {
 	t.Helper()
@@ -55,53 +31,11 @@ func decodeArtifact(t *testing.T, artifact []byte) map[string]directread.Operati
 	return out
 }
 
-// The fixture artifact equals a fresh generation from the fixture catalogue
-// and the declaration with the scoped entries, and the graphql_query root
-// policy derives over it.
-func TestScopedInvestmentFixtureIsFresh(t *testing.T) {
-	in := scopedFixtureInputs(t)
-	artifact, err := generate(in)
-	if err != nil {
-		t.Fatalf("generate over the ops %s fixture: %v", scopedFixtureCommit[:8], err)
-	}
-	cat, err := directread.LoadCatalogue(artifact)
-	if err != nil {
-		t.Fatalf("fixture artifact does not load: %v", err)
-	}
-	if _, err := directread.NewGraphQLPolicy(cat, in.SDL, directread.DefaultGraphQLLimits()); err != nil {
-		t.Fatalf("graphql_query root policy over the fixture: %v", err)
-	}
-	for _, name := range []string{"investmentBreakdownTeam", "investmentBreakdownRepository"} {
-		if _, refusal := cat.Lookup(name); refusal != nil {
-			t.Fatalf("fixture artifact does not serve %s: %v", name, refusal)
-		}
-	}
-	if os.Getenv(writeScopedFixtureEnv) == "1" {
-		if err := os.WriteFile(scopedFixtureArtifact, artifact, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		return
-	}
-	committed, err := os.ReadFile(scopedFixtureArtifact)
-	if err != nil {
-		t.Fatalf("read %s: %v", scopedFixtureArtifact, err)
-	}
-	if !bytes.Equal(committed, artifact) {
-		t.Fatalf("%s is stale: run %s=1 go test ./cmd/operationpolicy -run TestScopedInvestmentFixtureIsFresh", scopedFixtureArtifact, writeScopedFixtureEnv)
-	}
-}
-
-// The vendored catalogue does not carry the scoped rows yet, so the committed
-// artifact serves neither entry and keeps the ORG entries' old reasons.
-func TestVendoredCatalogueDoesNotServeTheScopedEntriesYet(t *testing.T) {
-	if opsServesScopedInvestment {
-		t.Skip("the vendored catalogue serves the scoped entries")
-	}
-	in := vendoredInputs(t)
-	for _, row := range in.Registry.Rows {
-		if _, scoped := scopedInvestmentEntries()[row.Operation]; scoped {
-			t.Fatalf("the vendored registry carries %s: set opsServesScopedInvestment and regenerate", row.Operation)
-		}
+// The vendored catalogue carries the scoped rows and the committed artifact
+// serves both entries, unrestricted only.
+func TestVendoredCatalogueServesTheScopedEntries(t *testing.T) {
+	if !opsServesScopedInvestment {
+		t.Fatal("opsServesScopedInvestment is false although the vendored catalogue carries the scoped rows")
 	}
 	committed, err := os.ReadFile(filepath.Join(repoRoot, artifactPath))
 	if err != nil {
@@ -109,8 +43,12 @@ func TestVendoredCatalogueDoesNotServeTheScopedEntriesYet(t *testing.T) {
 	}
 	ops := decodeArtifact(t, committed)
 	for name := range scopedInvestmentEntries() {
-		if _, ok := ops[name]; ok {
-			t.Fatalf("committed artifact serves %s", name)
+		op, ok := ops[name]
+		if !ok {
+			t.Fatalf("committed artifact does not serve %s", name)
+		}
+		if op.Scope(directread.CallerRestricted).Served {
+			t.Fatalf("%s is served to a restricted caller", name)
 		}
 	}
 }
@@ -120,7 +58,7 @@ func TestVendoredCatalogueDoesNotServeTheScopedEntriesYet(t *testing.T) {
 // constraints and the unrestricted basis. The restricted caller keeps the
 // K14-A refusal, word for word.
 func TestScopedInvestmentEntriesDifferFromInvestmentBreakdownOnlyInScope(t *testing.T) {
-	in := scopedFixtureInputs(t)
+	in := vendoredInputs(t)
 	artifact, err := generate(in)
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +144,7 @@ func TestScopedInvestmentEntriesDifferFromInvestmentBreakdownOnlyInScope(t *test
 // when the scoped entries are served: the generated entries are byte-equal
 // once those two reasons are put back.
 func TestOrgInvestmentEntriesChangeOnlyTheLevelReasons(t *testing.T) {
-	scoped := scopedFixtureInputs(t)
+	scoped := vendoredInputs(t)
 	legacy := cloneInputs(scoped)
 	before := declaredPolicyFor(false)
 	for _, name := range []string{"investmentBreakdown", "investmentFull"} {
@@ -270,7 +208,7 @@ func ruleAt(t *testing.T, op directread.OperationPolicy, path string) directread
 // omitted level is refused (refusedWhenOmitted); a plant that drops that
 // constraint or gives it the default ORG is a violation.
 func TestScopedInvestmentEntriesAgreeWithTheSDL(t *testing.T) {
-	in := scopedFixtureInputs(t)
+	in := vendoredInputs(t)
 	f := loadSDLFixture(t, in)
 	limits, checked := limitViolations(f)
 	for _, v := range limits {

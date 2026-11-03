@@ -38,9 +38,16 @@ var contractsAtCapture = map[string]string{
 	"compoundingRisk":                "sha256:ded079a60583d070f41a5d5682bd77c32b22923d21843c2c9f2bdfe1ce0360e2",
 	// home is advanced past the capture: ops 5376c7c1 added home.filterEmptyReason and ops 51652ba7 more fields, and the capture
 	// holds no home case (TestTheCaptureHoldsNoHomeCaseWhileItsContractIsAdvanced); retake the capture on the next venue move.
-	"home":                "sha256:518dd7b5e00d9ab67289ce26a8dfe601dc961d971883fc05c2977929fbc2c525",
-	"hotspots":            "sha256:30999b82cd7e907ea1711e271b90aae84e66e60f9e93bbee835acf377cdbab23",
-	"investmentBreakdown": "sha256:8742ea2b7d3c3014c7a429a115108e167caf8a250230f5e59c16e3332f7b1749",
+	"home":     "sha256:518dd7b5e00d9ab67289ce26a8dfe601dc961d971883fc05c2977929fbc2c525",
+	"hotspots": "sha256:30999b82cd7e907ea1711e271b90aae84e66e60f9e93bbee835acf377cdbab23",
+	// investmentBreakdown is advanced past the capture: the re-vendor from ops 0b763a85 brings its V2 document
+	// (CHAOS-10351), which adds analytics.evidenceQualityStats.uncategorizedCount, and two new candidates of root
+	// analytics, investmentBreakdownTeam and investmentBreakdownRepository (CHAOS-12698), which the capture has no
+	// reply for. Root analytics is listed in notRecordedRoots; retake the capture on the next venue move (it was
+	// sha256:8742ea2b7d3c3014c7a429a115108e167caf8a250230f5e59c16e3332f7b1749 at the capture).
+	"investmentBreakdown":           "sha256:dcaf3bfe8899a3ba1fff623bb9dff5380212d515c51f073c1f2eb670f1c353df",
+	"investmentBreakdownRepository": "sha256:0535d2800c3017e3f9494e3da384e6ff96eb340f286372c812e220c00c73802c",
+	"investmentBreakdownTeam":       "sha256:fbc2c1b16914b5f673bc4700d4dd351a6390b804270a0b70c232c4b14681aa90",
 	// investmentFull is advanced past the capture: ops 51652ba7 added analytics.sankey.coverage.sizingCoverage and
 	// unsizedUnitCount and the ISSUE_SIZE measure. The recorded ops replies of root analytics lack those two paths, so the
 	// pinned outcome of analytics names them (make o4-oracle-repin); retake the capture on the next venue move.
@@ -371,9 +378,14 @@ func TestRecordedCaptureKeepsTheDarkOperationAndTheTestExcludesIt(t *testing.T) 
 
 // notRecordedRoots are the roots the recorded capture cannot replay: a root
 // whose registry document or shape the venue did not serve when the capture
-// was taken. The capture of the venue at ops 5c9a3d32 records every root, so
-// the list is empty; a root added here again must say why the capture lacks it.
-var notRecordedRoots = map[string]string{}
+// was taken. Root analytics is listed since the re-vendor from ops 0b763a85:
+// the capture holds investmentBreakdown V1 replies and no reply of the scoped
+// candidates. The capture stays as recorded; the recorded run says which roots
+// it did not measure, and recording them again needs the venue
+// (`make o4-oracle-capture`), after which this list must be emptied.
+var notRecordedRoots = map[string]string{
+	"analytics": "the capture was taken before investmentBreakdown V2 (CHAOS-10351, vendored from ops 0b763a85) added analytics.evidenceQualityStats.uncategorizedCount, so its recorded replies lack that path, and investmentBreakdownTeam and investmentBreakdownRepository (CHAOS-12698) have no recorded reply",
+}
 
 // withoutNotRecordedRoots returns the manifest without the shape cases and
 // the pinned outcome of a root the capture does not record, and the sorted
@@ -455,23 +467,27 @@ func isNotRecordedKey(t *testing.T, key string, skipped []string) bool {
 	return false
 }
 
-// The capture of the venue records every root: nothing is excluded, so a root
-// added to notRecordedRoots has to be a root the capture really lacks. The
-// ops side of root analytics is compared again on COUNT: the root
+// The recorded run excludes exactly root analytics (notRecordedRoots): the
+// exclusion drops its pinned outcome and its shape cases, and the capture
+// holds replies of it, so the exclusion measures something. Every other root
 // runs in full.
 func TestRecordedRunNamesTheRootsItDoesNotMeasure(t *testing.T) {
 	manifest, recording, _ := loadedCapture(t)
 	filtered, skipped := withoutNotRecordedRoots(t, manifest)
-	if len(skipped) != 0 {
+	if !slices.Equal(skipped, []string{"analytics"}) {
 		t.Fatalf("not recorded roots = %v", skipped)
 	}
-	if len(manifest.Expect) != len(filtered.Expect) || len(manifest.ShapeCases) != len(filtered.ShapeCases) {
-		t.Fatalf("the recorded manifest was changed: %d pinned roots, %d shape cases", len(manifest.Expect), len(manifest.ShapeCases))
+	if len(manifest.Expect) != len(filtered.Expect)+1 || len(manifest.ShapeCases) <= len(filtered.ShapeCases) {
+		t.Fatalf("the recorded manifest was changed or the exclusion dropped nothing: %d pinned roots, %d shape cases", len(manifest.Expect), len(manifest.ShapeCases))
 	}
+	n := 0
 	for key := range recording.Replies {
 		if isNotRecordedKey(t, key, skipped) {
-			t.Fatalf("reply %s belongs to a not recorded root", key)
+			n++
 		}
+	}
+	if n == 0 {
+		t.Fatal("the capture holds no reply of a not recorded root: the exclusion measured nothing")
 	}
 	if _, ok := manifest.Expect["capacityForecast"]; !ok {
 		t.Fatal("the capture pins no outcome for capacityForecast")

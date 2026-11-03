@@ -2,8 +2,6 @@ package directread_test
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -12,37 +10,16 @@ import (
 )
 
 // The team and repository investment breakdowns (CHAOS-12691) at the edge and
-// in graphql_query. The vendored ops catalogue does not register their
-// documents yet (ops CHAOS-12698, full-chaos/dev-health-ops#5574), so these
-// tests load the artifact cmd/operationpolicy generates from the ops catalogue
-// at 14f54b41 (testdata/ops_14f54b41; TestScopedInvestmentFixtureIsFresh in
-// cmd/operationpolicy holds it equal to a fresh generation).
-const scopedFixtureDir = "testdata/ops_14f54b41"
+// in graphql_query, over the embedded catalogue (ops 0b763a85 registers their
+// documents, CHAOS-12698).
 
-func scopedCatalogue(t *testing.T) *directread.Catalogue {
+func defaultCatalogueOf(t *testing.T) *directread.Catalogue {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(scopedFixtureDir, "operations.v1.json"))
+	cat, err := directread.DefaultCatalogue()
 	if err != nil {
 		t.Fatal(err)
-	}
-	cat, err := directread.LoadCatalogue(data)
-	if err != nil {
-		t.Fatalf("LoadCatalogue(fixture): %v", err)
 	}
 	return cat
-}
-
-func scopedGraphQLPolicy(t *testing.T) *directread.GraphQLPolicy {
-	t.Helper()
-	sdl, err := os.ReadFile(filepath.Join(scopedFixtureDir, "schema.graphql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	policy, err := directread.NewGraphQLPolicy(scopedCatalogue(t), sdl, directread.DefaultGraphQLLimits())
-	if err != nil {
-		t.Fatalf("NewGraphQLPolicy(fixture): %v", err)
-	}
-	return policy
 }
 
 // scopedBreakdownVars is a THEME breakdown with the given scope; a nil scope
@@ -89,12 +66,8 @@ func scopedEntries() []scopedEntry {
 }
 
 func TestScopedInvestmentEntriesAtTheEdge(t *testing.T) {
-	cat := scopedCatalogue(t)
-	defaultCat, err := directread.DefaultCatalogue()
-	if err != nil {
-		t.Fatal(err)
-	}
-	orgOp, _ := defaultCat.Lookup("investmentBreakdown")
+	cat := defaultCatalogueOf(t)
+	orgOp, _ := cat.Lookup("investmentBreakdown")
 	k14Restricted := orgOp.Scope(directread.CallerRestricted).Refusal
 	if k14Restricted == nil || k14Restricted.Code != directread.RefusalOperationNotServedForCaller {
 		t.Fatalf("investmentBreakdown's restricted scope is %+v, want the K14-A refusal", k14Restricted)
@@ -104,7 +77,7 @@ func TestScopedInvestmentEntriesAtTheEdge(t *testing.T) {
 		if refusal != nil {
 			t.Fatalf("%s: %v", e.name, refusal)
 		}
-		h := newOpHarness(t, func(opRecorded) (int, string) { return 200, opNullAnswer(op) }, opHarnessOptions{catalogue: cat})
+		h := newOpHarness(t, func(opRecorded) (int, string) { return 200, opNullAnswer(op) }, opHarnessOptions{})
 		ids := func(v ...string) []any {
 			out := make([]any, len(v))
 			for i, s := range v {
@@ -188,13 +161,13 @@ func jsonEqual(a, b any) bool {
 // With the scoped entries served, the ORG entries still serve ORG only and
 // name the scoped entry in their TEAM and REPO refusals.
 func TestOrgInvestmentEntriesNameTheScopedEntries(t *testing.T) {
-	cat := scopedCatalogue(t)
+	cat := defaultCatalogueOf(t)
 	for _, name := range []string{"investmentBreakdown", "investmentFull"} {
 		op, refusal := cat.Lookup(name)
 		if refusal != nil {
 			t.Fatalf("%s: %v", name, refusal)
 		}
-		h := newOpHarness(t, func(opRecorded) (int, string) { return 200, opNullAnswer(op) }, opHarnessOptions{catalogue: cat})
+		h := newOpHarness(t, func(opRecorded) (int, string) { return 200, opNullAnswer(op) }, opHarnessOptions{})
 		for _, c := range []struct {
 			label string
 			scope map[string]any
@@ -232,8 +205,7 @@ func TestOrgInvestmentEntriesNameTheScopedEntries(t *testing.T) {
 // admits it: ORG to investmentBreakdown, one owned team to
 // investmentBreakdownTeam, one repository to investmentBreakdownRepository.
 func TestGraphQLAnalyticsMapsTheScopeToItsEntry(t *testing.T) {
-	policy := scopedGraphQLPolicy(t)
-	h := newGQLHarness(t, gqlHarnessOptions{policy: policy})
+	h := newGQLHarness(t, gqlHarnessOptions{})
 	breakdowns := `breakdowns: [{dimension: THEME, measure: COUNT, dateRange: {startDate: "2026-09-01", endDate: "2026-09-28"}}]`
 	query := func(filters string) string {
 		batch := "{" + breakdowns
@@ -305,10 +277,7 @@ func mustJSON(t *testing.T, v any) string {
 // list included: a client list outside any list, at most MaxItems, with an
 // empty or absent SDL default.
 func TestLoaderHoldsMinItemsToWhatTheEdgeApplies(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(scopedFixtureDir, "operations.v1.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw := directread.EmbeddedCatalogueJSON()
 	edit := func(t *testing.T, path string, change func(rule map[string]any)) []byte {
 		t.Helper()
 		var file map[string]any
@@ -373,7 +342,7 @@ func TestDataCatalogAdvertisesTheScopedIDRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog := directread.BuildDataCatalog(scopedCatalogue(t), directread.CatalogCaller{
+	catalog := directread.BuildDataCatalog(defaultCatalogueOf(t), directread.CatalogCaller{
 		PrincipalClass: directread.ClassUnrestricted, Scopes: []string{"context:read"}, DataRead: true, OperationsServable: true, GateComposed: true,
 	}, sections)
 	want := map[string]string{"investmentBreakdownTeam": directread.SubjectKindTeam, "investmentBreakdownRepository": directread.SubjectKindRepository}
@@ -400,14 +369,4 @@ func TestDataCatalogAdvertisesTheScopedIDRule(t *testing.T) {
 	if len(want) != 0 {
 		t.Fatalf("data_catalog does not list %v", want)
 	}
-}
-
-// T13 over the catalogue with the scoped entries: every person variable and
-// argument answers person_scope_not_served, also when a stricter candidate
-// of the same root refuses the scope level of the query first.
-func TestT13WithTheScopedEntries(t *testing.T) {
-	t.Run("run_operation", func(t *testing.T) { t13PersonVariablesAtTheEdge(t, scopedCatalogue(t)) })
-	t.Run("graphql_query", func(t *testing.T) {
-		t13GraphQLPersonArguments(t, newGQLHarness(t, gqlHarnessOptions{policy: scopedGraphQLPolicy(t)}))
-	})
 }

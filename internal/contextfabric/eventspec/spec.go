@@ -4925,7 +4925,7 @@ var (
 	graphqlQueryReadBudgets  = []string{"bytes_ceiling", "rows_ceiling", "time_ceiling", "unknown"}
 	graphqlQueryOperations   = []string{
 		"acrRepositoryScopes", "capacityCompletionDistribution", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad",
-		"complexityTimeseries", "compoundingRisk", "hotspots", "investmentBreakdown", "investmentFull",
+		"complexityTimeseries", "compoundingRisk", "hotspots", "investmentBreakdown", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentFull",
 		"securityOverview", "throughputForecast", "workGraphArtifacts", "workGraphEdges",
 		"workGraphFlow",
 	}

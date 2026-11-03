@@ -37,8 +37,6 @@ type gqlHarnessOptions struct {
 	recorder     directread.GraphQLQueryRecorder
 	// clientTimeout is the MCP listener client's deadline (default 5 s).
 	clientTimeout time.Duration
-	// policy replaces the default root policy (a test-local catalogue).
-	policy *directread.GraphQLPolicy
 }
 
 func newGQLHarness(t *testing.T, opts gqlHarnessOptions) *gqlHarness {
@@ -56,9 +54,6 @@ func newGQLHarness(t *testing.T, opts gqlHarnessOptions) *gqlHarness {
 		if err != nil {
 			t.Fatalf("NewGraphQLPolicy: %v", err)
 		}
-	}
-	if opts.policy != nil {
-		policy = opts.policy
 	}
 	if opts.limits != nil {
 		policy, err = directread.NewGraphQLPolicy(policy.Catalogue(), directread.EmbeddedOpsSchema(), *opts.limits)

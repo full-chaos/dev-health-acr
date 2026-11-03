@@ -26,7 +26,7 @@ func TestGraphQLTwoOperationRootsResolveToTheStricterOperation(t *testing.T) {
 	if got := catalog.Operations(); !slices.Equal(got, []string{"acrRepositoryScopes", "catalogValues"}) {
 		t.Fatalf("catalog candidate order %v", got)
 	}
-	if got := analytics.Operations(); !slices.Equal(got, []string{"investmentBreakdown", "investmentFull"}) {
+	if got := analytics.Operations(); !slices.Equal(got, []string{"investmentBreakdown", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentFull"}) {
 		t.Fatalf("analytics candidate order %v", got)
 	}
 	batch := `{breakdowns: [{dimension: THEME, measure: COUNT, dateRange: {startDate: "2026-09-01", endDate: "2026-09-28"}}]}`
@@ -303,11 +303,7 @@ func TestT12GraphQLAliasesAddedRowIDsAndClassRefusal(t *testing.T) {
 // a GraphQL variable of the free query, is refused with zero requests; two
 // inline-literal positions as well.
 func TestT13GraphQLEveryPersonArgumentIsRefused(t *testing.T) {
-	t13GraphQLPersonArguments(t, newGQLHarness(t, gqlHarnessOptions{}))
-}
-
-func t13GraphQLPersonArguments(t *testing.T, h *gqlHarness) {
-	t.Helper()
+	h := newGQLHarness(t, gqlHarnessOptions{})
 	checked := 0
 	for field, ops := range gqlRootOps(t, h.policy) {
 		for _, op := range ops {
