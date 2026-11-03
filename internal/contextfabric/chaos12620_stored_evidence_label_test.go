@@ -101,3 +101,19 @@ func TestAStoredEvidenceLabelIsRestatedInTheByteBoundFallback(t *testing.T) {
 		}
 	}
 }
+
+// A nameless project with a UUID id reads as the kind's word in the graph
+// (CHAOS-12619). That word is no name: the evidence label stays the noun, never
+// "Project: project".
+func TestTheKindWordOfANamelessProjectIsNoName(t *testing.T) {
+	t.Parallel()
+	project, _, err := identity.Derive(identity.KindProject, []string{"linear", "c67b1602-31db-4422-8dec-a4a02bbcc513"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result InvestigationResult
+	result.SubjectResolution.Committed = []SubjectRef{{Kind: SubjectProject, CanonicalID: project, Label: ReadableSourceID(SubjectProject, "c67b1602-31db-4422-8dec-a4a02bbcc513")}}
+	if got, _ := contractsv1.ContextFabricEvidenceRefLabelNamed("acr:v1:project:linear:c67b1602-31db-4422-8dec-a4a02bbcc513", evidenceSubjectNames(result)); got != "Project" {
+		t.Fatalf("label %q, want the noun alone", got)
+	}
+}
