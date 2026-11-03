@@ -258,6 +258,13 @@ const (
 	ContextFabricRenderLandscapeYField     = "delivery_units_30d"
 )
 
+// ContextFabricLandscapePositionLimitation is the one line an answer serves
+// while it carries a landscape_position quadrant (CHAOS-12626; North Star check
+// 7: a position establishes where a team stands, not why). It is
+// service-authored, so no model caveat displaces it, and it leaves the answer
+// with the quadrant.
+const ContextFabricLandscapePositionLimitation = "The quadrant shows where each team stood on churn and delivery units on one day. It locates the teams; it does not explain why a team stands where it does."
+
 // The forecast's table (CHAOS-12608): the `distribution` table of the team
 // workload fact (CHAOS-12607), one row per distinct completion day, keyed by
 // ContextFabricRenderForecastAxisField, with the share of runs finished by

@@ -1453,6 +1453,7 @@ func (a *App) withoutDisabledRenderShapes(answer contractsv1.ContextFabricInvest
 	return contextfabric.WithoutDisabledRenderShapes(answer, contextfabric.RenderShapeOptions{
 		InvestmentThemeShare: a.config.ContextFabricInvestmentTreemapEnabled,
 		ComparisonSideBySide: a.config.ContextFabricComparisonTableEnabled,
+		LandscapePosition:    a.config.ContextFabricLandscapeQuadrantEnabled,
 		CompletionForecast:   a.config.ContextFabricCompletionDistributionEnabled,
 		// CHAOS-12582.
 		InvestmentRepositoryFlow: a.config.ContextFabricInvestmentSankeyEnabled,

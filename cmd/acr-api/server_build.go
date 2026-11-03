@@ -176,6 +176,7 @@ func appConfig(cfg config.Config, serviceVersion string) api.AppConfig {
 		ContextFabricInvestmentTreemapEnabled:       cfg.ContextFabricInvestmentTreemapEnabled,
 		ContextFabricInvestmentSankeyEnabled:        cfg.ContextFabricInvestmentSankeyEnabled,
 		ContextFabricComparisonTableEnabled:         cfg.ContextFabricComparisonTableEnabled,
+		ContextFabricLandscapeQuadrantEnabled:       cfg.ContextFabricLandscapeQuadrantEnabled,
 		ContextFabricCompletionDistributionEnabled:  cfg.CompletionDistributionEnabled,
 		ContextFabricEventStreamEnabled:             cfg.ContextFabricEventStreamEnabled,
 		ContextFabricRunLeaseEnabled:                cfg.ContextFabricRunLeaseEnabled,

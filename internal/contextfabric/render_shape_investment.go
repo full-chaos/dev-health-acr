@@ -1,6 +1,8 @@
 package contextfabric
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"reflect"
 	"slices"
 	"strings"
@@ -17,6 +19,9 @@ type RenderShapeOptions struct {
 	// ComparisonSideBySide turns on the comparison_side_by_side rule
 	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
 	ComparisonSideBySide bool
+	// LandscapePosition turns on the landscape_position rule (CHAOS-12626). See
+	// Config.ContextFabricLandscapeQuadrantEnabled.
+	LandscapePosition bool
 	// CompletionForecast turns on the completion_forecast rule (CHAOS-12608).
 	// See Config.CompletionDistributionEnabled: the rule draws the table that
 	// switch serves, so one switch gates both.
@@ -42,9 +47,14 @@ type RenderShapeOptions struct {
 // was off must not be served once it is on: it would lack what the switch
 // adds. WithoutDisabledRenderShapes covers the other direction at the serving
 // doors. With every switch off this is the table version itself, so a
-// deployment that turns nothing on keeps every stored answer. The longest form
-// is 119 characters at question-family.v6, inside the column's 128
-// (TestTheReuseFamilyVersionNamesTheRenderSwitchesOn).
+// deployment that turns nothing on keeps every stored answer. The landscape
+// quadrant switch (CHAOS-12675) and the sankey switch (CHAOS-12582) join it.
+//
+// With every switch on, the readable form is 138 characters (question-family.v7),
+// past the column's 128, so a form past 128 is the table version, "+render#" and
+// the first 32 hex digits of the full form's sha256 (lead ruling on CHAOS-12582).
+// Every shorter form stays readable and byte-equal to what it was
+// (TestTheReuseFamilyVersionNamesTheRenderSwitchesOn sweeps all 32 sets).
 func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
 	var on []string
 	if options.ComparisonSideBySide {
@@ -59,11 +69,24 @@ func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
 	if options.InvestmentThemeShare {
 		on = append(on, string(contractsv1.ContextFabricRenderRuleInvestmentThemeShare))
 	}
+	if options.LandscapePosition {
+		on = append(on, string(contractsv1.ContextFabricRenderRuleLandscapePosition))
+	}
 	if len(on) == 0 {
 		return QuestionFamilyTableVersion
 	}
-	return QuestionFamilyTableVersion + "+render:" + strings.Join(on, ",")
+	full := QuestionFamilyTableVersion + "+render:" + strings.Join(on, ",")
+	// Migration 0036's CHECK holds question_family_version to 128 characters.
+	if len(full) <= reuseQuestionFamilyVersionMaxLength {
+		return full
+	}
+	digest := sha256.Sum256([]byte(full))
+	return QuestionFamilyTableVersion + "+render#" + hex.EncodeToString(digest[:16])
 }
+
+// reuseQuestionFamilyVersionMaxLength is the question_family_version column's
+// bound (migration 0036, ck_acr_cf_investigation_results_question_family_version_length).
+const reuseQuestionFamilyVersionMaxLength = 128
 
 // The words of the treemap (CHAOS-12521). They are served, never derived from a
 // model, and agreed with the seam that draws them.
@@ -214,7 +237,7 @@ func familyTakesShape(family QuestionFamily, shape InvestigationShape) bool {
 // (Codex #1949 r1): a result stored while it was on keeps its summaries, and
 // the summary is the same widening the shapes are.
 func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShapeOptions) InvestigationResult {
-	if options.InvestmentThemeShare && options.ComparisonSideBySide && options.CompletionForecast && options.InvestmentRepositoryFlow {
+	if options.InvestmentThemeShare && options.ComparisonSideBySide && options.LandscapePosition && options.CompletionForecast && options.InvestmentRepositoryFlow {
 		return result
 	}
 	if !options.CompletionForecast {
@@ -235,6 +258,10 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 			if !options.ComparisonSideBySide {
 				continue
 			}
+		case contractsv1.ContextFabricRenderRuleLandscapePosition:
+			if !options.LandscapePosition {
+				continue
+			}
 		case contractsv1.ContextFabricRenderRuleCompletionForecast, contractsv1.ContextFabricRenderRuleCompletionForecastPercentiles:
 			if !options.CompletionForecast {
 				continue
@@ -243,6 +270,10 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 		kept = append(kept, shape)
 	}
 	result.RenderShapes = kept
+	// The quadrant's served line goes with it (CHAOS-12626).
+	if !hasLandscapePosition(kept) {
+		result.Limitations = withoutLimitation(result.Limitations, contractsv1.ContextFabricLandscapePositionLimitation)
+	}
 	return result
 }
 

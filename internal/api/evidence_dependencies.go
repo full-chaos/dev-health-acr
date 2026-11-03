@@ -51,6 +51,9 @@ type AppConfig struct {
 	// ContextFabricComparisonTableEnabled mirrors
 	// config.Config.ContextFabricComparisonTableEnabled, for the same two doors.
 	ContextFabricComparisonTableEnabled bool
+	// ContextFabricLandscapeQuadrantEnabled mirrors
+	// config.Config.ContextFabricLandscapeQuadrantEnabled, for the same two doors.
+	ContextFabricLandscapeQuadrantEnabled bool
 	// ContextFabricCompletionDistributionEnabled mirrors
 	// config.Config.CompletionDistributionEnabled (CHAOS-12608), for the same
 	// two doors: the forecast shapes and the claim's forecast summary.

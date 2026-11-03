@@ -233,6 +233,16 @@ func validServeConfig(t *testing.T) config.Config {
 	return cfg
 }
 
+// CHAOS-12626: the switch reaches the app both doors read it from.
+func TestAppConfigThreadsTheLandscapeQuadrantSwitch(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		got := appConfig(config.Config{ContextFabricLandscapeQuadrantEnabled: enabled}, "test-version")
+		if got.ContextFabricLandscapeQuadrantEnabled != enabled {
+			t.Fatalf("appConfig(...).ContextFabricLandscapeQuadrantEnabled = %v, want %v", got.ContextFabricLandscapeQuadrantEnabled, enabled)
+		}
+	}
+}
+
 // CHAOS-12513: the switch reaches the app both doors read it from.
 func TestAppConfigThreadsTheComparisonTableSwitch(t *testing.T) {
 	for _, enabled := range []bool{true, false} {

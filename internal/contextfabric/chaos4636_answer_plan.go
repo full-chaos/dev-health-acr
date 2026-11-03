@@ -628,6 +628,10 @@ func (e *Engine) finalizeResult(
 	result.ClaimedFacts = withDeclaredCadence(result.ClaimedFacts, e.renderShapeOptions.TableCadence)
 	renderShapes, _ := selectRenderShapes(result, frame, e.renderShapeOptions)
 	result.RenderShapes = renderShapes
+	// The quadrant's served line (CHAOS-12626) goes with the quadrant.
+	limitations, displaced := withLandscapeLimitation(result.Limitations, renderShapes)
+	result.Limitations = limitations
+	result.LimitationsDisplaced += displaced
 	// Seed the outcome set from this turn's requirement rows, ONCE.
 	//
 	// Idempotent on purpose: this function runs again on a retry pass and

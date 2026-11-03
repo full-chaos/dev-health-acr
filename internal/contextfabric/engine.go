@@ -23,6 +23,9 @@ type EngineOptions struct {
 	// ComparisonTableEnabled turns on the comparison_side_by_side rule
 	// (CHAOS-12513). See Config.ContextFabricComparisonTableEnabled.
 	ComparisonTableEnabled bool
+	// LandscapeQuadrantEnabled turns on the landscape_position rule
+	// (CHAOS-12626). See Config.ContextFabricLandscapeQuadrantEnabled.
+	LandscapeQuadrantEnabled bool
 	// CompletionForecastEnabled turns on the completion_forecast rule
 	// (CHAOS-12608). See Config.CompletionDistributionEnabled.
 	CompletionForecastEnabled bool
@@ -1496,6 +1499,7 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		renderShapeOptions: RenderShapeOptions{
 			InvestmentThemeShare: options.InvestmentTreemapEnabled,
 			ComparisonSideBySide: options.ComparisonTableEnabled,
+			LandscapePosition:    options.LandscapeQuadrantEnabled,
 			CompletionForecast:   options.CompletionForecastEnabled,
 			// CHAOS-12582.
 			InvestmentRepositoryFlow: options.InvestmentSankeyEnabled,
