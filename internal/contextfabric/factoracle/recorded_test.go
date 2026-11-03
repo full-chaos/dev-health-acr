@@ -387,6 +387,49 @@ var notRecordedRoots = map[string]string{}
 // operation added here again must say why the capture lacks it.
 var notRecordedOperations = map[string]string{}
 
+// replayDivergence is what the venue measured for a root and what the
+// recorded replay of the same capture gives instead.
+type replayDivergence struct {
+	venueCompared, venueFindings   int
+	replayCompared, replayFindings int
+	ticket                         string
+}
+
+// venueReplayDivergence names the roots whose pinned outcome in
+// testdata/venue/manifest.json is the recorded replay's, NOT the venue's: the
+// replay of the capture does not reproduce what the venue measured, and the
+// outcome was re-pinned from the replay (make o4-oracle-repin, hosted run
+// 41666034643; lead ruling on CHAOS-12808). A reader of the pin must not take
+// these roots' outcome as the venue's.
+//
+// compoundingRisk, capture of 2026-11-03: the venue compared 61 with 1
+// finding (health_rows, team on 2026-11-03); the replay compares 17 with 5
+// health_rows findings (repository on 2026-11-03 x4, 2026-10-22 x1). The
+// cause is unproven: an in-progress capture day, or the extract window
+// against acr's unbounded latest-day read (CHAOS-12834).
+var venueReplayDivergence = map[string]replayDivergence{
+	"compoundingRisk": {venueCompared: 61, venueFindings: 1, replayCompared: 17, replayFindings: 5, ticket: "CHAOS-12834"},
+}
+
+// The pin of a root named in venueReplayDivergence is the replay's outcome,
+// as named: a capture that changes it (CHAOS-12834's fix) must take the root
+// out of the list, so the note cannot outlive the pin it describes.
+func TestThePinNamesWhereTheReplayIsNotTheVenue(t *testing.T) {
+	manifest, _, _ := loadedCapture(t)
+	if len(venueReplayDivergence) == 0 {
+		t.Fatal("no divergence is named: remove this test with the last entry")
+	}
+	for root, d := range venueReplayDivergence {
+		pinned, ok := manifest.Expect[root]
+		if !ok {
+			t.Fatalf("root %s is named as diverging (%s) but the capture pins no outcome for it", root, d.ticket)
+		}
+		if pinned.Compared != d.replayCompared || len(pinned.Findings) != d.replayFindings {
+			t.Fatalf("root %s pins compared %d with %d findings, the named replay outcome is %d with %d (venue %d with %d, %s): update or remove the entry", root, pinned.Compared, len(pinned.Findings), d.replayCompared, d.replayFindings, d.venueCompared, d.venueFindings, d.ticket)
+		}
+	}
+}
+
 // withoutNotRecordedRoots returns the manifest without the shape cases and
 // the pinned outcome of a root the capture does not record, and the sorted
 // names of those roots. The exclusion is checked, not assumed: the root must
