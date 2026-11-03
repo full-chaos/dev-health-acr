@@ -42,8 +42,9 @@ type RenderShapeOptions struct {
 // was off must not be served once it is on: it would lack what the switch
 // adds. WithoutDisabledRenderShapes covers the other direction at the serving
 // doors. With every switch off this is the table version itself, so a
-// deployment that turns nothing on keeps every stored answer. The longest form
-// is 92 characters, inside the column's 128.
+// deployment that turns nothing on keeps every stored answer. The landscape
+// quadrant switch joins it (CHAOS-12675). The longest form is 111 characters,
+// inside the column's 128.
 func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
 	var on []string
 	if options.ComparisonSideBySide {
@@ -54,6 +55,9 @@ func ReuseQuestionFamilyVersion(options RenderShapeOptions) string {
 	}
 	if options.InvestmentThemeShare {
 		on = append(on, string(contractsv1.ContextFabricRenderRuleInvestmentThemeShare))
+	}
+	if options.LandscapePosition {
+		on = append(on, string(contractsv1.ContextFabricRenderRuleLandscapePosition))
 	}
 	if len(on) == 0 {
 		return QuestionFamilyTableVersion
