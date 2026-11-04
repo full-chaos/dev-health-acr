@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http/httptest"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,13 @@ func TestOracleOnTheSeededStore(t *testing.T) {
 		if !t.Run(sub.name, sub.run) {
 			t.Logf("subtest %s failed", sub.name)
 		}
+	}
+	opsFloat32Gap.Lock()
+	gap := opsFloat32Gap.max
+	opsFloat32Gap.Unlock()
+	t.Logf("o4 float32 gap: arch=%s max relative gap ops vs store rows = %.6g, bound 2^-24 = %.6g", runtime.GOARCH, gap, relOpsFloat32)
+	if gap > relOpsFloat32 {
+		t.Errorf("max relative gap %.6g between ops values and the store rows is above the Float32 bound %.6g", gap, relOpsFloat32)
 	}
 }
 

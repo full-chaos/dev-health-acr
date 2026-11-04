@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Float tolerances. Each one is a declared rule of a pair, with its reason;
@@ -28,6 +29,25 @@ const (
 	// (CHAOS-12950).
 	relOpsFloat32 = 0x1p-24
 )
+
+// opsFloat32Gap is the largest relative gap seen between an ops theme value
+// and the value recomputed from the store rows (the Float32 effect, measured);
+// the recorded gate logs it per architecture (CHAOS-12950).
+var opsFloat32Gap struct {
+	sync.Mutex
+	max float64
+}
+
+func observeOpsFloat32Gap(ops, store float64) {
+	scale := math.Max(math.Abs(ops), math.Abs(store))
+	if scale == 0 {
+		return
+	}
+	gap := math.Abs(ops-store) / scale
+	opsFloat32Gap.Lock()
+	opsFloat32Gap.max = math.Max(opsFloat32Gap.max, gap)
+	opsFloat32Gap.Unlock()
+}
 
 func scaled(rel float64, values ...float64) float64 {
 	scale := 0.0
@@ -219,6 +239,7 @@ func compareInvestment(ctx context.Context, o *Oracle, rr *RootReport) error {
 	fromStore := o.Store.OrgThemeEffort(o.Window)
 	for _, theme := range themeKeys(ops, fromStore) {
 		rr.Compared++
+		observeOpsFloat32Gap(ops[theme], fromStore[theme])
 		if math.Abs(ops[theme]-fromStore[theme]) <= themeTolerance(ops[theme], fromStore[theme]) {
 			rr.Matches++
 			continue
