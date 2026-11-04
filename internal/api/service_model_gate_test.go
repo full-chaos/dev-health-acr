@@ -158,19 +158,15 @@ func TestServiceModelTurnIsServedOnTheFeatureOwnModelOrOpenDeployment(t *testing
 		name    string
 		grants  *serviceModelGrants
 		configs contextfabric.OrgModelConfigResolver
-		open    bool
 		basis   string
 		asked   int
 	}{
 		{name: "feature and fallback grant", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{}, basis: "platform_model_fallback", asked: 1},
 		{name: "own model", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{found: true}, basis: "own_model", asked: 2},
-		{name: "open deployment and own model", grants: &serviceModelGrants{}, configs: ownModelConfigs{found: true}, open: true, basis: "own_model", asked: 0},
 		{name: "feature, fallback grant and own model", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{found: true}, basis: "own_model", asked: 2},
-		{name: "open deployment", grants: &serviceModelGrants{}, configs: ownModelConfigs{}, open: true, basis: "deployment_open", asked: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := gatedClientRouteRig(t, tc.grants, tc.configs)
-			rig.app.runtime.ServiceModelOpen = tc.open
 			envelope := decodeEnvelope(t, rig.post(t, contractsv1.ContextFabricSynthesisModeServer, nil))
 			if interprets, synthesizes := rig.model.counts(); interprets != 1 || synthesizes != 1 {
 				t.Fatalf("model calls = interpret %d synthesize %d, want 1 and 1", interprets, synthesizes)
@@ -316,13 +312,11 @@ func TestEngineRunsWithThePlatformModelWithheldOnlyWhenTheCallerMayNotUseIt(t *t
 		name     string
 		grants   *serviceModelGrants
 		configs  contextfabric.OrgModelConfigResolver
-		open     bool
 		supplied bool
 		withheld bool
 	}{
 		{name: "feature and fallback grant", grants: &serviceModelGrants{feature: true, fallback: true}, withheld: false},
 		{name: "feature and fallback grant with an own model", grants: &serviceModelGrants{feature: true, fallback: true}, configs: ownModelConfigs{found: true}, withheld: true},
-		{name: "open deployment", grants: &serviceModelGrants{}, open: true, withheld: false},
 		{name: "own model", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{found: true}, withheld: true},
 		{name: "own model whose configuration is unusable", grants: &serviceModelGrants{feature: true}, configs: ownModelConfigs{err: entitlements.ErrLLMConfigUnusable}, withheld: true},
 		{name: "client model", grants: &serviceModelGrants{}, supplied: true, withheld: true},
@@ -339,7 +333,6 @@ func TestEngineRunsWithThePlatformModelWithheldOnlyWhenTheCallerMayNotUseIt(t *t
 			}))
 			app.runtime.Entitlements = tc.grants
 			app.runtime.OrgModelConfigs = tc.configs
-			app.runtime.ServiceModelOpen = tc.open
 			body := investigationRequestBody()
 			if tc.supplied {
 				body.SynthesisMode = contractsv1.ContextFabricSynthesisModeClient

@@ -1358,7 +1358,7 @@ reports `basis=own_model` with the deployment model withheld for the turn: if
 the configuration is gone when the runtime is resolved, the turn fails as
 model-unavailable and never falls back to the deployment model. The gate's
 basis binds the whole turn: a turn admitted on the deployment model
-(`entitlement`, `deployment_open`) is served by it on every call even if an
+(`platform_model_fallback`) is served by it on every call even if an
 own configuration appears mid-turn, and an unreadable configuration at the gate
 fails the turn as unavailable.
 

@@ -27,7 +27,6 @@ const (
 type serviceModelBasis string
 
 const (
-	serviceModelBasisDeploymentOpen        serviceModelBasis = "deployment_open"
 	serviceModelBasisPlatformModelFallback serviceModelBasis = "platform_model_fallback"
 	serviceModelBasisOwnModel              serviceModelBasis = "own_model"
 	serviceModelBasisOwnModelGateClosed    serviceModelBasis = "own_model_gate_closed"
@@ -133,14 +132,10 @@ func (a *App) serviceModelDecision(ctx context.Context, principal storage.Princi
 }
 
 // deploymentModelGrant reports whether the organization may draw the
-// deployment's own model when it has no model configuration of its own: the
-// deployment is open (every organization holds both flags), or the
-// organization holds acr_service_model AND platform_model_fallback. The error
+// deployment's own model when it has no model configuration of its own: only
+// when the organization holds acr_service_model AND platform_model_fallback. The error
 // is the entitlement read failure, if any.
 func (a *App) deploymentModelGrant(ctx context.Context, principal storage.Principal) (serviceModelBasis, bool, error) {
-	if a.runtime.ServiceModelOpen {
-		return serviceModelBasisDeploymentOpen, true, nil
-	}
 	featureOn, err := a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement)
 	if err != nil {
 		return "", false, err
@@ -156,13 +151,10 @@ func (a *App) deploymentModelGrant(ctx context.Context, principal storage.Princi
 }
 
 // serviceModelOn reports whether ACR AI features are on for the organization:
-// the deployment is open, or ops serves acr_service_model ON (the effective
+// ops serves acr_service_model ON (the effective
 // value: the org's explicit override, else ON for a saved BYO configuration,
 // else the plan or admin state).
 func (a *App) serviceModelOn(ctx context.Context, principal storage.Principal) (bool, error) {
-	if a.runtime.ServiceModelOpen {
-		return true, nil
-	}
 	return a.runtime.Entitlements.HasEntitlement(ctx, principal.OrgID, serviceModelEntitlement)
 }
 
@@ -307,7 +299,7 @@ func (a *App) gateServiceModel(w http.ResponseWriter, r *http.Request, principal
 	if !allowed {
 		ctx = contextfabric.WithPlatformModelWithheldBasis(ctx, string(basis))
 	}
-	if basis == serviceModelBasisPlatformModelFallback || basis == serviceModelBasisDeploymentOpen {
+	if basis == serviceModelBasisPlatformModelFallback {
 		// The basis binds the turn: it runs on the deployment model for every
 		// call, whatever the organization configuration says by then.
 		ctx = contextfabric.WithDeploymentModelBound(ctx)

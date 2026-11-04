@@ -193,3 +193,20 @@ func TestAnUnusableOpsConfigNeverFallsBackToThePlatformModel(t *testing.T) {
 		t.Fatalf("no BYO: err = %v platform calls = %d, want the platform model", err, platform.calls)
 	}
 }
+
+// CHAOS-12997: ACR_MCP_SERVICE_MODEL_DEFAULT is gone too. Any value is reported
+// once and changes nothing: the platform model needs the two feature flags.
+func TestAStaleServiceModelDefaultSettingIsReportedAndIgnored(t *testing.T) {
+	withOps := entitlementWithLLMConfig{fakeOrgLLMSource: &fakeOrgLLMSource{}}
+	for _, value := range []string{"on", "off", "bogus"} {
+		var logs strings.Builder
+		logger := slog.New(slog.NewTextHandler(&logs, nil))
+		got := buildOrgModelConfigResolver(withOps, envLookup(map[string]string{removedEnvServiceModelDefault: value}), logger)
+		if _, ok := got.(opsOrgModelConfigs); !ok {
+			t.Fatalf("stale value %q built %T, want the ops source", value, got)
+		}
+		if !strings.Contains(logs.String(), removedEnvServiceModelDefault) || !strings.Contains(logs.String(), "removed and ignored") {
+			t.Fatalf("stale value %q was not reported: %s", value, logs.String())
+		}
+	}
+}

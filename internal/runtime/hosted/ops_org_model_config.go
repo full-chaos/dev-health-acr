@@ -17,6 +17,12 @@ import (
 // is told once at start-up.
 const removedEnvOrgLLMConfigSource = "ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"
 
+// removedEnvServiceModelDefault was the switch that treated every organization
+// as holding acr_service_model and platform_model_fallback (CHAOS-12997, chris
+// 2026-11-04: a model is BYO, or the feature flags grant the platform model).
+// It is ignored, even in production where it used to be refused.
+const removedEnvServiceModelDefault = "ACR_MCP_SERVICE_MODEL_DEFAULT"
+
 type orgLLMConfigSource interface {
 	OrgLLMConfig(ctx context.Context, orgID string) (entitlements.OrgLLMConfig, bool, error)
 }
@@ -29,7 +35,10 @@ type orgLLMConfigSource interface {
 // returns a nil interface: the platform model answers every organization.
 func buildOrgModelConfigResolver(entitlement entitlementChecker, lookup func(string) (string, bool), logger *slog.Logger) contextfabric.OrgModelConfigResolver {
 	if value, set := lookup(removedEnvOrgLLMConfigSource); set && logger != nil {
-		logger.Warn("context fabric org model config source: the setting is removed and ignored; per-organization BYO configuration is always read from ops", "setting", removedEnvOrgLLMConfigSource, "value_set", strings.TrimSpace(value) != "")
+		logger.Warn("context fabric org model config source: the setting is removed and ignored; per-organization BYO configuration is read from ops whenever a Dev Health entitlement client is configured", "setting", removedEnvOrgLLMConfigSource, "value_set", strings.TrimSpace(value) != "")
+	}
+	if value, set := lookup(removedEnvServiceModelDefault); set && logger != nil {
+		logger.Warn("context fabric service model: the setting is removed and ignored; an organization without its own model draws the platform model only with acr_service_model and platform_model_fallback", "setting", removedEnvServiceModelDefault, "value_set", strings.TrimSpace(value) != "")
 	}
 	source, hasOps := entitlement.(orgLLMConfigSource)
 	if !hasOps {
