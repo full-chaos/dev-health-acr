@@ -33,37 +33,40 @@ type entitlementWithLLMConfig struct {
 	*fakeOrgLLMSource
 }
 
-func TestBuildOrgModelConfigResolverPicksTheOpsSource(t *testing.T) {
+func TestBuildOrgModelConfigResolverIsOpsWhenTheEntitlementClientExists(t *testing.T) {
 	source := &fakeOrgLLMSource{}
 	withOps := entitlementWithLLMConfig{fakeOrgLLMSource: source}
-	env := func(value string) func(string) (string, bool) {
-		return envLookup(map[string]string{EnvOrgLLMConfigSource: value})
-	}
-	got, err := buildOrgModelConfigResolver(withOps, env(""), discardLogger(), false)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := buildOrgModelConfigResolver(withOps, envLookup(nil), discardLogger())
 	if _, ok := got.(opsOrgModelConfigs); !ok {
-		t.Fatalf("unset must default to the ops source, got %T", got)
+		t.Fatalf("with the Dev Health client the source must be ops, got %T", got)
 	}
-	if got, err := buildOrgModelConfigResolver(localEntitlement{}, env(""), discardLogger(), false); err != nil || got != nil {
-		t.Fatalf("unset without the Dev Health client: %v %v, want a nil interface", got, err)
+	if got := buildOrgModelConfigResolver(localEntitlement{}, envLookup(nil), discardLogger()); got != nil {
+		t.Fatalf("without the Dev Health client: %T, want a nil interface", got)
 	}
-	if got, err := buildOrgModelConfigResolver(withOps, env("off"), discardLogger(), true); err != nil || got != nil {
-		t.Fatalf("off on an open deployment: %v %v, want a nil interface", got, err)
+}
+
+// CHAOS-12997: the setting is gone. A deployment that still sets it, to any
+// value, gets the same source as one that does not, and is told once.
+func TestAStaleOrgLLMConfigSourceSettingChangesNothing(t *testing.T) {
+	withOps := entitlementWithLLMConfig{fakeOrgLLMSource: &fakeOrgLLMSource{}}
+	for _, value := range []string{"off", "ops", "bogus", ""} {
+		var logs strings.Builder
+		logger := slog.New(slog.NewTextHandler(&logs, nil))
+		lookup := envLookup(map[string]string{removedEnvOrgLLMConfigSource: value})
+		if got := buildOrgModelConfigResolver(withOps, lookup, logger); func() bool { _, ok := got.(opsOrgModelConfigs); return !ok }() {
+			t.Fatalf("stale value %q built %T, want the ops source", value, buildOrgModelConfigResolver(withOps, lookup, logger))
+		}
+		if !strings.Contains(logs.String(), "removed and ignored") {
+			t.Fatalf("stale value %q was not reported: %s", value, logs.String())
+		}
+		if got := buildOrgModelConfigResolver(localEntitlement{}, lookup, logger); got != nil {
+			t.Fatalf("stale value %q with no Dev Health client built %T, want nil", value, got)
+		}
 	}
-	got, err = buildOrgModelConfigResolver(withOps, env("ops"), discardLogger(), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := got.(opsOrgModelConfigs); !ok {
-		t.Fatalf("ops source = %T", got)
-	}
-	if _, err := buildOrgModelConfigResolver(localEntitlement{}, env("ops"), discardLogger(), false); err == nil {
-		t.Fatal("ops source without the Dev Health entitlement client was accepted")
-	}
-	if _, err := buildOrgModelConfigResolver(withOps, env("bogus"), discardLogger(), false); err == nil {
-		t.Fatal("an unknown source was accepted")
+	var quiet strings.Builder
+	buildOrgModelConfigResolver(withOps, envLookup(nil), slog.New(slog.NewTextHandler(&quiet, nil)))
+	if strings.Contains(quiet.String(), "removed and ignored") {
+		t.Fatalf("an unset setting was reported: %s", quiet.String())
 	}
 }
 
@@ -191,24 +194,19 @@ func TestAnUnusableOpsConfigNeverFallsBackToThePlatformModel(t *testing.T) {
 	}
 }
 
-// With no per-organization source the gate cannot tell a saved-BYO organization
-// from one with none, and an organization holding both flags would draw the
-// platform model. A deployment that is not open therefore refuses to start with
-// the source off; the local entitlement client (development and test, where it
-// grants every flag) stays the one other nil-source composition.
-func TestOffOrgModelConfigSourceRefusesToStartOnADeploymentThatIsNotOpen(t *testing.T) {
+// CHAOS-12997: ACR_MCP_SERVICE_MODEL_DEFAULT is gone too. Any value is reported
+// once and changes nothing: the platform model needs the two feature flags.
+func TestAStaleServiceModelDefaultSettingIsReportedAndIgnored(t *testing.T) {
 	withOps := entitlementWithLLMConfig{fakeOrgLLMSource: &fakeOrgLLMSource{}}
-	env := func(value string) func(string) (string, bool) {
-		return envLookup(map[string]string{EnvOrgLLMConfigSource: value})
-	}
-	got, err := buildOrgModelConfigResolver(withOps, env("off"), discardLogger(), false)
-	if err == nil || !strings.Contains(err.Error(), EnvOrgLLMConfigSource) {
-		t.Fatalf("off on a deployment that is not open: %v %v, want a start-up error naming %s", got, err, EnvOrgLLMConfigSource)
-	}
-	if got != nil {
-		t.Fatalf("a refused build returned a resolver: %T", got)
-	}
-	if got, err := buildOrgModelConfigResolver(localEntitlement{}, env(""), discardLogger(), false); err != nil || got != nil {
-		t.Fatalf("unset with the local entitlement client: %v %v, want a nil source and no error", got, err)
+	for _, value := range []string{"on", "off", "bogus"} {
+		var logs strings.Builder
+		logger := slog.New(slog.NewTextHandler(&logs, nil))
+		got := buildOrgModelConfigResolver(withOps, envLookup(map[string]string{removedEnvServiceModelDefault: value}), logger)
+		if _, ok := got.(opsOrgModelConfigs); !ok {
+			t.Fatalf("stale value %q built %T, want the ops source", value, got)
+		}
+		if !strings.Contains(logs.String(), removedEnvServiceModelDefault) || !strings.Contains(logs.String(), "removed and ignored") {
+			t.Fatalf("stale value %q was not reported: %s", value, logs.String())
+		}
 	}
 }

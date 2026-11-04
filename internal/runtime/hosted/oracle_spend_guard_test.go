@@ -15,9 +15,10 @@ import (
 )
 
 // CHAOS-12461 spend guard. ACR_CONTEXT_FABRIC_MODEL_BASE_URL alone does not keep a question
-// off an organization's own model: the per-organization source (ops, the default) answers
-// first. Pointing acr-api at the scripted model oracle is only safe when the source is off
-// and the service model is open. These tests run the real wiring (buildOrgModelConfigResolver,
+// off an organization's own model: the per-organization source (ops, whenever a Dev Health
+// entitlement client exists) answers first. Pointing acr-api at the scripted model oracle is
+// only safe where there is no such client (local/dev; CHAOS-12997 removed the setting that
+// used to turn the source off). These tests run the real wiring (buildOrgModelConfigResolver,
 // wrapWithOrgModelRuntimeResolver, newContextFabricModelRuntime) with an organization that
 // HAS its own model configuration and a credential, loopback only, no real key anywhere.
 
@@ -60,23 +61,22 @@ func orgWithOwnModel() (entitlementWithLLMConfig, *fakeOrgLLMSource) {
 	return entitlementWithLLMConfig{fakeOrgLLMSource: source}, source
 }
 
-// With the source off and the service model open, an organization that has its own model
-// configuration still resolves to the oracle: its configuration is never read.
-func TestOrgWithItsOwnModelResolvesToTheOracleWhenTheSourceIsOffAndTheServiceModelIsOpen(t *testing.T) {
+// With no Dev Health entitlement client there is no per-organization source, so an
+// organization that has its own model configuration still resolves to the oracle: its
+// configuration is never read.
+func TestOrgWithItsOwnModelResolvesToTheOracleWhenThereIsNoDevHealthEntitlementClient(t *testing.T) {
 	oracle, hits := oracleStandIn(t)
-	lookup := oracleEnv(oracle.URL+"/v1/", map[string]string{EnvOrgLLMConfigSource: "off"})
-	entitlement, source := orgWithOwnModel()
+	lookup := oracleEnv(oracle.URL+"/v1/", nil)
+	_, source := orgWithOwnModel()
+	var entitlement entitlementChecker = localEntitlement{}
 
 	deployment, err := newContextFabricModelRuntime(context.Background(), lookup, nil, discardLogger())
 	if err != nil || deployment == nil {
 		t.Fatalf("deployment runtime = %v, %v", deployment, err)
 	}
-	orgConfigs, err := buildOrgModelConfigResolver(entitlement, lookup, discardLogger(), true)
-	if err != nil {
-		t.Fatal(err)
-	}
+	orgConfigs := buildOrgModelConfigResolver(entitlement, lookup, discardLogger())
 	if orgConfigs != nil {
-		t.Fatalf("source=off built a per-organization source: %T", orgConfigs)
+		t.Fatalf("no entitlement client built a per-organization source: %T", orgConfigs)
 	}
 	wired, resolver, err := wrapWithOrgModelRuntimeResolver(deployment, orgConfigs, lookup, nil, discardLogger())
 	if err != nil {
@@ -100,25 +100,22 @@ func TestOrgWithItsOwnModelResolvesToTheOracleWhenTheSourceIsOffAndTheServiceMod
 	}
 }
 
-// RED CONTROL. Without the two settings the organization's own configuration wins over the
-// environment base URL: this is the hazard the docs name. The test asserts the hazard is
-// real, so a change that quietly made the environment win (or the source default off) shows.
-func TestWithoutTheSettingsAnOrgWithItsOwnModelBeatsTheEnvironmentBaseURL(t *testing.T) {
+// RED CONTROL. With a Dev Health entitlement client the organization's own configuration
+// wins over the environment base URL: this is the hazard the docs name. A stale
+// ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE=off no longer switches it off (CHAOS-12997).
+func TestWithAnEntitlementClientAnOrgWithItsOwnModelBeatsTheEnvironmentBaseURL(t *testing.T) {
 	oracle, hits := oracleStandIn(t)
-	for name, tc := range map[string]struct {
-		extra map[string]string
-		open  bool
-	}{
-		"source unset, service model closed": {nil, false},
-		"source unset, service model open":   {nil, true},
-		"source ops, service model open":     {map[string]string{EnvOrgLLMConfigSource: "ops"}, true},
+	for name, extra := range map[string]map[string]string{
+		"setting unset":      nil,
+		"stale setting: off": {removedEnvOrgLLMConfigSource: "off"},
+		"stale setting: ops": {removedEnvOrgLLMConfigSource: "ops"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			lookup := oracleEnv(oracle.URL+"/v1/", tc.extra)
+			lookup := oracleEnv(oracle.URL+"/v1/", extra)
 			entitlement, source := orgWithOwnModel()
-			orgConfigs, err := buildOrgModelConfigResolver(entitlement, lookup, discardLogger(), tc.open)
-			if err != nil || orgConfigs == nil {
-				t.Fatalf("per-organization source = %v, %v, want the ops source", orgConfigs, err)
+			orgConfigs := buildOrgModelConfigResolver(entitlement, lookup, discardLogger())
+			if orgConfigs == nil {
+				t.Fatal("per-organization source = nil, want the ops source")
 			}
 			resolved, ok, err := orgConfigs.ResolveOrgModelConfig(context.Background(), "org_with_own_model")
 			if err != nil || !ok {
@@ -128,20 +125,11 @@ func TestWithoutTheSettingsAnOrgWithItsOwnModelBeatsTheEnvironmentBaseURL(t *tes
 				t.Fatalf("resolved = %q, want the organization's own base URL and credential", resolved.BaseURL)
 			}
 			if strings.HasPrefix(resolved.BaseURL, oracle.URL) {
-				t.Fatal("the organization resolved to the oracle without the settings")
+				t.Fatal("the organization resolved to the oracle")
 			}
 			if source.calls == 0 || hits.Load() != 0 {
 				t.Fatalf("source calls = %d oracle hits = %d", source.calls, hits.Load())
 			}
 		})
-	}
-}
-
-// source=off alone, with the service model closed, is refused at start: no silent half-setting.
-func TestSourceOffWithoutTheServiceModelOpenRefusesToStart(t *testing.T) {
-	entitlement, _ := orgWithOwnModel()
-	lookup := oracleEnv("http://127.0.0.1:1/v1/", map[string]string{EnvOrgLLMConfigSource: "off"})
-	if got, err := buildOrgModelConfigResolver(entitlement, lookup, discardLogger(), false); err == nil || got != nil {
-		t.Fatalf("source=off with the service model closed = %v, %v, want a start-up error", got, err)
 	}
 }

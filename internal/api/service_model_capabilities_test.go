@@ -15,13 +15,11 @@ import (
 func TestCapabilitiesListInvestigateQuestionOnlyWhereTheServiceModelServes(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		open    bool
 		grants  *serviceModelGrants
 		configs ownModelConfigs
 		listed  bool
 	}{
 		{name: "no entitlement, no own model", grants: &serviceModelGrants{}, listed: false},
-		{name: "deployment open", open: true, grants: &serviceModelGrants{}, listed: true},
 		{name: "feature and fallback grant", grants: &serviceModelGrants{feature: true, fallback: true}, listed: true},
 		{name: "feature only", grants: &serviceModelGrants{feature: true}, listed: false},
 		{name: "fallback grant only", grants: &serviceModelGrants{fallback: true}, listed: false},
@@ -34,7 +32,6 @@ func TestCapabilitiesListInvestigateQuestionOnlyWhereTheServiceModelServes(t *te
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := gatedClientRouteRig(t, tc.grants, tc.configs)
-			rig.app.runtime.ServiceModelOpen = tc.open
 			request := httptest.NewRequest(http.MethodGet, "/api/v1/agent-context/capabilities", nil)
 			request.Header.Set("Authorization", "Bearer "+rig.token)
 			request.Header.Set("X-ACR-Client-Version", "1.0.0")
