@@ -17,8 +17,10 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/reposlug"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/userprincipal"
+	"github.com/full-chaos/dev-health-go/repokey"
 )
 
 // CHAOS-12456: the differential of the work-item census. The real resolver, the
@@ -26,8 +28,11 @@ import (
 // body runs on a statement model that evaluates what a statement carries, and on
 // real ClickHouse (ACR_CONTAINER_TESTS=1).
 
-// linkSlugGrammar is the two-part grammar the library's link aggregate tests.
-const linkSlugGrammar = `^[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?/[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?$`
+// linkSlugGrammar is the grammar the library's link aggregate tests (2-20
+// segments, with a 255-byte bound beside it). It is the library's own value,
+// so a library change turns the statement cells red; TestLinkGrammarAgreesWithReposlug
+// holds it equal to the key rule acr itself applies.
+var linkSlugGrammar = repokey.SlugPattern
 
 const (
 	linkKey        = "CHAOS-204"
@@ -330,7 +335,7 @@ func aWorkItemOwnerGrantAdmitsWhatTheGateAdmits(t *testing.T, build grantedItemW
 	world := build(t, "owner grant")
 	principal := userprincipal.Authenticated(t, world.org, []string{"acme/*"})
 	world.principal = &principal
-	for key, repository := range map[string]grantRepository{"CHAOS-301": world.nestedGitLab, "CHAOS-302": world.malformed} {
+	for key, repository := range map[string]grantRepository{"CHAOS-302": world.malformed} {
 		world.key = key
 		without := observeLinkTurn(t, world)
 		item := linkItem{id: "linear:" + key, provider: "linear"}
@@ -353,6 +358,15 @@ func aWorkItemOwnerGrantAdmitsWhatTheGateAdmits(t *testing.T, build grantedItemW
 	world.addLink(t, issueLink{control.id, "native", world.insideGitHub})
 	if turn := observeLinkTurn(t, world); len(turn.resolution.Committed) != 1 || turn.resolution.Committed[0].CanonicalID != world.canonicalID(t, control) {
 		t.Fatalf("control: committed = %+v, want the item linked to %s", turn.resolution.Committed, world.insideGitHub.slug)
+	}
+	// acme/* covers its subgroups, as the node gate does: an item linked to
+	// the nested GitLab repository is counted on the link path.
+	world.key = "CHAOS-301"
+	nested := linkItem{id: "linear:CHAOS-301", provider: "linear"}
+	world.addItem(t, nested)
+	world.addLink(t, issueLink{nested.id, "native", world.nestedGitLab})
+	if turn := observeLinkTurn(t, world); len(turn.resolution.Committed) != 1 || turn.resolution.Committed[0].CanonicalID != world.canonicalID(t, nested) {
+		t.Fatalf("nested: committed = %+v, want the item linked to %s", turn.resolution.Committed, world.nestedGitLab.slug)
 	}
 	// A valid link keeps the item in, beside a nested one.
 	world.key = "CHAOS-304"
@@ -381,7 +395,7 @@ func (m *linkStatementModel) Query(ctx context.Context, statement string, bindin
 	// reads that from the statement, so a library that drops it turns this red.
 	grammar := strings.Contains(statement, "'"+linkSlugGrammar+"'")
 	granted := func(repository grantRepository) bool {
-		if grammar && !regexp.MustCompile(linkSlugGrammar).MatchString(repository.slug) {
+		if grammar && (len(repository.slug) > repokey.MaxBytes || !regexp.MustCompile(linkSlugGrammar).MatchString(repository.slug)) {
 			return false
 		}
 		owner, _, _ := strings.Cut(repository.slug, "/")
@@ -619,15 +633,21 @@ func aRepositoryOwnedItemCountsByItsOwnRepository(t *testing.T, build grantedIte
 }
 
 // aRepositoryOwnerGrantAdmitsWhatTheGateAdmits: an owner wildcard held by a
-// non-user credential reaches a repository-owned issue by the two-part slug
-// grammar only, as the node gate does. acme/* never reaches acme/group/secret or
-// acme/trailing-, so an issue owned there leaves the turn as it was. One world,
-// one key per case.
+// non-user credential reaches a repository-owned issue by the nested slug
+// grammar, as the node gate does. acme/* reaches acme/group/secret (an owner
+// covers its subgroups) and never acme/trailing-, so an issue owned there
+// leaves the turn as it was. One world, one key per case.
 func aRepositoryOwnerGrantAdmitsWhatTheGateAdmits(t *testing.T, build grantedItemWorldBuilder) {
 	world := build(t, "owner grant owned")
 	principal := userprincipal.Authenticated(t, world.org, []string{"acme/*"})
 	world.principal = &principal
-	for _, repository := range []grantRepository{world.nestedGitLab, world.malformed} {
+	nestedItem := linkItem{id: providerPrefix(world.nestedGitLab) + world.nestedGitLab.slug + "#7", provider: world.nestedGitLab.provider, repository: world.nestedGitLab}
+	_, world.key, _ = strings.Cut(nestedItem.id, ":")
+	world.addItem(t, nestedItem)
+	if turn := observeLinkTurn(t, world); len(turn.resolution.Committed) != 1 || turn.resolution.Committed[0].CanonicalID != world.canonicalID(t, nestedItem) {
+		t.Fatalf("nested: committed = %+v, want the issue owned by %s", turn.resolution.Committed, world.nestedGitLab.slug)
+	}
+	for _, repository := range []grantRepository{world.malformed} {
 		item := linkItem{id: providerPrefix(repository) + repository.slug + "#7", provider: repository.provider, repository: repository}
 		_, world.key, _ = strings.Cut(item.id, ":")
 		without := observeLinkTurn(t, world)
@@ -668,4 +688,22 @@ func TestAKeyWhosePrefixIsOnlyOutsideReadsLikeAWord(t *testing.T) {
 
 func TestEveryProviderKeyCommitsThroughTheGate(t *testing.T) {
 	everyProviderKeyCommitsThroughTheGate(t, grantedItemModelWorld)
+}
+
+// The grammar the library's link aggregate tests and the key rule acr itself
+// applies are one rule: for every key in the table both accept or both refuse.
+func TestLinkGrammarAgreesWithReposlug(t *testing.T) {
+	t.Parallel()
+	long := strings.Repeat("a", 100)
+	for _, key := range []string{
+		"acme/web", "acme/group/web", "acme/group/sub/web", strings.Repeat("g/", 19) + "r", strings.Repeat("g/", 20) + "r",
+		"acme/.github", "acme/group/.github", "acme/.group/web", "acme/..", "acme/.", "acme/trailing-", "acme/group./web",
+		"acme", "", "*", "Acme/web", "acme//web", "acme/web/", long + "/" + long, long + "a/x", "a/" + long + "a",
+		strings.Repeat("ab/", 85) + "ab",
+	} {
+		got := len(key) <= repokey.MaxBytes && regexp.MustCompile(linkSlugGrammar).MatchString(key)
+		if want := reposlug.ValidSlug(key); got != want {
+			t.Errorf("%q: library grammar = %v, reposlug = %v", key, got, want)
+		}
+	}
 }
