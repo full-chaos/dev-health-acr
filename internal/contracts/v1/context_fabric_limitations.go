@@ -958,6 +958,7 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricGroupReadUnreadLimitation(limitation) ||
 		IsContextFabricGroupListOverBoundLimitation(limitation) ||
 		IsContextFabricCohortNarrowingLimitation(limitation) ||
+		IsContextFabricLandscapeDaysDifferLimitation(limitation) ||
 		IsContextFabricFactRowTruncationLimitation(limitation) ||
 		IsContextFabricClaimDepthLimitation(limitation) ||
 		IsContextFabricBudgetTrimLimitation(limitation) ||

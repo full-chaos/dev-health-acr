@@ -674,6 +674,16 @@ func (e *Engine) finalizeResult(
 	limitations, displaced := withLandscapeLimitation(result.Limitations, renderShapes)
 	result.Limitations = limitations
 	result.LimitationsDisplaced += displaced
+	// A quadrant refused because the teams speak for different days says so and
+	// offers the latest day they share (CHAOS-12958). With the rule off the
+	// quadrant is not asked for, so nothing is refused and no line is served.
+	daysDifferLine, daysDifferRefused := "", false
+	if e.renderShapeOptions.LandscapePosition {
+		daysDifferLine, daysDifferRefused = landscapeDaysDifferLine(result, facts)
+	}
+	limitations, displaced = withLandscapeDaysDifferLimitation(result.Limitations, daysDifferLine, daysDifferRefused)
+	result.Limitations = limitations
+	result.LimitationsDisplaced += displaced
 	// Seed the outcome set from this turn's requirement rows, ONCE.
 	//
 	// Idempotent on purpose: this function runs again on a retry pass and

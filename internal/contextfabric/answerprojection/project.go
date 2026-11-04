@@ -1550,7 +1550,9 @@ func claimsAChartPlots(shapes []contractsv1.ContextFabricRenderShape) map[string
 func limitationsToBound(result contractsv1.ContextFabricInvestigationResult, cohort *contractsv1.ContextFabricProjectedCohort, bounds Budget, shapes []contractsv1.ContextFabricRenderShape) ([]string, func(string) bool) {
 	source := restateWorkItemListed(result, cohort, bounds)
 	if !carriesQuadrant(shapes) {
-		return withoutSentence(source, contractsv1.ContextFabricLandscapePositionLimitation), contractsv1.IsContextFabricRetrievalDegradedLimitation
+		return withoutSentence(source, contractsv1.ContextFabricLandscapePositionLimitation), func(limitation string) bool {
+			return contractsv1.IsContextFabricRetrievalDegradedLimitation(limitation) || contractsv1.IsContextFabricLandscapeDaysDifferLimitation(limitation)
+		}
 	}
 	return source, func(limitation string) bool {
 		return contractsv1.IsContextFabricRetrievalDegradedLimitation(limitation) || limitation == contractsv1.ContextFabricLandscapePositionLimitation

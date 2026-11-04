@@ -63,16 +63,7 @@ func landscapePositionShape(result InvestigationResult) (*contractsv1.ContextFab
 			return nil, 0, RenderShapeSkipSubjectKindNotCharted
 		}
 	}
-	placed := make([]landscapeSide, 0, len(sides))
-	leftOut := 0
-	for _, side := range sides {
-		point, ok := landscapeSideOf(result.ClaimedFacts, side)
-		if !ok {
-			leftOut++
-			continue
-		}
-		placed = append(placed, point)
-	}
+	placed, leftOut := landscapePlacedSides(result.ClaimedFacts, sides)
 	if len(placed) < 2 {
 		return nil, leftOut, RenderShapeSkipFewerThanTwoPoints
 	}
@@ -92,6 +83,98 @@ func landscapePositionShape(result InvestigationResult) (*contractsv1.ContextFab
 		return nil, leftOut, RenderShapeSkipQuadrantUnprovable
 	}
 	return shape, leftOut, ""
+}
+
+// landscapePlacedSides is the committed teams that give a point, in committed
+// order, and how many gave none.
+func landscapePlacedSides(claims []ClaimedFact, sides []SubjectRef) ([]landscapeSide, int) {
+	placed := make([]landscapeSide, 0, len(sides))
+	leftOut := 0
+	for _, side := range sides {
+		point, ok := landscapeSideOf(claims, side)
+		if !ok {
+			leftOut++
+			continue
+		}
+		placed = append(placed, point)
+	}
+	return placed, leftOut
+}
+
+// landscapeCommonDayField is the landscape fact's field that names the latest
+// day every team of the read holds live rows (CHAOS-12958). It only serves the
+// offer in the refusal's line; the quadrant is never read on it.
+const landscapeCommonDayField = "common_live_day"
+
+// landscapeDaysDifferLine is the line of a quadrant refused because the placed
+// teams speak for different days, and false when the quadrant was refused for
+// any other reason or drawn. It names each team's day and offers the latest day
+// all of them share, from the facts the answer was synthesized from; with no
+// such day it says the teams hold none. The days are worded as the title words
+// the quadrant's day.
+func landscapeDaysDifferLine(result InvestigationResult, facts CanonicalFactBundle) (string, bool) {
+	if _, _, reason := landscapePositionShape(result); reason != RenderShapeSkipLandscapeDaysDiffer {
+		return "", false
+	}
+	placed, _ := landscapePlacedSides(result.ClaimedFacts, result.SubjectResolution.Committed)
+	sides := make([]string, 0, len(placed))
+	ids := make(map[string]struct{}, len(placed))
+	for _, side := range placed {
+		sides = append(sides, side.label+" "+landscapeDayWords(side.day))
+	}
+	for _, committed := range result.SubjectResolution.Committed {
+		ids[committed.CanonicalID] = struct{}{}
+	}
+	shared := ""
+	held := 0
+	for _, fact := range facts.Facts {
+		if fact.Kind != FactLandscape {
+			continue
+		}
+		if _, ok := ids[fact.Subject.CanonicalID]; !ok {
+			continue
+		}
+		value := fact.Fields[landscapeCommonDayField]
+		if value.String == nil || *value.String == "" || (shared != "" && *value.String != shared) {
+			return contractsv1.ContextFabricLandscapeDaysDifferLimitation(sides, ""), true
+		}
+		shared = *value.String
+		held++
+	}
+	if held < len(placed) {
+		shared = ""
+	}
+	if shared != "" {
+		shared = landscapeDayWords(shared)
+	}
+	return contractsv1.ContextFabricLandscapeDaysDifferLimitation(sides, shared), true
+}
+
+// withLandscapeDaysDifferLimitation serves the refusal's line exactly while the
+// quadrant is refused for different days. Finalization runs on every pass, so
+// the earlier line is removed first and the current one added only when this
+// pass refuses for that reason. It returns how many model caveats the line
+// displaced.
+func withLandscapeDaysDifferLimitation(limitations []string, line string, refused bool) ([]string, int) {
+	limitations = withoutDaysDifferLimitations(limitations)
+	if !refused {
+		return limitations, 0
+	}
+	return appendBoundedLimitations(limitations, []string{line})
+}
+
+// withoutDaysDifferLimitations removes every refusal line, whatever days it names.
+func withoutDaysDifferLimitations(limitations []string) []string {
+	if !slices.ContainsFunc(limitations, contractsv1.IsContextFabricLandscapeDaysDifferLimitation) {
+		return limitations
+	}
+	kept := make([]string, 0, len(limitations))
+	for _, limitation := range limitations {
+		if !contractsv1.IsContextFabricLandscapeDaysDifferLimitation(limitation) {
+			kept = append(kept, limitation)
+		}
+	}
+	return kept
 }
 
 // asksForLandscape reads the interpretation's own requirements, not the facts

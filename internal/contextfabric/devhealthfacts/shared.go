@@ -1430,7 +1430,14 @@ import (
 // v278 -> v279: current_state states "N rows" for a claim that carries a table
 // and a null scalar, where it printed "null" (CHAOS-12951). An answer saved
 // under v278 holds the old text.
-const QueryVersion = "devhealthfacts.clickhouse.v280"
+//
+// v280 -> v281: a team landscape fact on a read of two or more teams whose own
+// latest days differ carries common_live_day, the latest day every team holds
+// live rows for at least two identities, and the answer serves a line naming
+// each team's day and offering that window when it refuses the quadrant
+// (CHAOS-12958). An answer saved under v280 refuses the quadrant without saying
+// why.
+const QueryVersion = "devhealthfacts.clickhouse.v281"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

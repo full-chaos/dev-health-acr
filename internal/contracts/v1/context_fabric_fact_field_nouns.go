@@ -80,7 +80,7 @@ var contextFabricStringFieldClasses = func() map[string]ContextFabricStringField
 		"status_since", "success_criterion", "team_id", "team_name", "title", "unit_from", "unit_to", "window_end",
 		"window_start", "work_scope_id", "work_unit_id", "sizing_note",
 		"latest_sprint_end", "next_sprint_end", "state_source", "target_date", "target_date_provider", "due_at", "work_item_id",
-		"forecast_p50_date", "forecast_p85_date", "forecast_p95_date",
+		"forecast_p50_date", "forecast_p85_date", "forecast_p95_date", "common_live_day",
 		// CHAOS-12580: a repository's canonical id and its handle.
 		"repository", "repository_label",
 	} {

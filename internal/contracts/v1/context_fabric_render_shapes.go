@@ -265,6 +265,47 @@ const (
 // with the quadrant.
 const ContextFabricLandscapePositionLimitation = "The quadrant shows where each team stood on churn and delivery units on one day. It locates the teams; it does not explain why a team stands where it does."
 
+const (
+	contextFabricLandscapeDaysDifferPrefix   = "No quadrant is drawn because the teams' latest landscape days differ: "
+	contextFabricLandscapeDaysDifferOffer    = ". Ask for a window ending "
+	contextFabricLandscapeDaysDifferOfferEnd = " to see them on one day."
+	contextFabricLandscapeDaysDifferNone     = ". The teams hold no common day in the window read."
+)
+
+// ContextFabricLandscapeDaysDifferLimitation is the line an answer serves when
+// the landscape_position quadrant is refused because the teams' rows speak for
+// different days (CHAOS-12958; North Star checks 5 and 12: missing is not
+// healthy, and a partial answer says what would complete it). sides are the
+// placed teams, each "<label> <day>" as the answer words them, in committed
+// order; sharedDay is the latest day every team holds live rows, worded the same
+// way, or "" when the teams hold no common day in the window read. The
+// quadrant itself is never read on a common day: the line only offers the
+// window to ask again. It is service-authored, so no model caveat displaces it.
+func ContextFabricLandscapeDaysDifferLimitation(sides []string, sharedDay string) string {
+	line := contextFabricLandscapeDaysDifferPrefix + strings.Join(sides, "; ")
+	if sharedDay == "" {
+		return line + contextFabricLandscapeDaysDifferNone
+	}
+	return line + contextFabricLandscapeDaysDifferOffer + sharedDay + contextFabricLandscapeDaysDifferOfferEnd
+}
+
+// IsContextFabricLandscapeDaysDifferLimitation recognizes the sentences
+// ContextFabricLandscapeDaysDifferLimitation composes.
+func IsContextFabricLandscapeDaysDifferLimitation(limitation string) bool {
+	rest, ok := strings.CutPrefix(limitation, contextFabricLandscapeDaysDifferPrefix)
+	if !ok || rest == "" || strings.ContainsAny(rest, "\n") {
+		return false
+	}
+	if sides, found := strings.CutSuffix(rest, contextFabricLandscapeDaysDifferNone); found {
+		return sides != ""
+	}
+	if rest, found := strings.CutSuffix(rest, contextFabricLandscapeDaysDifferOfferEnd); found {
+		sides, day, cut := strings.Cut(rest, contextFabricLandscapeDaysDifferOffer)
+		return cut && sides != "" && day != "" && !strings.Contains(day, contextFabricLandscapeDaysDifferOffer)
+	}
+	return false
+}
+
 // The forecast's table (CHAOS-12608): the `distribution` table of the team
 // workload fact (CHAOS-12607), one row per distinct completion day, keyed by
 // ContextFabricRenderForecastAxisField, with the share of runs finished by

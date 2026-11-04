@@ -286,6 +286,10 @@ func WithoutDisabledRenderShapes(result InvestigationResult, options RenderShape
 	if !hasLandscapePosition(kept) {
 		result.Limitations = withoutLimitation(result.Limitations, contractsv1.ContextFabricLandscapePositionLimitation)
 	}
+	// The refusal's line goes with the rule (CHAOS-12958).
+	if !options.LandscapePosition {
+		result.Limitations = withoutDaysDifferLimitations(result.Limitations)
+	}
 	return result
 }
 
