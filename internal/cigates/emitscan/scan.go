@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/parser"
 	"go/printer"
 	"go/scanner"
@@ -2271,7 +2272,7 @@ func (s *fileScan) errorTextValue(expr ast.Expr) bool {
 		if pkg == "fmt" && (name == "Sprint" || name == "Sprintln") {
 			found = true
 		}
-		if pkg == "fmt" && (name == "Sprintf" || name == "Errorf") && formatMayPrintError(call.Args) {
+		if pkg == "fmt" && (name == "Sprintf" || name == "Errorf") && s.formatMayPrintError(call.Args) {
 			found = true
 		}
 		return !found
@@ -2279,18 +2280,15 @@ func (s *fileScan) errorTextValue(expr ast.Expr) bool {
 	return found
 }
 
-// formatMayPrintError reports whether a Sprintf or Errorf call can print error text: its format is not a string literal
+// formatMayPrintError reports whether a Sprintf or Errorf call can print error text: its format is not a constant
 // (fail closed), or it holds a verb that prints an error: %v %s %q %x %X (fmt calls Error() for the string verbs) or %w.
-func formatMayPrintError(args []ast.Expr) bool {
+// A named string constant is read by its value, as the checker computed it.
+func (s *fileScan) formatMayPrintError(args []ast.Expr) bool {
 	if len(args) == 0 {
 		return true
 	}
-	lit, ok := ast.Unparen(args[0]).(*ast.BasicLit)
-	if !ok || lit.Kind != token.STRING {
-		return true
-	}
-	format, err := strconv.Unquote(lit.Value)
-	if err != nil {
+	format, ok := s.constantFormat(args[0])
+	if !ok {
 		return true
 	}
 	for i := 0; i < len(format); i++ {
@@ -2309,6 +2307,31 @@ func formatMayPrintError(args []ast.Expr) bool {
 		}
 	}
 	return false
+}
+
+// constantFormat is the value of a format argument that is a string constant: a literal, or a named or concatenated
+// constant of this package or another, read from the type check. Any other expression, or a package that did not
+// type-check, is not constant here.
+func (s *fileScan) constantFormat(expr ast.Expr) (string, bool) {
+	if lit, ok := ast.Unparen(expr).(*ast.BasicLit); ok {
+		if lit.Kind != token.STRING {
+			return "", false
+		}
+		text, err := strconv.Unquote(lit.Value)
+		return text, err == nil
+	}
+	if s.pkg.oversize {
+		return "", false
+	}
+	typed := s.pkg.typedInfo()
+	if typed.err != nil || typed.info == nil {
+		return "", false
+	}
+	tv, ok := typed.info.Types[expr]
+	if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
+		return "", false
+	}
+	return constant.StringVal(tv.Value), true
 }
 
 func (s *fileScan) attribute(call *ast.CallExpr, keyExpr, value ast.Expr) {
