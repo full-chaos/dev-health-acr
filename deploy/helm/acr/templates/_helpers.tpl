@@ -403,6 +403,20 @@ is on and the event stream is not: acr-api would refuse to start
 {{- end -}}
 {{- end -}}
 
+{{- define "acr.validateShutdownBudget" -}}
+{{- $raw := toString (.Values.config.shutdownTimeout | default "10s") -}}
+{{- if not (regexMatch "^[0-9]+[sm]$" $raw) -}}
+{{- fail (printf "shutdown-budget: config.shutdownTimeout %q must be a whole number of seconds or minutes (for example 10s or 1m)" $raw) -}}
+{{- end -}}
+{{- $n := int (trimSuffix "m" (trimSuffix "s" $raw)) -}}
+{{- $shutdown := ternary (mul $n 60) $n (hasSuffix "m" $raw) -}}
+{{- $sleep := int .Values.deployment.preStopSleepSeconds -}}
+{{- $grace := int .Values.deployment.terminationGracePeriodSeconds -}}
+{{- if ge (add $sleep $shutdown) $grace -}}
+{{- fail (printf "shutdown-budget: deployment.preStopSleepSeconds (%d) + config.shutdownTimeout (%ds) must be less than deployment.terminationGracePeriodSeconds (%d)" $sleep $shutdown $grace) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "acr.validateWorkloadTokenExchange" -}}
 {{- if .Values.workloadTokenExchange.enabled -}}
 {{- if not (.Values.workloadTokenExchange.audience | default "") -}}
