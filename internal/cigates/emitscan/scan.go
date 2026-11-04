@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/parser"
 	"go/printer"
 	"go/scanner"
@@ -2268,7 +2269,10 @@ func (s *fileScan) errorTextValue(expr ast.Expr) bool {
 		if name == "Error" && len(call.Args) == 0 {
 			found = true
 		}
-		if pkg == "fmt" && (name == "Sprint" || name == "Sprintf" || name == "Sprintln" || name == "Errorf") {
+		if pkg == "fmt" && (name == "Sprint" || name == "Sprintln") {
+			found = true
+		}
+		if pkg == "fmt" && (name == "Sprintf" || name == "Errorf") && s.formatMayPrintError(call.Args) {
 			found = true
 		}
 		return !found
@@ -2276,11 +2280,67 @@ func (s *fileScan) errorTextValue(expr ast.Expr) bool {
 	return found
 }
 
+// formatMayPrintError reports whether a Sprintf or Errorf call can print error text: its format is not a constant
+// (fail closed), or it holds a verb that prints an error: %v %s %q %x %X (fmt calls Error() for the string verbs) or %w.
+// A named string constant is read by its value, as the checker computed it.
+func (s *fileScan) formatMayPrintError(args []ast.Expr) bool {
+	if len(args) == 0 {
+		return true
+	}
+	format, ok := s.constantFormat(args[0])
+	if !ok {
+		return true
+	}
+	for i := 0; i < len(format); i++ {
+		if format[i] != '%' {
+			continue
+		}
+		i++
+		for i < len(format) && strings.IndexByte("+-# 0123456789.[]*", format[i]) >= 0 {
+			i++ // flags, width, precision and argument indexes
+		}
+		if i >= len(format) {
+			break
+		}
+		if strings.IndexByte("vsqxXw", format[i]) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// constantFormat is the value of a format argument that is a string constant: a literal, or a named or concatenated
+// constant of this package or another, read from the type check. Any other expression, or a package that did not
+// type-check, is not constant here.
+func (s *fileScan) constantFormat(expr ast.Expr) (string, bool) {
+	if lit, ok := ast.Unparen(expr).(*ast.BasicLit); ok {
+		if lit.Kind != token.STRING {
+			return "", false
+		}
+		text, err := strconv.Unquote(lit.Value)
+		return text, err == nil
+	}
+	if s.pkg.oversize {
+		return "", false
+	}
+	typed := s.pkg.typedInfo()
+	if typed.err != nil || typed.info == nil {
+		return "", false
+	}
+	tv, ok := typed.info.Types[expr]
+	if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
+		return "", false
+	}
+	return constant.StringVal(tv.Value), true
+}
+
 func (s *fileScan) attribute(call *ast.CallExpr, keyExpr, value ast.Expr) {
 	keys, literal, over := s.keysOf(keyExpr)
+	unfoldable := false
 	if !literal && (over || s.unfoldableConst(keyExpr)) {
 		// a constant (or a conversion of one) the scan cannot fold: fail closed rather than skip
 		s.add(RuleProtectedKey, call.Pos(), "unfoldable const key")
+		unfoldable = true
 	}
 	label := "-"
 	for _, key := range keys {
@@ -2304,8 +2364,15 @@ func (s *fileScan) attribute(call *ast.CallExpr, keyExpr, value ast.Expr) {
 	if s.metricAttrs[call] {
 		s.metricLabel(call, keys, literal)
 		s.metricValue(value)
-	} else if !literal && s.dynamicCallInKey(keyExpr) {
-		s.add(RuleMetricLabel, call.Pos(), "dynamic key")
+	} else {
+		dynamic := !literal && s.dynamicCallInKey(keyExpr)
+		if dynamic {
+			s.add(RuleMetricLabel, call.Pos(), "dynamic key")
+		}
+		if !literal && !unfoldable && !dynamic {
+			// a span attribute key computed at run time: no key reaches the census, so it is pinned like an slog key
+			s.addLogKey(call.Pos(), keyExpr)
+		}
 	}
 }
 
