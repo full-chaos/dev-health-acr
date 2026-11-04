@@ -1455,11 +1455,15 @@ import (
 // limit, not as "read failed" (CHAOS-13003). An answer saved under v284 holds
 // the blockers as unavailable.
 //
-// v285 -> v286: when no fixed question family serves a question and the read
+// v285 -> v286: two ISO dates in a question are read as its range when the
+// interpreter read it as current (CHAOS-13010). An answer saved under v285 to
+// such a question holds a current-state read.
+//
+// v286 -> v287: when no fixed question family serves a question and the read
 // fallback is on, the model plans which fact kinds the answer reads, and the
-// plan carries answer_plan.fallback (CHAOS-13002). An answer saved under v285
+// plan carries answer_plan.fallback (CHAOS-13002). An answer saved under v286
 // reads only the family's kinds.
-const QueryVersion = "devhealthfacts.clickhouse.v286"
+const QueryVersion = "devhealthfacts.clickhouse.v287"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
