@@ -11,7 +11,13 @@ import (
 
 func (a *Authenticator) authenticateWebAssertion(w http.ResponseWriter, r *http.Request, ip string, now time.Time, allow bool, release func(), next http.Handler) {
 	if !allow || a.webAssertions == nil || len(r.Header.Values("Authorization")) != 0 {
-		a.recordUnknownFailure(r, ip, "invalid_web_assertion", now)
+		reason := "invalid_web_assertion"
+		if !allow {
+			// CHAOS-12109: a Context Fabric route takes no web assertion; the
+			// Warn line carries its own reason so a client still signing one is found.
+			reason = "web_assertion_not_accepted_on_route"
+		}
+		a.recordUnknownFailure(r, ip, reason, now)
 		a.writeError(w, r, http.StatusUnauthorized, "invalid_token", "Missing or invalid ACR credential", false, nil)
 		return
 	}

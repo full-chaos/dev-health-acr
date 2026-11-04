@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -94,17 +95,20 @@ func TestHostedReadRoutesMatchOpenAPI(t *testing.T) {
 		{path: "/api/v1/agent-context/capabilities", method: "get"},
 		{path: "/api/v1/agent-context/context-packets", method: "post"},
 		{path: "/api/v1/agent-context/evidence/{evidence_ref_id}", method: "get"},
-		{path: "/api/v1/context-fabric/investigations", method: "post"},
-		{path: "/api/v1/context-fabric/investigations/{result_id}", method: "get"},
-		{path: "/api/v1/context-fabric/investigations/submissions/{submission_id}", method: "get"},
-		{path: "/api/v1/context-fabric/threads", method: "get"},
-		{path: "/api/v1/context-fabric/threads/{thread_id}", method: "get"},
-		{path: "/api/v1/context-fabric/threads/{thread_id}", method: "delete"},
-		{path: "/api/v1/context-fabric/investigations/feedback/{result_id}", method: "get"},
-		{path: "/api/v1/context-fabric/investigations/feedback/{result_id}", method: "post"},
 	} {
 		if !hasSecurityAlternative(document.Paths[route.path][route.method].Security, "webAssertionAuth") {
 			t.Fatalf("%s %s must allow web assertions", route.method, route.path)
+		}
+	}
+	// CHAOS-12109: every Context Fabric route takes a credential only.
+	for path, operations := range document.Paths {
+		if !strings.HasPrefix(path, "/api/v1/context-fabric/") {
+			continue
+		}
+		for method, operation := range operations {
+			if hasSecurityAlternative(operation.Security, "webAssertionAuth") {
+				t.Fatalf("%s %s must not allow web assertions", method, path)
+			}
 		}
 	}
 	if hasSecurityAlternative(document.Paths["/api/v1/agent-context/episodes"]["post"].Security, "webAssertionAuth") {

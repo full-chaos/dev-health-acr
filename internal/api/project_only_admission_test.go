@@ -493,7 +493,8 @@ func TestAnOverLimitInventoryIsATypedLimitationNotAnOutage(t *testing.T) {
 // AC-8 (CHAOS-12107): project_only never reopens a "*" investigation. A web
 // assertion may name every repository on the two credential approvals only,
 // so a "*" assertion on the investigation route is refused at authentication,
-// with either permission set, and the explicit form is the control.
+// with either permission set. Since CHAOS-12109 the route refuses every web
+// assertion, the explicit form included.
 func TestAStarInvestigationAssertionIsRefused(t *testing.T) {
 	now := time.Now().UTC()
 	public, private, err := ed25519.GenerateKey(rand.Reader)
@@ -541,7 +542,5 @@ func TestAStarInvestigationAssertionIsRefused(t *testing.T) {
 		response := serve([]string{"*"}, permissions, fmt.Sprintf("star_%d", index))
 		assertErrorResponse(t, response, http.StatusUnauthorized, "invalid_token")
 	}
-	if response := serve([]string{hostedTestRepository}, []string{auth.ScopeContextRead}, "explicit_1"); response.Code == http.StatusUnauthorized {
-		t.Fatalf("the explicit assertion: %d %s, want it past authentication", response.Code, response.Body.String())
-	}
+	assertErrorResponse(t, serve([]string{hostedTestRepository}, []string{auth.ScopeContextRead}, "explicit_1"), http.StatusUnauthorized, "invalid_token")
 }

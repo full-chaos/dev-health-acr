@@ -94,7 +94,7 @@ func (a *App) ContextFabricInvestigationResultHandler(results contextfabric.Inve
 		}
 		a.serveStoredInvestigationResult(w, r, principal, results, gate, resultID, "context_fabric_investigation_result_read")
 	})
-	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
+	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, handler)
 }
 
 // serveStoredInvestigationResult reads resultID, decides it with the

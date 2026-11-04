@@ -217,7 +217,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		result, err := investigateRecovered(investigateCtx, investigator, principal, request)
 		deliveredStatus = a.deliverInvestigationOutcome(w, r, principal, request, submission, result, err, collectedSynthesisInput)
 	})
-	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
+	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, handler)
 }
 
 // deliverInvestigationOutcome delivers one run's outcome, the same for the

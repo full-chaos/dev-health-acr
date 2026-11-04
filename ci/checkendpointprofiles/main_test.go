@@ -2249,8 +2249,8 @@ func TestRealTreeRejectsAWrapperRemovedWithItsMarkerTextLeftInAStringLiteral(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	call := "return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)"
-	mutated := strings.Replace(string(raw), call, "_ = \"a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)\"\n\treturn handler", 1)
+	call := "return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, handler)"
+	mutated := strings.Replace(string(raw), call, "_ = \"a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, handler)\"\n\treturn handler", 1)
 	if mutated == string(raw) {
 		t.Fatal("the wrapper call was not found in the real context_fabric_routes.go; the fixture for this proof is stale")
 	}

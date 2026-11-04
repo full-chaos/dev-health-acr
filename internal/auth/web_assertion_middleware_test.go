@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -74,7 +76,8 @@ func TestAuthenticator_webAssertionsCannotAuthenticateWriteRoutes(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	authenticator, err := NewAuthenticator(newMemoryCredentialStore(t), nil, AuthenticatorOptions{Now: func() time.Time { return now }, Limiter: NoopLimiter{}, WebAssertions: verifier})
+	logs := &bytes.Buffer{}
+	authenticator, err := NewAuthenticator(newMemoryCredentialStore(t), nil, AuthenticatorOptions{Now: func() time.Time { return now }, Limiter: NoopLimiter{}, WebAssertions: verifier, Logger: slog.New(slog.NewJSONHandler(logs, nil))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +94,11 @@ func TestAuthenticator_webAssertionsCannotAuthenticateWriteRoutes(t *testing.T) 
 
 	// Then
 	assertContractError(t, response, http.StatusUnauthorized, "invalid_token")
+	// CHAOS-12109: the refusal's Warn line names its own reason, so a client
+	// still signing a web assertion for a route that takes none is found.
+	if !strings.Contains(logs.String(), `"reason":"web_assertion_not_accepted_on_route"`) {
+		t.Fatalf("the refusal is not named in the log: %s", logs.String())
+	}
 }
 
 func TestAuthenticator_rejectsMultipleAuthMechanismsForCredentialIssueAssertion(t *testing.T) {

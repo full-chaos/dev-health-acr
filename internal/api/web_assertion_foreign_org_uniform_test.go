@@ -249,24 +249,32 @@ func TestWebAssertionForeignOrg_capabilitiesAnswerUniformly(t *testing.T) {
 	}
 }
 
-func TestWebAssertionForeignOrg_investigationResultAnswersUniformly(t *testing.T) {
+// A credential of one organization asking for another organization's result
+// gets the same 404 as an unknown result (a web assertion is refused on this
+// route, CHAOS-12109, so the caller is a bearer credential).
+func TestForeignOrg_investigationResultAnswersUniformly(t *testing.T) {
 	// Given
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-	signer, verifier := newUniformSigner(t, now)
 	store := memoryinvestigation.NewStore()
 	seeded := seedResult(t, store, uniformOwnerOrg, "result_uniform_owned_01")
-	app := uniformResultApp(t, now, verifier, store)
+	app, bearer := uniformResultApp(t, now, store)
 	path := func(id string) string {
 		return strings.Replace(ContextFabricInvestigationResultPath, "{result_id}", id, 1)
 	}
-	owner := serve(app, signer.request(http.MethodGet, path(seeded.ResultID), nil, uniformOwnerOrg, []string{hostedTestRepository}))
+	get := func(org, id string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, path(id), nil)
+		request.Header.Set("Authorization", "Bearer "+bearer(org))
+		request.Header.Set("X-ACR-Client-Version", "1.0.0")
+		return serve(app, request)
+	}
+	owner := get(uniformOwnerOrg, seeded.ResultID)
 	if owner.Code != http.StatusOK {
 		t.Fatalf("owner control status = %d body=%s", owner.Code, owner.Body.String())
 	}
 
 	// When
-	foreign := serve(app, signer.request(http.MethodGet, path(seeded.ResultID), nil, uniformCallerOrg, []string{hostedTestRepository}))
-	unknown := serve(app, signer.request(http.MethodGet, path("result_uniform_unknown_1"), nil, uniformCallerOrg, []string{hostedTestRepository}))
+	foreign := get(uniformCallerOrg, seeded.ResultID)
+	unknown := get(uniformCallerOrg, "result_uniform_unknown_1")
 
 	// Then
 	if foreign.Code != http.StatusNotFound {
@@ -277,7 +285,7 @@ func TestWebAssertionForeignOrg_investigationResultAnswersUniformly(t *testing.T
 	}
 }
 
-func uniformResultApp(t *testing.T, now time.Time, verifier *auth.WebAssertionVerifier, results contextfabric.InvestigationResultStore) *App {
+func uniformResultApp(t *testing.T, now time.Time, results contextfabric.InvestigationResultStore) (*App, func(org string) string) {
 	t.Helper()
 	audit := memory.NewAuditStore()
 	credentials := newMemoryCredentialLifecycle(t, audit, now)
@@ -296,7 +304,7 @@ func uniformResultApp(t *testing.T, now time.Time, verifier *auth.WebAssertionVe
 		return contextfabric.InvestigationResult{}, nil
 	})
 	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
-		Capabilities: StaticCapabilitiesProvider{Now: func() time.Time { return now }, Value: hostedCapabilities()}, Limits: manager, Now: func() time.Time { return now }, WebAssertions: verifier,
+		Capabilities: StaticCapabilitiesProvider{Now: func() time.Time { return now }, Value: hostedCapabilities()}, Limits: manager, Now: func() time.Time { return now },
 		Runtime: &RuntimeDependencies{
 			Credentials: credentials, Audit: audit, Entitlements: EntitlementFunc(func(context.Context, string, string) (bool, error) { return true, nil }),
 			Assembler: noopAssembler{}, Evidence: noopEvidenceStore{},
@@ -309,7 +317,19 @@ func uniformResultApp(t *testing.T, now time.Time, verifier *auth.WebAssertionVe
 	if err != nil {
 		t.Fatal(err)
 	}
-	return app
+	service, err := auth.NewService(credentials, auth.ServiceOptions{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return app, func(org string) string {
+		issued, err := service.Create(context.Background(), auth.CreateCredentialRequest{
+			OrgID: org, Name: "uniform " + org, RepositoryScopes: []string{hostedTestRepository}, Scopes: []string{auth.ScopeContextRead}, CreatedBy: "uniform_actor",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return issued.Token
+	}
 }
 
 func firstEvidenceRef(t *testing.T, packet []byte) string {

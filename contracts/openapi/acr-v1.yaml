@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: df370c7b8d1d5eb5db7b6ad33e6f7426d25821e859c985421e3bf5aec8ac2ae2
+# canonical-content-sha256: 386706abc812dacb4a7def12a460bb567195ad6a18534c62f584429195e6e1f9
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -653,8 +653,6 @@ paths:
       security:
         -
           bearerAuth: []
-        -
-          webAssertionAuth: []
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
   "/api/v1/context-fabric/investigations/feedback/{result_id}":
@@ -702,8 +700,6 @@ paths:
       security:
         -
           bearerAuth: []
-        -
-          webAssertionAuth: []
       summary: "Read the caller's feedback on one of its own Ask Dev results."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
@@ -759,8 +755,6 @@ paths:
       security:
         -
           bearerAuth: []
-        -
-          webAssertionAuth: []
       summary: "Set the caller's feedback on one of its own Ask Dev results."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
@@ -810,8 +804,6 @@ paths:
       security:
         -
           bearerAuth: []
-        -
-          webAssertionAuth: []
       summary: "Read the caller's own submission record."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
@@ -859,8 +851,6 @@ paths:
       security:
         -
           bearerAuth: []
-        -
-          webAssertionAuth: []
       summary: "Cancel the caller's own leased run."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
@@ -926,8 +916,6 @@ paths:
       security:
         -
           bearerAuth: []
-        -
-          webAssertionAuth: []
       summary: "Attach to the event stream of the caller's own leased run."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
@@ -1023,8 +1011,6 @@ paths:
       security:
         -
           bearerAuth: []
-        -
-          webAssertionAuth: []
       summary: "Re-read one immutable investigation result by its opaque result_id."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
@@ -1085,8 +1071,6 @@ paths:
       security:
         -
           bearerAuth: []
-        -
-          webAssertionAuth: []
       summary: "List the caller's own Ask Dev conversations."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
@@ -1132,8 +1116,6 @@ paths:
       security:
         -
           bearerAuth: []
-        -
-          webAssertionAuth: []
       summary: "Delete the caller's own Ask Dev conversation."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
@@ -1194,8 +1176,6 @@ paths:
       security:
         -
           bearerAuth: []
-        -
-          webAssertionAuth: []
       summary: "Read the caller's own Ask Dev conversation."
       x-required-entitlement: "agent_context_runtime"
       x-required-scope: "context:read"
