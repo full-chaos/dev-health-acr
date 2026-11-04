@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -36,6 +37,9 @@ func TestRevokePresentedAccessTokenRecordsOneAuditEventAndNoMore(t *testing.T) {
 	}
 	got, err = service.RevokePresentedAccessToken(ctx, issued.Token, clientID)
 	events := revokedAuditEvents(h, id)
+	if actor := lastLifecycleActor(t, h, id); actor != "credential" {
+		t.Fatalf("lifecycle outbox actor_type = %q, want credential (as for self/revoke)", actor)
+	}
 	if err != nil || got.Outcome != oauthvocab.OutcomeOK || len(events) != 1 || events[0].ActorID != id {
 		t.Fatalf("owner: %+v err=%v audit=%+v, want ok and one event with the credential as actor", got, err, events)
 	}
@@ -43,4 +47,24 @@ func TestRevokePresentedAccessTokenRecordsOneAuditEventAndNoMore(t *testing.T) {
 	if err != nil || got.Outcome != oauthvocab.OutcomeInvalidGrant || len(revokedAuditEvents(h, id)) != 1 {
 		t.Fatalf("second revoke: %+v err=%v audit=%d, want invalid_grant and still one event", got, err, len(revokedAuditEvents(h, id)))
 	}
+}
+
+func lastLifecycleActor(t *testing.T, h *oauthHarness, id string) string {
+	t.Helper()
+	actor := ""
+	for _, row := range h.audit.LifecycleOutbox() {
+		if row.AggregateID != id {
+			continue
+		}
+		var payload struct {
+			Payload struct {
+				ActorType string `json:"actor_type"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(row.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		actor = payload.Payload.ActorType
+	}
+	return actor
 }

@@ -40,6 +40,9 @@ var oauthTestWebKey ed25519.PrivateKey
 // oauthTestMCPHop is the hop policy newOAuthTestApp installs; a test sets and resets it.
 var oauthTestMCPHop *auth.MCPHopPolicy
 
+// oauthTestAuthAttempts is the address limiter newOAuthTestApp installs; a test sets and resets it.
+var oauthTestAuthAttempts auth.AttemptLimiter
+
 func newOAuthTestApp(t *testing.T, oauthRuntime *OAuthRuntime, withWebAssertions bool) (*App, *bytes.Buffer, error) {
 	t.Helper()
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
@@ -83,7 +86,7 @@ func newOAuthTestApp(t *testing.T, oauthRuntime *OAuthRuntime, withWebAssertions
 	}
 	logs := &bytes.Buffer{}
 	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
-		Capabilities: StaticCapabilitiesProvider{Now: clock, Value: hostedCapabilities()}, Limits: manager, Now: clock, WebAssertions: verifier, MCPHop: oauthTestMCPHop,
+		Capabilities: StaticCapabilitiesProvider{Now: clock, Value: hostedCapabilities()}, Limits: manager, Now: clock, WebAssertions: verifier, MCPHop: oauthTestMCPHop, AuthAttempts: oauthTestAuthAttempts,
 		Runtime: &RuntimeDependencies{
 			Credentials: credentials, Audit: audit, Entitlements: EntitlementFunc(func(context.Context, string, string) (bool, error) { return true, nil }),
 			Assembler: noopAssembler{}, Evidence: noopEvidenceStore{},

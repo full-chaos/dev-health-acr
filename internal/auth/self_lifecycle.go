@@ -174,7 +174,7 @@ func (s *Service) RevokePresentedAccessToken(ctx context.Context, token, clientI
 		result.Outcome = oauthvocab.OutcomeClientMismatch
 		return result, nil
 	}
-	if _, err := s.Revoke(ctx, credential.OrgID, credential.CredentialID, credential.CredentialID); err != nil {
+	if _, err := s.revoke(ctx, credential.OrgID, credential.CredentialID, credential.CredentialID, true); err != nil {
 		if errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrConflict) {
 			result.Outcome = oauthvocab.OutcomeInvalidGrant
 			return result, nil

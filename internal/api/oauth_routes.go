@@ -321,9 +321,12 @@ func (a *App) oauthLimitKey(r *http.Request, clientID string) string {
 // sessions from refreshing and signing out. A browser client's request is
 // keyed by the secret it presents instead (the code, the refresh token or the
 // revoked token), hashed like the client id. Any other client, or a browser
-// request that presents no secret, keeps oauthLimitKey.
+// request that presents no secret, keeps oauthLimitKey. An access token
+// (fcacr_) is keyed by its secret too (CHAOS-12825): its client_id is public,
+// so a client key would let anyone who knows the id use up the holder's
+// revoke; the address-level bound on token lookups is revokeAccessToken's.
 func (a *App) oauthTokenLimitKey(r *http.Request, clientID, secret string) string {
-	if secret != "" && a.oauth.IsBrowserClient(clientID) {
+	if secret != "" && (a.oauth.IsBrowserClient(clientID) || strings.HasPrefix(secret, auth.TokenPrefix)) {
 		sum := sha256.Sum256([]byte(secret))
 		return "secret:" + hex.EncodeToString(sum[:])
 	}
@@ -1031,6 +1034,29 @@ func (a *App) revokeAccessToken(w http.ResponseWriter, r *http.Request, token, c
 		a.handleRuntimeUnavailable(w, r)
 		return
 	}
+	// The lookup is an unauthenticated credential-store read: bound it per
+	// address exactly as the authenticator bounds a bearer lookup (a
+	// well-formed token over the failure budget keeps a few slots, so an
+	// attacker sharing the holder's address cannot lock the holder out).
+	ip := a.clientIP(r)
+	now := a.now().UTC()
+	var release func()
+	var decision auth.AttemptDecision
+	if a.authAttempts != nil {
+		if auth.IsTokenShapeValid(token) {
+			release, decision = auth.BeginVerificationDecision(a.authAttempts, ip, now)
+		} else {
+			release, decision = auth.BeginAttemptDecision(a.authAttempts, ip, now)
+		}
+		if !decision.Admitted() {
+			a.logger.DebugContext(r.Context(), "access token revocation refused by the address bound", "request_id", RequestID(r.Context()), "refusal", decision.Refusal)
+			w.Header().Set("Retry-After", "1")
+			writeOAuthJSON(w, http.StatusTooManyRequests, oauthErrorBody{Error: "slow_down", ErrorDescription: "too many requests"})
+			a.emitOAuthStep(r, oauthvocab.StepRevoke, oauthvocab.OutcomeRateLimited, "", http.StatusTooManyRequests)
+			return
+		}
+		defer release()
+	}
 	revocation, err := a.credentialService.RevokePresentedAccessToken(r.Context(), token, clientID)
 	if err != nil {
 		a.logOAuthDependencyFailure(r, oauthvocab.StepRevoke, err)
@@ -1041,8 +1067,12 @@ func (a *App) revokeAccessToken(w http.ResponseWriter, r *http.Request, token, c
 	level := slog.LevelDebug
 	if revocation.Outcome == oauthvocab.OutcomeOK {
 		level = slog.LevelInfo
+	} else if a.authAttempts != nil {
+		auth.RecordRejection(a.authAttempts, ip, a.now().UTC(), decision.OverBudget)
 	}
-	a.logger.Log(r.Context(), level, "access token revocation", "request_id", RequestID(r.Context()), "outcome", revocation.Outcome, "credential_id", revocation.CredentialID)
+	// credential_id is a protected key (the redactor drops it), so the audit
+	// event carries the credential and this line carries only the outcome.
+	a.logger.Log(r.Context(), level, "access token revocation", "request_id", RequestID(r.Context()), "outcome", revocation.Outcome)
 	writeOAuthJSON(w, http.StatusOK, struct{}{})
 	a.emitOAuthStep(r, oauthvocab.StepRevoke, revocation.Outcome, "", http.StatusOK)
 }
