@@ -290,12 +290,6 @@ type Config struct {
 	// consumer's pin accepts the field, then removed (its removal ticket is
 	// filed with the web and ask-dev pin bumps).
 	ThreadListFirstQuestionEnabled bool
-	// ServiceModelOpen (ACR_MCP_SERVICE_MODEL_DEFAULT=on; development and
-	// venues only, production is off) treats every organization as holding
-	// acr_service_model and platform_model_fallback. Unset or off: an
-	// organization with no model configuration of its own runs on the
-	// deployment's own model only with both flags.
-	ServiceModelOpen bool
 	// AnswerReuseMaxAge (CHAOS-3782, ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE)
 	// is the staleness window TRD §19.7.3 condition 4 enforces: a stored
 	// investigation result older than this is never reused, regardless of
@@ -583,9 +577,6 @@ func load(lookup lookupEnv) (Config, error) {
 	// No default: an unset variable leaves AnswerReuseMaxAge at zero,
 	// which means "answer reuse disabled" -- see the field's doc comment.
 	if cfg.AnswerReuseMaxAge, err = durationValue(lookup, "ACR_CONTEXT_FABRIC_ANSWER_REUSE_MAX_AGE", 0); err != nil {
-		return Config{}, err
-	}
-	if cfg.ServiceModelOpen, err = serviceModelDefaultValue(lookup, environment); err != nil {
 		return Config{}, err
 	}
 	if cfg.AskDevMaxRunningPerPrincipal, err = intValue(lookup, "ACR_ASK_DEV_MAX_RUNNING_PER_PRINCIPAL", defaultAskDevMaxRunningPerPrincipal); err != nil {
