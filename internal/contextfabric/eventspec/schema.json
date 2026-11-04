@@ -40,7 +40,7 @@
         "closed_vocabulary": [
           "none",
           "unknown_credential",
-          "not_resource_bound",
+          "not_mcp_bound",
           "not_approver"
         ],
         "applicability": "why a refused request was refused; none when the credential was revoked or was already revoked"

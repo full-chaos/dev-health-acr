@@ -23,7 +23,7 @@ const (
 // one of them alike, so a refusal tells nothing about the credential.
 const (
 	OnBehalfRefusedUnknownCredential = oauthvocab.OnBehalfReasonUnknownCredential
-	OnBehalfRefusedNotResourceBound  = oauthvocab.OnBehalfReasonNotResourceBound
+	OnBehalfRefusedNotMCPBound       = oauthvocab.OnBehalfReasonNotMCPBound
 	OnBehalfRefusedNotApprover       = oauthvocab.OnBehalfReasonNotApprover
 )
 
@@ -38,12 +38,13 @@ func (r *OnBehalfRefusal) Error() string { return ErrRevokeOnBehalfRefused.Error
 
 func (r *OnBehalfRefusal) Unwrap() error { return ErrRevokeOnBehalfRefused }
 
-// RevokeOnBehalf revokes an MCP-bound (resource-bound) credential of orgID for
+// RevokeOnBehalf revokes an MCP-bound (oauth_user class) credential of orgID for
 // an actor the Auth Control Plane authorized: an admin of the organization, or
 // the user who approved the credential. It takes the same storage path as
 // RevokeAsOperator, so it writes the same credential_revoked audit row, with
-// actorType as the audit actor type. An unknown id, a credential bound to no
-// resource, and a user who did not approve the credential are each an
+// actorType as the audit actor type. An unknown id, a credential that is not
+// MCP-bound (any other class, the browser class bound to the issuer included),
+// and a user who did not approve the credential are each an
 // *OnBehalfRefusal; an already-revoked credential is storage.ErrConflict, and
 // only an actor the credential admits gets it.
 func (s *Service) RevokeOnBehalf(ctx context.Context, orgID, credentialID, actorType, actorID string) (contractsv1.ClientCredential, error) {
@@ -61,8 +62,13 @@ func (s *Service) RevokeOnBehalf(ctx context.Context, orgID, credentialID, actor
 	if err != nil {
 		return contractsv1.ClientCredential{}, fmt.Errorf("load credential for revoke: %w", err)
 	}
-	if credential.Resource == "" || credential.Provenance.ClientClass == string(storage.CredentialClientClassWorkload) {
-		return contractsv1.ClientCredential{}, &OnBehalfRefusal{Reason: OnBehalfRefusedNotResourceBound}
+	// MCP-bound is the oauth_user class: an OAuth or RFC 8628 credential the
+	// lifecycle bound to a resource other than the issuer. A resource alone is
+	// not enough: a browser credential is bound to the issuer (the acr-api
+	// resource), and an org bearer or a legacy unclassified row names no MCP
+	// client.
+	if credential.Provenance.ClientClass != string(storage.CredentialClientClassOAuthUser) || credential.Resource == "" {
+		return contractsv1.ClientCredential{}, &OnBehalfRefusal{Reason: OnBehalfRefusedNotMCPBound}
 	}
 	if actorType == OnBehalfActorUser && credential.Provenance.ApprovingUserID != actorID {
 		return contractsv1.ClientCredential{}, &OnBehalfRefusal{Reason: OnBehalfRefusedNotApprover}

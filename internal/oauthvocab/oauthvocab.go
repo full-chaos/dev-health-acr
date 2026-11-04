@@ -196,7 +196,7 @@ const (
 
 	OnBehalfReasonNone              = "none"
 	OnBehalfReasonUnknownCredential = "unknown_credential"
-	OnBehalfReasonNotResourceBound  = "not_resource_bound"
+	OnBehalfReasonNotMCPBound       = "not_mcp_bound"
 	OnBehalfReasonNotApprover       = "not_approver"
 )
 
@@ -210,5 +210,5 @@ func OnBehalfDecisionVocabulary() []string {
 
 // OnBehalfReasonVocabulary lists every on-behalf revoke reason, none first.
 func OnBehalfReasonVocabulary() []string {
-	return []string{OnBehalfReasonNone, OnBehalfReasonUnknownCredential, OnBehalfReasonNotResourceBound, OnBehalfReasonNotApprover}
+	return []string{OnBehalfReasonNone, OnBehalfReasonUnknownCredential, OnBehalfReasonNotMCPBound, OnBehalfReasonNotApprover}
 }

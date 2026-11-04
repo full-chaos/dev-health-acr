@@ -1523,7 +1523,7 @@
         "acr_client_credential"
       ],
       "primary_validator": {
-        "description": "credentialRevokeOnBehalfHandler: Authenticator.MiddlewareFor(allowWebAssertions=FALSE) refuses an absent or malformed bearer and any web assertion before the credential lookup; requireWorkloadClass then refuses every credential whose row class is not workload (403 credential_class_refused); RequireScope(credential_lifecycle:revoke), which only the revoke binding role carries, refuses every other workload (403 insufficient_scope). The handler then validates the closed credential_revoke_on_behalf_request.v1 body, and Service.RevokeOnBehalf revokes only a resource-bound (MCP) credential of the binding's organization, for an admin or for the credential's approving user; every other credential answers one 404.",
+        "description": "credentialRevokeOnBehalfHandler: Authenticator.MiddlewareFor(allowWebAssertions=FALSE) refuses an absent or malformed bearer and any web assertion before the credential lookup; requireWorkloadClass then refuses every credential whose row class is not workload (403 credential_class_refused); RequireScope(credential_lifecycle:revoke), which only the revoke binding role carries, refuses every other workload (403 insufficient_scope). The handler then validates the closed credential_revoke_on_behalf_request.v1 body, and Service.RevokeOnBehalf revokes only an MCP-bound (oauth_user class) credential of the binding's organization, for an admin or for the credential's approving user; every other credential answers one 404.",
         "anchor": {
           "path": "internal/api/credential_revoke_on_behalf_route.go",
           "line": 24,
@@ -1544,7 +1544,7 @@
       "current_state_cache_behavior": "Revokes one credential row of the caller's own organization through the shared storage revoke (one credential_revoked audit row and one lifecycle event in the same transaction); response is 204 with Cache-Control no-store.",
       "impersonation_policy": "not_applicable_non_main_app",
       "entitlement_requirement": null,
-      "disclosure_behavior": "writeError() closed envelope; an unknown id, a credential bound to no resource, another organization's credential and a user who did not approve it answer one identical 404; 409 only to an actor the credential admits; a success has no body.",
+      "disclosure_behavior": "writeError() closed envelope; an unknown id, a credential of another class (browser, bound to the issuer, included), another organization's credential and a user who did not approve it answer one identical 404; 409 only to an actor the credential admits; a success has no body.",
       "gaps": [
         "entitlement_requirement: a workload-class revoke; no Dev Health licensing feature gates it, and the handler does not read the entitlement provider."
       ]

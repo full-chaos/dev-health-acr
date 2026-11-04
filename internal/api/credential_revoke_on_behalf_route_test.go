@@ -87,6 +87,13 @@ func (r onBehalfRouteRig) seed(t *testing.T, org, id, resource string) string {
 	if resource != "" {
 		input.ClientID = "acrc_0123456789abcdef0123456789abcdef"
 	}
+	if resource == "browser" {
+		// A first-party browser credential: bound to the issuer resource.
+		expires := time.Now().UTC().Add(time.Hour)
+		family := expires.Add(11 * time.Hour)
+		input.Resource, input.ClientClass, input.SessionID, input.FamilyID = "https://acr.example.test", storage.CredentialClientClassBrowser, "ses_web_1", "fam_"+id
+		input.ExpiresAt, input.FamilyExpiresAt = &expires, &family
+	}
 	created, err := r.app.runtime.Credentials.CreateCredential(context.Background(), input)
 	if err != nil {
 		t.Fatal(err)
@@ -198,7 +205,8 @@ func TestCredentialRevokeOnBehalfAnswersEveryRefusalAlike(t *testing.T) {
 		unknown                                   bool
 	}{
 		"non-approver user": {onBehalfRouteOrg, onBehalfRouteResource, "user", "usr_other_2", oauthvocab.OnBehalfReasonNotApprover, false},
-		"unbound row":       {onBehalfRouteOrg, "", "admin", "usr_admin_9", oauthvocab.OnBehalfReasonNotResourceBound, false},
+		"unbound row":       {onBehalfRouteOrg, "", "admin", "usr_admin_9", oauthvocab.OnBehalfReasonNotMCPBound, false},
+		"browser row":       {onBehalfRouteOrg, "browser", "admin", "usr_admin_9", oauthvocab.OnBehalfReasonNotMCPBound, false},
 		"other org's row":   {"org_2", onBehalfRouteResource, "admin", "usr_admin_9", oauthvocab.OnBehalfReasonUnknownCredential, false},
 		"unknown id":        {onBehalfRouteOrg, onBehalfRouteResource, "admin", "usr_admin_9", oauthvocab.OnBehalfReasonUnknownCredential, true},
 	} {

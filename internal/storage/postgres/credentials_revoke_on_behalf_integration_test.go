@@ -61,7 +61,7 @@ FROM acr.audit_events WHERE org_id = $1 AND action = 'credential_revoked' AND re
 
 	for _, cell := range []struct{ id, resource, actorType, actorID, reason string }{
 		{"cred_onbehalfother1", "https://acr.example/mcp", auth.OnBehalfActorUser, "web-user-2", auth.OnBehalfRefusedNotApprover},
-		{"cred_onbehalfunbnd1", "", auth.OnBehalfActorAdmin, "web-admin-7", auth.OnBehalfRefusedNotResourceBound},
+		{"cred_onbehalfunbnd1", "", auth.OnBehalfActorAdmin, "web-admin-7", auth.OnBehalfRefusedNotMCPBound},
 	} {
 		id := create(cell.id, cell.resource)
 		_, err := f.service.RevokeOnBehalf(f.ctx, credentialTestOrgID, id, cell.actorType, cell.actorID)
@@ -74,7 +74,15 @@ FROM acr.audit_events WHERE org_id = $1 AND action = 'credential_revoked' AND re
 		require.NoError(t, err)
 		require.Nil(t, current.RevokedAt, cell.id)
 	}
-	_, err := f.service.RevokeOnBehalf(f.ctx, "00000000-0000-4000-8000-000000000099", "cred_onbehalfadmin1", auth.OnBehalfActorAdmin, "web-admin-7")
+	// A browser credential (bound to the issuer) is not MCP-bound.
+	browser := browserFamilyMembers(t, f, "onbehalfbrowser", 1)[0]
+	_, err := f.service.RevokeOnBehalf(f.ctx, credentialTestOrgID, browser, auth.OnBehalfActorAdmin, "web-admin-7")
+	var browserRefusal *auth.OnBehalfRefusal
+	require.True(t, errors.As(err, &browserRefusal))
+	require.Equal(t, auth.OnBehalfRefusedNotMCPBound, browserRefusal.Reason)
+	n, _, _ := auditRows(browser)
+	require.Zero(t, n)
+	_, err = f.service.RevokeOnBehalf(f.ctx, "00000000-0000-4000-8000-000000000099", "cred_onbehalfadmin1", auth.OnBehalfActorAdmin, "web-admin-7")
 	var refusal *auth.OnBehalfRefusal
 	require.True(t, errors.As(err, &refusal))
 	require.Equal(t, auth.OnBehalfRefusedUnknownCredential, refusal.Reason, "another organization's id is unknown")

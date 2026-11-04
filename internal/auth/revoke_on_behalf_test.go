@@ -53,6 +53,55 @@ func (r onBehalfRig) mcpCredential(t *testing.T, id, resource string) string {
 	return created.CredentialID
 }
 
+// browserCredential stores a first-party browser credential: bound to the
+// issuer resource, approved by approver.
+func (r onBehalfRig) browserCredential(t *testing.T, id string) string {
+	t.Helper()
+	expires := time.Date(2026, 11, 4, 19, 0, 0, 0, time.UTC)
+	family := expires.Add(11 * time.Hour)
+	created, err := r.store.CreateCredential(context.Background(), storage.CredentialCreateInput{
+		CredentialID: id, OrgID: deviceFlowTestOrgID, Name: "browser", TokenPrefix: "fcacr_" + id[:8], TokenHash: HashToken("fcacr_" + id + "_secret_value_for_hash"),
+		RepositoryScopes: []string{"owner/repo"}, Scopes: []string{ScopeContextRead}, ActorID: onBehalfApprover, ExpiresAt: &expires,
+		IssuanceProvenance: storage.CredentialIssuanceProvenanceDeviceAuthorization, ApprovingUserID: onBehalfApprover,
+		Resource: "https://acr.example.test", ClientID: "acrc_browser0000000000000000000000000",
+		ClientClass: storage.CredentialClientClassBrowser, SessionID: "ses_web_1", FamilyID: "fam_" + id, FamilyExpiresAt: &family,
+	})
+	require.NoError(t, err)
+	require.Equal(t, string(storage.CredentialClientClassBrowser), created.Provenance.ClientClass)
+	return created.CredentialID
+}
+
+// The eligible set is the oauth_user class, not "has a resource": every other
+// class is refused, the browser class bound to the issuer and an org bearer
+// bound to a resource included.
+func TestRevokeOnBehalf_RefusesEveryClassButOAuthUser(t *testing.T) {
+	rig := newOnBehalfRig(t)
+	browser := rig.browserCredential(t, "cred_browserrow001")
+	bearer, err := rig.service.Create(context.Background(), CreateCredentialRequest{
+		OrgID: deviceFlowTestOrgID, Name: "bearer", RepositoryScopes: []string{"owner/repo"}, Scopes: []string{ScopeContextRead},
+		CreatedBy: onBehalfApprover, Resource: onBehalfResource,
+	})
+	require.NoError(t, err)
+	require.Equal(t, string(storage.CredentialClientClassOrgBearer), bearer.Credential.Provenance.ClientClass)
+	device := rig.mcpCredential(t, "cred_nativedevice1", "")
+	for name, id := range map[string]string{"browser": browser, "org bearer with a resource": bearer.Credential.CredentialID, "native device": device} {
+		for _, actor := range []struct{ actorType, actorID string }{{OnBehalfActorAdmin, onBehalfAdmin}, {OnBehalfActorUser, onBehalfApprover}} {
+			_, err := rig.service.RevokeOnBehalf(context.Background(), deviceFlowTestOrgID, id, actor.actorType, actor.actorID)
+			var refusal *OnBehalfRefusal
+			require.True(t, errors.As(err, &refusal), "%s as %s: %v", name, actor.actorType, err)
+			require.Equal(t, OnBehalfRefusedNotMCPBound, refusal.Reason, name)
+			require.True(t, rig.live(t, id), name)
+			require.Empty(t, rig.revokedRows(id), name)
+		}
+	}
+	// Already revoked by another path, a browser credential still answers as
+	// not MCP-bound, never as a conflict.
+	_, err = rig.service.RevokeAsOperator(context.Background(), deviceFlowTestOrgID, browser, "op-1", "")
+	require.NoError(t, err)
+	_, err = rig.service.RevokeOnBehalf(context.Background(), deviceFlowTestOrgID, browser, OnBehalfActorAdmin, onBehalfAdmin)
+	require.ErrorIs(t, err, ErrRevokeOnBehalfRefused)
+}
+
 func (r onBehalfRig) revokedRows(id string) []storage.AuditEvent {
 	var rows []storage.AuditEvent
 	for _, event := range r.audit.Events() {
@@ -101,8 +150,8 @@ func TestRevokeOnBehalf_RefusesEveryCaseItMustNotRevokeAndLeavesTheRowLive(t *te
 		want                         string
 	}{
 		"user who did not approve":   {onBehalfResource, OnBehalfActorUser, onBehalfOther, false, OnBehalfRefusedNotApprover},
-		"admin on an unbound row":    {"", OnBehalfActorAdmin, onBehalfAdmin, false, OnBehalfRefusedNotResourceBound},
-		"approver on an unbound row": {"", OnBehalfActorUser, onBehalfApprover, false, OnBehalfRefusedNotResourceBound},
+		"admin on an unbound row":    {"", OnBehalfActorAdmin, onBehalfAdmin, false, OnBehalfRefusedNotMCPBound},
+		"approver on an unbound row": {"", OnBehalfActorUser, onBehalfApprover, false, OnBehalfRefusedNotMCPBound},
 		"admin in another org":       {onBehalfResource, OnBehalfActorAdmin, onBehalfAdmin, true, OnBehalfRefusedUnknownCredential},
 	} {
 		t.Run(name, func(t *testing.T) {
