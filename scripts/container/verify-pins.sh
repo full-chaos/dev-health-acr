@@ -10,7 +10,7 @@ command -v docker >/dev/null || { printf 'docker is required\n' >&2; exit 1; }
 # immutable pins, not on every unrelated change.
 pins=(
   'docker.io/docker/dockerfile:1.20|sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d'
-  'docker.io/library/golang:1.27.3-alpine3.23|sha256:895e5feab11a4b3774d24ee3c9579028456b82ad37f42a9eb6f82adaf776a201'
+  'docker.io/library/golang:1.27.3-alpine3.23|sha256:8a5046497cda39860b832ffdbe8dd66018a0f05bb01352f533a36e7e2ced66a0'
   'gcr.io/distroless/static-debian12:nonroot|sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a'
   'cgr.dev/chainguard/git:latest|sha256:f30343d11878c992336af4f150dc5e2ab6200e4e5bc5e3a366aebb1665abbf65'
   'docker.io/tonistiigi/binfmt:qemu-v10.2.3|sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0'
