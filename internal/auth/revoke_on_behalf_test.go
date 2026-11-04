@@ -260,3 +260,30 @@ func TestRevokeOnBehalf_TheRevokedMCPBearerIsRefusedOnItsNextCall(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, http.StatusUnauthorized, call(), "the revoked bearer is refused on its next call")
 }
+
+// native_device AND an MCP resource is an empty set: the lifecycle derives
+// oauth_user for every device-redeemed row with a resource, and refuses a
+// row that names native_device with one. So the oauth_user predicate leaves
+// no device-flow MCP credential out.
+func TestRevokeOnBehalf_NoNativeDeviceRowCarriesAResource(t *testing.T) {
+	rig := newOnBehalfRig(t)
+	base := storage.CredentialCreateInput{
+		CredentialID: "cred_nativeresrc01", OrgID: deviceFlowTestOrgID, Name: "device", TokenPrefix: "fcacr_nativere", TokenHash: HashToken("fcacr_native_resource_secret_value"),
+		RepositoryScopes: []string{"owner/repo"}, Scopes: []string{ScopeContextRead}, ActorID: onBehalfApprover,
+		IssuanceProvenance: storage.CredentialIssuanceProvenanceDeviceAuthorization, ApprovingUserID: onBehalfApprover,
+		Resource: onBehalfResource, ClientID: "acrc_0123456789abcdef0123456789abcdef",
+	}
+	named := base
+	named.ClientClass = storage.CredentialClientClassNativeDevice
+	_, err := rig.store.CreateCredential(context.Background(), named)
+	require.ErrorIs(t, err, storage.ErrInvalidCredentialInput, "a native_device row with a resource is refused")
+	noClient := base
+	noClient.CredentialID, noClient.ClientID = "cred_nativeresrc02", ""
+	_, err = rig.store.CreateCredential(context.Background(), noClient)
+	require.ErrorIs(t, err, storage.ErrInvalidCredentialInput, "a device row with a resource must name its client")
+	derived, err := rig.store.CreateCredential(context.Background(), base)
+	require.NoError(t, err)
+	require.Equal(t, string(storage.CredentialClientClassOAuthUser), derived.Provenance.ClientClass)
+	_, err = rig.service.RevokeOnBehalf(context.Background(), deviceFlowTestOrgID, derived.CredentialID, OnBehalfActorUser, onBehalfApprover)
+	require.NoError(t, err, "the device-flow MCP credential is eligible")
+}
