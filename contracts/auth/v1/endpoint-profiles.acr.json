@@ -1909,9 +1909,9 @@
         "file": "internal/api/app.go",
         "line": 121
       },
-      "public_rationale": "RFC 7009 token revocation for the first-party browser client's refresh token (CHAOS-12124): sign-out must work after every access token of the family has expired, so the route takes no bearer. Served only when a browser client is configured.",
+      "public_rationale": "RFC 7009 token revocation for the first-party browser client's refresh token (CHAOS-12124): sign-out must work after every access token of the family has expired, so the route takes no bearer. It also revokes one access token for the OAuth client it was issued to (CHAOS-12825): the only holder-side revoke for an MCP-bound credential, which acr-mcp cannot forward. Always served when OAuth is on.",
       "primary_validator": {
-        "description": "OAuthService.RevokeRefreshToken -- browser clients only (any other client is unauthorized_client); an access token is unsupported_token_type; a refresh token, known or not, is answered 200 and revokes its token family (the family row and every member credential) for the client that holds it. Rate limited per IP by AllowTokenRequest.",
+        "description": "Service.RevokePresentedAccessToken for an fcacr_ access token (the credential must have been issued to the presented client_id; any other outcome changes nothing and answers 200 {}); OAuthService.RevokeRefreshToken -- browser clients only (any other client is unauthorized_client) -- for a refresh token; a refresh token, known or not, is answered 200 and revokes its token family (the family row and every member credential) for the client that holds it. Rate limited per IP by AllowTokenRequest.",
         "anchor": {
           "path": "internal/auth/oauth.go",
           "line": 1165,

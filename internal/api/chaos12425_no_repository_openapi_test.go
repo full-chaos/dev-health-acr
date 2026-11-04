@@ -239,6 +239,7 @@ var outsideAccessCheck = map[string]string{
 	"POST /authorize/first-party":                 "first-party authorize, code flow, web assertion, no bearer (CHAOS-12568)",
 	"POST /device_authorization":                  "OAuth device authorization, unauthenticated",
 	"POST /register":                              "OAuth client registration, unauthenticated",
+	"POST /revoke":                                "RFC 7009 revocation, the presented token is the authority (CHAOS-12825)",
 	"POST /token":                                 "OAuth token, unauthenticated",
 }
 

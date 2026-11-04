@@ -11,6 +11,7 @@ import (
 	"errors"
 	"html/template"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -87,12 +88,12 @@ type oauthAuthorizationServerMetadata struct {
 func (a *App) handleOAuthMetadata(w http.ResponseWriter, _ *http.Request) {
 	issuer := a.oauth.Issuer()
 	grantTypes := []string{"authorization_code", auth.OAuthDeviceCodeGrantType}
-	revocationEndpoint, revocationAuthMethods := "", []string(nil)
+	// The revocation endpoint always serves access tokens (CHAOS-12825).
+	revocationEndpoint, revocationAuthMethods := issuer+OAuthRevocationPath, []string{"none"}
 	if a.oauth.RefreshGrantSupported() {
 		// The refresh grant serves the first-party browser client only;
 		// /register still downgrades a dynamic client asking for it.
 		grantTypes = append(grantTypes, "refresh_token")
-		revocationEndpoint, revocationAuthMethods = issuer+OAuthRevocationPath, []string{"none"}
 	}
 	writeOAuthJSON(w, http.StatusOK, oauthAuthorizationServerMetadata{
 		Issuer:                                 issuer,
@@ -1001,6 +1002,10 @@ func (a *App) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 		invalid()
 		return
 	}
+	if strings.HasPrefix(token, auth.TokenPrefix) {
+		a.revokeAccessToken(w, r, token, clientID)
+		return
+	}
 	revocation, err := a.oauth.RevokeRefreshToken(r.Context(), token, clientID)
 	if err != nil {
 		if refusal, ok := oauthOutcome(err); ok {
@@ -1015,6 +1020,31 @@ func (a *App) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	writeOAuthJSON(w, http.StatusOK, struct{}{})
 	a.emitOAuthStep(r, oauthvocab.StepRevoke, revocation.Outcome, revocation.ClientKind, http.StatusOK)
+}
+
+// revokeAccessToken is the access-token side of the revocation endpoint
+// (CHAOS-12825): the client that holds a credential revokes it, which is the
+// only holder-side revoke for an MCP-bound credential. Every outcome but a
+// store failure answers 200 {} so the endpoint is no oracle for tokens.
+func (a *App) revokeAccessToken(w http.ResponseWriter, r *http.Request, token, clientID string) {
+	if a.credentialService == nil {
+		a.handleRuntimeUnavailable(w, r)
+		return
+	}
+	revocation, err := a.credentialService.RevokePresentedAccessToken(r.Context(), token, clientID)
+	if err != nil {
+		a.logOAuthDependencyFailure(r, oauthvocab.StepRevoke, err)
+		writeOAuthJSON(w, http.StatusServiceUnavailable, oauthErrorBody{Error: "temporarily_unavailable"})
+		a.emitOAuthStep(r, oauthvocab.StepRevoke, oauthvocab.OutcomeUnavailable, "", http.StatusServiceUnavailable)
+		return
+	}
+	level := slog.LevelDebug
+	if revocation.Outcome == oauthvocab.OutcomeOK {
+		level = slog.LevelInfo
+	}
+	a.logger.Log(r.Context(), level, "access token revocation", "request_id", RequestID(r.Context()), "outcome", revocation.Outcome, "credential_id", revocation.CredentialID)
+	writeOAuthJSON(w, http.StatusOK, struct{}{})
+	a.emitOAuthStep(r, oauthvocab.StepRevoke, revocation.Outcome, "", http.StatusOK)
 }
 
 // oauthClientRefusalReasons names each client refusal in plain words for the

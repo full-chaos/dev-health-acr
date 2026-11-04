@@ -10,6 +10,7 @@ import (
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -135,6 +136,57 @@ func (s *Service) RevokeSelf(ctx context.Context, principal storage.Principal) (
 		return SelfRevocation{}, err
 	}
 	return SelfRevocation{CredentialID: credential.CredentialID, Credential: credential}, nil
+}
+
+// PresentedRevocation is the result of revoking a credential by the token its
+// holder presents: the oauthvocab outcome and, once the token named a
+// credential, its id (never the token).
+type PresentedRevocation struct {
+	Outcome      string
+	CredentialID string
+}
+
+// RevokePresentedAccessToken revokes the credential an OAuth client presents
+// at the RFC 7009 revocation endpoint (CHAOS-12825). Holding the token is the
+// authority, as for RevokeSelf, and no resource or MCP hop is asked of the
+// caller: an MCP-bound credential is usable only through acr-mcp, which
+// forwards no lifecycle route, so this is its only holder-side revoke path. The
+// credential must have been issued to clientID. A malformed, unknown,
+// already-revoked or expired token answers invalid_grant and a token of another
+// client answers client_mismatch; neither changes anything, and the endpoint
+// answers every outcome alike (RFC 7009 §2.2).
+func (s *Service) RevokePresentedAccessToken(ctx context.Context, token, clientID string) (PresentedRevocation, error) {
+	if s == nil || s.store == nil || s.now == nil || storage.IsNil(ctx) || strings.TrimSpace(clientID) == "" {
+		return PresentedRevocation{}, ErrInvalidCredential
+	}
+	if !IsTokenShapeValid(token) {
+		return PresentedRevocation{Outcome: oauthvocab.OutcomeInvalidGrant}, nil
+	}
+	credential, err := s.store.FindByTokenHash(ctx, HashToken(token))
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return PresentedRevocation{Outcome: oauthvocab.OutcomeInvalidGrant}, nil
+		}
+		return PresentedRevocation{}, fmt.Errorf("find presented credential: %w", err)
+	}
+	result := PresentedRevocation{CredentialID: credential.CredentialID}
+	if credential.Provenance.ClientID != clientID {
+		result.Outcome = oauthvocab.OutcomeClientMismatch
+		return result, nil
+	}
+	if credential.RevokedAt != nil || credential.ExpiresAt != nil && !credential.ExpiresAt.After(s.now().UTC()) {
+		result.Outcome = oauthvocab.OutcomeInvalidGrant
+		return result, nil
+	}
+	if _, err := s.Revoke(ctx, credential.OrgID, credential.CredentialID, credential.CredentialID); err != nil {
+		if errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrConflict) {
+			result.Outcome = oauthvocab.OutcomeInvalidGrant
+			return result, nil
+		}
+		return result, err
+	}
+	result.Outcome = oauthvocab.OutcomeOK
+	return result, nil
 }
 
 func (s *Service) authenticatedCredential(ctx context.Context, principal storage.Principal) (credentialSnapshot, error) {

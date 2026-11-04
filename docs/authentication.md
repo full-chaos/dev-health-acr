@@ -521,7 +521,16 @@ revocation.
   `token_type_hint`, `client_id`. It revokes the token's family
   (`revoked_reason=sign_out`) and answers `200 {}` for any refresh token, known
   or not; it works after every access token of the family has expired. An
-  access token is `unsupported_token_type`. Served only with a browser client.
+  access token of the browser client is not a refresh token and revokes
+  nothing there. Served only with a browser client for refresh tokens.
+- `POST /revoke` also takes an access token (`fcacr_...`) of any OAuth client
+  (CHAOS-12825). The credential must have been issued to the `client_id`
+  presented. It revokes that one credential through the same path as
+  `self/revoke` (audit `credential_revoked`, actor the credential) and answers
+  `200 {}` for any token, known or not, of another client or not. Holding the
+  token is the authority: an MCP-bound credential is usable only through
+  acr-mcp (the hop), which forwards no lifecycle route, so this is its
+  holder-side revoke. The endpoint is always served when OAuth is on.
 - Credential class: `acr_browser_refresh_token` in the ops credential-class
   contract (`contracts/auth/v1/credential-classes.json`, ops CHAOS-12141). The
   endpoint profiles (`contracts/auth/v1/endpoint-profiles.acr.json`) list it as
@@ -539,8 +548,7 @@ revocation.
   browser client id does not stop other sessions from refreshing or signing
   out. Every other client stays keyed by its `client_id`.
 - The authorization server metadata lists `refresh_token` in
-  `grant_types_supported` and names `revocation_endpoint` only when a browser
-  client is configured; `/register` still downgrades a dynamic client that asks
+  `grant_types_supported` and names `revocation_endpoint` always when OAuth is on; `/register` still downgrades a dynamic client that asks
   for the refresh grant.
 - Telemetry, on the OAuth step line (closed vocabulary): `step=token` with
   `ok` (rotated), `grace_replay`, `reuse_revoked`, `family_expired`,
