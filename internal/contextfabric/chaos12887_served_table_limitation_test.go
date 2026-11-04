@@ -32,7 +32,6 @@ func TestServedDetailTableLimitationReplacesAModelSentenceThatCitesTheTable(t *t
 	}{
 		{"by display noun", "The input lists a subcategory breakdown but does not include its row contents."},
 		{"by field name", "subcategory_breakdown rows are not supplied."},
-		{"by row count", "The supplied data lists a breakdown with 3 rows but not their contents."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			other := "The read of linked subjects was cut at its limit."
@@ -52,17 +51,15 @@ func TestServedDetailTableLimitationReplacesAModelSentenceThatCitesTheTable(t *t
 	}
 }
 
-func TestServedDetailTableLimitationRowCountMatchesWholeNumbersOnly(t *testing.T) {
+// A row count alone never identifies a table: another table can hold the same
+// number of rows (Codex r2 P2). Only the table's own name or noun does.
+func TestServedDetailTableLimitationNeverMatchesOnARowCountAlone(t *testing.T) {
 	t.Parallel()
-	for _, prose := range []string{"13 rows were skipped.", "The 30 rows of another read were cut.", "Found 3.5 rows."} {
+	for _, prose := range []string{"13 rows were skipped.", "It lists 3 rows without contents.", "The repository theme breakdown has 3 rows that were not supplied."} {
 		result, facts := subcategoryServed(prose)
 		if got := withServedDetailTableLimitation(result, facts); !slices.Equal(got.Limitations, []string{prose}) {
-			t.Fatalf("%q became %q; a count that is not the served table's 3 rows is not a citation", prose, got.Limitations)
+			t.Fatalf("%q became %q; a row count or another table's name is not a citation of the served table", prose, got.Limitations)
 		}
-	}
-	result, facts := subcategoryServed("It lists 3 rows without contents.")
-	if got := withServedDetailTableLimitation(result, facts); !slices.Contains(got.Limitations, servedSentence) {
-		t.Fatalf("limitations = %q; the exact count must still match", got.Limitations)
 	}
 }
 

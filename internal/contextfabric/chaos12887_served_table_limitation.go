@@ -1,8 +1,6 @@
 package contextfabric
 
 import (
-	"regexp"
-	"strconv"
 	"strings"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -73,8 +71,7 @@ func limitationCitesServedTable(limitation string, served []ClaimedFact) bool {
 	text := strings.ToLower(limitation)
 	for _, claim := range served {
 		field := claim.Table.Field
-		if strings.Contains(text, field) || strings.Contains(text, strings.ToLower(contractsv1.ContextFabricFactFieldNoun(field))) ||
-			regexp.MustCompile(`(^|[^0-9.,])`+strconv.Itoa(len(claim.Rows))+` rows?\b`).MatchString(text) {
+		if strings.Contains(text, field) || strings.Contains(text, strings.ToLower(contractsv1.ContextFabricFactFieldNoun(field))) {
 			return true
 		}
 	}
