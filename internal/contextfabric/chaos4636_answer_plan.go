@@ -812,6 +812,7 @@ func (e *Engine) finalizeResult(
 		}
 	}
 	result = withDegradedLimitationFallback(result)
+	result = withServedDetailTableLimitation(result, facts.Facts)
 	result = withUnclaimedRepositorySplitFloor(result, frame)
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result

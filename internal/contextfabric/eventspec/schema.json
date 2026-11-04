@@ -12229,6 +12229,41 @@
     ]
   },
   {
+    "id": "contextfabric.synthesis_detail_table_rows",
+    "msg": "context fabric synthesis detail table rows",
+    "level": "debug",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per synthesis call whose input lists a detail table; a request makes at most two synthesis calls (the first and one retry).",
+    "max_lines_per_scope": 2,
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "detail_table_rows",
+        "type": "string_slice",
+        "presence": "required",
+        "max_items": 8
+      },
+      {
+        "key": "detail_tables_omitted",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.synthesis_input",
     "msg": "context fabric synthesis input",
     "level": "info",

@@ -50,7 +50,12 @@ const (
 	// v30 -> v31 (CHAOS-12887): a fact also gives each detail table's row count
 	// (detail_table_rows), and the detail table rule asks the model not to call
 	// a breakdown with rows unavailable; it never says the breakdown is shown.
-	PromptVersion = "context-fabric-synthesis.v31"
+	//
+	// v31 -> v32 (CHAOS-12887): the detail table rule says the service shows a
+	// listed breakdown's rows beside the answer, and asks the model not to write
+	// that its rows or contents were not supplied. v31 told it the input gave
+	// it no rows, and the model repeated that as a limitation beside a drawn table.
+	PromptVersion = "context-fabric-synthesis.v32"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = interpretprompt.OutputVersion
 )

@@ -114,10 +114,12 @@ func TestAWithheldDetailTableGetsNoNameAndNoCount(t *testing.T) {
 	}
 }
 
-// The prompt tells the model what a count means and never promises that the
-// breakdown is shown: a serve-time cut (CHAOS-12582) can still withhold it
-// after synthesis, and then the server's own sentence says so.
-func TestThePromptReadsADetailTableCountWithoutPromisingItIsShown(t *testing.T) {
+// The prompt tells the model what a count means and that the service shows the
+// rows, never without the exception: a serve-time cut (CHAOS-12582) can still
+// withhold the table after synthesis, and then the server's own sentence says
+// so (v32, CHAOS-12887: v31 said only that the input gave no rows, and the
+// model repeated that as a limitation beside a drawn table).
+func TestThePromptReadsADetailTableCountAndPromisesItIsShownOnlyWithItsException(t *testing.T) {
 	t.Parallel()
 	system := synthesisprompt.System()
 	line := ""
@@ -129,13 +131,11 @@ func TestThePromptReadsADetailTableCountWithoutPromisingItIsShown(t *testing.T) 
 	if !strings.Contains(line, "detail_table_rows") {
 		t.Fatalf("the detail table line does not explain detail_table_rows: %q", line)
 	}
-	if !strings.Contains(line, "do not write that the breakdown is unavailable") {
-		t.Fatalf("the detail table line does not forbid calling a counted breakdown unavailable: %q", line)
+	if !strings.Contains(line, "Do not write that the breakdown is unavailable") || !strings.Contains(line, "were not supplied") {
+		t.Fatalf("the detail table line does not forbid calling a counted breakdown unavailable or not supplied: %q", line)
 	}
-	for _, promise := range []string{"served", "shown", "displayed", "drawn"} {
-		if strings.Contains(strings.ToLower(line), promise) {
-			t.Fatalf("the detail table line promises the breakdown is %s: %q", promise, line)
-		}
+	if !strings.Contains(line, "unless it states that it left them out") {
+		t.Fatalf("the detail table line promises the rows are shown without the exception for a withheld table: %q", line)
 	}
 }
 
@@ -164,7 +164,7 @@ func TestTheContractMovedWithTheDetailTableRowCount(t *testing.T) {
 // A caller that writes the answer itself (client synthesis) gets the same input,
 // counts included, so it gets the same rule (Codex r1 P2 on #2012, reproduced):
 // without it, a caller's model can still call a counted breakdown unavailable.
-func TestTheClientRulesReadADetailTableCountWithoutPromisingItIsShown(t *testing.T) {
+func TestTheClientRulesReadADetailTableCountAndPromiseItIsShownOnlyWithItsException(t *testing.T) {
 	t.Parallel()
 	rule := ""
 	for _, each := range synthesisprompt.ClientRules() {
@@ -172,13 +172,11 @@ func TestTheClientRulesReadADetailTableCountWithoutPromisingItIsShown(t *testing
 			rule = each
 		}
 	}
-	if !strings.Contains(rule, "do not write that the breakdown is unavailable") {
-		t.Fatalf("no client rule reads detail_table_rows and forbids calling a counted breakdown unavailable: %q", synthesisprompt.ClientRules())
+	if !strings.Contains(rule, "Do not write that the breakdown is unavailable") || !strings.Contains(rule, "were not supplied") {
+		t.Fatalf("no client rule reads detail_table_rows and forbids calling a counted breakdown unavailable or not supplied: %q", synthesisprompt.ClientRules())
 	}
-	for _, promise := range []string{"served", "shown", "displayed", "drawn"} {
-		if strings.Contains(strings.ToLower(rule), promise) {
-			t.Fatalf("the client rule promises the breakdown is %s: %q", promise, rule)
-		}
+	if !strings.Contains(rule, "unless it states that it left them out") {
+		t.Fatalf("the client rule promises the rows are shown without the exception for a withheld table: %q", rule)
 	}
 	if assembly := synthesisprompt.ClientAssembly(); !slices.Contains(assembly.Rules, rule) {
 		t.Fatal("the served client assembly does not carry the rule")
