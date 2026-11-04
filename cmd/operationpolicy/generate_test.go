@@ -169,8 +169,8 @@ func TestServedCounts(t *testing.T) {
 	if got := names(cat.Operations(directread.CallerUnrestricted)); !slices.Equal(got, wantUnrestricted) {
 		t.Fatalf("unrestricted = %v (%d), want the 16 of design D.3 plus home, recommendations, workItemTeamAttributions, sourceHealth and the scoped investmentBreakdownTeam and investmentBreakdownRepository (CHAOS-12691), minus the dark securityAlerts", got, len(got))
 	}
-	if got := names(cat.Operations(directread.CallerRestricted)); !slices.Equal(got, []string{"compoundingRisk", "hotspots"}) {
-		t.Fatalf("restricted = %v, want the 2 of POLICY-ARTIFACT-v0", got)
+	if got := names(cat.Operations(directread.CallerRestricted)); !slices.Equal(got, []string{"compoundingRisk", "hotspots", "investmentBreakdownRepository"}) {
+		t.Fatalf("restricted = %v, want the 2 of POLICY-ARTIFACT-v0 and the aggregate-only investmentBreakdownRepository (CHAOS-12690)", got)
 	}
 }
 

@@ -381,8 +381,8 @@ func TestDataToolsEndToEndAreModelFreeAndScopedToTheCredential(t *testing.T) {
 		t.Fatalf("the refusal names the repository outside the grant: %s", mustJSON(denied))
 	}
 	restrictedCatalog, _ := dtCallTool(t, rs, "data_catalog", nil)
-	if got := len(restrictedCatalog["operations"].(map[string]any)["operations"].([]any)); got != 2 {
-		t.Fatalf("a restricted credential sees %d operations, want 2", got)
+	if got := len(restrictedCatalog["operations"].(map[string]any)["operations"].([]any)); got != 3 {
+		t.Fatalf("a restricted credential sees %d operations, want 3", got)
 	}
 
 	// Without data:read run_operation is not advertised, and a direct call

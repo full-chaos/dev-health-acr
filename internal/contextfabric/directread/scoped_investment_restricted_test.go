@@ -44,6 +44,13 @@ func TestRestrictedCallerReadsGrantedRepositoryBreakdownOnly(t *testing.T) {
 			}
 		})
 	}
+	t.Run("ids_omitted_is_refused_before_dispatch", func(t *testing.T) {
+		h.upstream.reset()
+		resp := h.run(t, opRestrictedA(), "investmentBreakdownRepository", scopedBreakdownVars(map[string]any{"level": "REPO"}))
+		if resp.Call != directread.CallRefused || len(h.upstream.requests()) != 0 {
+			t.Fatalf("want a refusal with zero upstream, got %+v", resp)
+		}
+	})
 	t.Run("team_entry_stays_refused", func(t *testing.T) {
 		h.upstream.reset()
 		resp := h.run(t, opRestrictedA(), "investmentBreakdownTeam", scopedBreakdownVars(map[string]any{"level": "TEAM", "ids": []any{opTeamT}}))

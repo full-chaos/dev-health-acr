@@ -27,9 +27,9 @@
       "field": "analytics",
       "operations": [
         "investmentBreakdown",
-        "investmentBreakdownRepository",
         "investmentBreakdownTeam",
-        "investmentFull"
+        "investmentFull",
+        "investmentBreakdownRepository"
       ],
       "cost_class": "analytics_batch",
       "arguments": [
@@ -37,7 +37,7 @@
         "orgId"
       ],
       "fixed_arguments": [],
-      "restricted_served": false
+      "restricted_served": true
     },
     {
       "field": "capacityForecast",

@@ -47,8 +47,8 @@ func TestVendoredCatalogueServesTheScopedEntries(t *testing.T) {
 		if !ok {
 			t.Fatalf("committed artifact does not serve %s", name)
 		}
-		if op.Scope(directread.CallerRestricted).Served {
-			t.Fatalf("%s is served to a restricted caller", name)
+		if served := op.Scope(directread.CallerRestricted); served.Served != (name == "investmentBreakdownRepository") || served.Served && !served.AggregateOnly {
+			t.Fatalf("%s: restricted scope %+v, want served aggregate-only for the repository entry only", name, served)
 		}
 	}
 }
@@ -130,6 +130,9 @@ func TestScopedInvestmentEntriesDifferFromInvestmentBreakdownOnlyInScope(t *test
 			for i := range normalized.Scopes {
 				if normalized.Scopes[i].Caller == directread.CallerUnrestricted {
 					normalized.Scopes[i].Basis = org.Scope(directread.CallerUnrestricted).Basis
+				}
+				if normalized.Scopes[i].Caller == directread.CallerRestricted && normalized.Scopes[i].AggregateOnly {
+					normalized.Scopes[i] = org.Scope(directread.CallerRestricted)
 				}
 			}
 			got, _ := json.Marshal(normalized)

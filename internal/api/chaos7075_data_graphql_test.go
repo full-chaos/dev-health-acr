@@ -197,12 +197,12 @@ func TestChaos7075CatalogSchemaSectionPerCallerClass(t *testing.T) {
 		t.Fatal("the schema view names a refused root or a person field")
 	}
 	r := section(restricted, h)
-	if got := roots(r); !slices.Equal(got, []string{"compoundingRisk", "hotspots"}) {
+	if got := roots(r); !slices.Equal(got, []string{"analytics", "compoundingRisk", "hotspots"}) {
 		t.Fatalf("restricted roots %v", got)
 	}
 	for _, root := range r["roots"].([]any) {
 		entry := root.(map[string]any)
-		if entry["scope_class"] != "forced_grant" || entry["forced_argument"] == "" || len(entry["row_id_paths"].([]any)) == 0 {
+		if entry["scope_class"] != "forced_grant" || entry["forced_argument"] == "" || (len(entry["row_id_paths"].([]any)) == 0 && entry["field"] != "analytics") {
 			t.Fatalf("restricted root without forced scope: %v", entry)
 		}
 	}

@@ -26,7 +26,7 @@ func TestGraphQLTwoOperationRootsResolveToTheStricterOperation(t *testing.T) {
 	if got := catalog.Operations(); !slices.Equal(got, []string{"acrRepositoryScopes", "catalogValues"}) {
 		t.Fatalf("catalog candidate order %v", got)
 	}
-	if got := analytics.Operations(); !slices.Equal(got, []string{"investmentBreakdown", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentFull"}) {
+	if got := analytics.Operations(); !slices.Equal(got, []string{"investmentBreakdown", "investmentBreakdownTeam", "investmentFull", "investmentBreakdownRepository"}) {
 		t.Fatalf("analytics candidate order %v", got)
 	}
 	batch := `{breakdowns: [{dimension: THEME, measure: COUNT, dateRange: {startDate: "2026-09-01", endDate: "2026-09-28"}}]}`
@@ -183,7 +183,7 @@ func TestT12GraphQLForcedScopeRestrictedCallerNeverReceivesAForeignRow(t *testin
 	for field, ops := range gqlRootOps(t, policy) {
 		for _, op := range ops {
 			scope := op.Scope(directread.CallerRestricted)
-			if !scope.Served {
+			if !scope.Served || scope.AggregateOnly {
 				continue
 			}
 			restrictedRoots++
