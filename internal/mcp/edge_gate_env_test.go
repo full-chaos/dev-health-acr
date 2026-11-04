@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +80,59 @@ func TestServeOptionsRefuseInvalidTrustedProxyCIDRs(t *testing.T) {
 		var invalid *acrmcp.ErrServeOptionInvalid
 		if err := opts.Validate(); !errors.As(err, &invalid) || invalid.Setting != "ACR_MCP_TRUSTED_PROXY_CIDRS" {
 			t.Errorf("%q: Validate = %v, want ErrServeOptionInvalid naming ACR_MCP_TRUSTED_PROXY_CIDRS", value, err)
+		}
+	}
+}
+
+// CHAOS-11734: acr-mcp accepts the node exclusions go-api reads, and refuses a
+// bad exclusion at start.
+func TestServeOptionsAcceptTrustedProxyExclusions(t *testing.T) {
+	opts, err := acrmcp.ServeOptionsFromEnvironment(envLookup(map[string]string{"ACR_MCP_TRUSTED_PROXY_CIDRS": "10.42.0.0/24,!10.42.0.0,!10.42.0.1"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := opts.Validate(); err != nil {
+		t.Fatalf("Validate = %v, want the exclusion list accepted", err)
+	}
+	for _, value := range []string{"10.42.0.0/24,!192.0.2.1", "10.42.0.0/24,!10.42.0.0/24"} {
+		bad, err := acrmcp.ServeOptionsFromEnvironment(envLookup(map[string]string{"ACR_MCP_TRUSTED_PROXY_CIDRS": value}))
+		if err != nil {
+			t.Fatalf("%q: env parse: %v", value, err)
+		}
+		var invalid *acrmcp.ErrServeOptionInvalid
+		if err := bad.Validate(); !errors.As(err, &invalid) || invalid.Setting != "ACR_MCP_TRUSTED_PROXY_CIDRS" {
+			t.Errorf("%q: Validate = %v, want ErrServeOptionInvalid naming ACR_MCP_TRUSTED_PROXY_CIDRS", value, err)
+		}
+	}
+}
+
+// CHAOS-11734 r1: Validate's refusal carries the parser's diagnostic, which
+// names the entry position (entry 2 in every form) and never the value.
+func TestServeOptionsTrustedProxyRefusalNamesTheEntryNotTheValue(t *testing.T) {
+	for _, c := range []struct{ form, list, address string }{
+		{"outside network", "10.42.0.0/24,!192.0.2.1", "192.0.2.1"},
+		{"network exclusion", "10.42.0.0/24,!10.42.0.0/24", "10.42.0.0"},
+		{"empty exclusion", "10.42.0.0/24,!", ""},
+		{"not an address", "10.42.0.0/24,!junkhost", "junkhost"},
+		{"zoned address", "fe80::/64,!fe80::1%eth0", "fe80::1"},
+		{"IPv4-mapped address", "10.42.0.0/24,!::ffff:10.42.0.1", "10.42.0.1"},
+		{"not a network", "10.42.0.0/24,junknet", "junknet"},
+	} {
+		opts, err := acrmcp.ServeOptionsFromEnvironment(envLookup(map[string]string{"ACR_MCP_TRUSTED_PROXY_CIDRS": c.list}))
+		if err != nil {
+			t.Fatalf("%s: env parse: %v", c.form, err)
+		}
+		err = opts.Validate()
+		var invalid *acrmcp.ErrServeOptionInvalid
+		if !errors.As(err, &invalid) || invalid.Setting != "ACR_MCP_TRUSTED_PROXY_CIDRS" {
+			t.Errorf("%s: Validate = %v, want ErrServeOptionInvalid naming ACR_MCP_TRUSTED_PROXY_CIDRS", c.form, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "entry 2 ") {
+			t.Errorf("%s: error %q does not name entry 2", c.form, err)
+		}
+		if c.address != "" && strings.Contains(err.Error(), c.address) {
+			t.Errorf("%s: error %q names the value %q", c.form, err, c.address)
 		}
 	}
 }

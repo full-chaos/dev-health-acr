@@ -118,7 +118,9 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v28 -> v29: a comparison claims every compared subject (CHAOS-12549).
 			// v29 -> v30: a fact lists its detail tables, claimed with value null
 			// only when the question asks for that breakdown (CHAOS-12554).
-			digest: "3f98398bd1bd585722cf670c892b3b632a3f19661c0e5e8243ee0334242d5fbf",
+			// v30 -> v31: a fact gives each detail table's row count, and a
+			// breakdown with rows is never called unavailable (CHAOS-12887).
+			digest: "b259a5971ff148a14b135546d8a25e6961be82e395e8640e59ad9a48f15e9910",
 		},
 		{
 			name:    "interpretation model-output schema",
