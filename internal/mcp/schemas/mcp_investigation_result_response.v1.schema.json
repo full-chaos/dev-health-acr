@@ -6907,6 +6907,13 @@
               "type": "integer",
               "minimum": 0
             },
+            "scope_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "scope_count_at_least": {
+              "type": "boolean"
+            },
             "forecast_p50_days": {
               "type": "integer",
               "minimum": 0

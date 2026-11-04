@@ -38,9 +38,18 @@ type ContextFabricClaimedCompletionForecast struct {
 	// scope's own target, or its backlog, as ops' worker falls back to it.
 	// Absent when the stored row has none, never 0 for none.
 	TargetItems *int64 `json:"target_items,omitempty"`
-	P50Days     *int64 `json:"forecast_p50_days,omitempty"`
-	P85Days     *int64 `json:"forecast_p85_days,omitempty"`
-	P95Days     *int64 `json:"forecast_p95_days,omitempty"`
+	// ScopeCount (CHAOS-12726) is how many work scopes of this claim's team
+	// the read held a forecast for, this scope included. A team is forecast
+	// under several work scopes at once, and a claim states one of them: the
+	// count lets a reader see that this forecast is one scope of several, not
+	// the team's. Set by the server; absent when unknown, never 0.
+	ScopeCount *int64 `json:"scope_count,omitempty"`
+	// ScopeCountAtLeast is true when the read of the team's forecasts was cut
+	// short, so ScopeCount is a floor.
+	ScopeCountAtLeast bool   `json:"scope_count_at_least,omitempty"`
+	P50Days           *int64 `json:"forecast_p50_days,omitempty"`
+	P85Days           *int64 `json:"forecast_p85_days,omitempty"`
+	P95Days           *int64 `json:"forecast_p95_days,omitempty"`
 	// P50Date, P85Date and P95Date are RFC 3339 full-dates, "2026-11-20":
 	// the stored dates, which name a UTC day.
 	P50Date string `json:"forecast_p50_date,omitempty"`
@@ -163,6 +172,9 @@ func (f ContextFabricClaimedCompletionForecast) validate() error {
 		if date != "" && !ValidContextFabricForecastDate(date) {
 			return fmt.Errorf("completion_forecast date is not an RFC 3339 full-date")
 		}
+	}
+	if f.ScopeCount != nil && *f.ScopeCount < 1 || f.ScopeCountAtLeast && f.ScopeCount == nil {
+		return fmt.Errorf("completion_forecast scope_count must be at least 1, and a floor needs a count")
 	}
 	for _, value := range []*int64{f.SimulationCount, f.HorizonDays, f.UnfinishedRuns, f.TargetItems, f.P50Days, f.P85Days, f.P95Days} {
 		if value != nil && *value < 0 {
