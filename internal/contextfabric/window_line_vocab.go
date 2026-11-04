@@ -67,7 +67,7 @@ func TemporalAxisLogVocabulary() []string {
 
 // StatedWindowOriginVocabulary is the closed set of channels that supplied a stated window.
 func StatedWindowOriginVocabulary() []string {
-	return []string{StatedWindowOriginField, StatedWindowOriginQuestionPhrase, StatedWindowOriginInterpreterRange}
+	return []string{StatedWindowOriginField, StatedWindowOriginQuestionPhrase, StatedWindowOriginInterpreterRange, StatedWindowOriginQuestionDates}
 }
 
 // StatedWindowAxisOutcomeVocabulary is the closed set of stated window axis outcomes.
