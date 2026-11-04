@@ -167,7 +167,7 @@ func investmentDecl(documentName string, exceptions map[string]string, disclosur
 					{Value: "REPO", Code: dr.RefusalBasisDependentShape, Reason: k14Reason + ": repository allocation source, [ops] analytics/investment.go:574-578; refused until oracle O4"},
 				},
 			},
-			"batch.breakdowns[*].measure":             enum(measures...),
+			"batch.breakdowns[*].measure":             enum(investmentMeasures...),
 			"batch.breakdowns[*].dateRange.startDate": client,
 			"batch.breakdowns[*].dateRange.endDate":   client,
 			"batch.breakdowns[*].topN":                between(1, 100),
@@ -260,13 +260,13 @@ func withLevelReasons(decl operationDecl, reasons map[string]string) operationDe
 // that batch.filters.scope.level must be the given level (absent is the SDL
 // default ORG and is refused) and batch.filters.scope.ids holds exactly one
 // id of the bound subject kind, checked by the subject gate; the breakdown
-// measures add ISSUE_SIZE (scopedMeasures). ops reads an empty id list as no
+// measures add ISSUE_SIZE (investmentMeasures). ops reads an empty id list as no
 // scope, the whole organization
 // ([ops] analytics/filtertranslation.go:47-50, 186-193 at 0b763a85).
 func scopedInvestmentDecl(documentName, level string, subject *dr.SubjectConversion, levelRefusals []dr.ValueRefusal, basis string) operationDecl {
 	decl := investmentDecl(documentName, investmentBreakdownExceptions, nil)
 	decl.Variables = withVariables(decl.Variables, map[string]variableDecl{
-		"batch.breakdowns[*].measure": enum(scopedMeasures...),
+		"batch.breakdowns[*].measure": enum(investmentMeasures...),
 		"batch.filters.scope.level":   {AllowedValues: []string{level}, RefusedValues: levelRefusals},
 		"batch.filters.scope.ids":     {MinItems: 1, MaxItems: 1, Subject: subject},
 	})
@@ -278,10 +278,10 @@ func scopedInvestmentDecl(documentName, level string, subject *dr.SubjectConvers
 	return decl
 }
 
-// scopedMeasures are the breakdown measures of the scoped entries: the shared
-// measures list plus ISSUE_SIZE (lead ruling, CHAOS-12691). The ORG entries
-// keep the shared list; CHURN_LOC is on neither.
-var scopedMeasures = append(slices.Clone(measures), "ISSUE_SIZE")
+// investmentMeasures are the breakdown measures of every investment entry: the
+// shared measures list plus ISSUE_SIZE (lead rulings CHAOS-12691 for the scoped
+// entries and CHAOS-12948 for the ORG entries). CHURN_LOC is on none.
+var investmentMeasures = append(slices.Clone(measures), "ISSUE_SIZE")
 
 // scopeServiceRefusal is the SERVICE level refusal every investment entry
 // shares.

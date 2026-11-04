@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 )
 
 const Redacted = "[REDACTED]"
@@ -246,10 +247,13 @@ func ErrorClass(err error) string {
 	return fmt.Sprintf("%T", err)
 }
 
-// hasForeignLetter reports a non-ASCII letter or digit: compact() drops it, so such a key could fold onto an
-// exact benign key. Zero-width and other format runes are not letters and stay folded.
+// hasForeignLetter reports a non-ASCII letter or digit, or an invalid UTF-8 byte: compact() drops it, so such a
+// key could fold onto an exact benign key. Zero-width and other format runes are not letters and stay folded.
 func hasForeignLetter(key string) bool {
-	for _, r := range key {
+	for i, r := range key {
+		if r == utf8.RuneError && !strings.HasPrefix(key[i:], "\uFFFD") {
+			return true
+		}
 		if r > unicode.MaxASCII && (unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsMark(r)) {
 			return true
 		}

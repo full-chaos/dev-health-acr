@@ -371,12 +371,12 @@ func TestDataCatalogAdvertisesTheScopedIDRule(t *testing.T) {
 	}
 }
 
-// ISSUE_SIZE is a breakdown measure of the scoped entries only (lead ruling,
-// CHAOS-12691): investmentBreakdownTeam and investmentBreakdownRepository
-// serve it, the ORG entries refuse it, and CHURN_LOC stays refused everywhere.
-// graphql_query maps an ISSUE_SIZE query with one owned team to the team
-// entry and refuses it at ORG scope.
-func TestIssueSizeIsServedByTheScopedEntriesOnly(t *testing.T) {
+// ISSUE_SIZE is a breakdown measure of every investment entry (lead ruling,
+// CHAOS-12691 for the scoped entries, widened to the ORG entries by CHAOS-12948):
+// all four serve it, and CHURN_LOC stays refused everywhere. graphql_query
+// maps an ISSUE_SIZE query with one owned team to the team entry and serves
+// it at ORG scope.
+func TestIssueSizeIsServedByEveryInvestmentEntry(t *testing.T) {
 	cat := defaultCatalogueOf(t)
 	withMeasure := func(scope map[string]any, measure string) map[string]any {
 		breakdown := scopedBreakdown()
@@ -392,8 +392,9 @@ func TestIssueSizeIsServedByTheScopedEntriesOnly(t *testing.T) {
 		{"investmentBreakdownRepository", "ISSUE_SIZE", map[string]any{"level": "REPO", "ids": []any{opRepo(opRepoA)}}, ""},
 		{"investmentBreakdownTeam", "CHURN_LOC", map[string]any{"level": "TEAM", "ids": []any{opTeamT}}, directread.RefusalVariableNotAllowed},
 		{"investmentBreakdownRepository", "CHURN_LOC", map[string]any{"level": "REPO", "ids": []any{opRepo(opRepoA)}}, directread.RefusalVariableNotAllowed},
-		{"investmentBreakdown", "ISSUE_SIZE", nil, directread.RefusalVariableNotAllowed},
-		{"investmentFull", "ISSUE_SIZE", nil, directread.RefusalVariableNotAllowed},
+		{"investmentBreakdown", "ISSUE_SIZE", nil, ""},
+		{"investmentFull", "ISSUE_SIZE", nil, ""},
+		{"investmentBreakdown", "CHURN_LOC", nil, directread.RefusalVariableNotAllowed},
 		{"investmentBreakdown", "COUNT", nil, ""},
 	} {
 		t.Run(c.operation+"/"+c.measure, func(t *testing.T) {
@@ -436,5 +437,10 @@ func TestIssueSizeIsServedByTheScopedEntriesOnly(t *testing.T) {
 		t.Fatalf("an ISSUE_SIZE team query mapped to %s", got)
 	}
 	h.listener.reset()
-	h.wantRefused(t, h.run(t, opUnrestricted(opOrgA), query(""), nil), directread.RefusalVariableNotAllowed)
+	h.listener.reset()
+	resp = h.run(t, opUnrestricted(opOrgA), query(""), nil)
+	h.wantServed(t, resp)
+	if got := resp.RootFields[0].Operation; got != "investmentBreakdown" {
+		t.Fatalf("an ISSUE_SIZE organization query mapped to %s", got)
+	}
 }
