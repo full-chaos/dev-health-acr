@@ -43,6 +43,11 @@ type onBehalfRouteRig struct {
 // credential store.
 func newOnBehalfRouteRig(t *testing.T, class storage.CredentialClientClass, scopes []string) onBehalfRouteRig {
 	t.Helper()
+	return newOnBehalfRouteRigIn(t, onBehalfRouteOrg, class, scopes)
+}
+
+func newOnBehalfRouteRigIn(t *testing.T, callerOrg string, class storage.CredentialClientClass, scopes []string) onBehalfRouteRig {
+	t.Helper()
 	app, _ := newHostedTestApp(t, nil, nil, []string{auth.ScopeContextRead}, nil, nil)
 	audit, ok := app.runtime.Audit.(*memory.AuditStore)
 	if !ok {
@@ -52,7 +57,7 @@ func newOnBehalfRouteRig(t *testing.T, class storage.CredentialClientClass, scop
 	authenticator, err := auth.NewAuthenticator(countingClassStore{
 		lookups: rig.lookups,
 		classCredentialStore: classCredentialStore{row: contractsv1.ClientCredential{
-			CredentialID: "revoke_caller", OrgID: onBehalfRouteOrg, Scopes: scopes, RepositoryScopes: []string{hostedTestRepository},
+			CredentialID: "revoke_caller", OrgID: callerOrg, Scopes: scopes, RepositoryScopes: []string{hostedTestRepository},
 			Provenance: contractsv1.CredentialProvenance{ClientClass: string(class)},
 		}},
 	}, nil, auth.AuthenticatorOptions{Now: time.Now})
@@ -370,5 +375,23 @@ func TestCredentialRevokeOnBehalfActorVocabularyIsOneList(t *testing.T) {
 	contract := []string{contractsv1.CredentialRevokeOnBehalfActorUser, contractsv1.CredentialRevokeOnBehalfActorAdmin}
 	if !slices.Equal(contract, oauthvocab.OnBehalfActorVocabulary()) || !slices.Equal(contract, []string{auth.OnBehalfActorUser, auth.OnBehalfActorAdmin}) {
 		t.Fatalf("actor vocabularies differ: contract %v, oauthvocab %v", contract, oauthvocab.OnBehalfActorVocabulary())
+	}
+}
+
+// The organization is the caller's binding's: a caller bound to one
+// organization revokes there and reaches no credential of another.
+func TestCredentialRevokeOnBehalfActsInTheCallersOrganizationOnly(t *testing.T) {
+	rig := newOnBehalfRouteRigIn(t, "org_2", storage.CredentialClientClassWorkload, revokeScopes())
+	ours := rig.seed(t, "org_2", "cred_routembound11", onBehalfRouteResource)
+	theirs := rig.seed(t, onBehalfRouteOrg, "cred_routembound12", onBehalfRouteResource)
+	assertErrorResponse(t, rig.post(theirs, onBehalfBody("admin", "usr_admin_9"), &rig.token), http.StatusNotFound, "not_found")
+	if !rig.live(t, onBehalfRouteOrg, theirs) {
+		t.Fatal("a caller bound to org_2 revoked a credential of org_1")
+	}
+	if response := rig.post(ours, onBehalfBody("admin", "usr_admin_9"), &rig.token); response.Code != http.StatusNoContent {
+		t.Fatalf("own organization's credential: status %d %s", response.Code, response.Body.String())
+	}
+	if rig.live(t, "org_2", ours) {
+		t.Fatal("the caller's own organization's credential is still live")
 	}
 }
