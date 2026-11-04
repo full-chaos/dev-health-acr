@@ -59,11 +59,23 @@ func TestLatencyProxyDelaysOneRoundTripAndCountsConnectionsAndHellos(t *testing.
 	if opening < 2*rtt {
 		t.Fatalf("first round trip on a new connection took %s, want at least a connection round trip plus a data round trip (%s)", opening, 2*rtt)
 	}
-	for i := 0; i < 5; i++ {
+	// A warm round trip must never be faster than one round trip (a sleep never
+	// returns early), and the proxy must add ONE round trip, not two: a double
+	// delay would put every sample at 2*rtt or more. Scheduler noise on a
+	// shared runner only ever adds time, so the upper bound is "some sample is
+	// under 2*rtt", never "every sample is" (CHAOS-13016: single samples of
+	// 135 ms and 184 ms against a 120 ms ceiling).
+	const maxWarmSamples = 40
+	sawOneRoundTrip := false
+	for i := 0; i < maxWarmSamples && !sawOneRoundTrip; i++ {
 		warm := roundTrip(t, first, []byte("statement"))
-		if warm < rtt || warm > 2*rtt {
-			t.Fatalf("warm round trip %d took %s, want about %s", i, warm, rtt)
+		if warm < rtt {
+			t.Fatalf("warm round trip %d took %s, want at least %s: the proxy added less than one round trip", i, warm, rtt)
 		}
+		sawOneRoundTrip = warm < 2*rtt
+	}
+	if !sawOneRoundTrip {
+		t.Fatalf("none of %d warm round trips took under %s: the proxy adds more than one round trip", maxWarmSamples, 2*rtt)
 	}
 	second, err := net.Dial("tcp", proxy.Addr())
 	if err != nil {
