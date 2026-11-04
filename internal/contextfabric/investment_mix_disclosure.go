@@ -203,6 +203,7 @@ func discloseForecastScopes(result *InvestigationResult, bundle CanonicalFactBun
 		covered[claim.Subject.CanonicalID][claim.CompletionForecast.WorkScopeID] = struct{}{}
 	}
 	var sentences []string
+	gap := false
 	for _, id := range order {
 		scopes := covered[id]
 		team := read[id]
@@ -214,11 +215,17 @@ func discloseForecastScopes(result *InvestigationResult, bundle CanonicalFactBun
 			scopeName = scope
 		}
 		sentence := contractsv1.ContextFabricForecastScopeLimitation(team.label, scopeName, int64(len(scopes)), int64(len(team.read)), atLeast)
-		if sentence != "" {
-			sentences = append(sentences, sentence)
+		if sentence == "" {
+			// Covering every scope the read held states nothing; anything else
+			// that cannot be worded is still a gap, so it is flagged, not skipped.
+			if int64(len(scopes)) < int64(len(team.read)) {
+				gap = true
+			}
+			continue
 		}
+		sentences = append(sentences, sentence)
 	}
-	if len(sentences) == 0 {
+	if len(sentences) == 0 && !gap {
 		return
 	}
 	composed, displaced := appendBoundedLimitations(result.Limitations, sentences)

@@ -18,13 +18,16 @@ import (
 // ContextFabricForecastScopeLimitation composes the sentence for a team whose
 // forecast covers covered of total work scopes. scope names the covered scope
 // and is used only when covered is 1. atLeast is true when total is a floor.
-// It returns "" when the sentence is not true or does not fit the bound:
-// covered < 1, covered >= total, an empty or untrimmed label.
+// A name longer than ContextFabricForecastScopeNameMaxRunes is cut and marked
+// with an ellipsis, so the sentence always fits the limitation bound however
+// the quoting escapes it. It returns "" only when the sentence would not be
+// true: covered < 1, covered >= total, an empty or untrimmed team label.
 func ContextFabricForecastScopeLimitation(team, scope string, covered, total int64, atLeast bool) string {
 	if team == "" || strings.TrimSpace(team) != team || strings.TrimSpace(scope) != scope ||
 		covered < 1 || covered >= total {
 		return ""
 	}
+	team, scope = clampForecastScopeName(team), clampForecastScopeName(scope)
 	var sentence strings.Builder
 	sentence.WriteString("This forecast for team ")
 	sentence.WriteString(strconv.Quote(team))
@@ -55,6 +58,19 @@ func ContextFabricForecastScopeLimitation(team, scope string, covered, total int
 		return ""
 	}
 	return sentence.String()
+}
+
+// ContextFabricForecastScopeNameMaxRunes bounds each name the sentence quotes.
+// Quoting escapes a control character to six runes, so two names of this length
+// and the fixed words stay well inside ContextFabricLimitationMaxLength.
+const ContextFabricForecastScopeNameMaxRunes = 100
+
+func clampForecastScopeName(name string) string {
+	runes := []rune(name)
+	if len(runes) <= ContextFabricForecastScopeNameMaxRunes {
+		return name
+	}
+	return string(runes[:ContextFabricForecastScopeNameMaxRunes-1]) + "…"
 }
 
 var forecastScopeLimitationPattern = regexp.MustCompile(`^This forecast for team "(?:[^"\\]|\\.)*" covers (?:work scope "(?:[^"\\]|\\.)*" only: 1|[1-9]\d{0,8}) of (?:the team's|at least) [1-9]\d{0,8} work scopes\. Left out of this answer: (?:at least )?[1-9]\d{0,8} work scopes?\.$`)

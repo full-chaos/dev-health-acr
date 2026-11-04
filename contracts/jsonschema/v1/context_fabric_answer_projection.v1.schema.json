@@ -3555,6 +3555,21 @@
           "maxLength": 128,
           "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
         }
+      },
+      "if": {
+        "properties": {
+          "scope_count_at_least": {
+            "const": true
+          }
+        },
+        "required": [
+          "scope_count_at_least"
+        ]
+      },
+      "then": {
+        "required": [
+          "scope_count"
+        ]
       }
     }
   }

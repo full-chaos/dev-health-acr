@@ -242,3 +242,40 @@ func TestAnotherSourcesTruncationIsNotAFloorOnTheScopeCount(t *testing.T) {
 		t.Fatalf("a truncated health read worded the workload count as a floor: %+v %q", result.ClaimedFacts[0].CompletionForecast, result.Limitations)
 	}
 }
+
+func TestAnOverlongOrEscapedLabelStillGetsTheSentence(t *testing.T) {
+	for name, label := range map[string]string{
+		"512 plain runes":        strings.Repeat("x", 512),
+		"512 control characters": strings.Repeat("\x01", 512),
+		"quotes and newlines":    "a\"b\\c\nd" + strings.Repeat("é", 400),
+	} {
+		t.Run(name, func(t *testing.T) {
+			facts, subject := scopeFacts("jira", 4)
+			subject.Label = label
+			for i := range facts {
+				facts[i].Subject = subject
+			}
+			result := InvestigationResult{ClaimedFacts: scopeClaims(facts, subject, 1)}
+			discloseForecastScopes(&result, CanonicalFactBundle{Facts: facts})
+			if len(result.Limitations) != 1 || !contractsv1.IsContextFabricForecastScopeLimitation(result.Limitations[0]) || !result.Coverage.Partial {
+				t.Fatalf("limitations = %d partial = %v, want one recognised sentence and partial", len(result.Limitations), result.Coverage.Partial)
+			}
+			if got := len([]rune(result.Limitations[0])); got > contractsv1.ContextFabricLimitationMaxLength {
+				t.Fatalf("sentence = %d runes, over the bound", got)
+			}
+		})
+	}
+}
+
+func TestAGapThatCannotBeWordedIsStillPartial(t *testing.T) {
+	facts, subject := scopeFacts("github", 3)
+	subject.Label = ""
+	for i := range facts {
+		facts[i].Subject = subject
+	}
+	result := InvestigationResult{ClaimedFacts: scopeClaims(facts, subject, 0)}
+	discloseForecastScopes(&result, CanonicalFactBundle{Facts: facts})
+	if !result.Coverage.Partial {
+		t.Fatal("coverage.partial = false: one scope of three was claimed and nothing says so")
+	}
+}
