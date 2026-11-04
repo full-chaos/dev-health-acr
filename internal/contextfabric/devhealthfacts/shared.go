@@ -1448,7 +1448,7 @@ import (
 // line naming each team's day and offering that window when it refuses the
 // quadrant (CHAOS-12958). An answer saved under v282 refuses the quadrant
 // without saying why.
-const QueryVersion = "devhealthfacts.clickhouse.v283"
+const QueryVersion = "devhealthfacts.clickhouse.v284"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

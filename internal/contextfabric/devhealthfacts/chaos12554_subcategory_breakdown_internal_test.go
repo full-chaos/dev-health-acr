@@ -148,14 +148,14 @@ func TestCHAOS12554TheTwoCallsSendTheRuledVariables(t *testing.T) {
 	caller := servingCaller()
 	readSunburst(t, context.Background(), true, caller, sunburstWindow())
 	want := []breakdownCall{
-		{operation: "investmentBreakdownRepository", variables: `{"batch":{"breakdowns":[{"dimension":"THEME","measure":"ISSUE_SIZE","dateRange":{"startDate":"2026-09-01","endDate":"2026-10-01"},"topN":100}],"filters":{"scope":{"level":"REPO","ids":["repository:8d0f8f5c-0b55-4f43-9f7e-3b0f6f0d1a11"]}}}}`},
-		{operation: "investmentBreakdownRepository", variables: `{"batch":{"breakdowns":[{"dimension":"SUBCATEGORY","measure":"ISSUE_SIZE","dateRange":{"startDate":"2026-09-01","endDate":"2026-10-01"},"topN":100}],"filters":{"scope":{"level":"REPO","ids":["repository:8d0f8f5c-0b55-4f43-9f7e-3b0f6f0d1a11"]}}}}`},
+		{operation: "investmentBreakdownRepository", variables: `{"batch":{"breakdowns":[{"dimension":"THEME","measure":"ISSUE_SIZE","dateRange":{"startDate":"2026-09-01","endDate":"2026-09-30"},"topN":100}],"filters":{"scope":{"level":"REPO","ids":["repository:8d0f8f5c-0b55-4f43-9f7e-3b0f6f0d1a11"]}}}}`},
+		{operation: "investmentBreakdownRepository", variables: `{"batch":{"breakdowns":[{"dimension":"SUBCATEGORY","measure":"ISSUE_SIZE","dateRange":{"startDate":"2026-09-01","endDate":"2026-09-30"},"topN":100}],"filters":{"scope":{"level":"REPO","ids":["repository:8d0f8f5c-0b55-4f43-9f7e-3b0f6f0d1a11"]}}}}`},
 	}
 	if !slices.Equal(caller.calls, want) {
 		t.Fatalf("calls:\n%+v\nwant:\n%+v", caller.calls, want)
 	}
-	team := string(subcategoryBreakdownVariables("THEME", "TEAM", "team:linear:CHAOS", "2026-09-01", "2026-10-01"))
-	if want := `{"batch":{"breakdowns":[{"dimension":"THEME","measure":"ISSUE_SIZE","dateRange":{"startDate":"2026-09-01","endDate":"2026-10-01"},"topN":100}],"filters":{"scope":{"level":"TEAM","ids":["team:linear:CHAOS"]}}}}`; team != want {
+	team := string(subcategoryBreakdownVariables("THEME", "TEAM", "team:linear:CHAOS", "2026-09-01", "2026-09-30"))
+	if want := `{"batch":{"breakdowns":[{"dimension":"THEME","measure":"ISSUE_SIZE","dateRange":{"startDate":"2026-09-01","endDate":"2026-09-30"},"topN":100}],"filters":{"scope":{"level":"TEAM","ids":["team:linear:CHAOS"]}}}}`; team != want {
 		t.Fatalf("team variables:\n%s\nwant\n%s", team, want)
 	}
 	if operation, level, ok := subcategoryBreakdownScopeOf(contextfabric.SubjectTeam); !ok || operation != "investmentBreakdownTeam" || level != "TEAM" {
@@ -303,6 +303,12 @@ func TestCHAOS12554AWithheldTableIsAClosedReasonNeverZeros(t *testing.T) {
 		},
 		"an answer of another dimension": {
 			caller: &breakdownCaller{theme: breakdownAnswer("SUBCATEGORY", sunburstSubcategories())}, want: "(unreadable)", calls: 1,
+		},
+		"a window whose last day is not over (ops clips it to the last final day)": {
+			caller: servingCaller(), window: func() *contractsv1.ContextFabricRequestedEvidenceWindow {
+				start, end := time.Date(2999, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2999, 2, 1, 0, 0, 0, 0, time.UTC)
+				return &contractsv1.ContextFabricRequestedEvidenceWindow{Start: &start, End: &end}
+			}(), want: "(window_not_whole_days)", calls: 0,
 		},
 		"a window that is not whole days": {
 			caller: servingCaller(), window: func() *contractsv1.ContextFabricRequestedEvidenceWindow {
@@ -548,6 +554,42 @@ func TestCHAOS12554TheWithheldReasonsAreTheLinesVocabulary(t *testing.T) {
 			if !slices.Equal(field.ClosedVocabulary, want) {
 				t.Fatalf("line themes %v, want %v", field.ClosedVocabulary, want)
 			}
+		}
+	}
+}
+
+// CHAOS-12690 (astra P1 on the I1a plan): ops reads dateRange.endDate as the
+// LAST day, inclusive (ops internal/queryapi/timewindow ExclusiveEnd = last day
+// + 1, never later than today; analytics/window.go windowEndExclusive), while a
+// fact window is [start, end) with the end exclusive. The date sent must be the
+// last day, so ops binds back the same exclusive end the fact states. The rule
+// below is ops's, copied as a model; a window sent as its exclusive end would
+// read one day more than the fact says.
+func TestCHAOS12690TheSentEndDateIsTheLastDayAndOpsBindsTheSameExclusiveEnd(t *testing.T) {
+	t.Parallel()
+	opsExclusiveEnd := func(endDate string) time.Time {
+		last, err := time.Parse(time.DateOnly, endDate)
+		if err != nil {
+			t.Fatalf("endDate %q: %v", endDate, err)
+		}
+		return last.AddDate(0, 0, 1)
+	}
+	for _, tc := range []struct{ start, end time.Time }{
+		{time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)},
+		{time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)},
+		{time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC)},
+		{time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC), time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)},
+	} {
+		bound := factTimeBound{active: true, hasStart: true, endExclusive: true, start: tc.start, end: tc.end}
+		startDate, endDate, ok := subcategoryBreakdownDates(bound)
+		if !ok {
+			t.Fatalf("window %s..%s was refused", tc.start, tc.end)
+		}
+		if startDate != tc.start.Format(time.DateOnly) {
+			t.Errorf("startDate %s, want %s", startDate, tc.start.Format(time.DateOnly))
+		}
+		if got := opsExclusiveEnd(endDate); !got.Equal(tc.end) {
+			t.Errorf("window %s..%s: ops would bind the exclusive end %s (sent endDate %s)", tc.start.Format(time.DateOnly), tc.end.Format(time.DateOnly), got.Format(time.DateOnly), endDate)
 		}
 	}
 }
