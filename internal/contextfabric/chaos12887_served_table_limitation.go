@@ -1,6 +1,7 @@
 package contextfabric
 
 import (
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -16,7 +17,9 @@ import (
 // so it is not served: the model's sentence and the service's withheld sentence
 // stand as they are, and no "shown beside" sentence is added. The sentence is
 // idempotent: finalizeResult runs again on a cut document, and it is removed
-// again when no served table remains. The status is never changed here.
+// again when no served table remains; the model sentence it replaced is not
+// restored then, because the withheld sentence already says the table is out.
+// The status is never changed here.
 func withServedDetailTableLimitation(result InvestigationResult, facts []CanonicalFact) InvestigationResult {
 	served := servedDetailTableClaims(result.ClaimedFacts, facts)
 	hadSentence := false
@@ -71,7 +74,7 @@ func limitationCitesServedTable(limitation string, served []ClaimedFact) bool {
 	for _, claim := range served {
 		field := claim.Table.Field
 		if strings.Contains(text, field) || strings.Contains(text, strings.ToLower(contractsv1.ContextFabricFactFieldNoun(field))) ||
-			strings.Contains(text, strconv.Itoa(len(claim.Rows))+" row") {
+			regexp.MustCompile(`(^|[^0-9.,])`+strconv.Itoa(len(claim.Rows))+` rows?\b`).MatchString(text) {
 			return true
 		}
 	}

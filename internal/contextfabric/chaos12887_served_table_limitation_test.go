@@ -52,6 +52,20 @@ func TestServedDetailTableLimitationReplacesAModelSentenceThatCitesTheTable(t *t
 	}
 }
 
+func TestServedDetailTableLimitationRowCountMatchesWholeNumbersOnly(t *testing.T) {
+	t.Parallel()
+	for _, prose := range []string{"13 rows were skipped.", "The 30 rows of another read were cut.", "Found 3.5 rows."} {
+		result, facts := subcategoryServed(prose)
+		if got := withServedDetailTableLimitation(result, facts); !slices.Equal(got.Limitations, []string{prose}) {
+			t.Fatalf("%q became %q; a count that is not the served table's 3 rows is not a citation", prose, got.Limitations)
+		}
+	}
+	result, facts := subcategoryServed("It lists 3 rows without contents.")
+	if got := withServedDetailTableLimitation(result, facts); !slices.Contains(got.Limitations, servedSentence) {
+		t.Fatalf("limitations = %q; the exact count must still match", got.Limitations)
+	}
+}
+
 func TestServedDetailTableLimitationLeavesWhatDoesNotCiteAServedDetailTable(t *testing.T) {
 	t.Parallel()
 	unrelated := "The read of linked subjects was cut at its limit."
