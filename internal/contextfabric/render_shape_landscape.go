@@ -12,12 +12,15 @@ import (
 // words of the two fields, which the contract holds them to.
 const (
 	landscapeTitlePrefix = "Churn and delivery units, 30 days to "
-	// landscapeMinIdentities is the person floor: a team of one identity is one
-	// person's numbers, so it gives no point (lead ruling 5 on CHAOS-4611).
-	landscapeMinIdentities = 2
 	// landscapeIdentityField is the row cell the floor reads.
 	landscapeIdentityField = "identity_count"
 )
+
+// LandscapeMinIdentities is the person floor: a team of one identity is one
+// person's numbers, so it gives no point (lead ruling 5 on CHAOS-4611). The
+// landscape read uses the same number to find the day teams share, so the day it
+// offers is a day the quadrant would draw.
+const LandscapeMinIdentities = 2
 
 // landscapeSide is one team's point: its x and y claims, on one fact, and the
 // day and cells of the one area_breakdown row they carry.
@@ -117,10 +120,12 @@ func landscapeDaysDifferLine(result InvestigationResult, facts CanonicalFactBund
 		return "", false
 	}
 	placed, _ := landscapePlacedSides(result.ClaimedFacts, result.SubjectResolution.Committed)
-	sides := make([]string, 0, len(placed))
+	labels := make([]string, 0, len(placed))
+	days := make([]string, 0, len(placed))
 	ids := make(map[string]struct{}, len(placed))
 	for _, side := range placed {
-		sides = append(sides, side.label+" "+landscapeDayWords(side.day))
+		labels = append(labels, side.label)
+		days = append(days, landscapeDayWords(side.day))
 	}
 	for _, committed := range result.SubjectResolution.Committed {
 		ids[committed.CanonicalID] = struct{}{}
@@ -136,7 +141,7 @@ func landscapeDaysDifferLine(result InvestigationResult, facts CanonicalFactBund
 		}
 		value := fact.Fields[landscapeCommonDayField]
 		if value.String == nil || *value.String == "" || (shared != "" && *value.String != shared) {
-			return contractsv1.ContextFabricLandscapeDaysDifferLimitation(sides, ""), true
+			return contractsv1.ContextFabricLandscapeDaysDifferLimitation(labels, days, ""), true
 		}
 		shared = *value.String
 		held++
@@ -147,7 +152,7 @@ func landscapeDaysDifferLine(result InvestigationResult, facts CanonicalFactBund
 	if shared != "" {
 		shared = landscapeDayWords(shared)
 	}
-	return contractsv1.ContextFabricLandscapeDaysDifferLimitation(sides, shared), true
+	return contractsv1.ContextFabricLandscapeDaysDifferLimitation(labels, days, shared), true
 }
 
 // withLandscapeDaysDifferLimitation serves the refusal's line exactly while the
@@ -214,7 +219,7 @@ func landscapeSideOf(claims []ClaimedFact, side SubjectRef) (landscapeSide, bool
 		return landscapeSide{}, false
 	}
 	day, identities, cells, ok := landscapeRowOf(x[0])
-	if !ok || identities < landscapeMinIdentities {
+	if !ok || identities < LandscapeMinIdentities {
 		return landscapeSide{}, false
 	}
 	xCell, xHeld := cells[contractsv1.ContextFabricRenderLandscapeXField]

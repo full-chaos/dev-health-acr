@@ -66,11 +66,15 @@ func TestADaysDifferRefusalOffersTheLatestSharedDay(t *testing.T) {
 		t.Fatal("a quadrant was drawn for teams on different days")
 	}
 	lines := daysDifferLines(finalized.Limitations)
-	want := contractsv1.ContextFabricLandscapeDaysDifferLimitation([]string{"Ops Team Oct 7, 2026", "Fullchaos Nov 4, 2026"}, "Oct 7, 2026")
+	want := contractsv1.ContextFabricLandscapeDaysDifferLimitation([]string{"Ops Team", "Fullchaos"}, []string{"Oct 7, 2026", "Nov 4, 2026"}, "Oct 7, 2026")
+	const plain = "No quadrant: the latest data for Ops Team is Oct 7, 2026, and for Fullchaos it is Nov 4, 2026. Ask for a window that ends Oct 7, 2026 to compare them."
+	if want != plain {
+		t.Fatalf("wording %q; want %q", want, plain)
+	}
 	if len(lines) != 1 || lines[0] != want {
 		t.Fatalf("limitations %q; want the one line %q", finalized.Limitations, want)
 	}
-	for _, part := range []string{"Ops Team", "Oct 7, 2026", "Fullchaos", "Nov 4, 2026", "window ending Oct 7, 2026"} {
+	for _, part := range []string{"Ops Team", "Oct 7, 2026", "Fullchaos", "Nov 4, 2026", "window that ends Oct 7, 2026"} {
 		if !strings.Contains(lines[0], part) {
 			t.Errorf("the line does not state %q: %s", part, lines[0])
 		}
@@ -88,8 +92,12 @@ func TestADaysDifferRefusalWithNoSharedDayOffersNoWindow(t *testing.T) {
 	teams := daysDifferTeams()
 	finalized := finalizeDaysDiffer(daysDifferEngine(t, true), quadrantResult(teams...), landscapeFactsWithCommonDay("", teams...))
 	lines := daysDifferLines(finalized.Limitations)
-	want := contractsv1.ContextFabricLandscapeDaysDifferLimitation([]string{"Ops Team Oct 7, 2026", "Fullchaos Nov 4, 2026"}, "")
-	if len(lines) != 1 || lines[0] != want || strings.Contains(lines[0], "window ending") {
+	want := contractsv1.ContextFabricLandscapeDaysDifferLimitation([]string{"Ops Team", "Fullchaos"}, []string{"Oct 7, 2026", "Nov 4, 2026"}, "")
+	const plain = "No quadrant: the latest data for Ops Team is Oct 7, 2026, and for Fullchaos it is Nov 4, 2026. There is no day on which all of them have data."
+	if want != plain {
+		t.Fatalf("wording %q; want %q", want, plain)
+	}
+	if len(lines) != 1 || lines[0] != want || strings.Contains(lines[0], "Ask for a window") {
 		t.Fatalf("limitations %q; want the one line %q", finalized.Limitations, want)
 	}
 }
@@ -159,14 +167,18 @@ func TestADisabledQuadrantServesNoDaysDifferLine(t *testing.T) {
 
 func TestTheDaysDifferSentenceIsRecognisedOnlyWhole(t *testing.T) {
 	t.Parallel()
-	offer := contractsv1.ContextFabricLandscapeDaysDifferLimitation([]string{"A Oct 7, 2026", "B Nov 4, 2026"}, "Oct 7, 2026")
-	none := contractsv1.ContextFabricLandscapeDaysDifferLimitation([]string{"A Oct 7, 2026", "B Nov 4, 2026"}, "")
-	for _, sentence := range []string{offer, none} {
+	offer := contractsv1.ContextFabricLandscapeDaysDifferLimitation([]string{"A", "B"}, []string{"Oct 7, 2026", "Nov 4, 2026"}, "Oct 7, 2026")
+	none := contractsv1.ContextFabricLandscapeDaysDifferLimitation([]string{"A", "B"}, []string{"Oct 7, 2026", "Nov 4, 2026"}, "")
+	three := contractsv1.ContextFabricLandscapeDaysDifferLimitation([]string{"A", "B", "C"}, []string{"Oct 7, 2026", "Nov 4, 2026", "Nov 2, 2026"}, "Oct 7, 2026")
+	if want := "No quadrant: the latest data for A is Oct 7, 2026, for B it is Nov 4, 2026, and for C it is Nov 2, 2026. Ask for a window that ends Oct 7, 2026 to compare them."; three != want {
+		t.Fatalf("three teams: %q; want %q", three, want)
+	}
+	for _, sentence := range []string{offer, none, three} {
 		if !contractsv1.IsContextFabricLandscapeDaysDifferLimitation(sentence) {
 			t.Errorf("not recognised: %q", sentence)
 		}
 	}
-	for _, sentence := range []string{"", "No quadrant is drawn.", "The quadrant shows where each team stood", offer + " Extra.", strings.TrimSuffix(offer, ".")} {
+	for _, sentence := range []string{"", "No quadrant: the latest data for A is Oct 7, 2026.", "No quadrant is drawn.", "The quadrant shows where each team stood", offer + " Extra.", strings.TrimSuffix(offer, ".")} {
 		if contractsv1.IsContextFabricLandscapeDaysDifferLimitation(sentence) {
 			t.Errorf("recognised: %q", sentence)
 		}
@@ -186,8 +198,24 @@ func TestADaysDifferRefusalOffersNoWindowTheFactsDoNotAgreeOn(t *testing.T) {
 	for name, facts := range map[string]CanonicalFactBundle{"two days": disagree, "one team names none": missing, "one fact": onlyOne} {
 		finalized := finalizeDaysDiffer(daysDifferEngine(t, true), quadrantResult(teams...), facts)
 		lines := daysDifferLines(finalized.Limitations)
-		if len(lines) != 1 || strings.Contains(lines[0], "window ending") {
+		if len(lines) != 1 || strings.Contains(lines[0], "Ask for a window") {
 			t.Errorf("%s: %q", name, lines)
 		}
+	}
+}
+
+// The day the read offers and the quadrant's own person floor are one number.
+func TestTheOfferedDayUsesTheQuadrantsPersonFloor(t *testing.T) {
+	t.Parallel()
+	floor := int64(LandscapeMinIdentities)
+	day := "2026-11-02"
+	at := quadrantResult(quadrantTeamFixture{"gh:ops-team", "Ops", day, floor, 900, 12}, quadrantTeamFixture{"linear:CHAOS", "Chaos", day, floor, 2400, 31})
+	if shapes, _ := selectRenderShapes(at, nil, quadrantOn); quadrantOf(t, shapes) == nil {
+		t.Fatalf("teams of exactly %d identities draw no quadrant", floor)
+	}
+	below := quadrantResult(quadrantTeamFixture{"gh:ops-team", "Ops", day, floor - 1, 900, 12}, quadrantTeamFixture{"linear:CHAOS", "Chaos", day, floor, 2400, 31})
+	shapes, event := selectRenderShapes(below, nil, quadrantOn)
+	if quadrantOf(t, shapes) != nil || quadrantSkipOf(t, event) != RenderShapeSkipFewerThanTwoPoints {
+		t.Fatalf("a team of %d identities is placed", floor-1)
 	}
 }

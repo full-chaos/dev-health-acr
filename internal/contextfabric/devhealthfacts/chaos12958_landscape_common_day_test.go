@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -85,7 +86,7 @@ func TestLandscapeTeamsOnDifferentDaysCarryTheirLatestSharedDay(t *testing.T) {
 	if len(statements) != 1 {
 		t.Fatalf("%d common-day statements, want 1", len(statements))
 	}
-	for _, part := range []string{"HAVING uniqExact(team_id) = 2", "day_identities >= 2", "WHERE is_live", "ORDER BY as_of_day DESC", "LIMIT 1"} {
+	for _, part := range []string{"HAVING uniqExact(team_id) = 2", fmt.Sprintf("day_identities >= %d", contextfabric.LandscapeMinIdentities), "WHERE is_live", "ORDER BY as_of_day DESC", "LIMIT 1"} {
 		if !strings.Contains(statements[0].statement, part) {
 			t.Errorf("the statement lacks %q:\n%s", part, statements[0].statement)
 		}

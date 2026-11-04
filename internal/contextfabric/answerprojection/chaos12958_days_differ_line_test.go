@@ -12,7 +12,7 @@ import (
 // quadrant, so a limitation cap never cuts it, with or without a quadrant.
 func TestTheDaysDifferLineSurvivesTheLimitationCaps(t *testing.T) {
 	t.Parallel()
-	line := contractsv1.ContextFabricLandscapeDaysDifferLimitation([]string{"Ops Team Oct 7, 2026", "Fullchaos Nov 4, 2026"}, "Oct 7, 2026")
+	line := contractsv1.ContextFabricLandscapeDaysDifferLimitation([]string{"Ops Team", "Fullchaos"}, []string{"Oct 7, 2026", "Nov 4, 2026"}, "Oct 7, 2026")
 	for name, tc := range map[string]struct {
 		count, size int
 		budget      Budget

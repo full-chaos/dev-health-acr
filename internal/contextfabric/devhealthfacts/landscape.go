@@ -475,11 +475,6 @@ ORDER BY team_id, map_name`)
 	return max(rowCount, coordinateRows), seriesOmitted, rejected, nil
 }
 
-// landscapeMinIdentitiesPerDay is the person floor of a day that two teams
-// can share: a team of one identity gives no point on the quadrant (lead ruling
-// 5 on CHAOS-4611), so a day on which a team has fewer is no day the teams share.
-const landscapeMinIdentitiesPerDay = 2
-
 // readCommonLiveDay is the latest day every one of the read's teams holds live
 // rows for at least landscapeMinIdentitiesPerDay identities, or "" when the
 // teams' own latest days already agree or they share none in the window read
@@ -492,7 +487,9 @@ func (p *LandscapeProvider) readCommonLiveDay(ctx context.Context, orgID string,
 	}
 	first := byTeam[teamOrder[0]].asOfDay
 	differ := false
-	for _, teamID := range teamOrder[1:] {
+	ownDays := make([]string, 0, len(teamOrder))
+	for _, teamID := range teamOrder {
+		ownDays = append(ownDays, byTeam[teamID].asOfDay)
 		if byTeam[teamID].asOfDay != first {
 			differ = true
 		}
@@ -511,7 +508,7 @@ FROM (
 		)
 		WHERE is_live
 		GROUP BY as_of_day, team_id
-		HAVING day_identities >= ` + strconv.Itoa(landscapeMinIdentitiesPerDay) + `
+		HAVING day_identities >= ` + strconv.Itoa(contextfabric.LandscapeMinIdentities) + `
 	)
 	GROUP BY as_of_day
 	HAVING uniqExact(team_id) = ` + strconv.Itoa(len(teamOrder)) + `
@@ -525,6 +522,7 @@ LIMIT 1`
 	if err != nil {
 		return "", err
 	}
+	slog.DebugContext(ctx, "landscape common live day read", "teams", len(teamOrder), "own_latest_days", contextfabric.SanitizeLogStrings(ownDays), "common_live_day", contextfabric.SanitizeLogAttr(day), "found", day != "")
 	return day, nil
 }
 
