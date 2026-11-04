@@ -104,10 +104,11 @@ func landscapePlacedSides(claims []ClaimedFact, sides []SubjectRef) ([]landscape
 	return placed, leftOut
 }
 
-// landscapeCommonDayField is the landscape fact's field that names the latest
+// FactFieldCommonLiveDay is the landscape fact's field that names the latest
 // day every team of the read holds live rows (CHAOS-12958). It only serves the
-// offer in the refusal's line; the quadrant is never read on it.
-const landscapeCommonDayField = "common_live_day"
+// offer in the refusal's line; the quadrant is never read on it, and the model
+// is never shown it (CHAOS-13009): the server words its own disclosures.
+const FactFieldCommonLiveDay = "common_live_day"
 
 // landscapeDaysDifferLine is the line of a quadrant refused because the placed
 // teams speak for different days, and false when the quadrant was refused for
@@ -116,8 +117,16 @@ const landscapeCommonDayField = "common_live_day"
 // such day it says the teams hold none. The days are worded as the title words
 // the quadrant's day.
 func landscapeDaysDifferLine(result InvestigationResult, facts CanonicalFactBundle) (string, bool) {
+	line, _, refused := landscapeDaysDifference(result, facts)
+	return line, refused
+}
+
+// landscapeDaysDifference is landscapeDaysDifferLine with the day the compared
+// teams share: shared is the ISO day every placed team's fact names, or "" when
+// the facts name none or disagree.
+func landscapeDaysDifference(result InvestigationResult, facts CanonicalFactBundle) (line, shared string, refused bool) {
 	if _, _, reason := landscapePositionShape(result); reason != RenderShapeSkipLandscapeDaysDiffer {
-		return "", false
+		return "", "", false
 	}
 	placed, _ := landscapePlacedSides(result.ClaimedFacts, result.SubjectResolution.Committed)
 	labels := make([]string, 0, len(placed))
@@ -130,7 +139,6 @@ func landscapeDaysDifferLine(result InvestigationResult, facts CanonicalFactBund
 	for _, committed := range result.SubjectResolution.Committed {
 		ids[committed.CanonicalID] = struct{}{}
 	}
-	shared := ""
 	held := 0
 	for _, fact := range facts.Facts {
 		if fact.Kind != FactLandscape {
@@ -139,9 +147,9 @@ func landscapeDaysDifferLine(result InvestigationResult, facts CanonicalFactBund
 		if _, ok := ids[fact.Subject.CanonicalID]; !ok {
 			continue
 		}
-		value := fact.Fields[landscapeCommonDayField]
+		value := fact.Fields[FactFieldCommonLiveDay]
 		if value.String == nil || *value.String == "" || (shared != "" && *value.String != shared) {
-			return contractsv1.ContextFabricLandscapeDaysDifferLimitation(labels, days, ""), true
+			return contractsv1.ContextFabricLandscapeDaysDifferLimitation(labels, days, ""), "", true
 		}
 		shared = *value.String
 		held++
@@ -149,10 +157,11 @@ func landscapeDaysDifferLine(result InvestigationResult, facts CanonicalFactBund
 	if held < len(placed) {
 		shared = ""
 	}
+	words := ""
 	if shared != "" {
-		shared = landscapeDayWords(shared)
+		words = landscapeDayWords(shared)
 	}
-	return contractsv1.ContextFabricLandscapeDaysDifferLimitation(labels, days, shared), true
+	return contractsv1.ContextFabricLandscapeDaysDifferLimitation(labels, days, words), shared, true
 }
 
 // withLandscapeDaysDifferLimitation serves the refusal's line exactly while the

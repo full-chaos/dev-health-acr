@@ -1454,7 +1454,12 @@ import (
 // a read the server stops at a memory limit is served as stopped at its memory
 // limit, not as "read failed" (CHAOS-13003). An answer saved under v284 holds
 // the blockers as unavailable.
-const QueryVersion = "devhealthfacts.clickhouse.v285"
+//
+// v286 -> v287: a quadrant refused for different days also offers the day the
+// teams share as a window option the user picks (window_clarification and
+// structure_needs), and the model is no longer shown common_live_day
+// (CHAOS-13009). An answer saved under v286 holds the refusal without the option.
+const QueryVersion = "devhealthfacts.clickhouse.v287"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
