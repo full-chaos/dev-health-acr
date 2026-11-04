@@ -597,6 +597,35 @@ const blockerBreakdownProjectLimitation = "repository_breakdown lists the team's
 // population and is counted nowhere, neither as open nor as excluded.
 const blockerOpenPredicate = "lower(s.status) NOT IN ('done', '" + workItemCancelledStatus + "')"
 
+// blockerStatementMaxMemoryUsage is the statement memory cap of the team blocker
+// reads. The edge-row statements are about twenty subqueries (the repository
+// arm 13.4 MiB, the project arm 23.6 MiB, measured one at a time on an
+// organization with 60 dependencies, so the footprint is the statement's shape,
+// not the data) plus about 0.7 KiB per work item of the organization: 36.5 to
+// 50.6 MiB on askdev-1 (21,341 work items), and the prod read stopped at the
+// former 64 MiB cap on every team, 0 successes in 7 days (ClickHouse 241,
+// CHAOS-13003). 192 MiB is 3x the largest peak seen and under the API's 256 MiB
+// statement default; max_threads stays 1.
+//
+// Headroom: the fixed footprint (about 29 to 36 MiB, the planning and IN-set
+// building of the statement) plus about 0.7 KiB per work item holds to roughly
+// 200,000 work items of one organization. Past that the fix is not a higher cap:
+// it is team blocker totals the ops side precomputes into an append-only daily
+// table that this read takes with an argMax reader (CHAOS-13003 follow-up).
+//
+// memory-limit-measured: 50.61 MiB 2026-11-04 askdev-1 system.query_log team blocker totals with age (prod stopped at 64 MiB)
+const blockerStatementMaxMemoryUsage = uint64(192 << 20)
+
+// blockerReaderSettings is workItemReaderSettings with the blockers' own memory cap.
+func blockerReaderSettings(ctx context.Context) (readers.Settings, error) {
+	settings, err := workItemReaderSettings(ctx)
+	if err != nil {
+		return readers.Settings{}, err
+	}
+	settings.MaxMemoryUsage = blockerStatementMaxMemoryUsage
+	return settings, nil
+}
+
 // teamBlockerTotalsSQL is the team totals statement: distinct blocked items and
 // edges across two arms, the team's owned repositories (one row per team and
 // repository pair) and the items of its owned projects that reach a repository
@@ -663,7 +692,7 @@ func (p *BlockersProvider) readTeamRollup(ctx context.Context, principal storage
 	ageUnavailable := map[string]bool{}
 	var authorizedMemo *blockerAuthorizationMemo
 	if repoKeys := repoKeysOf(owned); len(repoKeys) > 0 || len(reached) > 0 {
-		settings, settingsErr := workItemReaderSettings(ctx)
+		settings, settingsErr := blockerReaderSettings(ctx)
 		if settingsErr != nil {
 			return outcome, settingsErr
 		}
@@ -784,7 +813,7 @@ ORDER BY rid`, settings)
 	if orgWide && (len(owned) > 0 || len(reached) > 0) {
 		memo := authorizedMemo
 		if memo == nil {
-			settings, settingsErr := workItemReaderSettings(ctx)
+			settings, settingsErr := blockerReaderSettings(ctx)
 			if settingsErr != nil {
 				return outcome, settingsErr
 			}
