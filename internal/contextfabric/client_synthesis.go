@@ -668,10 +668,11 @@ func (a *ClientSynthesisAssembly) inputBoundWithin(budget int) (int, error) {
 // beside a synthesis input: the smallest served answer of a one-subject turn
 // with no facts measured 4176 bytes of body beyond its input (see
 // TestClientSynthesisAnswerFloorCoversTheSmallestServedAnswer, which fails when
-// a served answer needs more). The rules travel in that body, so a new rule moves
-// it. The exact answer is still fitted by the stage-3 path, which refuses typed
-// when its smallest form does not fit.
-const ClientSynthesisAnswerFloorBytes = 4352
+// a served answer needs more), and 4474 once the detail table rule joined the
+// client rules (CHAOS-12887); the floor keeps the same 176-byte margin. The rules
+// travel in that body, so a new rule moves it. The exact answer is still fitted
+// by the stage-3 path, which refuses typed when its smallest form does not fit.
+const ClientSynthesisAnswerFloorBytes = 4650
 
 // widenedInputBound is the largest the synthesis input may be when it cannot
 // be cut to its preferred share of the caller's budget (maxBytes): what the

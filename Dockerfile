@@ -11,7 +11,7 @@
 ARG ACR_IMAGE_MIRROR_PREFIX=
 
 # Digest update and verification instructions are in docs/container-images.md.
-FROM --platform=$BUILDPLATFORM ${ACR_IMAGE_MIRROR_PREFIX}golang:1.27.3-alpine3.23@sha256:895e5feab11a4b3774d24ee3c9579028456b82ad37f42a9eb6f82adaf776a201 AS build
+FROM --platform=$BUILDPLATFORM ${ACR_IMAGE_MIRROR_PREFIX}golang:1.27.3-alpine3.23@sha256:8a5046497cda39860b832ffdbe8dd66018a0f05bb01352f533a36e7e2ced66a0 AS build
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -60,7 +60,7 @@ RUN --mount=type=cache,id=acr-go-build-${BUILD_CACHE_ID},target=/root/.cache/go-
     cp /out/acr-mcp /out-mcp-root/usr/local/bin/ && \
     find /out-api-root /out-mcp-root -exec touch -d "@${SOURCE_DATE_EPOCH}" {} +
 
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:1b7b9f0f0e0a1d2155f531db587cc48ec26aaf97ab64364225f5bf18a054e66a AS acr-api
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS acr-api
 
 ARG VERSION
 ARG COMMIT=unknown
@@ -96,7 +96,7 @@ EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/acr-api"]
 CMD ["serve"]
 
-FROM cgr.dev/chainguard/git:latest@sha256:6b5b402aaba4db9a6446e363d70bcc158c773c5d00c75d4bcd68691fdaa539cc AS acr-mcp-base
+FROM cgr.dev/chainguard/git:latest@sha256:f30343d11878c992336af4f150dc5e2ab6200e4e5bc5e3a366aebb1665abbf65 AS acr-mcp-base
 
 FROM build AS acr-mcp-root
 COPY --from=acr-mcp-base / /mcp-root

@@ -24,7 +24,10 @@ set -euo pipefail
 #      a package whose test file both names a root outside its directory
 #      (repopath, "go.mod", os.Getwd, a ".." literal) and enumerates files
 #      (Walk, WalkDir, ReadDir, Glob, ParseDir, DirFS, `go list`) walks the
-#      tree, and any change reaches it; and every changed file reaches the
+#      tree, and any change reaches it; the enumeration may sit in the test
+#      source or in a non-test file of the same package (a helper the guard
+#      calls); a helper in another package is not seen, so a guard must
+#      enumerate in its own package; and every changed file reaches the
 #      packages whose test source names the file's base name as a literal.
 #   A test that opens a file by a COMPUTED name outside rules 1-4 is not seen;
 #   main pushes run every shard, so such a miss fails there, not silently.
@@ -167,6 +170,13 @@ select_shards() {
     for f in "${fields[@]:2}"; do test_files[${fields[0]}]+="${fields[1]}/$f"$'\n'; done
   done <<<"$listing"
 
+  local -A src_files=()
+  listing="$(go_list -f '{{.ImportPath}}|{{.Dir}}{{range .GoFiles}}|{{.}}{{end}}' ./...)" || return 1
+  while IFS='|' read -r -a fields; do
+    [ "${#fields[@]}" -gt 2 ] || continue
+    for f in "${fields[@]:2}"; do src_files[${fields[0]}]+="${fields[1]}/$f"$'\n'; done
+  done <<<"$listing"
+
   local owner dep deps
   listing="$(go_list -test -f '{{.ImportPath}}{{range .Deps}}|{{.}}{{end}}' ./...)" || return 1
   while IFS='|' read -r -a fields; do
@@ -234,7 +244,9 @@ select_shards() {
   # answers map back to packages through file_pkg.
   local tf patterns base walkers=0 literal=0
   local -a all_test_files=()
-  local -A file_pkg=() has_root=() has_enum=()
+  local -A file_pkg=() has_root=() has_enum=() has_enum_src=()
+  local -a all_src_files=()
+  local -A src_pkg=()
   for ip in "${!test_files[@]}"; do
     [ -n "${has_tests[$ip]:-}" ] || continue
     while IFS= read -r tf; do
@@ -244,7 +256,21 @@ select_shards() {
     done <<<"${test_files[$ip]}"
   done
   [ "${#all_test_files[@]}" -gt 0 ] || { printf 'reached-shards: no test file listed\n' >&2; return 1; }
-  local matched
+  # The non-test Go files of every package that has tests: a helper the test calls may hold the enumeration.
+  for ip in "${!src_files[@]}"; do
+    [ -n "${has_tests[$ip]:-}" ] || continue
+    while IFS= read -r tf; do
+      [ -n "$tf" ] || continue
+      all_src_files+=("$tf")
+      src_pkg[$tf]="$ip"
+    done <<<"${src_files[$ip]}"
+  done
+  local matched status=0
+  if [ "${#all_src_files[@]}" -gt 0 ]; then
+    matched="$(grep -l -E "$enumerates" -- "${all_src_files[@]}")" || status=$?
+    [ "$status" -le 1 ] || { printf 'reached-shards: grep %s failed (exit %s)\n' "$enumerates" "$status" >&2; return 1; }
+    while IFS= read -r tf; do [ -z "$tf" ] || has_enum_src[${src_pkg[$tf]}]=1; done <<<"$matched"
+  fi
   matched="$(grep_files -E "$root_ref")"
   while IFS= read -r tf; do [ -z "$tf" ] || has_root[$tf]=1; done <<<"$matched"
   matched="$(grep_files -E "$enumerates")"
@@ -252,7 +278,7 @@ select_shards() {
   matched="$(grep_files -E "$computed_root_path")"
   while IFS= read -r tf; do [ -z "$tf" ] || has_root[$tf]=2; done <<<"$matched"
   for tf in "${!has_root[@]}"; do
-    if [ "${has_root[$tf]}" = 2 ] || [ -n "${has_enum[$tf]:-}" ]; then
+    if [ "${has_root[$tf]}" = 2 ] || [ -n "${has_enum[$tf]:-}" ] || [ -n "${has_enum_src[${file_pkg[$tf]}]:-}" ]; then
       ip="${file_pkg[$tf]}"
       [ -n "${reached[$ip]:-}" ] || { walkers=$((walkers + 1)); basis[$ip]="tests walk the module tree (${tf#"$repo_root"/})"; }
       reached[$ip]=1

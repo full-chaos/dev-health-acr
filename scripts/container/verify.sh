@@ -16,7 +16,7 @@ sentinel="${ACR_CONTAINER_SECRET_SENTINEL:-ACR_CONTAINER_SECRET_SENTINEL_9b4f4fe
 # ghcr.io/full-chaos mirror in CI (destination path drops "docker.io/library/",
 # matching how the mirror workflow names it -- see docs/container-images.md);
 # empty by default falls back to the explicit upstream form, unchanged.
-postgres_image="${ACR_IMAGE_MIRROR_PREFIX:-docker.io/library/}postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44"
+postgres_image="${ACR_IMAGE_MIRROR_PREFIX:-docker.io/library/}postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5"
 tmp_dir="$(mktemp -d)"
 git_workspace=""
 migration_network=""
