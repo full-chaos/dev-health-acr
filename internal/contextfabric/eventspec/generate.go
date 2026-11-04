@@ -348,6 +348,8 @@ func goVarName(e Event) string {
 		return "DualTableFacts"
 	case DetailTablesAttached.ID:
 		return "DetailTablesAttached"
+	case SynthesisDetailTableRows.ID:
+		return "SynthesisDetailTableRows"
 	case ModelRowsStripped.ID:
 		return "ModelRowsStripped"
 	case DriverSourceStateCorrected.ID:

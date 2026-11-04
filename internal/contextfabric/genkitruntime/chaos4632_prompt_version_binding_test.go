@@ -120,7 +120,9 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// only when the question asks for that breakdown (CHAOS-12554).
 			// v30 -> v31: a fact gives each detail table's row count, and a
 			// breakdown with rows is never called unavailable (CHAOS-12887).
-			digest: "b259a5971ff148a14b135546d8a25e6961be82e395e8640e59ad9a48f15e9910",
+			// v31 -> v32: the rule says the service shows the rows beside the
+			// answer, and the model is not to write that they were not supplied.
+			digest: "4746c155bf85957c09f73a9f6dadc9ffb73576656f9df79e3f3fab74080720cf",
 		},
 		{
 			name:    "interpretation model-output schema",

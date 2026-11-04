@@ -134,4 +134,11 @@ const ContextFabricRepositoryFlowWithheldLimitation = "This answer leaves out th
 // is for a table the size cut removed.
 const ContextFabricRepositorySplitUnclaimedLimitation = "This answer does not state the team's effort by repository and theme, which the question asked for, so it does not answer the whole question."
 
+// ContextFabricDetailTableServedLimitation replaces a model limitation that
+// cites a detail table the answer serves (CHAOS-12887). The synthesis model is
+// given a table's row count and never its rows, so its prose can call the rows
+// "not supplied" beside a table the page draws. The service states what is
+// true: the written summary does not list them, and the table does.
+const ContextFabricDetailTableServedLimitation = "The written summary does not list the rows of the breakdown it names; the table or chart beside this answer shows them."
+
 const ContextFabricDistributionWithheldLimitation = "This answer leaves out the completion forecast's distribution of simulation runs, because the assembled answer exceeded the size budget; the forecast's percentile days are still stated."

@@ -2834,6 +2834,11 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 	// point starts with Rows nil -- what follows copies rows verbatim from
 	// the canonical fact each claim cites, never from the model, closing
 	// the routing gap the CHAOS-4347 rejection above left open.
+	if recorder, ok := r.Telemetry.(synthesisDetailTableRowsRecorder); ok {
+		if event := synthesisDetailTableRows(input.Facts.Facts); len(event.Tables) > 0 {
+			recorder.RecordSynthesisDetailTableRows(ctx, principal, event)
+		}
+	}
 	var dualTableClaims, secondaryRowsBytes int
 	claimedFacts, rowsCount, rowsByKind, rowsTruncated := attachCanonicalRowsWithDualTableTelemetry(cloneSlice(draft.ClaimedFacts), input.Facts.Facts, &dualTableClaims, &secondaryRowsBytes)
 	if r.Telemetry != nil {

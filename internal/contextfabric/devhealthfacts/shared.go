@@ -1437,7 +1437,11 @@ import (
 // scopes than the read held carries scope_count and a limitation naming the
 // scope and the count (CHAOS-12726). An answer saved under v280 presents one
 // scope's forecast without either.
-const QueryVersion = "devhealthfacts.clickhouse.v281"
+//
+// v281 -> v282: a model limitation that cites a detail table the answer serves
+// is replaced by the service's own sentence, and the synthesis prompt is v32
+// (CHAOS-12887). An answer saved under v281 holds the model's "not supplied".
+const QueryVersion = "devhealthfacts.clickhouse.v282"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
