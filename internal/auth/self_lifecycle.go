@@ -152,7 +152,7 @@ type PresentedRevocation struct {
 // caller: an MCP-bound credential is usable only through acr-mcp, which
 // forwards no lifecycle route, so this is its only holder-side revoke path. The
 // credential must have been issued to clientID. A malformed, unknown,
-// already-revoked or expired token answers invalid_grant and a token of another
+// already-revoked or expired token (FindByTokenHash returns none of those) answers invalid_grant and a token of another
 // client answers client_mismatch; neither changes anything, and the endpoint
 // answers every outcome alike (RFC 7009 §2.2).
 func (s *Service) RevokePresentedAccessToken(ctx context.Context, token, clientID string) (PresentedRevocation, error) {
@@ -172,10 +172,6 @@ func (s *Service) RevokePresentedAccessToken(ctx context.Context, token, clientI
 	result := PresentedRevocation{CredentialID: credential.CredentialID}
 	if credential.Provenance.ClientID != clientID {
 		result.Outcome = oauthvocab.OutcomeClientMismatch
-		return result, nil
-	}
-	if credential.RevokedAt != nil || credential.ExpiresAt != nil && !credential.ExpiresAt.After(s.now().UTC()) {
-		result.Outcome = oauthvocab.OutcomeInvalidGrant
 		return result, nil
 	}
 	if _, err := s.Revoke(ctx, credential.OrgID, credential.CredentialID, credential.CredentialID); err != nil {
