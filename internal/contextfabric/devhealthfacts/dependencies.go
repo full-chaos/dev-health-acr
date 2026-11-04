@@ -607,6 +607,12 @@ const blockerOpenPredicate = "lower(s.status) NOT IN ('done', '" + workItemCance
 // CHAOS-13003). 192 MiB is 3x the largest peak seen and under the API's 256 MiB
 // statement default; max_threads stays 1.
 //
+// Headroom: the fixed footprint (about 29 to 36 MiB, the planning and IN-set
+// building of the statement) plus about 0.7 KiB per work item holds to roughly
+// 200,000 work items of one organization. Past that the fix is not a higher cap:
+// it is team blocker totals the ops side precomputes into an append-only daily
+// table that this read takes with an argMax reader (CHAOS-13003 follow-up).
+//
 // memory-limit-measured: 50.61 MiB 2026-11-04 askdev-1 system.query_log team blocker totals with age (prod stopped at 64 MiB)
 const blockerStatementMaxMemoryUsage = uint64(192 << 20)
 
