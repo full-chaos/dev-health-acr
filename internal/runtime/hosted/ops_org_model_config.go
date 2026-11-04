@@ -3,7 +3,6 @@ package hosted
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -12,59 +11,37 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 )
 
-// EnvOrgLLMConfigSource overrides where per-organization BYO LLM
-// configuration comes from. The default (unset or "ops") is Dev Health's own
-// settings store (the web AI Setup > BYO LLM page writes it), read through
-// ops' internal llm-config route with the entitlement credential; acr holds
-// no BYO store and no settings encryption key. "off" turns the ops source off:
-// no per-organization source.
-const EnvOrgLLMConfigSource = "ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"
-
-const (
-	orgLLMConfigSourceOps = "ops"
-	orgLLMConfigSourceOff = "off"
-)
+// removedEnvOrgLLMConfigSource was the setting that chose where per-organization
+// BYO LLM configuration comes from (CHAOS-12997, chris 2026-11-04: everything
+// stays in ops). It no longer changes anything; a deployment that still sets it
+// is told once at start-up.
+const removedEnvOrgLLMConfigSource = "ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE"
 
 type orgLLMConfigSource interface {
 	OrgLLMConfig(ctx context.Context, orgID string) (entitlements.OrgLLMConfig, bool, error)
 }
 
-// buildOrgModelConfigResolver returns the per-organization config source, or
-// a nil interface when there is none. One store only: ops. Unset behaves as
-// "ops"; the one lenient case is no Dev Health entitlement client (local/dev),
-// which means no per-org source. An explicit "ops" without the client is an
-// error. "off" means no per-org source. A nil source cannot tell a saved-BYO
-// organization from one with none, so it is only built where every
-// organization may draw the deployment model anyway (an open deployment, or the
-// local entitlement client that grants every flag); otherwise it is an error
-// and the process does not start.
-func buildOrgModelConfigResolver(entitlement entitlementChecker, lookup func(string) (string, bool), logger *slog.Logger, serviceModelOpen bool) (contextfabric.OrgModelConfigResolver, error) {
-	value, _ := lookup(EnvOrgLLMConfigSource)
-	source, hasOps := entitlement.(orgLLMConfigSource)
-	switch strings.TrimSpace(value) {
-	case "", orgLLMConfigSourceOps:
-		explicit := strings.TrimSpace(value) != ""
-		if !hasOps {
-			if explicit {
-				return nil, fmt.Errorf("%s=ops needs the Dev Health entitlement client (ACR_DEV_HEALTH_ENTITLEMENT_URL and its token file)", EnvOrgLLMConfigSource)
-			}
-			if logger != nil {
-				logger.Info("context fabric org model config source: none (no Dev Health entitlement client configured); the platform model answers every organization")
-			}
-			return nil, nil
-		}
-		if logger != nil {
-			logger.Info("context fabric org model config source", "source", contextfabric.SanitizeLogAttr(orgLLMConfigSourceOps))
-		}
-		return opsOrgModelConfigs{source: source, generations: &versionGenerations{}, logger: logger}, nil
-	case orgLLMConfigSourceOff:
-		if _, local := entitlement.(localEntitlement); !serviceModelOpen && !local {
-			return nil, fmt.Errorf("%s=%s needs ACR_MCP_SERVICE_MODEL_DEFAULT=on: with no per-organization source a saved BYO configuration cannot be told from none, so the platform model could answer it", EnvOrgLLMConfigSource, orgLLMConfigSourceOff)
-		}
-		return nil, nil
-	default:
-		return nil, fmt.Errorf("%s must be empty, %q or %q", EnvOrgLLMConfigSource, orgLLMConfigSourceOps, orgLLMConfigSourceOff)
+// buildOrgModelConfigResolver returns the per-organization config source: the
+// settings store of Dev Health (the web AI Setup > BYO LLM page writes it), read
+// through ops' internal llm-config route with the entitlement credential. acr
+// holds no BYO store and no settings encryption key. With no Dev Health
+// entitlement client (local/dev) there is no per-organization source and it
+// returns a nil interface: the platform model answers every organization.
+func buildOrgModelConfigResolver(entitlement entitlementChecker, lookup func(string) (string, bool), logger *slog.Logger) contextfabric.OrgModelConfigResolver {
+	if value, set := lookup(removedEnvOrgLLMConfigSource); set && logger != nil {
+		logger.Warn("context fabric org model config source: the setting is removed and ignored; per-organization BYO configuration is always read from ops", "setting", removedEnvOrgLLMConfigSource, "value_set", strings.TrimSpace(value) != "")
 	}
+	source, hasOps := entitlement.(orgLLMConfigSource)
+	if !hasOps {
+		if logger != nil {
+			logger.Info("context fabric org model config source: none (no Dev Health entitlement client configured); the platform model answers every organization")
+		}
+		return nil
+	}
+	if logger != nil {
+		logger.Info("context fabric org model config source", "source", "ops")
+	}
+	return opsOrgModelConfigs{source: source, generations: &versionGenerations{}, logger: logger}
 }
 
 // opsOrgModelConfigs serves contextfabric.OrgModelConfigResolver from ops.

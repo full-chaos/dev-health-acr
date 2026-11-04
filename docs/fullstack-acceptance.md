@@ -294,21 +294,15 @@ A plan without a `service` section behaves exactly as before; a call that offers
 always answered by the OpenCode script, service section or not.
 
 **Spend hazard, read first.** `ACR_CONTEXT_FABRIC_MODEL_BASE_URL` alone does not keep a question
-off a real model. The per-organization source (`ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE`,
-default `ops`) answers first, and an organization that saved its own model configuration is sent
-to that organization's provider, base URL and credential. Set both of these on `acr-api` before
-anything else:
-
-```text
-ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE=off
-ACR_MCP_SERVICE_MODEL_DEFAULT=on
-```
-
-`off` needs `ACR_MCP_SERVICE_MODEL_DEFAULT=on` (acr-api refuses to start otherwise), and
-`ACR_MCP_SERVICE_MODEL_DEFAULT=on` is refused when `ACR_ENVIRONMENT=production`. The control is
-`internal/runtime/hosted/oracle_spend_guard_test.go`: with both settings an organization that has
-its own model configuration resolves to the oracle and its configuration is never read; without
-them it resolves to its own base URL and credential (that case is the red control).
+off a real model. Wherever a Dev Health entitlement client is configured, the per-organization
+source (ops) answers first, and an organization that saved its own model configuration is sent
+to that organization's provider, base URL and credential. There is no setting to turn the source
+off any more (CHAOS-12997). Only an organization with no saved configuration falls through to the
+oracle, and acr-api with no Dev Health entitlement client (local/dev) has no per-organization
+source at all. Run oracle questions as an organization that has saved no model configuration. The
+controls are in `internal/runtime/hosted/oracle_spend_guard_test.go`: with no entitlement client an
+organization that has its own model configuration resolves to the oracle and its configuration is
+never read; with the client it resolves to its own base URL and credential (the red control).
 
 Then point `acr-api` at the oracle. No other variable or flag is added:
 
