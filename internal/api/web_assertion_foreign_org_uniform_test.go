@@ -167,6 +167,88 @@ func answerOf(response *httptest.ResponseRecorder) string {
 	return response.Result().Status + "\n" + body
 }
 
+// A web assertion of one organization that names a repository of another
+// organization, an unknown repository, or its own not yet synced repository
+// gets one answer, and none of the other organization's values.
+func TestWebAssertionForeignOrg_contextPacketsAnswerUniformly(t *testing.T) {
+	// Given
+	const slug = hostedTestRepository
+	controlApp, controlSigner := uniformHostedApp(t, uniformEvidenceStore(t, uniformOwnerOrg, slug))
+	control := serve(controlApp, controlSigner.contextPacket(uniformOwnerOrg, slug))
+	if control.Code != http.StatusOK || !strings.Contains(control.Body.String(), uniformLeakMarker) {
+		t.Fatalf("owner control must read its own data: %d %s", control.Code, control.Body.String())
+	}
+	cases := map[string]storage.EvidenceStore{
+		"foreign-org-slug":  uniformEvidenceStore(t, uniformOwnerOrg, slug),
+		"unknown-slug":      uniformEvidenceStore(t, uniformOwnerOrg, "other-org/other-repo"),
+		"own-org-unsynced":  uniformEvidenceStore(t, uniformCallerOrg, "other-org/other-repo"),
+		"empty-store-owner": uniformEvidenceStore(t, "org_z", "other-org/other-repo"),
+	}
+
+	// When
+	answers := map[string]string{}
+	for name, store := range cases {
+		app, signer := uniformHostedApp(t, store)
+		response := serve(app, signer.contextPacket(uniformCallerOrg, slug))
+		answers[name] = answerOf(response)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d body=%s", name, response.Code, response.Body.String())
+		}
+		for _, foreign := range []string{uniformLeakMarker, "22222222-2222-4222-8222-222222222222", "acr:v1:"} {
+			if strings.Contains(response.Body.String(), foreign) {
+				t.Fatalf("%s: answer carries a value of another organization (%s): %s", name, foreign, response.Body.String())
+			}
+		}
+	}
+
+	// Then
+	want := answers["own-org-unsynced"]
+	for name, got := range answers {
+		if got != want {
+			t.Fatalf("%s answers differently from own-org-unsynced:\n%s\n--- vs ---\n%s", name, got, want)
+		}
+	}
+}
+
+func TestWebAssertionForeignOrg_evidenceAnswersUniformly(t *testing.T) {
+	// Given
+	const slug = hostedTestRepository
+	store := uniformEvidenceStore(t, uniformOwnerOrg, slug)
+	app, signer := uniformHostedApp(t, store)
+	packet := serve(app, signer.contextPacket(uniformOwnerOrg, slug))
+	handle := firstEvidenceRef(t, packet.Body.Bytes())
+	ownerRead := serve(app, signer.request(http.MethodGet, "/api/v1/agent-context/evidence/"+handle, nil, uniformOwnerOrg, []string{slug}))
+	if ownerRead.Code != http.StatusOK {
+		t.Fatalf("owner control status = %d body=%s", ownerRead.Code, ownerRead.Body.String())
+	}
+
+	// When
+	foreign := serve(app, signer.request(http.MethodGet, "/api/v1/agent-context/evidence/"+handle, nil, uniformCallerOrg, []string{slug}))
+	unknown := serve(app, signer.request(http.MethodGet, "/api/v1/agent-context/evidence/acr-unknown-handle-0000", nil, uniformCallerOrg, []string{slug}))
+
+	// Then
+	if foreign.Code != http.StatusNotFound {
+		t.Fatalf("foreign handle status = %d body=%s", foreign.Code, foreign.Body.String())
+	}
+	if strings.Contains(foreign.Body.String(), uniformLeakMarker) || answerOf(foreign) != answerOf(unknown) {
+		t.Fatalf("foreign handle answer differs from unknown:\n%s\n--- vs ---\n%s", answerOf(foreign), answerOf(unknown))
+	}
+}
+
+func TestWebAssertionForeignOrg_capabilitiesAnswerUniformly(t *testing.T) {
+	// Given
+	app, signer := uniformHostedApp(t, uniformEvidenceStore(t, uniformOwnerOrg, hostedTestRepository))
+
+	// When
+	owner := serve(app, signer.request(http.MethodGet, "/api/v1/agent-context/capabilities", nil, uniformOwnerOrg, []string{hostedTestRepository}))
+	other := serve(app, signer.request(http.MethodGet, "/api/v1/agent-context/capabilities", nil, uniformCallerOrg, []string{hostedTestRepository}))
+
+	// Then
+	if owner.Code != http.StatusOK || answerOf(owner) != answerOf(other) {
+		t.Fatalf("capabilities differ by organization:\n%s\n--- vs ---\n%s", answerOf(owner), answerOf(other))
+	}
+}
+
 // A credential of one organization asking for another organization's result
 // gets the same 404 as an unknown result (a web assertion is refused on this
 // route, CHAOS-12109, so the caller is a bearer credential).
