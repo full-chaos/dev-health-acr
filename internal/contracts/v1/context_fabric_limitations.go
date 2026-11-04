@@ -982,7 +982,8 @@ func IsContextFabricServiceAuthoredLimitation(limitation string) bool {
 		IsContextFabricComparisonPeriodUnreadLimitation(limitation) ||
 		IsContextFabricCoverageEntriesDroppedLimitation(limitation) ||
 		IsContextFabricProjectStatusMissingLimitation(limitation) ||
-		IsContextFabricWorkItemAuthorizationGapLimitation(limitation)
+		IsContextFabricWorkItemAuthorizationGapLimitation(limitation) ||
+		IsContextFabricForecastScopeLimitation(limitation)
 }
 
 // ContextFabricStatedRangeConflictLimitation is served when a turn ran on the

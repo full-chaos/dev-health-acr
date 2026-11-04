@@ -1373,6 +1373,26 @@ ask-dev pin, the web pin and the web deploy hold the shape. Off, the team fact
 still carries the row's scalar percentiles, dates and run count, and nothing
 about the distribution: no table, no state, no horizon.
 
+**Updated 2026-11-04 (CHAOS-12726): a forecast of some of a team's work scopes
+says so.** A team is forecast under several work scopes at once and the
+workload provider emits one fact per scope. A claim states one of them, so an
+answer that claims fewer scopes than the team has must not read as the team's
+forecast. `discloseForecastScopes` (after `discloseCompletionForecast`, from the
+facts already read, no new query) sets `scope_count` on each forecast summary:
+the number of the claimed team's scopes the read held, this scope included, and
+`scope_count_at_least` when the workload read was truncated (a floor). When a
+team's claims cover fewer scopes than that count, it adds one service-authored
+limitation and sets `coverage.partial`, e.g. `This forecast for team "Fullchaos"
+covers work scope "CHAOS" only: 1 of the team's 14 work scopes. Left out of this
+answer: 13 work scopes.` The sentence is recognised by
+`IsContextFabricForecastScopeLimitation`, so no composer displaces it. A team
+whose scopes are all claimed, or that has one, gets the count and no sentence.
+This discloses which scopes were used; it does not choose a forecast source, so
+the question whether a team answer should use the capacity page's team-wide
+forecast, one named scope, or a table of all scopes stays open (CHAOS-12726). It
+widens the forecast summary (optional fields, absent when unknown): ask-dev and
+web move by pin before the count is drawn.
+
 ```mermaid
 flowchart LR
     DECL["producer declaration<br/>FactColumnDeclaration.Unit<br/>(devhealthfacts/fact_field_declarations.go)"]

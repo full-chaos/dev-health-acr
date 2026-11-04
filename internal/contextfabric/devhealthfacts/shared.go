@@ -1430,7 +1430,14 @@ import (
 // v278 -> v279: current_state states "N rows" for a claim that carries a table
 // and a null scalar, where it printed "null" (CHAOS-12951). An answer saved
 // under v278 holds the old text.
-const QueryVersion = "devhealthfacts.clickhouse.v280"
+//
+// v279 -> v280: the ORG investment operations admit ISSUE_SIZE (CHAOS-12948).
+//
+// v280 -> v281: a team forecast claim that covers fewer of the team's work
+// scopes than the read held carries scope_count and a limitation naming the
+// scope and the count (CHAOS-12726). An answer saved under v280 presents one
+// scope's forecast without either.
+const QueryVersion = "devhealthfacts.clickhouse.v281"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
