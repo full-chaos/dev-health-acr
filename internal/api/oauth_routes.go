@@ -314,6 +314,19 @@ func (a *App) oauthLimitKey(r *http.Request, clientID string) string {
 	return "client:" + hex.EncodeToString(sum[:])
 }
 
+// revokeLimitKey is the limiter key of a /revoke request. An access token
+// (fcacr_) of a non-browser client is keyed by client AND source address
+// (CHAOS-12825): the client_id is public, so a client-wide key would let
+// anyone who knows it use up the holder's revoke, while a per-secret key would
+// let distinct bogus tokens skip the budget. Everything else keeps
+// oauthTokenLimitKey.
+func (a *App) revokeLimitKey(r *http.Request, clientID, secret string) string {
+	if strings.HasPrefix(secret, auth.TokenPrefix) && !a.oauth.IsBrowserClient(clientID) {
+		return a.oauthLimitKey(r, clientID) + "|ip:" + a.clientIP(r)
+	}
+	return a.oauthTokenLimitKey(r, clientID, secret)
+}
+
 // oauthTokenLimitKey is the limiter key of a /token or /revoke request. Every
 // user of a first-party browser client shares its public client_id, so a
 // client key would put every browser session, and anyone who knows the id,
@@ -321,12 +334,9 @@ func (a *App) oauthLimitKey(r *http.Request, clientID string) string {
 // sessions from refreshing and signing out. A browser client's request is
 // keyed by the secret it presents instead (the code, the refresh token or the
 // revoked token), hashed like the client id. Any other client, or a browser
-// request that presents no secret, keeps oauthLimitKey. An access token
-// (fcacr_) is keyed by its secret too (CHAOS-12825): its client_id is public,
-// so a client key would let anyone who knows the id use up the holder's
-// revoke; the address-level bound on token lookups is revokeAccessToken's.
+// request that presents no secret, keeps oauthLimitKey.
 func (a *App) oauthTokenLimitKey(r *http.Request, clientID, secret string) string {
-	if secret != "" && (a.oauth.IsBrowserClient(clientID) || strings.HasPrefix(secret, auth.TokenPrefix)) {
+	if secret != "" && a.oauth.IsBrowserClient(clientID) {
 		sum := sha256.Sum256([]byte(secret))
 		return "secret:" + hex.EncodeToString(sum[:])
 	}
@@ -983,7 +993,7 @@ func (a *App) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 		clientID, clientIDOK = tokenClientID(r)
 		secret = r.PostForm.Get("token")
 	}
-	if a.oauthRateLimited(w, r, oauthvocab.StepRevoke, a.oauthTokenLimitKey(r, clientID, secret), a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
+	if a.oauthRateLimited(w, r, oauthvocab.StepRevoke, a.revokeLimitKey(r, clientID, secret), a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
 		return
 	}
 	invalid := func() {

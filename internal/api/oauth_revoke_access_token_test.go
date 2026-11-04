@@ -165,9 +165,26 @@ func TestRevocationFloodDoesNotBlockTheHolder(t *testing.T) {
 	token, clientID := mcpBoundOAuthToken(t, app)
 
 	// From another address: 80 well-formed unknown tokens under the holder's public client_id.
+	limited := 0
 	for i := 0; i < 80; i++ {
-		bogus := auth.TokenPrefix + strings.Repeat("A", 42) + string(rune('A'+i%26))
-		revokeFrom(t, app, "198.51.100.7", bogus, clientID)
+		bogus := auth.TokenPrefix + strings.Repeat("A", 41) + string(rune('A'+i/26)) + string(rune('A'+i%26))
+		if revokeFrom(t, app, "198.51.100.7", bogus, clientID) == http.StatusTooManyRequests {
+			limited++
+		}
+	}
+	if limited == 0 {
+		t.Fatal("80 distinct unknown tokens from one address under one client were never limited")
+	}
+	// /token keeps the per-client budget for distinct fcacr_-looking codes.
+	tokenLimited := 0
+	for i := 0; i < 80; i++ {
+		code := auth.TokenPrefix + strings.Repeat("B", 41) + string(rune('A'+i/26)) + string(rune('A'+i%26))
+		if status, _, _ := postOAuthForm(t, app, OAuthTokenPath, url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {oauthTestRedirect}, "client_id": {clientID}, "code_verifier": {strings.Repeat("v", 50)}}); status == http.StatusTooManyRequests {
+			tokenLimited++
+		}
+	}
+	if tokenLimited == 0 {
+		t.Fatal("80 distinct fcacr_-prefixed codes at /token were never limited: the per-client budget was bypassed")
 	}
 	// From the SAME address as the holder: malformed tokens until the failure budget is spent.
 	refused := 0
