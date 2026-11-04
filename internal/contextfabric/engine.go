@@ -2387,6 +2387,14 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	}
 	// CHAOS-12632: what the interpretation kept of the question, counts only.
 	e.recordInterpretationTerms(ctx, principal, request.Question, interpretation, familyOutcome.Frame)
+	// CHAOS-13010: two ISO dates in the question are its range; the model's
+	// prompt copies only the request's bounds, so it reads the question as current.
+	if dated, applied := withQuestionDateRange(request.Question, interpretation, request.TimeContext.Axis); applied {
+		if e.telemetry != nil {
+			e.telemetry.RecordStatedWindowAxis(ctx, principal, request.Consumer.Surface, StatedWindowOriginQuestionDates, interpretation.TimeContext.Axis, dated.TimeContext.Axis, StatedWindowAxisStatedRange)
+		}
+		interpretation = dated
+	}
 	// Bound the INTERPRETED question too, not just the wire request
 	// (CHAOS-3755 codex delta review, P2).
 	//
