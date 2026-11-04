@@ -186,3 +186,33 @@ func TestRevocationFloodDoesNotBlockTheHolder(t *testing.T) {
 		t.Fatalf("forwarded call after the holder's revoke = %d, want 401", got)
 	}
 }
+
+// luna r1 on #2026: revoking a browser access token would cascade to the
+// whole refresh family; the browser client keeps unsupported_token_type and its
+// refresh token keeps working.
+func TestBrowserAccessTokenIsNotRevokedAtTheRevocationEndpoint(t *testing.T) {
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{
+		Issuer: oauthTestIssuer, Resources: []string{oauthTestResource, oauthTestIssuer}, DevBrowserRedirectURIs: []string{oauthTestRedirect},
+	}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { oauthConsentExtraClaims = nil })
+	all := []string{"*"}
+	oauthConsentExtraClaims = map[string]any{"sid": "sess_1"}
+	_, body := serveConsent(app, consentRequest(t, map[string]any{"action": "approve", "handle": authorizeToConsent(t, app, oauthTestAuthorizeQuery(auth.DevBrowserClientID)), "repository_scopes": all}, all, "r1"))
+	redirect, _ := url.Parse(body["redirect_url"].(string))
+	status, login, raw := postOAuthForm(t, app, OAuthTokenPath, url.Values{"grant_type": {"authorization_code"}, "code": {redirect.Query().Get("code")},
+		"redirect_uri": {oauthTestRedirect}, "client_id": {auth.DevBrowserClientID}, "code_verifier": {strings.Repeat("v", 50)}})
+	if status != http.StatusOK {
+		t.Fatalf("login: %d %s", status, raw)
+	}
+	status, answer, raw := postOAuthForm(t, app, OAuthRevocationPath, url.Values{"token": {login.AccessToken}, "token_type_hint": {"access_token"}, "client_id": {auth.DevBrowserClientID}})
+	if status != http.StatusBadRequest || answer.Error != "unsupported_token_type" {
+		t.Fatalf("browser access token revoke = %d %s, want 400 unsupported_token_type", status, raw)
+	}
+	status, _, raw = postOAuthForm(t, app, OAuthTokenPath, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {login.RefreshToken}, "client_id": {auth.DevBrowserClientID}})
+	if status != http.StatusOK {
+		t.Fatalf("refresh after the refused access-token revoke = %d %s, want 200", status, raw)
+	}
+}

@@ -1005,7 +1005,10 @@ func (a *App) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 		invalid()
 		return
 	}
-	if strings.HasPrefix(token, auth.TokenPrefix) {
+	// A browser client's access token stays unsupported_token_type: its
+	// revoke cascades to the whole refresh family, which its refresh token
+	// already asks for (CHAOS-12124).
+	if strings.HasPrefix(token, auth.TokenPrefix) && !a.oauth.IsBrowserClient(clientID) {
 		a.revokeAccessToken(w, r, token, clientID)
 		return
 	}
