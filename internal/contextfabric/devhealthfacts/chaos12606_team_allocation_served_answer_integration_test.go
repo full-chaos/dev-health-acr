@@ -233,6 +233,7 @@ func TestATeamsChildrenAllocationQuestionDrawsTheTeamsTreemap(t *testing.T) {
 		if len(model.offered) != 1 || model.offered[0] != team {
 			t.Fatalf("%s: investment facts offered for %v, want the team's alone", shape, model.offered)
 		}
+		assertTeamAllocationRequirement(t, string(shape), result)
 		var treemaps []contractsv1.ContextFabricRenderShape
 		for _, s := range result.RenderShapes {
 			if s.Kind == contractsv1.ContextFabricRenderKindTreemap {
@@ -256,6 +257,31 @@ func TestATeamsChildrenAllocationQuestionDrawsTheTeamsTreemap(t *testing.T) {
 		if err := result.Validate(); err != nil {
 			t.Fatalf("%s: the served result does not validate: %v", shape, err)
 		}
+	}
+}
+
+// assertTeamAllocationRequirement is CHAOS-12885 over the production registry:
+// the route reads the team's own fact, so the plan's allocation requirement is
+// the team's (allocation_breakdown/subject/team), that read satisfies it, and
+// no member requirement nothing reads lowers the answer to degraded.
+func assertTeamAllocationRequirement(t *testing.T, cell string, result contextfabric.InvestigationResult) {
+	t.Helper()
+	const anchor, member = "allocation_breakdown/subject/team", "allocation_breakdown/member/repository"
+	planned := map[string]bool{}
+	for _, requirement := range result.AnswerPlan.Requirements {
+		planned[requirement.Requirement] = true
+	}
+	if !planned[anchor] || planned[member] {
+		t.Fatalf("%s: plan requirements %v, want %s and not %s", cell, planned, anchor, member)
+	}
+	satisfied := false
+	for _, row := range result.Completeness.Outcomes {
+		if row.Requirement == anchor && row.Stage == contractsv1.ContextFabricOutcomeStageAssembledResult {
+			satisfied = row.Outcome == contractsv1.ContextFabricRequirementSatisfied
+		}
+	}
+	if !satisfied || result.Completeness.State == contractsv1.ContextFabricAnswerCompletenessDegraded {
+		t.Fatalf("%s: completeness %+v, want %s satisfied and the answer not degraded", cell, result.Completeness, anchor)
 	}
 }
 

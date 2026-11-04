@@ -900,6 +900,32 @@ type candidateOutcome struct {
 	// terminal: the candidate admits the shape but refuses the caller
 	// class; the search ends with its refusal.
 	terminal bool
+	// keepsPins: the query keeps every pin of the candidate (its scope level
+	// is the query's own, CHAOS-12819). Read once the arguments are bound.
+	keepsPins bool
+}
+
+// preferredOver orders two refused candidates; the reply is the refusal of
+// the one that wins. In this order: the deeper stage wins; on a stage tie a
+// person refusal wins (personWinsTie, design D.5, T13); then the candidate
+// whose pins the query keeps wins over one whose pins it does not keep
+// (CHAOS-12819: an ORG investment entry refuses a TEAM scope by naming the
+// TEAM entry, which has already refused the query for its own reason); else
+// the earlier, stricter candidate keeps it.
+func (o *candidateOutcome) preferredOver(best *candidateOutcome) bool {
+	if best == nil {
+		return true
+	}
+	if o.stage != best.stage {
+		return o.stage > best.stage
+	}
+	if personWinsTie(o, best) {
+		return true
+	}
+	if personWinsTie(best, o) {
+		return false
+	}
+	return o.keepsPins && !best.keepsPins
 }
 
 func (x *gqlRun) planRoot(ctx context.Context, index int, root rootSel, vars map[string]any) (plannedRoot, *GraphQLResponse, error) {
@@ -917,12 +943,20 @@ func (x *gqlRun) planRoot(ctx context.Context, index int, root rootSel, vars map
 			resp := x.refuse(outcome.refusal.Code, outcome.refusal.Reason, outcome.path)
 			return plannedRoot{}, &resp, nil
 		}
-		if best == nil || outcome.stage > best.stage {
+		if outcome.preferredOver(best) {
 			best = outcome
 		}
 	}
 	resp := x.refuse(best.refusal.Code, best.refusal.Reason, best.path)
 	return plannedRoot{}, &resp, nil
+}
+
+// personWinsTie: of two candidates refused at the same stage, a person
+// refusal is the answer (design D.5, T13). A stricter candidate can refuse
+// the query's scope level deeper than the person argument a later candidate
+// refuses (the ORG investment entry and a TEAM or REPO scope, CHAOS-12691).
+func personWinsTie(outcome, best *candidateOutcome) bool {
+	return outcome.stage == best.stage && outcome.refusal.Code == RefusalPersonScopeNotServed && best.refusal.Code != RefusalPersonScopeNotServed
 }
 
 func (x *gqlRun) tryCandidate(cand *rootCandidate, root rootSel, leaves []string, vars map[string]any) (map[string]any, []subjectUse, CallerScope, *candidateOutcome) {
@@ -963,6 +997,7 @@ func (x *gqlRun) tryCandidate(cand *rootCandidate, root rootSel, leaves []string
 		}
 		docVars[variable] = got
 	}
+	keepsPins := cand.keepsPins(docVars)
 	// Selection: every leaf on the operation's output allowlist.
 	for _, leaf := range leaves {
 		if op.OutputAllowed(leaf) {
@@ -974,7 +1009,7 @@ func (x *gqlRun) tryCandidate(cand *rootCandidate, root rootSel, leaves []string
 		} else if isWithheld(op, leaf) {
 			reason = "field is withheld by the operation policy (free text evidence)"
 		}
-		return nil, nil, scope, &candidateOutcome{refusal: &Refusal{Code: RefusalFieldNotAllowed, Reason: reason}, path: leaf, stage: 3}
+		return nil, nil, scope, &candidateOutcome{refusal: &Refusal{Code: RefusalFieldNotAllowed, Reason: reason}, path: leaf, stage: 3, keepsPins: keepsPins}
 	}
 	// 7b: the variable allowlist of the operation.
 	tree, subjects, refusals := checkVariables(op, docVars)
@@ -984,7 +1019,7 @@ func (x *gqlRun) tryCandidate(cand *rootCandidate, root rootSel, leaves []string
 		if _, known := op.Variable(deepest.path); known {
 			path = argumentPath(cand, deepest.path)
 		}
-		return nil, nil, scope, &candidateOutcome{refusal: &Refusal{Code: deepest.code, Reason: deepest.reason}, path: path, stage: 4}
+		return nil, nil, scope, &candidateOutcome{refusal: &Refusal{Code: deepest.code, Reason: deepest.reason}, path: path, stage: 4, keepsPins: keepsPins}
 	}
 	// 7e': constraints, the caller class's first.
 	constraints := op.Constraints
@@ -992,7 +1027,7 @@ func (x *gqlRun) tryCandidate(cand *rootCandidate, root rootSel, leaves []string
 		constraints = append(append([]Constraint{}, scope.Constraints...), op.Constraints...)
 	}
 	if refusal := checkConstraints(tree, constraints, x.r.now()); refusal != nil {
-		return nil, nil, scope, &candidateOutcome{refusal: refusal, stage: 5}
+		return nil, nil, scope, &candidateOutcome{refusal: refusal, stage: 5, keepsPins: keepsPins}
 	}
 	if !scope.Served {
 		refusal := scope.Refusal

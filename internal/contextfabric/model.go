@@ -1050,6 +1050,10 @@ type CanonicalFact struct {
 	// one by naming it with value null (namesDetailTable). Set only by
 	// synthesisprompt.ModelFacingFacts; empty on every fact a provider reads.
 	DetailTables []string `json:"detail_tables,omitempty"`
+	// DetailTableRows is, per name in DetailTables, the number of rows the
+	// table holds (CHAOS-12887): the model knows the breakdown is there and how
+	// large it is, never its rows. Set only by synthesisprompt.ModelFacingFacts.
+	DetailTableRows map[string]int `json:"detail_table_rows,omitempty"`
 }
 
 func (f CanonicalFact) Validate(requireEvidence bool) error {

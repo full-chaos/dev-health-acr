@@ -321,7 +321,9 @@ func namedInvestmentGoalRow(agreement FamilyAgreement) bool {
 // the precedence table, because the question then asks more than where effort
 // went. A project anchor keeps it too: a project reaches repositories only
 // through its issues' linked pull requests, so "across its repositories" is not
-// its own fact's split.
+// its own fact's split. Requirement derivation reads the same predicate
+// (requirementRoleSlots): on this route the requirement is the anchor's, never
+// each member's (CHAOS-12885).
 func scopeAllocationFrame(frame *QuestionFrame, anchorKind SubjectKind) bool {
 	if frame == nil || len(frame.Goals) != 1 || frame.Goals[0] != GoalAllocateInvestment {
 		return false

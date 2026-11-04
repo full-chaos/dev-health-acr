@@ -797,6 +797,14 @@ var ProductionColumns = map[string][]Column{
 		{Name: "valid_from", Type: "DateTime64(3, 'UTC')"},
 		{Name: "valid_to", Type: "Nullable(DateTime64(3, 'UTC'))"},
 		{Name: "updated_at", Type: "DateTime64(3, 'UTC')"},
+		// CHAOS-12691: the owning team's linked share of the repository (D5988),
+		// ops migration 122 (ADD COLUMN share Nullable(Float64)), the last column
+		// of team_repo_ownership in ops baseline/head.json. NULL is "not
+		// measured", never zero. Only the factoracle extract reads it (the
+		// owner-share pair); NOT yet read off a live system.columns as this
+		// package's doc requires: the live freshness test of devhealthsource is
+		// what confirms it against a deployment.
+		{Name: "share", Type: "Nullable(Float64)"},
 	},
 	// work_item_metrics_daily is CHAOS-4364's FlowProvider's read (flow.go),
 	// its first reader in this package. provider is unread by the provider

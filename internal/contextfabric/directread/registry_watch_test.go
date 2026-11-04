@@ -141,7 +141,7 @@ func TestRegistryWatch_digest_drift_stamps_served_and_warns_once(t *testing.T) {
 	ws := warns(buf.String())
 	if len(ws) != 1 || !strings.Contains(ws[0], "registry digest drift") ||
 		!strings.Contains(ws[0], cat.SchemaDigest()) || !strings.Contains(ws[0], servedDrift) ||
-		!strings.Contains(ws[0], "pinned_ops=64") || !strings.Contains(ws[0], "served_ops=64") {
+		!strings.Contains(ws[0], "pinned_ops=66") || !strings.Contains(ws[0], "served_ops=66") {
 		t.Fatalf("warns = %q", ws)
 	}
 	// Same state again: no repeat line.
@@ -301,7 +301,7 @@ func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *tes
 	if !strings.Contains(out, "registry digest drift") {
 		t.Fatalf("no schema digest drift line: %s", out)
 	}
-	changed := []string{"aiAttributedPrs", "aiAttributionOverview", "aiGovernanceSummary", "dataHealthIdentity", "testopsRisk", "aiImpactSummary", "aiOpportunities", "aiWorkflowDrilldown", "capacityForecast", "home", "hotspots", "improveOpportunities", "investmentFull", "operatingReview", "reviewEdges", "testOpsCoverage", "testOpsPipeline"}
+	changed := []string{"aiAttributedPrs", "aiAttributionOverview", "aiGovernanceSummary", "dataHealthIdentity", "testopsRisk", "aiImpactSummary", "aiOpportunities", "aiWorkflowDrilldown", "capacityForecast", "home", "hotspots", "improveOpportunities", "investmentBreakdown", "investmentFull", "operatingReview", "reviewEdges", "testOpsCoverage", "testOpsPipeline"}
 	for _, op := range changed {
 		if !strings.Contains(out, "operation="+op+" ") || !strings.Contains(out, "reason=changed") {
 			t.Errorf("no changed drift line for %s: %s", op, out)
@@ -310,22 +310,22 @@ func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *tes
 	if !strings.Contains(out, "operation=capacityCompletionDistribution ") || !strings.Contains(out, "reason=missing_in_served") {
 		t.Errorf("no missing_in_served line for the new operation: %s", out)
 	}
-	for _, op := range []string{"coverageBaselines", "coverageScopeBaseline", "investmentEvidenceQuality", "sourceHealth", "testopsJobFailures"} {
+	for _, op := range []string{"coverageBaselines", "coverageScopeBaseline", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentEvidenceQuality", "sourceHealth", "testopsJobFailures"} {
 		if !strings.Contains(out, "operation="+op+" ") {
 			t.Errorf("no missing_in_served line for %s: %s", op, out)
 		}
 	}
-	if got := strings.Count(out, "registry operation drift"); got != len(changed)+7 {
-		t.Errorf("%d operation drift lines, want %d: %s", got, len(changed)+7, out)
+	if got := strings.Count(out, "registry operation drift"); got != len(changed)+9 {
+		t.Errorf("%d operation drift lines, want %d: %s", got, len(changed)+9, out)
 	}
 }
 
-// Fixture: the GET /registry body of ops 51652ba7, written from the output of
+// Fixture: the GET /registry body of ops 0b763a85, written from the output of
 // ops go run ./cmd/registrydump (the current text of every operation, the
 // legacy texts left out, as the route serves them), not captured from a host.
 // The catalogue pinned from that commit must match it with zero drift.
 func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T) {
-	body, err := os.ReadFile("testdata/query_registry_51652ba7.json")
+	body, err := os.ReadFile("testdata/query_registry_0b763a85.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,15 +334,43 @@ func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T)
 	w, cat, buf := newWatch(t, f, nil)
 	w.Start()
 	w.Wait()
-	const want = "sha256:70c727ac76a2203a8f5a48378f9d9911bbd1275d52db2a6f625ceed2ee72c821"
+	const want = "sha256:6d40791c0e2a28c2e0284a3330d1b30ddc3e9b24d397d9ceb237c398d4cd106c"
 	if got := cat.StampedSchemaDigest(); got != want || cat.SchemaDigest() != want {
 		t.Fatalf("stamp %s pinned %s, want %s", got, cat.SchemaDigest(), want)
 	}
 	if ws := warns(buf.String()); len(ws) != 0 {
 		t.Fatalf("drift against the vendored commit's registry: %q", ws)
 	}
-	if !strings.Contains(buf.String(), "registry digest match") || !strings.Contains(buf.String(), "operations=64") {
-		t.Fatalf("no match line with 64 ops: %s", buf)
+	if !strings.Contains(buf.String(), "registry digest match") || !strings.Contains(buf.String(), "operations=66") {
+		t.Fatalf("no match line with 66 ops: %s", buf)
+	}
+}
+
+// The registry ops 51652ba7 served (the prod fact until ops 0b763a85), against
+// the catalogue pinned now: the schema digest moved (evidenceQualityStats
+// gained uncategorizedCount), investmentBreakdown changed text, and the two
+// scoped investment documents (CHAOS-12698) are not served yet.
+func TestRegistryWatch_51652ba7_served_registry_against_the_new_pin_shows_digest_drift_and_three_operations(t *testing.T) {
+	body, err := os.ReadFile("testdata/query_registry_51652ba7.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newRegistryFixture(t)
+	f.set(200, body)
+	w, _, buf := newWatch(t, f, nil)
+	w.Start()
+	w.Wait()
+	out := buf.String()
+	if ws := warns(out); len(ws) != 4 || !strings.Contains(ws[0], "registry digest drift") {
+		t.Fatalf("want digest drift + 3 operation drift warnings: %q", ws)
+	}
+	for _, want := range []string{
+		"operation=investmentBreakdown ", "reason=changed",
+		"operation=investmentBreakdownRepository ", "operation=investmentBreakdownTeam ", "reason=missing_in_served",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("no drift line with %q: %s", want, out)
+		}
 	}
 }
 
@@ -405,14 +433,16 @@ func TestRegistryWatch_previous_served_registry_against_the_new_pin_shows_the_di
 			digest++
 		}
 	}
-	if digest != 1 || len(ws) != 12 {
-		t.Fatalf("want one digest drift warning + 11 changed documents: %q", ws)
+	if digest != 1 || len(ws) != 15 {
+		t.Fatalf("want one digest drift warning + 14 operation drift lines (12 changed documents, 2 scoped investment documents missing in served): %q", ws)
 	}
 }
 
 // The registry ops 754d86cf served (pin 21), against the catalogue pinned now:
-// the schema digest moved (deltaPct nullable, rateState added) and the two
-// operations whose registered document text moved are home and operatingReview.
+// the schema digest moved (deltaPct nullable, rateState added), the documents
+// whose registered text moved since (home, operatingReview and the rest
+// listed below) drift, and the two scoped investment documents (ops
+// 0b763a85) are missing in served.
 func TestRegistryWatch_pin21_served_registry_against_the_new_pin_shows_digest_drift_and_three_changed_documents(t *testing.T) {
 	body, err := os.ReadFile("testdata/query_registry_754d86cf.json")
 	if err != nil {
@@ -424,13 +454,13 @@ func TestRegistryWatch_pin21_served_registry_against_the_new_pin_shows_digest_dr
 	w.Start()
 	w.Wait()
 	ws := warns(buf.String())
-	if len(ws) != 7 {
-		t.Fatalf("want digest drift + 6 operation drift warnings: %q", ws)
+	if len(ws) != 10 {
+		t.Fatalf("want digest drift + 9 operation drift warnings: %q", ws)
 	}
 	if !strings.Contains(buf.String(), "registry digest drift") {
 		t.Errorf("no schema digest drift line: %s", buf)
 	}
-	for _, op := range []string{"compoundingRisk", "home", "investmentFull", "operatingReview", "testOpsCoverage", "testOpsPipeline"} {
+	for _, op := range []string{"compoundingRisk", "home", "investmentBreakdown", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentFull", "operatingReview", "testOpsCoverage", "testOpsPipeline"} {
 		if !strings.Contains(buf.String(), "operation="+op+" ") {
 			t.Errorf("no drift line for %s", op)
 		}
@@ -439,9 +469,10 @@ func TestRegistryWatch_pin21_served_registry_against_the_new_pin_shows_digest_dr
 
 // The registry ops 5376c7c1 served (the prod fact until ops 51652ba7), against
 // the catalogue pinned now: the schema digest moved (home and investmentFull
-// gained fields) and five operations changed text: home, investmentFull and
-// the three that are not served (operatingReview, testOpsCoverage,
-// testOpsPipeline).
+// gained fields), six operations changed text: home, investmentFull,
+// investmentBreakdown (ops 0b763a85) and the three that are not served
+// (operatingReview, testOpsCoverage, testOpsPipeline), and the two scoped
+// investment documents are missing in served.
 func TestRegistryWatch_5376c7c1_served_registry_against_the_new_pin_shows_digest_drift_and_five_changed_documents(t *testing.T) {
 	body, err := os.ReadFile("testdata/query_registry_5376c7c1.json")
 	if err != nil {
@@ -453,13 +484,13 @@ func TestRegistryWatch_5376c7c1_served_registry_against_the_new_pin_shows_digest
 	w.Start()
 	w.Wait()
 	ws := warns(buf.String())
-	if len(ws) != 6 {
-		t.Fatalf("want digest drift + 5 operation drift warnings: %q", ws)
+	if len(ws) != 9 {
+		t.Fatalf("want digest drift + 8 operation drift warnings: %q", ws)
 	}
 	if !strings.Contains(buf.String(), "registry digest drift") {
 		t.Errorf("no schema digest drift line: %s", buf)
 	}
-	for _, op := range []string{"home", "investmentFull", "operatingReview", "testOpsCoverage", "testOpsPipeline"} {
+	for _, op := range []string{"home", "investmentBreakdown", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentFull", "operatingReview", "testOpsCoverage", "testOpsPipeline"} {
 		if !strings.Contains(buf.String(), "operation="+op+" ") {
 			t.Errorf("no drift line for %s", op)
 		}

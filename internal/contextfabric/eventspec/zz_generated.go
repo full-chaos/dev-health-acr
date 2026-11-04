@@ -20,192 +20,194 @@ func FieldKeys(e Event) []string {
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
 	"api.oauth_step": OAuthStep,
-	"contextfabric.anchor_binding_transition":             AnchorBindingTransition,
-	"contextfabric.answer_display":                        AnswerDisplay,
-	"contextfabric.answer_reuse_bypass":                   AnswerReuseBypass,
-	"contextfabric.answer_reuse_containment":              AnswerReuseContainment,
-	"contextfabric.answer_reuse_outcome":                  AnswerReuseOutcome,
-	"contextfabric.answer_reuse_served_request_id":        AnswerReuseServedRequestID,
-	"contextfabric.binding_epoch_moved":                   BindingEpochMoved,
-	"contextfabric.binding_epoch_unchanged":               BindingEpochUnchanged,
-	"contextfabric.budget_assertion":                      BudgetAssertion,
-	"contextfabric.category_fact_composition":             CategoryFactComposition,
-	"contextfabric.client_synthesis_decision":             ClientSynthesisDecision,
-	"contextfabric.cohort_driver_narration":               CohortDriverNarration,
-	"contextfabric.cohort_kind_fulltext":                  CohortKindFulltext,
-	"contextfabric.cohort_narrowing_disclosure":           CohortNarrowingDisclosure,
-	"contextfabric.cohort_ranked":                         CohortRanked,
-	"contextfabric.cohort_structure_gate":                 CohortStructureGate,
-	"contextfabric.commit_affirmation_retraction":         CommitAffirmationRetraction,
-	"contextfabric.commit_kept_by_no_member_found":        CommitKeptByNoMemberFound,
-	"contextfabric.completeness_authority":                CompletenessAuthority,
-	"contextfabric.confirmed_need_ledger":                 ConfirmedNeedLedger,
-	"contextfabric.confirmed_need_ledger_window":          ConfirmedNeedLedgerWindow,
-	"contextfabric.count_population_scope":                CountPopulationScope,
-	"contextfabric.coverage_disclosure_phrasing":          CoverageDisclosurePhrasing,
-	"contextfabric.coverage_entries_capped":               CoverageEntriesCapped,
-	"contextfabric.detail_tables_attached":                DetailTablesAttached,
-	"contextfabric.direct_read":                           DirectRead,
-	"contextfabric.direct_read_authorization":             DirectReadAuthorization,
-	"contextfabric.direct_relationships_read":             DirectRelationshipsRead,
-	"contextfabric.driver_identity_collisions":            DriverIdentityCollisions,
-	"contextfabric.driver_source_state_corrected":         DriverSourceStateCorrected,
-	"contextfabric.dual_table_facts":                      DualTableFacts,
-	"contextfabric.engine_fact_gate_info":                 EngineFactGateInfo,
-	"contextfabric.engine_fact_gate_warn":                 EngineFactGateWarn,
-	"contextfabric.evidence_expansion":                    EvidenceExpansion,
-	"contextfabric.evidence_label_fallback":               EvidenceLabelFallback,
-	"contextfabric.fact_evaluation_coverage":              FactEvaluationCoverage,
-	"contextfabric.fact_read":                             FactRead,
-	"contextfabric.fact_read_failed":                      FactReadFailed,
-	"contextfabric.fact_result_rejected":                  FactResultRejected,
-	"contextfabric.fact_root_refused":                     FactRootRefused,
-	"contextfabric.fact_scope_expansion_decision":         FactScopeExpansionDecision,
-	"contextfabric.fact_scope_expansion_gap":              FactScopeExpansionGap,
-	"contextfabric.fact_table_declaration":                FactTableDeclaration,
-	"contextfabric.fact_table_declaration_rejected":       FactTableDeclarationRejected,
-	"contextfabric.fact_table_declarations_capped":        FactTableDeclarationsCapped,
-	"contextfabric.frame_validation":                      FrameValidation,
-	"contextfabric.gated_offer_resolution":                GatedOfferResolution,
-	"contextfabric.gated_offer_resolution_failure":        GatedOfferResolutionFailure,
-	"contextfabric.graphql_query":                         GraphQLQuery,
-	"contextfabric.grouped_cohort_completeness":           GroupedCohortCompleteness,
-	"contextfabric.inferred_window_gate":                  InferredWindowGate,
-	"contextfabric.interpretation_ensemble_gap":           InterpretationEnsembleGap,
-	"contextfabric.interpretation_ensemble_resolved":      InterpretationEnsembleResolved,
-	"contextfabric.interpretation_terms":                  InterpretationTerms,
-	"contextfabric.interpreted_time_bound":                InterpretedTimeBound,
-	"contextfabric.item_accounting_disagreement":          ItemAccountingDisagreement,
-	"contextfabric.kind_carry":                            KindCarry,
-	"contextfabric.limitation_disclosure_skipped":         LimitationDisclosureSkipped,
-	"contextfabric.membership_cardinality":                MembershipCardinality,
-	"contextfabric.model_rows_stripped":                   ModelRowsStripped,
-	"contextfabric.observation_cover":                     ObservationCover,
-	"contextfabric.operation_read":                        OperationRead,
-	"contextfabric.organization_subject_read":             OrganizationSubjectRead,
-	"contextfabric.ownership_routing":                     OwnershipRouting,
-	"contextfabric.period_delta_composition":              PeriodDeltaComposition,
-	"contextfabric.plan_carry":                            PlanCarry,
-	"contextfabric.plan_carry_outcome":                    PlanCarryOutcome,
-	"contextfabric.plan_narrowing":                        PlanNarrowing,
-	"contextfabric.plan_operand_reads":                    PlanOperandReads,
-	"contextfabric.plan_subject_obligation_reads":         PlanSubjectObligationReads,
-	"contextfabric.prior_consulted":                       PriorConsulted,
-	"contextfabric.prior_degradation":                     PriorDegradation,
-	"contextfabric.prior_degradation_pointer_dangling":    PriorDegradationPointerDangling,
-	"contextfabric.prior_subject_receipt_skip_reason":     PriorSubjectReceiptSkipReason,
-	"contextfabric.prior_subject_receipts_skipped":        PriorSubjectReceiptsSkipped,
-	"contextfabric.project_deployment_walk":               ProjectDeploymentWalk,
-	"contextfabric.project_narrowing_resolution":          ProjectNarrowingResolution,
-	"contextfabric.project_status_drivers":                ProjectStatusDrivers,
-	"contextfabric.projected_rows_by_fact_kind":           ProjectedRowsByFactKind,
-	"contextfabric.projected_rows_count":                  ProjectedRowsCount,
-	"contextfabric.pull_request_status_filter":            PullRequestStatusFilter,
-	"contextfabric.question_family_resolution":            QuestionFamilyResolution,
-	"contextfabric.read_requirement_population":           ReadRequirementPopulation,
-	"contextfabric.remembered_window_axis":                RememberedWindowAxis,
-	"contextfabric.render_shape_rule_skipped":             RenderShapeRuleSkipped,
-	"contextfabric.render_shape_selection_summary":        RenderShapeSelectionSummary,
-	"contextfabric.repository_work_item_walk":             RepositoryWorkItemWalk,
-	"contextfabric.requirement_outcome_transition":        RequirementOutcomeTransition,
-	"contextfabric.retained_ranking_accounting":           RetainedRankingAccounting,
-	"contextfabric.semantic_state_persistence":            SemanticStatePersistence,
-	"contextfabric.server_status_shadow":                  ServerStatusShadowLine,
-	"contextfabric.service_limitation_lookalikes_dropped": ServiceLimitationLookalikesDropped,
-	"contextfabric.stated_window_axis_decision":           StatedWindowAxisDecision,
-	"contextfabric.stored_answerability":                  StoredAnswerability,
-	"contextfabric.stored_result_authorization":           StoredResultAuthorization,
-	"contextfabric.structure_explicit":                    StructureExplicit,
-	"contextfabric.structure_needs_disclosed":             StructureNeedsDisclosed,
-	"contextfabric.structure_offer_count":                 StructureOfferCount,
-	"contextfabric.structure_receipt":                     StructureReceipt,
-	"contextfabric.structure_receipt_veto":                StructureReceiptVeto,
-	"contextfabric.subjectless_terminal":                  SubjectlessTerminal,
-	"contextfabric.supplied_interpretation_decision":      SuppliedInterpretationDecision,
-	"contextfabric.supplied_synthesis_decision":           SuppliedSynthesisDecision,
-	"contextfabric.synthesis_input":                       SynthesisInput,
-	"contextfabric.synthesis_retry_selection":             SynthesisRetrySelection,
-	"contextfabric.synthesis_status_override":             SynthesisStatusOverride,
-	"contextfabric.team_anchor_walk":                      TeamAnchorWalk,
-	"contextfabric.team_blockers_drivers":                 TeamBlockersDrivers,
-	"contextfabric.team_narrowing_general_read":           TeamNarrowingGeneralRead,
-	"contextfabric.terminal_save_skipped":                 TerminalSaveSkipped,
-	"contextfabric.window_binder_outcome":                 WindowBinderOutcome,
-	"contextfabric.window_canonicalization_outcome":       WindowCanonicalizationOutcome,
-	"contextfabric.window_carry":                          WindowCarry,
-	"contextfabric.window_classification":                 WindowClassification,
-	"contextfabric.window_continuation_decision":          WindowContinuationDecision,
-	"contextfabric.window_expand_offer_redeemed":          WindowExpandOfferRedeemed,
-	"contextfabric.window_gate_offer_disclosure":          WindowGateOfferDisclosure,
-	"contextfabric.window_gated_for_confirmation":         WindowGatedForConfirmation,
-	"contextfabric.work_item_authorization_gap":           WorkItemAuthorizationGap,
-	"contextfabric.work_item_link_reach":                  WorkItemLinkReach,
-	"contextfabric.work_item_membership_gate":             WorkItemMembershipGate,
-	"contextfabric.work_item_membership_s1":               WorkItemMembershipS1,
-	"contextfabric.work_item_reuse":                       WorkItemReuse,
-	"contextfabric.work_item_stored_serving":              WorkItemStoredServing,
-	"contextfabric.work_item_tuple_admission":             WorkItemTupleAdmission,
-	"devhealthfacts.fact_bytes_bound_exceeded":            FactBytesBoundExceeded,
-	"devhealthfacts.health_daily_health_cap_cut":          HealthDailyHealthCapCut,
-	"devhealthfacts.owning_teams_truncated":               OwningTeamsTruncated,
-	"devhealthfacts.project_owning_team_rollup":           ProjectOwningTeamRollup,
-	"devhealthfacts.pull_request_project_native_first":    PullRequestProjectNativeFirst,
-	"devhealthfacts.repository_theme_breakdown_withheld":  RepositoryThemeBreakdownWithheld,
-	"devhealthfacts.rule_basis_day_absent":                DeficiencyRuleBasisDayAbsent,
-	"devhealthfacts.rule_basis_day_invalid":               DeficiencyRuleBasisDayInvalid,
-	"devhealthfacts.subject_id_shape_rejected":            SubjectIDShapeRejected,
-	"devhealthfacts.team_linked_mix_native_first":         TeamLinkedMixNativeFirst,
-	"devhealthfacts.team_linked_mix_set":                  TeamLinkedMixSet,
-	"devhealthfacts.team_pr_link_state_native_first":      TeamPRLinkStateNativeFirst,
-	"genkitruntime.model_interpret_decision":              ModelInterpretDecision,
-	"genkitruntime.model_phrase_decision":                 ModelPhraseDecision,
-	"genkitruntime.model_synthesize_decision":             ModelSynthesizeDecision,
-	"graphrank.alias_lookup":                              AliasLookup,
-	"graphrank.anchor_kind_withheld":                      AnchorKindWithheld,
-	"graphrank.anchor_kind_withheld_summary":              AnchorKindWithheldSummary,
-	"graphrank.anchor_offer":                              AnchorOffer,
-	"graphrank.anchor_pool":                               AnchorPool,
-	"graphrank.anchor_slot_displaced":                     AnchorSlotDisplaced,
-	"graphrank.confirmed_kind_rescue":                     ConfirmedKindRescue,
-	"graphrank.confirmed_kind_scope":                      ConfirmedKindScope,
-	"graphrank.corroboration":                             Corroboration,
-	"graphrank.corroboration_summary":                     CorroborationSummary,
-	"graphrank.decision":                                  Decision,
-	"graphrank.decision_summary":                          DecisionSummary,
-	"graphrank.evidence_census_commit":                    EvidenceCensusCommit,
-	"graphrank.evidence_census_listing":                   EvidenceCensusListing,
-	"graphrank.evidence_probe":                            EvidenceProbe,
-	"graphrank.evidence_round":                            EvidenceRound,
-	"graphrank.evidence_source_native":                    EvidenceSourceNative,
-	"graphrank.evidence_source_native_probe":              EvidenceSourceNativeProbe,
-	"graphrank.exact_name_search":                         ExactNameSearch,
-	"graphrank.identity_gate":                             IdentityGate,
-	"graphrank.identity_gate_summary":                     IdentityGateSummary,
-	"graphrank.identity_universe":                         IdentityUniverse,
-	"graphrank.kind_coverage_floor":                       KindCoverageFloor,
-	"graphrank.kind_hint_search":                          KindHintSearch,
-	"graphrank.kind_offer":                                KindOffer,
-	"graphrank.kind_offer_withheld":                       KindOfferWithheld,
-	"graphrank.kind_scoped_semantic":                      KindScopedSemantic,
-	"graphrank.low_population_kind_scope":                 LowPopulationKindScope,
-	"graphrank.low_population_kind_scope_summary":         LowPopulationKindScopeSummary,
-	"graphrank.offer_pool":                                OfferPool,
-	"graphrank.offer_pool_summary":                        OfferPoolSummary,
-	"graphrank.page_hint_lookup":                          PageHintLookup,
-	"graphrank.ranked_cut_summary":                        RankedCutSummary,
-	"graphrank.repository_reference_row":                  RepositoryReferenceRow,
-	"graphrank.reserved_kind_admitted":                    ReservedKindAdmitted,
-	"graphrank.search":                                    Search,
-	"graphrank.search_question":                           SearchQuestion,
-	"graphrank.slice_b_survivor_verdict":                  SliceBSurvivorVerdict,
-	"graphrank.slice_b_survivor_verdict_summary":          SliceBSurvivorVerdictSummary,
-	"graphrank.work_item_key_prefix_unread":               WorkItemKeyPrefixUnread,
-	"mcp.hosted_context_scope":                            MCPHostedContextScope,
-	"mcp.http_readiness":                                  MCPHTTPReadiness,
-	"mcp.http_request":                                    MCPHTTPRequest,
-	"mcp.http_serving":                                    MCPHTTPServing,
-	"process.otel_export":                                 OTelExport,
-	"projectionrun.graph_count_check_finished":            GraphCountCheckFinished,
+	"contextfabric.anchor_binding_transition":                          AnchorBindingTransition,
+	"contextfabric.answer_display":                                     AnswerDisplay,
+	"contextfabric.answer_reuse_bypass":                                AnswerReuseBypass,
+	"contextfabric.answer_reuse_containment":                           AnswerReuseContainment,
+	"contextfabric.answer_reuse_outcome":                               AnswerReuseOutcome,
+	"contextfabric.answer_reuse_served_request_id":                     AnswerReuseServedRequestID,
+	"contextfabric.binding_epoch_moved":                                BindingEpochMoved,
+	"contextfabric.binding_epoch_unchanged":                            BindingEpochUnchanged,
+	"contextfabric.budget_assertion":                                   BudgetAssertion,
+	"contextfabric.category_fact_composition":                          CategoryFactComposition,
+	"contextfabric.client_synthesis_decision":                          ClientSynthesisDecision,
+	"contextfabric.cohort_driver_narration":                            CohortDriverNarration,
+	"contextfabric.cohort_kind_fulltext":                               CohortKindFulltext,
+	"contextfabric.cohort_narrowing_disclosure":                        CohortNarrowingDisclosure,
+	"contextfabric.cohort_ranked":                                      CohortRanked,
+	"contextfabric.cohort_structure_gate":                              CohortStructureGate,
+	"contextfabric.commit_affirmation_retraction":                      CommitAffirmationRetraction,
+	"contextfabric.commit_kept_by_no_member_found":                     CommitKeptByNoMemberFound,
+	"contextfabric.completeness_authority":                             CompletenessAuthority,
+	"contextfabric.confirmed_need_ledger":                              ConfirmedNeedLedger,
+	"contextfabric.confirmed_need_ledger_window":                       ConfirmedNeedLedgerWindow,
+	"contextfabric.count_population_scope":                             CountPopulationScope,
+	"contextfabric.coverage_disclosure_phrasing":                       CoverageDisclosurePhrasing,
+	"contextfabric.coverage_entries_capped":                            CoverageEntriesCapped,
+	"contextfabric.detail_tables_attached":                             DetailTablesAttached,
+	"contextfabric.direct_read":                                        DirectRead,
+	"contextfabric.direct_read_authorization":                          DirectReadAuthorization,
+	"contextfabric.direct_relationships_read":                          DirectRelationshipsRead,
+	"contextfabric.driver_identity_collisions":                         DriverIdentityCollisions,
+	"contextfabric.driver_source_state_corrected":                      DriverSourceStateCorrected,
+	"contextfabric.dual_table_facts":                                   DualTableFacts,
+	"contextfabric.engine_fact_gate_info":                              EngineFactGateInfo,
+	"contextfabric.engine_fact_gate_warn":                              EngineFactGateWarn,
+	"contextfabric.evidence_expansion":                                 EvidenceExpansion,
+	"contextfabric.evidence_label_fallback":                            EvidenceLabelFallback,
+	"contextfabric.fact_evaluation_coverage":                           FactEvaluationCoverage,
+	"contextfabric.fact_read":                                          FactRead,
+	"contextfabric.fact_read_failed":                                   FactReadFailed,
+	"contextfabric.fact_result_rejected":                               FactResultRejected,
+	"contextfabric.fact_root_refused":                                  FactRootRefused,
+	"contextfabric.fact_scope_expansion_decision":                      FactScopeExpansionDecision,
+	"contextfabric.fact_scope_expansion_gap":                           FactScopeExpansionGap,
+	"contextfabric.fact_table_declaration":                             FactTableDeclaration,
+	"contextfabric.fact_table_declaration_rejected":                    FactTableDeclarationRejected,
+	"contextfabric.fact_table_declarations_capped":                     FactTableDeclarationsCapped,
+	"contextfabric.frame_validation":                                   FrameValidation,
+	"contextfabric.gated_offer_resolution":                             GatedOfferResolution,
+	"contextfabric.gated_offer_resolution_failure":                     GatedOfferResolutionFailure,
+	"contextfabric.graphql_query":                                      GraphQLQuery,
+	"contextfabric.grouped_cohort_completeness":                        GroupedCohortCompleteness,
+	"contextfabric.inferred_window_gate":                               InferredWindowGate,
+	"contextfabric.interpretation_ensemble_gap":                        InterpretationEnsembleGap,
+	"contextfabric.interpretation_ensemble_resolved":                   InterpretationEnsembleResolved,
+	"contextfabric.interpretation_terms":                               InterpretationTerms,
+	"contextfabric.interpreted_time_bound":                             InterpretedTimeBound,
+	"contextfabric.item_accounting_disagreement":                       ItemAccountingDisagreement,
+	"contextfabric.kind_carry":                                         KindCarry,
+	"contextfabric.limitation_disclosure_skipped":                      LimitationDisclosureSkipped,
+	"contextfabric.membership_cardinality":                             MembershipCardinality,
+	"contextfabric.model_rows_stripped":                                ModelRowsStripped,
+	"contextfabric.observation_cover":                                  ObservationCover,
+	"contextfabric.operation_read":                                     OperationRead,
+	"contextfabric.organization_subject_read":                          OrganizationSubjectRead,
+	"contextfabric.ownership_routing":                                  OwnershipRouting,
+	"contextfabric.period_delta_composition":                           PeriodDeltaComposition,
+	"contextfabric.plan_carry":                                         PlanCarry,
+	"contextfabric.plan_carry_outcome":                                 PlanCarryOutcome,
+	"contextfabric.plan_narrowing":                                     PlanNarrowing,
+	"contextfabric.plan_operand_reads":                                 PlanOperandReads,
+	"contextfabric.plan_subject_obligation_reads":                      PlanSubjectObligationReads,
+	"contextfabric.prior_consulted":                                    PriorConsulted,
+	"contextfabric.prior_degradation":                                  PriorDegradation,
+	"contextfabric.prior_degradation_pointer_dangling":                 PriorDegradationPointerDangling,
+	"contextfabric.prior_subject_receipt_skip_reason":                  PriorSubjectReceiptSkipReason,
+	"contextfabric.prior_subject_receipts_skipped":                     PriorSubjectReceiptsSkipped,
+	"contextfabric.project_deployment_walk":                            ProjectDeploymentWalk,
+	"contextfabric.project_narrowing_resolution":                       ProjectNarrowingResolution,
+	"contextfabric.project_status_drivers":                             ProjectStatusDrivers,
+	"contextfabric.projected_rows_by_fact_kind":                        ProjectedRowsByFactKind,
+	"contextfabric.projected_rows_count":                               ProjectedRowsCount,
+	"contextfabric.pull_request_status_filter":                         PullRequestStatusFilter,
+	"contextfabric.question_family_resolution":                         QuestionFamilyResolution,
+	"contextfabric.read_requirement_population":                        ReadRequirementPopulation,
+	"contextfabric.remembered_window_axis":                             RememberedWindowAxis,
+	"contextfabric.render_shape_rule_skipped":                          RenderShapeRuleSkipped,
+	"contextfabric.render_shape_selection_summary":                     RenderShapeSelectionSummary,
+	"contextfabric.repository_work_item_walk":                          RepositoryWorkItemWalk,
+	"contextfabric.requirement_outcome_transition":                     RequirementOutcomeTransition,
+	"contextfabric.retained_ranking_accounting":                        RetainedRankingAccounting,
+	"contextfabric.semantic_state_persistence":                         SemanticStatePersistence,
+	"contextfabric.server_status_shadow":                               ServerStatusShadowLine,
+	"contextfabric.service_limitation_lookalikes_dropped":              ServiceLimitationLookalikesDropped,
+	"contextfabric.stated_window_axis_decision":                        StatedWindowAxisDecision,
+	"contextfabric.stored_answerability":                               StoredAnswerability,
+	"contextfabric.stored_result_authorization":                        StoredResultAuthorization,
+	"contextfabric.structure_explicit":                                 StructureExplicit,
+	"contextfabric.structure_needs_disclosed":                          StructureNeedsDisclosed,
+	"contextfabric.structure_offer_count":                              StructureOfferCount,
+	"contextfabric.structure_receipt":                                  StructureReceipt,
+	"contextfabric.structure_receipt_veto":                             StructureReceiptVeto,
+	"contextfabric.subjectless_terminal":                               SubjectlessTerminal,
+	"contextfabric.supplied_interpretation_decision":                   SuppliedInterpretationDecision,
+	"contextfabric.supplied_synthesis_decision":                        SuppliedSynthesisDecision,
+	"contextfabric.synthesis_input":                                    SynthesisInput,
+	"contextfabric.synthesis_retry_selection":                          SynthesisRetrySelection,
+	"contextfabric.synthesis_status_override":                          SynthesisStatusOverride,
+	"contextfabric.team_anchor_walk":                                   TeamAnchorWalk,
+	"contextfabric.team_blockers_drivers":                              TeamBlockersDrivers,
+	"contextfabric.team_narrowing_general_read":                        TeamNarrowingGeneralRead,
+	"contextfabric.terminal_save_skipped":                              TerminalSaveSkipped,
+	"contextfabric.window_binder_outcome":                              WindowBinderOutcome,
+	"contextfabric.window_canonicalization_outcome":                    WindowCanonicalizationOutcome,
+	"contextfabric.window_carry":                                       WindowCarry,
+	"contextfabric.window_classification":                              WindowClassification,
+	"contextfabric.window_continuation_decision":                       WindowContinuationDecision,
+	"contextfabric.window_expand_offer_redeemed":                       WindowExpandOfferRedeemed,
+	"contextfabric.window_gate_offer_disclosure":                       WindowGateOfferDisclosure,
+	"contextfabric.window_gated_for_confirmation":                      WindowGatedForConfirmation,
+	"contextfabric.work_item_authorization_gap":                        WorkItemAuthorizationGap,
+	"contextfabric.work_item_link_reach":                               WorkItemLinkReach,
+	"contextfabric.work_item_membership_gate":                          WorkItemMembershipGate,
+	"contextfabric.work_item_membership_s1":                            WorkItemMembershipS1,
+	"contextfabric.work_item_reuse":                                    WorkItemReuse,
+	"contextfabric.work_item_stored_serving":                           WorkItemStoredServing,
+	"contextfabric.work_item_tuple_admission":                          WorkItemTupleAdmission,
+	"devhealthfacts.fact_bytes_bound_exceeded":                         FactBytesBoundExceeded,
+	"devhealthfacts.health_daily_health_cap_cut":                       HealthDailyHealthCapCut,
+	"devhealthfacts.investment_subcategory_breakdown_noncanonical_key": InvestmentSubcategoryBreakdownNoncanonicalKey,
+	"devhealthfacts.investment_subcategory_breakdown_withheld":         InvestmentSubcategoryBreakdownWithheld,
+	"devhealthfacts.owning_teams_truncated":                            OwningTeamsTruncated,
+	"devhealthfacts.project_owning_team_rollup":                        ProjectOwningTeamRollup,
+	"devhealthfacts.pull_request_project_native_first":                 PullRequestProjectNativeFirst,
+	"devhealthfacts.repository_theme_breakdown_withheld":               RepositoryThemeBreakdownWithheld,
+	"devhealthfacts.rule_basis_day_absent":                             DeficiencyRuleBasisDayAbsent,
+	"devhealthfacts.rule_basis_day_invalid":                            DeficiencyRuleBasisDayInvalid,
+	"devhealthfacts.subject_id_shape_rejected":                         SubjectIDShapeRejected,
+	"devhealthfacts.team_linked_mix_native_first":                      TeamLinkedMixNativeFirst,
+	"devhealthfacts.team_linked_mix_set":                               TeamLinkedMixSet,
+	"devhealthfacts.team_pr_link_state_native_first":                   TeamPRLinkStateNativeFirst,
+	"genkitruntime.model_interpret_decision":                           ModelInterpretDecision,
+	"genkitruntime.model_phrase_decision":                              ModelPhraseDecision,
+	"genkitruntime.model_synthesize_decision":                          ModelSynthesizeDecision,
+	"graphrank.alias_lookup":                                           AliasLookup,
+	"graphrank.anchor_kind_withheld":                                   AnchorKindWithheld,
+	"graphrank.anchor_kind_withheld_summary":                           AnchorKindWithheldSummary,
+	"graphrank.anchor_offer":                                           AnchorOffer,
+	"graphrank.anchor_pool":                                            AnchorPool,
+	"graphrank.anchor_slot_displaced":                                  AnchorSlotDisplaced,
+	"graphrank.confirmed_kind_rescue":                                  ConfirmedKindRescue,
+	"graphrank.confirmed_kind_scope":                                   ConfirmedKindScope,
+	"graphrank.corroboration":                                          Corroboration,
+	"graphrank.corroboration_summary":                                  CorroborationSummary,
+	"graphrank.decision":                                               Decision,
+	"graphrank.decision_summary":                                       DecisionSummary,
+	"graphrank.evidence_census_commit":                                 EvidenceCensusCommit,
+	"graphrank.evidence_census_listing":                                EvidenceCensusListing,
+	"graphrank.evidence_probe":                                         EvidenceProbe,
+	"graphrank.evidence_round":                                         EvidenceRound,
+	"graphrank.evidence_source_native":                                 EvidenceSourceNative,
+	"graphrank.evidence_source_native_probe":                           EvidenceSourceNativeProbe,
+	"graphrank.exact_name_search":                                      ExactNameSearch,
+	"graphrank.identity_gate":                                          IdentityGate,
+	"graphrank.identity_gate_summary":                                  IdentityGateSummary,
+	"graphrank.identity_universe":                                      IdentityUniverse,
+	"graphrank.kind_coverage_floor":                                    KindCoverageFloor,
+	"graphrank.kind_hint_search":                                       KindHintSearch,
+	"graphrank.kind_offer":                                             KindOffer,
+	"graphrank.kind_offer_withheld":                                    KindOfferWithheld,
+	"graphrank.kind_scoped_semantic":                                   KindScopedSemantic,
+	"graphrank.low_population_kind_scope":                              LowPopulationKindScope,
+	"graphrank.low_population_kind_scope_summary":                      LowPopulationKindScopeSummary,
+	"graphrank.offer_pool":                                             OfferPool,
+	"graphrank.offer_pool_summary":                                     OfferPoolSummary,
+	"graphrank.page_hint_lookup":                                       PageHintLookup,
+	"graphrank.ranked_cut_summary":                                     RankedCutSummary,
+	"graphrank.repository_reference_row":                               RepositoryReferenceRow,
+	"graphrank.reserved_kind_admitted":                                 ReservedKindAdmitted,
+	"graphrank.search":                                                 Search,
+	"graphrank.search_question":                                        SearchQuestion,
+	"graphrank.slice_b_survivor_verdict":                               SliceBSurvivorVerdict,
+	"graphrank.slice_b_survivor_verdict_summary":                       SliceBSurvivorVerdictSummary,
+	"graphrank.work_item_key_prefix_unread":                            WorkItemKeyPrefixUnread,
+	"mcp.hosted_context_scope":                                         MCPHostedContextScope,
+	"mcp.http_readiness":                                               MCPHTTPReadiness,
+	"mcp.http_request":                                                 MCPHTTPRequest,
+	"mcp.http_serving":                                                 MCPHTTPServing,
+	"process.otel_export":                                              OTelExport,
+	"projectionrun.graph_count_check_finished":                         GraphCountCheckFinished,
 }
 
 // OAuthStepFields is api.oauth_step's generated typed construction interface
@@ -9733,6 +9735,114 @@ func (f HealthDailyHealthCapCutFields) SlogArgs() []any {
 	}
 }
 
+// InvestmentSubcategoryBreakdownNoncanonicalKeyFields is devhealthfacts.investment_subcategory_breakdown_noncanonical_key's generated typed construction interface
+// (CHAOS-5516): one Go field per Field InvestmentSubcategoryBreakdownNoncanonicalKey.Fields declares in spec.go.
+type InvestmentSubcategoryBreakdownNoncanonicalKeyFields struct {
+	OrgID           string
+	SubjectKind     string
+	ThemeKeys       int
+	SubcategoryKeys int
+	AboveZeroKeys   int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every InvestmentSubcategoryBreakdownNoncanonicalKeyFields uniformly, set ONLY by NewInvestmentSubcategoryBreakdownNoncanonicalKeyFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewInvestmentSubcategoryBreakdownNoncanonicalKeyFields is the generated constructor for InvestmentSubcategoryBreakdownNoncanonicalKeyFields -- every
+// field InvestmentSubcategoryBreakdownNoncanonicalKey.Fields declares is a required parameter.
+func NewInvestmentSubcategoryBreakdownNoncanonicalKeyFields(orgID string, subjectKind string, themeKeys int, subcategoryKeys int, aboveZeroKeys int) InvestmentSubcategoryBreakdownNoncanonicalKeyFields {
+	return InvestmentSubcategoryBreakdownNoncanonicalKeyFields{
+		OrgID:           orgID,
+		SubjectKind:     subjectKind,
+		ThemeKeys:       themeKeys,
+		SubcategoryKeys: subcategoryKeys,
+		AboveZeroKeys:   aboveZeroKeys,
+		constructed:     true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewInvestmentSubcategoryBreakdownNoncanonicalKeyFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f InvestmentSubcategoryBreakdownNoncanonicalKeyFields) IsConstructed() bool {
+	return f.constructed
+}
+
+// SlogArgs returns InvestmentSubcategoryBreakdownNoncanonicalKey's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f InvestmentSubcategoryBreakdownNoncanonicalKeyFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"theme_keys", f.ThemeKeys,
+		"subcategory_keys", f.SubcategoryKeys,
+		"above_zero_keys", f.AboveZeroKeys,
+	}
+}
+
+// InvestmentSubcategoryBreakdownWithheldFields is devhealthfacts.investment_subcategory_breakdown_withheld's generated typed construction interface
+// (CHAOS-5516): one Go field per Field InvestmentSubcategoryBreakdownWithheld.Fields declares in spec.go.
+type InvestmentSubcategoryBreakdownWithheldFields struct {
+	OrgID       string
+	SubjectKind string
+	Reason      string
+	Theme       string
+	RelativeGap float64
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every InvestmentSubcategoryBreakdownWithheldFields uniformly, set ONLY by NewInvestmentSubcategoryBreakdownWithheldFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewInvestmentSubcategoryBreakdownWithheldFields is the generated constructor for InvestmentSubcategoryBreakdownWithheldFields -- every
+// field InvestmentSubcategoryBreakdownWithheld.Fields declares is a required parameter.
+func NewInvestmentSubcategoryBreakdownWithheldFields(orgID string, subjectKind string, reason string, theme string, relativeGap float64) InvestmentSubcategoryBreakdownWithheldFields {
+	return InvestmentSubcategoryBreakdownWithheldFields{
+		OrgID:       orgID,
+		SubjectKind: subjectKind,
+		Reason:      reason,
+		Theme:       theme,
+		RelativeGap: relativeGap,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewInvestmentSubcategoryBreakdownWithheldFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f InvestmentSubcategoryBreakdownWithheldFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns InvestmentSubcategoryBreakdownWithheld's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f InvestmentSubcategoryBreakdownWithheldFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"subject_kind", contextfabric.SanitizeLogAttr(f.SubjectKind),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"theme", contextfabric.SanitizeLogAttr(f.Theme),
+		"relative_gap", f.RelativeGap,
+	}
+}
+
 // OwningTeamsTruncatedFields is devhealthfacts.owning_teams_truncated's generated typed construction interface
 // (CHAOS-5516): one Go field per Field OwningTeamsTruncated.Fields declares in spec.go.
 type OwningTeamsTruncatedFields struct {
@@ -13316,14 +13426,16 @@ func (f MCPHTTPRequestFields) SlogArgs() []any {
 // MCPHTTPServingFields is mcp.http_serving's generated typed construction interface
 // (CHAOS-5516): one Go field per Field MCPHTTPServing.Fields declares in spec.go.
 type MCPHTTPServingFields struct {
-	ListenAddress     string
-	Transport         string
-	BasePath          string
-	McpHop            bool
-	ServerVersion     string
-	ServerCommit      string
-	ProtocolRevisions []string
-	MaxBodyBytes      int
+	ListenAddress          string
+	Transport              string
+	BasePath               string
+	McpHop                 bool
+	ServerVersion          string
+	ServerCommit           string
+	ProtocolRevisions      []string
+	MaxBodyBytes           int
+	TrustedProxyNetworks   int
+	TrustedProxyExclusions int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every MCPHTTPServingFields uniformly, set ONLY by NewMCPHTTPServingFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -13337,21 +13449,23 @@ type MCPHTTPServingFields struct {
 
 // NewMCPHTTPServingFields is the generated constructor for MCPHTTPServingFields -- every
 // field MCPHTTPServing.Fields declares is a required parameter.
-func NewMCPHTTPServingFields(listenAddress string, transport string, basePath string, mcpHop bool, serverVersion string, serverCommit string, protocolRevisions []string, maxBodyBytes int) MCPHTTPServingFields {
+func NewMCPHTTPServingFields(listenAddress string, transport string, basePath string, mcpHop bool, serverVersion string, serverCommit string, protocolRevisions []string, maxBodyBytes int, trustedProxyNetworks int, trustedProxyExclusions int) MCPHTTPServingFields {
 	valid := true
 	if protocolRevisions == nil {
 		valid = false
 	}
 	return MCPHTTPServingFields{
-		ListenAddress:     listenAddress,
-		Transport:         transport,
-		BasePath:          basePath,
-		McpHop:            mcpHop,
-		ServerVersion:     serverVersion,
-		ServerCommit:      serverCommit,
-		ProtocolRevisions: protocolRevisions,
-		MaxBodyBytes:      maxBodyBytes,
-		constructed:       valid,
+		ListenAddress:          listenAddress,
+		Transport:              transport,
+		BasePath:               basePath,
+		McpHop:                 mcpHop,
+		ServerVersion:          serverVersion,
+		ServerCommit:           serverCommit,
+		ProtocolRevisions:      protocolRevisions,
+		MaxBodyBytes:           maxBodyBytes,
+		TrustedProxyNetworks:   trustedProxyNetworks,
+		TrustedProxyExclusions: trustedProxyExclusions,
+		constructed:            valid,
 	}
 }
 
@@ -13376,6 +13490,8 @@ func (f MCPHTTPServingFields) SlogArgs() []any {
 		"server_commit", contextfabric.SanitizeLogAttr(f.ServerCommit),
 		"protocol_revisions", contextfabric.SanitizeLogStrings(f.ProtocolRevisions),
 		"max_body_bytes", f.MaxBodyBytes,
+		"trusted_proxy_networks", f.TrustedProxyNetworks,
+		"trusted_proxy_exclusions", f.TrustedProxyExclusions,
 	}
 }
 

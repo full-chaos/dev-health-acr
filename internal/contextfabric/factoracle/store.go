@@ -3,6 +3,7 @@ package factoracle
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -41,6 +42,19 @@ type unitGeneration struct {
 	subcats    map[string]float64
 	prs        []string
 	issues     []string
+	// status is the row's categorization_status.
+	status string
+}
+
+// gated is the evidence gate of both producers: a work unit whose latest
+// generation has too little text (insufficient_evidence) or none
+// (no_text_sources) carries a fixed uniform prior, not a measured split, and
+// stays out of the theme mix. ops: analytics.CategorizedOnlySQL
+// (internal/queryapi/analytics/investment.go:677 at 0b763a85), counted in
+// evidenceQualityStats.uncategorizedCount; acr: evidenceGatedStatuses
+// (devhealthfacts/investment_uncategorized.go, #1666).
+func (g unitGeneration) gated() bool {
+	return g.status == "insufficient_evidence" || g.status == "no_text_sources"
 }
 
 type unitGenerations struct {
@@ -129,6 +143,7 @@ func NewStore(extract *Extract) (*Store, error) {
 		if repo, ok := rowString(row, "repo_id"); ok {
 			gen.repoID = &repo
 		}
+		gen.status, _ = rowString(row, "categorization_status")
 		if evidence, ok := rowString(row, "structural_evidence_json"); ok {
 			var refs struct {
 				PRs    []string `json:"prs"`
@@ -196,7 +211,8 @@ func (s *Store) inScope(id string) bool {
 }
 
 // OrgThemeEffort is the ops ORG reading under COUNT by theme: the sum,
-// over the latest generation of every work unit in scope and in the window,
+// over the latest generation of every work unit in scope, in the window and
+// not evidence-gated (gated),
 // of one per work unit x subcategory share, grouped by the theme prefix of the
 // subcategory key, with the share as the Float32 ops casts it to
 // (dev-health-ops internal/queryapi/analytics investmentContextFor).
@@ -204,12 +220,25 @@ func (s *Store) OrgThemeEffort(w Window) map[string]float64 {
 	out := map[string]float64{}
 	for _, id := range s.unitIDs() {
 		unit := s.units[id]
-		if !s.inScope(id) || !w.holds(unit.latest) {
+		if !s.inScope(id) || !w.holds(unit.latest) || unit.latest.gated() {
 			continue
 		}
 		addSubcategoryEffort(out, unit.latest)
 	}
 	return out
+}
+
+// GatedUnits is the number of work units in scope and in the window that the
+// evidence gate leaves out of the mix: what ops counts as uncategorized.
+func (s *Store) GatedUnits(w Window) int64 {
+	var n int64
+	for _, id := range s.unitIDs() {
+		unit := s.units[id]
+		if s.inScope(id) && w.holds(unit.latest) && unit.latest.gated() {
+			n++
+		}
+	}
+	return n
 }
 
 func addSubcategoryEffort(out map[string]float64, gen unitGeneration) {
@@ -336,13 +365,13 @@ func reachTotal(reach map[string]float64) float64 {
 
 // ExpectedRepositoryEffort is the acr repository mix the store rows give:
 // per repository and theme, one per work unit x theme share x the repository's
-// share of the unit, over the latest generation of every work unit in scope
-// and in the window.
+// share of the unit, over the latest generation of every work unit in scope,
+// in the window and not evidence-gated (gated).
 func (s *Store) ExpectedRepositoryEffort(w Window) map[string]map[string]float64 {
 	out := map[string]map[string]float64{}
 	for _, id := range s.unitIDs() {
 		unit := s.units[id]
-		if !s.inScope(id) || !w.holds(unit.latest) {
+		if !s.inScope(id) || !w.holds(unit.latest) || unit.latest.gated() {
 			continue
 		}
 		for repo, share := range s.reach(unit.latest, unit.latest.repoID) {
@@ -350,7 +379,7 @@ func (s *Store) ExpectedRepositoryEffort(w Window) map[string]map[string]float64
 				out[repo] = map[string]float64{}
 			}
 			for theme, themeShare := range unit.latest.themes {
-				out[repo][theme] += themeShare * share
+				out[repo][theme] += float64(themeShare * share) // no fused multiply-add (arm64)
 			}
 		}
 	}
@@ -361,7 +390,8 @@ func (s *Store) ExpectedRepositoryEffort(w Window) map[string]map[string]float64
 // gain when the reader loses that class's rule: the effort, as far as it
 // reaches a repository, of the superseded work units, of the work units
 // outside the membership run, and of the work units whose latest NULL
-// repo_id an older generation would replace.
+// repo_id an older generation would replace. An evidence-gated work unit
+// (gated) is out of every mix whatever the rule, so it witnesses nothing.
 type Witnesses map[Class]map[string]float64
 
 // Witnesses computes the witness of every investment regression class.
@@ -369,12 +399,12 @@ func (s *Store) Witnesses(w Window) Witnesses {
 	out := Witnesses{ClassSupersession: {}, ClassMembershipScope: {}, ClassNullableArgmax: {}}
 	add := func(class Class, gen unitGeneration, share float64) {
 		for theme, themeShare := range gen.themes {
-			out[class][theme] += themeShare * share
+			out[class][theme] += float64(themeShare * share) // no fused multiply-add (arm64)
 		}
 	}
 	for _, id := range s.unitIDs() {
 		unit := s.units[id]
-		if !w.holds(unit.latest) {
+		if !w.holds(unit.latest) || unit.latest.gated() {
 			continue
 		}
 		switch {
@@ -561,6 +591,464 @@ func (s *Store) ownedRepositories(at time.Time) (owned map[string]map[string]boo
 		}
 	}
 	return owned, byNameOnly, nil
+}
+
+// coOwnerShareFloor is the smallest stored share a co-owner row may carry: the
+// ops writer gives a co-owner below it no row (chris 2026-10-15, CHAOS-9822;
+// ops internal/providersync/team_repo_ownership_derivation.go
+// teamRepoOwnershipCoOwnerShareFloor). A co-owner at exactly the floor keeps
+// its row.
+const coOwnerShareFloor = 0.01
+
+// ownerShareSumTolerance: the owner shares of one repository sum to 1 within
+// it.
+const ownerShareSumTolerance = 1e-9
+
+// OwnerShareBreachKind names a breach of the ownership share contract (D5988)
+// in the stored rows.
+type OwnerShareBreachKind string
+
+const (
+	// BreachShareSum: the owner shares of a repository do not sum to 1.
+	BreachShareSum OwnerShareBreachKind = "share_sum"
+	// BreachCoOwnerBelowFloor: a co-owner of a repository with more than one
+	// owner has a stored share below coOwnerShareFloor.
+	BreachCoOwnerBelowFloor OwnerShareBreachKind = "co_owner_below_floor"
+)
+
+// OwnerShareBreach is one breach of the share contract, by repository.
+type OwnerShareBreach struct {
+	Kind  OwnerShareBreachKind
+	Repo  string
+	Teams []string
+	// Values holds, per team, the share the breach is about: the owner
+	// share for share_sum, the stored share for
+	// co_owner_below_floor.
+	Values map[string]float64
+	Detail string
+}
+
+// RepositoryOwner is one owning team of a repository as of an instant.
+type RepositoryOwner struct {
+	Team string
+	// Stored is the team's stored share: the largest non-NULL share of its
+	// valid rows; nil when every one of them is NULL (not measured).
+	Stored *float64
+	// Share is the owner share: Stored over the sum of Stored of every owner
+	// of the repository, or 1/n when an owner has no stored share or the
+	// stored shares sum to nothing.
+	Share float64
+	// Main is true when a valid row of the team has is_primary = 1, the ops
+	// main owner (link rank).
+	Main bool
+}
+
+// OwnerShareReading is the owners of every repository as of one instant, by
+// the ops rule, with the breaches of the share contract in the rows.
+type OwnerShareReading struct {
+	AsOf time.Time
+	// Owners holds, per repository, its owners sorted by team; the shares
+	// are computed over every owner, never over the teams in view.
+	Owners map[string][]RepositoryOwner
+	// EqualSplit lists the repositories whose owners split equally: an
+	// owner has no stored share, or the stored shares sum to nothing (the
+	// known limit of D5988, not a breach).
+	EqualSplit []string
+	// Clamped lists the repositories whose first record is after AsOf: the
+	// owners valid at that first record were read (ops ownershipwindow). The
+	// extract holds no row that ended before its window, so for such a
+	// repository it cannot tell an owner of the first record from a gap
+	// between two owners of the full table; a reader must not take a clamped
+	// repository as measured.
+	Clamped []string
+	// Breaches are the breaches of the share contract, by repository and
+	// kind. They are findings of the owner-share pair, never dropped.
+	Breaches []OwnerShareBreach
+}
+
+// Share is the owner share of team in repo, 0 when the team does not own it.
+func (r *OwnerShareReading) Share(repo, team string) float64 {
+	for _, owner := range r.Owners[repo] {
+		if owner.Team == team {
+			return owner.Share
+		}
+	}
+	return 0
+}
+
+// ForTeams narrows the owners to the teams in view AFTER the shares were
+// computed over every owner (ops teamscope.OwnerShares, CHAOS-9413): a
+// co-owner in view keeps its own share of a repository, never the whole of
+// it. It returns team -> repository -> owner share.
+func (r *OwnerShareReading) ForTeams(teams []string) map[string]map[string]float64 {
+	inView := map[string]bool{}
+	for _, team := range teams {
+		inView[team] = true
+	}
+	out := map[string]map[string]float64{}
+	for repo, owners := range r.Owners {
+		for _, owner := range owners {
+			if !inView[owner.Team] {
+				continue
+			}
+			if out[owner.Team] == nil {
+				out[owner.Team] = map[string]float64{}
+			}
+			out[owner.Team][repo] = owner.Share
+		}
+	}
+	return out
+}
+
+// OwningTeams lists the teams that own a repository, sorted.
+func (r *OwnerShareReading) OwningTeams() []string {
+	teams := map[string]bool{}
+	for _, owners := range r.Owners {
+		for _, owner := range owners {
+			teams[owner.Team] = true
+		}
+	}
+	return sortedKeys(teams)
+}
+
+// asciiLower is ClickHouse lower(): ASCII letters only.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
+}
+
+// trimSpaces is ClickHouse trimBoth(): spaces (ASCII 32) only.
+func trimSpaces(s string) string { return strings.Trim(s, " ") }
+
+func rowNullableFloat(row Row, column string) (*float64, error) {
+	if v, ok := row[column]; !ok || v == nil {
+		return nil, nil
+	}
+	f, err := rowFloat(row, column)
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+// inactiveTeams is ops ownershipwindow.InactiveTeams over the teams rows: per
+// raw id, the newest row by (updated_at, last_synced, is_active) decides
+// (teamactive.NewestRowInactive); the ids are compared trimmed.
+func (s *Store) inactiveTeams() (map[string]bool, error) {
+	type newest struct {
+		updated, synced time.Time
+		active          float64
+	}
+	byID := map[string]newest{}
+	for _, row := range s.extract.Tables[tableTeams] {
+		id, ok := rowString(row, "id")
+		if !ok {
+			continue
+		}
+		updated, err := rowTime(row, "updated_at")
+		if err != nil {
+			return nil, fmt.Errorf("teams: %w", err)
+		}
+		synced, err := rowTime(row, "last_synced")
+		if err != nil {
+			return nil, fmt.Errorf("teams: %w", err)
+		}
+		active, err := rowFloat(row, "is_active")
+		if err != nil {
+			return nil, fmt.Errorf("teams: %w", err)
+		}
+		next := newest{updated, synced, active}
+		if prior, seen := byID[id]; seen {
+			later := next.updated.After(prior.updated) ||
+				(next.updated.Equal(prior.updated) && (next.synced.After(prior.synced) || (next.synced.Equal(prior.synced) && next.active > prior.active)))
+			if !later {
+				continue
+			}
+		}
+		byID[id] = next
+	}
+	out := map[string]bool{}
+	for id, row := range byID {
+		if row.active == 0 {
+			out[trimSpaces(id)] = true
+		}
+	}
+	return out, nil
+}
+
+// OwnerShares is the reference reading of ops teamscope.OwnerShares (D5988,
+// CHAOS-9408) over the extract rows, as of asOf:
+//
+//   - team_repo_ownership as FINAL reads it: per sorting key (provider,
+//     repo_full_name, team_id, source, valid_from) the row of the newest
+//     updated_at, the last one read on a tie;
+//   - a row owns when its team_id is not empty, its team is not inactive
+//     (inactiveTeams), and it resolves to a repository of the catalog: its own
+//     repo_id, else every repos id (repos as FINAL reads it) of the same
+//     provider whose lower-cased name equals its lower-cased repo_full_name;
+//   - a row holds at the later of asOf and the first record of its
+//     repository (the earliest valid_from of the owning rows of active teams,
+//     ops ownershipwindow): valid_from <= that instant < valid_to (or open);
+//   - a team's stored share of a repository is the largest non-NULL share of
+//     its valid rows, NULL when all are NULL; the owner share is stored over
+//     the sum of stored over ALL owners when no owner is NULL and the sum is
+//     above 0, else 1/(number of owners).
+//
+// The breaches of the share contract are returned in the reading, never
+// dropped: the owner shares of a repository sum to 1; no co-owner of a
+// repository with more than one owner has a stored share below the 1% floor.
+// The ops main owner (is_primary = 1) and every owner at the largest share are
+// not co-owners: ops keeps a main owner's row whatever its share, and a full
+// tie makes every tied team a main owner (D5990; team-attribution.md section
+// 0.4d), so a tie is no breach.
+//
+// This reading differs from ownedRepositories, acr's own reading of team
+// ownership (design K11), which never filters by valid_from.
+func (s *Store) OwnerShares(asOf time.Time) (*OwnerShareReading, error) {
+	asOf = asOf.UTC()
+	inactive, err := s.inactiveTeams()
+	if err != nil {
+		return nil, err
+	}
+
+	// repos as FINAL reads it: ReplacingMergeTree(last_synced) ORDER BY
+	// (org_id, id).
+	type repoRow struct {
+		at             time.Time
+		provider, name string
+	}
+	catalog := map[string]repoRow{}
+	for _, row := range s.extract.Tables[tableRepos] {
+		id, ok := rowString(row, "id")
+		if !ok {
+			continue
+		}
+		at, terr := rowTime(row, "last_synced")
+		if terr != nil {
+			return nil, fmt.Errorf("repos: %w", terr)
+		}
+		id = strings.ToLower(id)
+		if prior, seen := catalog[id]; seen && at.Before(prior.at) {
+			continue
+		}
+		provider, _ := rowString(row, "provider")
+		name, _ := rowString(row, "repo")
+		catalog[id] = repoRow{at: at, provider: provider, name: name}
+	}
+	byName := map[string][]string{}
+	for _, id := range mapKeys(catalog) {
+		entry := catalog[id]
+		key := entry.provider + "\x00" + asciiLower(entry.name)
+		byName[key] = append(byName[key], id)
+	}
+
+	// team_repo_ownership as FINAL reads it: ReplacingMergeTree(updated_at)
+	// ORDER BY (org_id, provider, repo_full_name, team_id, source,
+	// valid_from).
+	type ownKey struct {
+		provider, name, team, source string
+		from                         int64
+	}
+	type ownRow struct {
+		updated  time.Time
+		from     time.Time
+		to       *time.Time
+		team     string
+		repos    []string
+		share    *float64
+		primary  bool
+		resolves bool
+	}
+	final := map[ownKey]*ownRow{}
+	var keys []ownKey
+	for _, row := range s.extract.Tables[tableTeamRepoOwnership] {
+		from, ferr := rowTime(row, "valid_from")
+		if ferr != nil {
+			return nil, fmt.Errorf("team_repo_ownership: %w", ferr)
+		}
+		updated, uerr := rowTime(row, "updated_at")
+		if uerr != nil {
+			return nil, fmt.Errorf("team_repo_ownership: %w", uerr)
+		}
+		provider, _ := rowString(row, "provider")
+		name, _ := rowString(row, "repo_full_name")
+		team, _ := rowString(row, "team_id")
+		source, _ := rowString(row, "source")
+		key := ownKey{provider: provider, name: name, team: team, source: source, from: from.UnixNano()}
+		prior, seen := final[key]
+		if seen && updated.Before(prior.updated) {
+			continue
+		}
+		if !seen {
+			keys = append(keys, key)
+		}
+		next := &ownRow{updated: updated, from: from, team: team}
+		if to, ok := rowString(row, "valid_to"); ok {
+			until, terr := parseInstant(to)
+			if terr != nil {
+				return nil, fmt.Errorf("team_repo_ownership: %w", terr)
+			}
+			next.to = &until
+		}
+		if next.share, err = rowNullableFloat(row, "share"); err != nil {
+			return nil, fmt.Errorf("team_repo_ownership: %w", err)
+		}
+		if primary, perr := rowFloat(row, "is_primary"); perr == nil && primary == 1 {
+			next.primary = true
+		}
+		if id, ok := rowString(row, "repo_id"); ok {
+			next.repos, next.resolves = []string{strings.ToLower(id)}, true
+		} else {
+			next.repos = byName[provider+"\x00"+asciiLower(name)]
+			next.resolves = len(next.repos) > 0
+		}
+		final[key] = next
+	}
+
+	owning := func(r *ownRow) bool { return r.team != "" && !inactive[trimSpaces(r.team)] && r.resolves }
+	first := map[string]time.Time{}
+	for _, key := range keys {
+		r := final[key]
+		if !owning(r) {
+			continue
+		}
+		for _, repo := range r.repos {
+			if at, seen := first[repo]; !seen || r.from.Before(at) {
+				first[repo] = r.from
+			}
+		}
+	}
+
+	type pairKey struct{ repo, team string }
+	owners := map[pairKey]*RepositoryOwner{}
+	clamped := map[string]bool{}
+	for _, key := range keys {
+		r := final[key]
+		if !owning(r) {
+			continue
+		}
+		for _, repo := range r.repos {
+			if _, inCatalog := catalog[repo]; !inCatalog {
+				continue
+			}
+			at := asOf
+			if f := first[repo]; f.After(asOf) {
+				at = f
+			}
+			if r.from.After(at) || (r.to != nil && !r.to.After(at)) {
+				continue
+			}
+			if at.After(asOf) {
+				clamped[repo] = true
+			}
+			pk := pairKey{repo, r.team}
+			owner := owners[pk]
+			if owner == nil {
+				owner = &RepositoryOwner{Team: r.team}
+				owners[pk] = owner
+			}
+			if r.share != nil && (owner.Stored == nil || *r.share > *owner.Stored) {
+				share := *r.share
+				owner.Stored = &share
+			}
+			owner.Main = owner.Main || r.primary
+		}
+	}
+
+	out := &OwnerShareReading{AsOf: asOf, Owners: map[string][]RepositoryOwner{}, Clamped: sortedKeys(clamped)}
+	for pk, owner := range owners {
+		out.Owners[pk.repo] = append(out.Owners[pk.repo], *owner)
+	}
+	repos := make([]string, 0, len(out.Owners))
+	for repo := range out.Owners {
+		repos = append(repos, repo)
+	}
+	sort.Strings(repos)
+	for _, repo := range repos {
+		list := out.Owners[repo]
+		sort.Slice(list, func(i, j int) bool { return list[i].Team < list[j].Team })
+		measured, sum := true, 0.0
+		for _, owner := range list {
+			if owner.Stored == nil {
+				measured = false
+				continue
+			}
+			sum += *owner.Stored
+		}
+		measured = measured && sum > 0
+		for i := range list {
+			if measured {
+				list[i].Share = *list[i].Stored / sum
+			} else {
+				list[i].Share = 1 / float64(len(list))
+			}
+		}
+		if !measured {
+			out.EqualSplit = append(out.EqualSplit, repo)
+		}
+		out.Breaches = append(out.Breaches, shareContractBreaches(repo, list)...)
+	}
+	return out, nil
+}
+
+// shareContractBreaches checks the owners of one repository against the share
+// contract.
+func shareContractBreaches(repo string, owners []RepositoryOwner) []OwnerShareBreach {
+	var out []OwnerShareBreach
+	shares := map[string]float64{}
+	total := 0.0
+	for _, owner := range owners {
+		shares[owner.Team] = owner.Share
+		total += owner.Share
+	}
+	if math.IsNaN(total) || math.Abs(total-1) > ownerShareSumTolerance {
+		out = append(out, OwnerShareBreach{Kind: BreachShareSum, Repo: repo, Teams: teamsOf(owners), Values: shares,
+			Detail: fmt.Sprintf("the owner shares of the repository sum to %s, not 1", formatFloat(total))})
+	}
+	if len(owners) < 2 {
+		return out
+	}
+	largest := math.Inf(-1)
+	for _, owner := range owners {
+		largest = math.Max(largest, owner.Share)
+	}
+	// A full tie of the largest share is valid: every tied team is a main
+	// owner and keeps its row whatever its share (D5990; team-attribution.md
+	// section 0.4d). The floor binds lesser owners only, so the main owner
+	// (is_primary = 1) and every owner at the largest share are exempt.
+	top := map[string]bool{}
+	for _, owner := range owners {
+		if largest-owner.Share <= ownerShareSumTolerance {
+			top[owner.Team] = true
+		}
+	}
+	var below []string
+	stored := map[string]float64{}
+	for _, owner := range owners {
+		if owner.Main || top[owner.Team] || owner.Stored == nil || *owner.Stored >= coOwnerShareFloor {
+			continue
+		}
+		below = append(below, owner.Team)
+		stored[owner.Team] = *owner.Stored
+	}
+	if len(below) > 0 {
+		out = append(out, OwnerShareBreach{Kind: BreachCoOwnerBelowFloor, Repo: repo, Teams: below, Values: stored,
+			Detail: fmt.Sprintf("%d co-owners of the repository have a stored share below the %s floor; the ops writer gives them no row", len(below), formatFloat(coOwnerShareFloor))})
+	}
+	return out
+}
+
+func teamsOf(owners []RepositoryOwner) []string {
+	out := make([]string, 0, len(owners))
+	for _, owner := range owners {
+		out = append(out, owner.Team)
+	}
+	return out
 }
 
 func sortedKeys(set map[string]bool) []string {

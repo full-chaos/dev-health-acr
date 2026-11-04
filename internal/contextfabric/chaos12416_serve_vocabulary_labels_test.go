@@ -153,7 +153,9 @@ func wordRows() []wordRow {
 					Rows:  []contractsv1.ContextFabricClaimedFactRow{{Fields: map[string]contractsv1.ContextFabricScalarValue{"subcategory": {String: &other}}}},
 				},
 			}
-		}, map[string]string{"subcategory:quality.bugfix": "Bugfix"}},
+			// The column word of subcategory (CHAOS-12554 declares the column
+			// on subcategory_breakdown) rides with the row word.
+		}, map[string]string{"subcategory:quality.bugfix": "Bugfix", "fact_field:subcategory": "Subcategory"}},
 		// CHAOS-12639: each cell of a column its table declares in a vocabulary,
 		// on either table, and no cell of a column no table declares.
 		{"claimed column vocabulary cell", func(r *InvestigationResult) {

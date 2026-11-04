@@ -424,7 +424,31 @@ func opMinimalVariables(t *testing.T, op *directread.OperationPolicy) map[string
 			rule, _ := op.Variable(con.Path)
 			opMerge(vars, con.Path, opDate(opNow.AddDate(0, 0, -7), rule.Type))
 			opMerge(vars, con.Other, opDate(opNow, rule.Type))
+		case directread.ConstraintRequiresValue:
+			// An unconditional rule with no default refuses an omitted
+			// value: the scoped investment level.
+			if con.Path == "" && con.OtherDefault == "" && len(con.Values) > 0 {
+				opMerge(vars, con.Other, con.Values[0])
+			}
 		}
+	}
+	// A list with MinItems is refused when omitted: name org A's subjects.
+	for _, rule := range op.Variables {
+		if rule.MinItems <= 0 {
+			continue
+		}
+		var id any = "x"
+		if rule.Subject != nil {
+			id = opTeamT
+			if rule.Subject.Kind == directread.SubjectKindRepository {
+				id = opRepo(opRepoA)
+			}
+		}
+		items := make([]any, rule.MinItems)
+		for i := range items {
+			items[i] = id
+		}
+		opMerge(vars, rule.Path, items)
 	}
 	return vars
 }

@@ -133,19 +133,27 @@ func ModelFacingAnswerBudget(allocation contextfabric.ItemAllocation) *AnswerBud
 //
 // A declared detail table (CHAOS-12554) is left out the same way, and its name
 // is listed in the fact's detail_tables, so a question that asks for that
-// breakdown can name it in a claim with value null. Names only, sorted: the
-// model never sees its rows.
+// breakdown can name it in a claim with value null. Names, sorted, and each
+// table's row count in detail_table_rows (CHAOS-12887): the model never sees the
+// rows, but it knows the breakdown holds them, so it does not write that the
+// breakdown is unavailable. A table the reader withheld is not in the fact, so
+// it gets neither.
 func ModelFacingFacts(facts []contextfabric.CanonicalFact) []contextfabric.CanonicalFact {
 	out := make([]contextfabric.CanonicalFact, len(facts))
 	for i, fact := range facts {
 		clone := fact
 		clone.DetailTables = nil
+		clone.DetailTableRows = nil
 		if len(fact.Fields) > 0 {
 			fields := make(map[string]contextfabric.FactValue, len(fact.Fields))
 			for key, value := range fact.Fields {
 				if len(value.Rows) > 0 {
 					if value.Table != nil && value.Table.Detail {
 						clone.DetailTables = append(clone.DetailTables, key)
+						if clone.DetailTableRows == nil {
+							clone.DetailTableRows = map[string]int{}
+						}
+						clone.DetailTableRows[key] = len(value.Rows)
 					}
 					continue
 				}
