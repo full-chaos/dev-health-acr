@@ -1,9 +1,10 @@
 package config
 
 import (
-	"errors"
-	"net/netip"
+	"fmt"
 	"strings"
+
+	"github.com/full-chaos/dev-health-acr/internal/trustedproxy"
 )
 
 func stringListValue(lookup lookupEnv, key string) []string {
@@ -21,11 +22,11 @@ func stringListValue(lookup lookupEnv, key string) []string {
 	return result
 }
 
+// validateTrustedProxyCIDRs reads the list with the resolver's own parser,
+// networks and "!<address>" exclusions.
 func validateTrustedProxyCIDRs(values []string) error {
-	for _, value := range values {
-		if _, err := netip.ParsePrefix(value); err != nil {
-			return errors.New("ACR_TRUSTED_PROXY_CIDRS contains an invalid CIDR")
-		}
+	if _, err := trustedproxy.Parse(values); err != nil {
+		return fmt.Errorf("ACR_TRUSTED_PROXY_CIDRS: %w", err)
 	}
 	return nil
 }

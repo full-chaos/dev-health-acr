@@ -92,3 +92,42 @@ func TestTrustedProxyClientIPResolverUsesAllForwardedHeaderLines(t *testing.T) {
 		t.Fatalf("client IP = %q", got)
 	}
 }
+
+// CHAOS-11734: the prod list excludes the node's own addresses from the node
+// pod range. A host process or a hostNetwork pod reaches acr from 10.42.0.1,
+// so its X-Forwarded-For must not be believed, and an excluded hop in a
+// trusted proxy's chain is a client, not a proxy.
+func TestTrustedProxyClientIPResolverHonoursExclusions(t *testing.T) {
+	resolver, err := NewTrustedProxyClientIPResolver([]string{"10.42.0.0/24", "!10.42.0.0", "!10.42.0.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name, remote, forwarded, want string
+	}{
+		{name: "excluded node peer is the client", remote: "10.42.0.1:443", forwarded: "198.51.100.7", want: "10.42.0.1"},
+		{name: "excluded network address peer is the client", remote: "10.42.0.0:443", forwarded: "198.51.100.7", want: "10.42.0.0"},
+		{name: "ingress pod peer forwards the client", remote: "10.42.0.6:443", forwarded: "198.51.100.7", want: "198.51.100.7"},
+		{name: "excluded hop in a trusted chain is the client", remote: "10.42.0.6:443", forwarded: "198.51.100.7, 10.42.0.1", want: "10.42.0.1"},
+		{name: "IPv4-mapped excluded peer is the client", remote: "[::ffff:10.42.0.1]:443", forwarded: "198.51.100.7", want: "::ffff:10.42.0.1"},
+		{name: "IPv4-mapped ingress pod peer forwards the client", remote: "[::ffff:10.42.0.6]:443", forwarded: "198.51.100.7", want: "198.51.100.7"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest("GET", "http://example.test", nil)
+			request.RemoteAddr = test.remote
+			request.Header.Set("X-Forwarded-For", test.forwarded)
+			if got := resolver(request); got != test.want {
+				t.Fatalf("client IP = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestTrustedProxyClientIPResolverRejectsABadExclusion(t *testing.T) {
+	for _, list := range [][]string{{"10.42.0.0/24", "!192.0.2.1"}, {"10.42.0.0/24", "!10.42.0.0/24"}} {
+		if _, err := NewTrustedProxyClientIPResolver(list); err == nil {
+			t.Errorf("trusted proxy list %q accepted", list)
+		}
+	}
+}

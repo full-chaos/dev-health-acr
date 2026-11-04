@@ -147,6 +147,18 @@ func TestEdgeGateIgnoresForwardedForFromUntrustedPeer(t *testing.T) {
 	}
 }
 
+// CHAOS-11734: an excluded address inside a trusted network is not a proxy, so
+// a host process reaching acr-mcp from the node address cannot mint fresh
+// buckets with X-Forwarded-For.
+func TestEdgeGateIgnoresForwardedForFromAnExcludedPeer(t *testing.T) {
+	hosted := newHostedAPI(t)
+	e := newEndpointWithGate(t, hosted, acrmcp.EdgeGateOptions{TrustedProxyCIDRs: []string{"127.0.0.0/8", "!127.0.0.1"}})
+	got := burst(t, e, 25, func(int) string { return "junk" }, func(i int) string { return "198.51.100." + string(rune('0'+i%10)) })
+	if got[http.StatusUnauthorized] != 20 || got[http.StatusTooManyRequests] != 5 {
+		t.Fatalf("spoofed XFF from an excluded peer x25 = %v, want the peer bucket to refuse after 20", got)
+	}
+}
+
 func TestEdgeGateWithNoTrustedProxiesIgnoresForwardedFor(t *testing.T) {
 	e := newEndpoint(t, newHostedAPI(t))
 	got := burst(t, e, 25, func(int) string { return "junk" }, func(i int) string { return "198.51.100." + string(rune('0'+i%10)) })
