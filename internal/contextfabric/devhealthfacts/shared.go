@@ -1449,12 +1449,12 @@ import (
 // quadrant (CHAOS-12958). An answer saved under v282 refuses the quadrant
 // without saying why.
 //
-// v283 -> v284: the team blocker edge-row statements carry their own 192 MiB
+// v284 -> v285: the team blocker edge-row statements carry their own 192 MiB
 // memory cap, not the 64 MiB work item reader cap the prod read stopped at, and
 // a read the server stops at a memory limit is served as stopped at its memory
-// limit, not as "read failed" (CHAOS-13003). An answer saved under v283 holds
+// limit, not as "read failed" (CHAOS-13003). An answer saved under v284 holds
 // the blockers as unavailable.
-const QueryVersion = "devhealthfacts.clickhouse.v284"
+const QueryVersion = "devhealthfacts.clickhouse.v285"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
