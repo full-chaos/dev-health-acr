@@ -216,6 +216,14 @@ type Config struct {
 	// reuse key are as before. Turn it on after web's and ask-dev's pins are
 	// deployed.
 	ContextFabricInvestmentSunburstEnabled bool
+	// ContextFabricInvestmentRepositoryFromOpsEnabled (CHAOS-12690,
+	// ACR_CONTEXT_FABRIC_INVESTMENT_REPOSITORY_FROM_OPS_ENABLED) reads a
+	// repository's investment mix from the ops investmentBreakdownRepository
+	// answers: the split of a work unit across repositories is the ops one
+	// (lines changed), not ACR's PR-ref count. Default OFF: turning it moves
+	// repository numbers for units that span repositories, so it also joins
+	// the answer-reuse key (devhealthfacts.QueryVersionFor).
+	ContextFabricInvestmentRepositoryFromOpsEnabled bool
 	// ContextFabricInvestmentSankeyEnabled (CHAOS-12582,
 	// ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED) turns on the
 	// investment_repository_flow render rule: one team's effort from its
