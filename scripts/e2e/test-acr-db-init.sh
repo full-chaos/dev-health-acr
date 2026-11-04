@@ -16,7 +16,7 @@ trap cleanup EXIT
 
 docker run -d --rm --name "$container" --label devhealth.acr.e2e=acl-bootstrap \
   -e POSTGRES_USER=bootstrap -e POSTGRES_PASSWORD="$admin_password" -e POSTGRES_DB=postgres \
-  postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44 >/dev/null
+  postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5 >/dev/null
 
 for _ in {1..60}; do
   if docker exec "$container" pg_isready -U bootstrap -d postgres >/dev/null 2>&1; then
@@ -35,7 +35,7 @@ run_init() {
     -e ACR_RUNTIME_DB_USER=acr_runtime -e ACR_RUNTIME_DB_PASSWORD=runtime-password \
     -e ACR_MIGRATION_DB_USER=acr_migration -e ACR_MIGRATION_DB_PASSWORD=migration-password \
     -e ACR_ENABLE_EPISODE_WRITEBACK="${ACR_ENABLE_EPISODE_WRITEBACK:-false}" \
-    postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44 /usr/local/bin/acr-db-init "$mode" >/dev/null
+    postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5 /usr/local/bin/acr-db-init "$mode" >/dev/null
 }
 
 admin_query() {

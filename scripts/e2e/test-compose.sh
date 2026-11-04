@@ -174,11 +174,11 @@ grep -Fq 'ALTER DATABASE %I OWNER TO %I' "$root/deploy/compose/acr-db-init.sh"
 grep -Fq 'REVOKE ALL ON TABLES FROM :"runtime_user"' "$root/deploy/compose/acr-db-init.sh"
 if grep -Fq 'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO :"runtime_user"' "$root/deploy/compose/acr-db-init.sh"; then exit 1; fi
 for image in \
-  'postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44' \
-  'clickhouse/clickhouse-server:latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5' \
-  'edoburu/pgbouncer:latest@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd' \
-  'valkey/valkey:9-alpine@sha256:ee91f7a174ac4d6a6b0685b3a60e321f0a9dbbb691f9b0e285be2ba1d1be8328' \
-  'axllent/mailpit:latest@sha256:d5ecbb067db3705fa953d79e1b7f81ef84038df67aba6c52825d8c02a1ea748a' \
+  'postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5' \
+  'clickhouse/clickhouse-server:latest@sha256:739e099abd1157390960a59e4532d21781d8fde57e6e4151cb920ea02c30b1ce' \
+  'edoburu/pgbouncer:latest@sha256:8638aa563607256d3c7440437534195f1066a92b68015d89ae9d6b935b444a6d' \
+  'valkey/valkey:9-alpine@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b' \
+  'axllent/mailpit:latest@sha256:9b3a463be15354c0f0eba91697d80e3e0d8a5623ef0e627cacc836bc17fd5231' \
   'nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10'; do
   grep -Fq "$image" "$root/deploy/compose/acr.compose.yml" "$script" "$root/scripts/e2e/test-acr-db-init.sh"
   pin="${image/@sha256:/|sha256:}"

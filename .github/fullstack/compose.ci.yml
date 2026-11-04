@@ -98,7 +98,7 @@ services:
     networks: [dev-health]
 
   clickhouse:
-    image: clickhouse/clickhouse-server:latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5
+    image: clickhouse/clickhouse-server:latest@sha256:739e099abd1157390960a59e4532d21781d8fde57e6e4151cb920ea02c30b1ce
     restart: on-failure
     environment:
       CLICKHOUSE_LISTEN_HOST: 0.0.0.0
@@ -116,7 +116,7 @@ services:
     networks: [dev-health]
 
   valkey:
-    image: valkey/valkey:9-alpine@sha256:ee91f7a174ac4d6a6b0685b3a60e321f0a9dbbb691f9b0e285be2ba1d1be8328
+    image: valkey/valkey:9-alpine@sha256:bf09d58e96d6b4524a15396b65b242bbe18beebbcc15a04d8ee75ddac62fae0b
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "valkey-cli", "ping"]
