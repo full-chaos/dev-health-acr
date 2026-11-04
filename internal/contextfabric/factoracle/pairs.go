@@ -36,17 +36,29 @@ const (
 var opsFloat32Gap struct {
 	sync.Mutex
 	max float64
+	n   int
 }
 
 func observeOpsFloat32Gap(ops, store float64) {
 	scale := math.Max(math.Abs(ops), math.Abs(store))
-	if scale == 0 {
-		return
+	gap := 0.0
+	if scale != 0 {
+		gap = math.Abs(ops-store) / scale
 	}
-	gap := math.Abs(ops-store) / scale
 	opsFloat32Gap.Lock()
 	opsFloat32Gap.max = math.Max(opsFloat32Gap.max, gap)
+	opsFloat32Gap.n++
 	opsFloat32Gap.Unlock()
+}
+
+// takeOpsFloat32Gap returns the largest gap and the number of values compared
+// since the last take, and resets both.
+func takeOpsFloat32Gap() (float64, int) {
+	opsFloat32Gap.Lock()
+	defer opsFloat32Gap.Unlock()
+	gap, n := opsFloat32Gap.max, opsFloat32Gap.n
+	opsFloat32Gap.max, opsFloat32Gap.n = 0, 0
+	return gap, n
 }
 
 func scaled(rel float64, values ...float64) float64 {
