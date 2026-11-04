@@ -84,6 +84,16 @@ else
 fi
 stop_listener
 
+# 3b. One valid JSON value only: a multi-value body whose last value is ok is not ready.
+start_listener 0 '{"status":"starting"}
+{"status":"ok"}'
+if wait_for_healthz "http://127.0.0.1:${port}/healthz" 2 0.2 2>"$fixture/err"; then
+  bad "wait_for_healthz accepted a body with two JSON values, the last one ok"
+else
+  ok "wait_for_healthz refuses a body with more than one JSON value"
+fi
+stop_listener
+
 # 4. A listener that resets forever fails at the deadline, not never.
 start_listener 100000 '{"status":"ok"}'
 started="$(date +%s)"

@@ -17,7 +17,7 @@ wait_for_healthz() {
   while :; do
     attempts=$((attempts + 1))
     if body="$(curl --fail --silent --show-error --max-time 5 "$url" 2>&1)"; then
-      if printf '%s' "$body" | jq -e '.status == "ok"' >/dev/null 2>&1; then
+      if printf '%s' "$body" | jq -e -s 'length == 1 and .[0].status == "ok"' >/dev/null 2>&1; then
         return 0
       fi
       last="answered without status ok: ${body}"
