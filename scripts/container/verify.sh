@@ -7,6 +7,8 @@ mcp_image="${2:?usage: verify.sh <api-image> <mcp-image>}"
 # it: a build that took the version but stopped stamping it would otherwise pass.
 expected_version="${ACR_CONTAINER_EXPECTED_VERSION:?ACR_CONTAINER_EXPECTED_VERSION is required: the version the images were built with}"
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=scripts/container/lib/healthz-probe.sh
+source "${repo_root}/scripts/container/lib/healthz-probe.sh"
 sentinel="${ACR_CONTAINER_SECRET_SENTINEL:-ACR_CONTAINER_SECRET_SENTINEL_9b4f4fe1}"
 # Must stay on the version ACR actually ships against -- the same digest the
 # compose stack and the Helm chart's bundled PostgreSQL use. A harness pinned to
@@ -286,8 +288,8 @@ unset migration_dsn migration_password
 api_container="$(docker run -d "${readonly_probe_flags[@]}" -e ACR_LOCAL_COMPOSITION_READY=true -p 127.0.0.1::8080 "$api_image")"
 track_container "$api_container"
 api_port="$(docker port "$api_container" 8080/tcp | awk -F: '{print $NF}')"
-curl --fail --silent --show-error --retry 20 --retry-connrefused \
-  "http://127.0.0.1:${api_port}/healthz" | jq -e '.status == "ok"' >/dev/null
+# CHAOS-12966: poll until ready; curl --retry does not retry the reset docker's port proxy sends before the app listens.
+wait_for_healthz "http://127.0.0.1:${api_port}/healthz"
 
 assert_reports_version MCP "$mcp_image" version
 docker run --rm "${readonly_probe_flags[@]}" "$mcp_image" metadata | jq -e \
