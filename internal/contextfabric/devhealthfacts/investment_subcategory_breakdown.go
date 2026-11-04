@@ -157,11 +157,17 @@ func subcategoryBreakdownVariables(dimension, level, canonicalID, startDate, end
 }
 
 // subcategoryBreakdownDates is the investment window as the dates ops reads: a
-// work unit counts when its end stamp is in [startDate, endDate), the rule the
-// mix reads apply (workUnitEndStampPredicate). Only a window of whole UTC days
-// with an exclusive end has dates; any other (a bound inside a day, an
-// inclusive end, or all history, which has no start) is not sent, so ops never
-// reads a different period than the fact states (reason window_not_whole_days).
+// work unit counts when its end stamp is in [startDate, endDate], the rule the
+// mix reads apply (workUnitEndStampPredicate) with ops's inclusive last day.
+// ops reads dateRange.endDate as the LAST day, inclusive (ops
+// internal/queryapi/timewindow ExclusiveEnd: last day + 1, never later than the
+// last final day; analytics/window.go windowEndExclusive), so the fact's
+// exclusive end is sent as the day before it (CHAOS-12690). Only a window of
+// whole UTC days with an exclusive end whose last day is over has dates; any
+// other (a bound inside a day, an inclusive end, all history which has no
+// start, or a last day that is not over, which ops clips to the last final
+// day) is not sent, so ops never reads a different period than the fact states
+// (reason window_not_whole_days).
 func subcategoryBreakdownDates(bound factTimeBound) (startDate, endDate string, ok bool) {
 	if !bound.active || !bound.hasStart || !bound.endExclusive || !bound.start.Before(bound.end) {
 		return "", "", false
@@ -169,7 +175,11 @@ func subcategoryBreakdownDates(bound factTimeBound) (startDate, endDate string, 
 	if !wholeUTCDay(bound.start) || !wholeUTCDay(bound.end) {
 		return "", "", false
 	}
-	return bound.start.UTC().Format(time.DateOnly), bound.end.UTC().Format(time.DateOnly), true
+	today := clock().UTC().Truncate(24 * time.Hour)
+	if bound.end.UTC().After(today) {
+		return "", "", false
+	}
+	return bound.start.UTC().Format(time.DateOnly), bound.end.UTC().AddDate(0, 0, -1).Format(time.DateOnly), true
 }
 
 func wholeUTCDay(t time.Time) bool {

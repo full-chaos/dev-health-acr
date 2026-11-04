@@ -1448,7 +1448,13 @@ import (
 // line naming each team's day and offering that window when it refuses the
 // quadrant (CHAOS-12958). An answer saved under v282 refuses the quadrant
 // without saying why.
-const QueryVersion = "devhealthfacts.clickhouse.v283"
+//
+// v284 -> v285: the team blocker edge-row statements carry their own 192 MiB
+// memory cap, not the 64 MiB work item reader cap the prod read stopped at, and
+// a read the server stops at a memory limit is served as stopped at its memory
+// limit, not as "read failed" (CHAOS-13003). An answer saved under v284 holds
+// the blockers as unavailable.
+const QueryVersion = "devhealthfacts.clickhouse.v285"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
@@ -1618,14 +1624,22 @@ func readFailure(action string, err error) error {
 		attrs = append(attrs, "clickhouse_code", int(code))
 	}
 	slog.Warn("devhealthfacts.read_failed", attrs...)
+	reason := "devhealthfacts: " + action + " failed"
+	if hasCode && code == clickHouseMemoryLimitExceededCode {
+		reason = contextfabric.FactReadMemoryLimitReason
+	}
 	return &contextfabric.FactReadFailure{
 		State:      contextfabric.SourceUnavailable,
-		Reason:     "devhealthfacts: " + action + " failed",
+		Reason:     reason,
 		Class:      contextfabric.FactReadFailureReadFailed,
 		Cause:      err,
 		SourceCode: code,
 	}
 }
+
+// clickHouseMemoryLimitExceededCode is the exception code of a statement that
+// went over max_memory_usage (or the server's total memory).
+const clickHouseMemoryLimitExceededCode = 241
 
 // clickHouseExceptionCode is the numeric ClickHouse exception code err carries
 // or wraps. The code is a closed value a log line may carry; the exception

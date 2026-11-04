@@ -194,10 +194,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 		Window: request.config.RequestControls.Auth.Window, AttemptLimit: request.config.RequestControls.Auth.Requests,
 		FailureLimit: request.config.RequestControls.AuthFailures, MaxTrackedKeys: request.config.RequestControls.AuthTrackedKeys, MaxInFlight: request.config.RequestControls.AuthMaxInFlight,
 	})
-	orgModelConfigResolver, err := buildOrgModelConfigResolver(entitlement, os.LookupEnv, request.options.Logger, request.config.ServiceModelOpen)
-	if err != nil {
-		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric org model config source: %w", err))
-	}
+	orgModelConfigResolver := buildOrgModelConfigResolver(entitlement, os.LookupEnv, request.options.Logger)
 	request.sourceHealthOperations = devhealthfacts.NewOperationHolder()
 	investigator, investigationResultStore, clarificationSink, structureSelectionSink, err := buildContextFabricInvestigator(ctx, request, postgres, clickhouse, orgModelConfigResolver)
 	if err != nil {
@@ -331,7 +328,6 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 			DataSubjects:               dataReads.subjects,
 			DirectRelationships:        directRelationships,
 			OrgModelConfigs:            orgModelConfigResolver,
-			ServiceModelOpen:           request.config.ServiceModelOpen,
 			// CHAOS-4013: nil unless ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE
 			// and ACR_WORKLOAD_TRUST_DOMAIN are both set -- see
 			// buildWorkloadTokenExchange's own doc comment.
