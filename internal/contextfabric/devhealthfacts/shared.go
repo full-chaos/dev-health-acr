@@ -1455,6 +1455,10 @@ import (
 // limit, not as "read failed" (CHAOS-13003). An answer saved under v284 holds
 // the blockers as unavailable.
 //
+// v285 -> v286: two ISO dates in a question are read as its range when the
+// interpreter read it as current (CHAOS-13010). An answer saved under v285 to
+// such a question holds a current-state read.
+//
 // v286 -> v287: a quadrant refused for different days also offers the day the
 // teams share as a window option the user picks (window_clarification and
 // structure_needs), and the model is no longer shown common_live_day
