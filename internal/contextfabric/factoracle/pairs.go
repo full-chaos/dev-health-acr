@@ -19,8 +19,14 @@ const (
 	// relSum: a sum the two planes add in a different order.
 	relSum = 1e-9
 	// relOpsFloat32: ops casts the subcategory share to Float32 before it
-	// multiplies by the effort (analytics investmentContextFor ARRAY JOIN).
-	relOpsFloat32 = 1e-6
+	// multiplies by the effort (analytics investmentContextFor ARRAY JOIN,
+	// CAST ... Array(Tuple(String, Float32))). A Float32 keeps a 24-bit
+	// significand, so rounding a share to nearest changes it by at most
+	// 2^-24 of its value, and a sum of such positive products keeps that
+	// relative bound. It is this bound exactly, not a rounder number: a
+	// measured gap above it is a finding, never a reason to widen the constant
+	// (CHAOS-12950).
+	relOpsFloat32 = 0x1p-24
 )
 
 func scaled(rel float64, values ...float64) float64 {
