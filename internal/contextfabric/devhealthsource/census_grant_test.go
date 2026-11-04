@@ -238,10 +238,11 @@ func TestAGrantedWorkItemCensusCarriesTheDirectAndLinkArmsOnEveryStatement(t *te
 					if !strings.Contains(statement, "wia_link.work_item_id IN (SELECT w.work_item_id FROM work_items AS w WHERE") {
 						t.Fatalf("statement %d does not narrow the link aggregate to the handle's candidates", i)
 					}
-					// The library's link aggregate tests the two-part grammar before
-					// the owner, and that is the one thing keeping acme/group/secret
-					// out for an acme/* grant. RepositoryAllowed refuses that slug too:
-					// a library that dropped the guard would be an existence signal.
+					// The library's link aggregate tests the key grammar (2-20 segments)
+					// before the owner, and that is the one thing keeping a malformed
+					// slug such as acme/trailing- out for an acme/* grant. The graph gate
+					// refuses that slug too: a library that dropped the guard would be an
+					// existence signal.
 					if !strings.Contains(statement, "'"+linkSlugGrammar+"'") {
 						t.Fatalf("statement %d lost the library's slug grammar", i)
 					}
