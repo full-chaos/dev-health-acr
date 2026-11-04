@@ -305,8 +305,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "acr_web_assertion"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "Handler wraps itself: return a.protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true) at the end of ContextFabricInvestigationHandler -- deliberately so the nil-investigator 503 check stays INSIDE the authenticated boundary (CHAOS-3755 finding H5: an early-return-unwrapped 503 would let an unauthenticated caller probe configuration state).",
@@ -363,8 +362,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "acr_web_assertion"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricInvestigationResultHandler.",
@@ -423,8 +421,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "acr_web_assertion"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricSubmissionStatusHandler.",
@@ -481,8 +478,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "acr_web_assertion"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricSubmissionEventsHandler.",
@@ -539,8 +535,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "acr_web_assertion"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricSubmissionCancelHandler.",
@@ -597,8 +592,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "acr_web_assertion"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricThreadListHandler.",
@@ -655,8 +649,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "acr_web_assertion"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricThreadHandler.",
@@ -713,8 +706,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "acr_web_assertion"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricThreadHandler.",
@@ -771,8 +763,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "acr_web_assertion"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricResultFeedbackHandler.",
@@ -829,8 +820,7 @@
       "classification": "protected",
       "public_rationale": null,
       "accepted_credential_classes": [
-        "acr_client_credential",
-        "acr_web_assertion"
+        "acr_client_credential"
       ],
       "primary_validator": {
         "description": "protectedRuntimeHandler(RequestClassContext, ScopeContextRead, entitlement=true, allowWebAssertions=true), applied at the end of ContextFabricResultFeedbackHandler.",

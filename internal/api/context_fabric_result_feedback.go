@@ -183,7 +183,7 @@ func (a *App) ContextFabricResultFeedbackHandler() http.Handler {
 		a.recordReadAudit(r.Context(), principal, action, "context_fabric_investigation", "", "success", nil)
 		writeJSON(w, http.StatusOK, body)
 	})
-	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
+	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, handler)
 }
 
 func (a *App) writeResultFeedbackStoreError(w http.ResponseWriter, r *http.Request, principal storage.Principal, route resultFeedbackRoute, err error) {

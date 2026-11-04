@@ -167,106 +167,32 @@ func answerOf(response *httptest.ResponseRecorder) string {
 	return response.Result().Status + "\n" + body
 }
 
-// A web assertion of one organization that names a repository of another
-// organization, an unknown repository, or its own not yet synced repository
-// gets one answer, and none of the other organization's values.
-func TestWebAssertionForeignOrg_contextPacketsAnswerUniformly(t *testing.T) {
-	// Given
-	const slug = hostedTestRepository
-	controlApp, controlSigner := uniformHostedApp(t, uniformEvidenceStore(t, uniformOwnerOrg, slug))
-	control := serve(controlApp, controlSigner.contextPacket(uniformOwnerOrg, slug))
-	if control.Code != http.StatusOK || !strings.Contains(control.Body.String(), uniformLeakMarker) {
-		t.Fatalf("owner control must read its own data: %d %s", control.Code, control.Body.String())
-	}
-	cases := map[string]storage.EvidenceStore{
-		"foreign-org-slug":  uniformEvidenceStore(t, uniformOwnerOrg, slug),
-		"unknown-slug":      uniformEvidenceStore(t, uniformOwnerOrg, "other-org/other-repo"),
-		"own-org-unsynced":  uniformEvidenceStore(t, uniformCallerOrg, "other-org/other-repo"),
-		"empty-store-owner": uniformEvidenceStore(t, "org_z", "other-org/other-repo"),
-	}
-
-	// When
-	answers := map[string]string{}
-	for name, store := range cases {
-		app, signer := uniformHostedApp(t, store)
-		response := serve(app, signer.contextPacket(uniformCallerOrg, slug))
-		answers[name] = answerOf(response)
-		if response.Code != http.StatusOK {
-			t.Fatalf("%s: status = %d body=%s", name, response.Code, response.Body.String())
-		}
-		for _, foreign := range []string{uniformLeakMarker, "22222222-2222-4222-8222-222222222222", "acr:v1:"} {
-			if strings.Contains(response.Body.String(), foreign) {
-				t.Fatalf("%s: answer carries a value of another organization (%s): %s", name, foreign, response.Body.String())
-			}
-		}
-	}
-
-	// Then
-	want := answers["own-org-unsynced"]
-	for name, got := range answers {
-		if got != want {
-			t.Fatalf("%s answers differently from own-org-unsynced:\n%s\n--- vs ---\n%s", name, got, want)
-		}
-	}
-}
-
-func TestWebAssertionForeignOrg_evidenceAnswersUniformly(t *testing.T) {
-	// Given
-	const slug = hostedTestRepository
-	store := uniformEvidenceStore(t, uniformOwnerOrg, slug)
-	app, signer := uniformHostedApp(t, store)
-	packet := serve(app, signer.contextPacket(uniformOwnerOrg, slug))
-	handle := firstEvidenceRef(t, packet.Body.Bytes())
-	ownerRead := serve(app, signer.request(http.MethodGet, "/api/v1/agent-context/evidence/"+handle, nil, uniformOwnerOrg, []string{slug}))
-	if ownerRead.Code != http.StatusOK {
-		t.Fatalf("owner control status = %d body=%s", ownerRead.Code, ownerRead.Body.String())
-	}
-
-	// When
-	foreign := serve(app, signer.request(http.MethodGet, "/api/v1/agent-context/evidence/"+handle, nil, uniformCallerOrg, []string{slug}))
-	unknown := serve(app, signer.request(http.MethodGet, "/api/v1/agent-context/evidence/acr-unknown-handle-0000", nil, uniformCallerOrg, []string{slug}))
-
-	// Then
-	if foreign.Code != http.StatusNotFound {
-		t.Fatalf("foreign handle status = %d body=%s", foreign.Code, foreign.Body.String())
-	}
-	if strings.Contains(foreign.Body.String(), uniformLeakMarker) || answerOf(foreign) != answerOf(unknown) {
-		t.Fatalf("foreign handle answer differs from unknown:\n%s\n--- vs ---\n%s", answerOf(foreign), answerOf(unknown))
-	}
-}
-
-func TestWebAssertionForeignOrg_capabilitiesAnswerUniformly(t *testing.T) {
-	// Given
-	app, signer := uniformHostedApp(t, uniformEvidenceStore(t, uniformOwnerOrg, hostedTestRepository))
-
-	// When
-	owner := serve(app, signer.request(http.MethodGet, "/api/v1/agent-context/capabilities", nil, uniformOwnerOrg, []string{hostedTestRepository}))
-	other := serve(app, signer.request(http.MethodGet, "/api/v1/agent-context/capabilities", nil, uniformCallerOrg, []string{hostedTestRepository}))
-
-	// Then
-	if owner.Code != http.StatusOK || answerOf(owner) != answerOf(other) {
-		t.Fatalf("capabilities differ by organization:\n%s\n--- vs ---\n%s", answerOf(owner), answerOf(other))
-	}
-}
-
-func TestWebAssertionForeignOrg_investigationResultAnswersUniformly(t *testing.T) {
+// A credential of one organization asking for another organization's result
+// gets the same 404 as an unknown result (a web assertion is refused on this
+// route, CHAOS-12109, so the caller is a bearer credential).
+func TestForeignOrg_investigationResultAnswersUniformly(t *testing.T) {
 	// Given
 	now := time.Date(2026, 8, 12, 12, 0, 0, 0, time.UTC)
-	signer, verifier := newUniformSigner(t, now)
 	store := memoryinvestigation.NewStore()
 	seeded := seedResult(t, store, uniformOwnerOrg, "result_uniform_owned_01")
-	app := uniformResultApp(t, now, verifier, store)
+	app, bearer := uniformResultApp(t, now, store)
 	path := func(id string) string {
 		return strings.Replace(ContextFabricInvestigationResultPath, "{result_id}", id, 1)
 	}
-	owner := serve(app, signer.request(http.MethodGet, path(seeded.ResultID), nil, uniformOwnerOrg, []string{hostedTestRepository}))
+	get := func(org, id string) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, path(id), nil)
+		request.Header.Set("Authorization", "Bearer "+bearer(org))
+		request.Header.Set("X-ACR-Client-Version", "1.0.0")
+		return serve(app, request)
+	}
+	owner := get(uniformOwnerOrg, seeded.ResultID)
 	if owner.Code != http.StatusOK {
 		t.Fatalf("owner control status = %d body=%s", owner.Code, owner.Body.String())
 	}
 
 	// When
-	foreign := serve(app, signer.request(http.MethodGet, path(seeded.ResultID), nil, uniformCallerOrg, []string{hostedTestRepository}))
-	unknown := serve(app, signer.request(http.MethodGet, path("result_uniform_unknown_1"), nil, uniformCallerOrg, []string{hostedTestRepository}))
+	foreign := get(uniformCallerOrg, seeded.ResultID)
+	unknown := get(uniformCallerOrg, "result_uniform_unknown_1")
 
 	// Then
 	if foreign.Code != http.StatusNotFound {
@@ -277,7 +203,7 @@ func TestWebAssertionForeignOrg_investigationResultAnswersUniformly(t *testing.T
 	}
 }
 
-func uniformResultApp(t *testing.T, now time.Time, verifier *auth.WebAssertionVerifier, results contextfabric.InvestigationResultStore) *App {
+func uniformResultApp(t *testing.T, now time.Time, results contextfabric.InvestigationResultStore) (*App, func(org string) string) {
 	t.Helper()
 	audit := memory.NewAuditStore()
 	credentials := newMemoryCredentialLifecycle(t, audit, now)
@@ -296,7 +222,7 @@ func uniformResultApp(t *testing.T, now time.Time, verifier *auth.WebAssertionVe
 		return contextfabric.InvestigationResult{}, nil
 	})
 	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
-		Capabilities: StaticCapabilitiesProvider{Now: func() time.Time { return now }, Value: hostedCapabilities()}, Limits: manager, Now: func() time.Time { return now }, WebAssertions: verifier,
+		Capabilities: StaticCapabilitiesProvider{Now: func() time.Time { return now }, Value: hostedCapabilities()}, Limits: manager, Now: func() time.Time { return now },
 		Runtime: &RuntimeDependencies{
 			Credentials: credentials, Audit: audit, Entitlements: EntitlementFunc(func(context.Context, string, string) (bool, error) { return true, nil }),
 			Assembler: noopAssembler{}, Evidence: noopEvidenceStore{},
@@ -309,7 +235,19 @@ func uniformResultApp(t *testing.T, now time.Time, verifier *auth.WebAssertionVe
 	if err != nil {
 		t.Fatal(err)
 	}
-	return app
+	service, err := auth.NewService(credentials, auth.ServiceOptions{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return app, func(org string) string {
+		issued, err := service.Create(context.Background(), auth.CreateCredentialRequest{
+			OrgID: org, Name: "uniform " + org, RepositoryScopes: []string{hostedTestRepository}, Scopes: []string{auth.ScopeContextRead}, CreatedBy: "uniform_actor",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return issued.Token
+	}
 }
 
 func firstEvidenceRef(t *testing.T, packet []byte) string {

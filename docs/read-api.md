@@ -30,8 +30,13 @@ read stubs for health and deployment diagnostics.
 
 ## Request policy
 
-Every read route accepts either a validated `fcacr_` client credential or a
-trusted web assertion. Credential administration and episode write routes remain
+The Agent Context read routes (`capabilities`, `context-packets`, `evidence`)
+accept either a validated `fcacr_` client credential or a trusted web assertion.
+Every Context Fabric route (`/api/v1/context-fabric/*`: investigations, results,
+submissions and their events and cancel, feedback, threads, and the `data/*`
+reads) takes a validated credential only: a web assertion there is refused `401`
+`invalid_token` and the failure line carries the reason
+`web_assertion_not_accepted_on_route` (CHAOS-12109). Credential administration and episode write routes remain
 bearer-only, except that device approval accepts a trusted web assertion carrying
 only `credential:issue` for its exact request-bound approval body. This is a
 trusted-assertion permission, never an `fcacr_` credential scope: the assertion
