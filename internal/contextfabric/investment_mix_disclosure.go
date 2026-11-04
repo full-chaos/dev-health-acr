@@ -144,3 +144,92 @@ func forecastDate(fact CanonicalFact, field string) string {
 	}
 	return date
 }
+
+const workloadFactSource = "canonical_fact:workload"
+
+// discloseForecastScopes (CHAOS-12726) says how many work scopes a team has
+// when an answer's forecast claims fewer of them. A team is forecast under
+// several scopes at once, and one fact is read per scope; a claim states one
+// scope's forecast. Each forecast summary of a team gets the count of the
+// team's scopes the read held, and a team whose claims cover fewer than that
+// gets one service-authored limitation naming the scopes covered and the
+// number left out. It reads only the facts already read: no new query. It
+// discloses what was used; it does not choose a forecast source.
+func discloseForecastScopes(result *InvestigationResult, bundle CanonicalFactBundle) {
+	type teamScopes struct {
+		label string
+		read  map[string]struct{}
+	}
+	read := map[string]*teamScopes{}
+	var order []string
+	for _, fact := range bundle.Facts {
+		if fact.Kind != FactWorkload || fact.Subject.Kind != SubjectTeam || completionForecastOf(fact) == nil {
+			continue
+		}
+		scope, _ := stringField(fact, "work_scope_id")
+		team := read[fact.Subject.CanonicalID]
+		if team == nil {
+			team = &teamScopes{label: fact.Subject.Label, read: map[string]struct{}{}}
+			read[fact.Subject.CanonicalID] = team
+			order = append(order, fact.Subject.CanonicalID)
+		}
+		team.read[scope] = struct{}{}
+	}
+	if len(read) == 0 {
+		return
+	}
+	atLeast := false
+	for _, source := range bundle.Coverage.Sources {
+		if source.Source == workloadFactSource && source.State == SourceTruncated {
+			atLeast = true
+		}
+	}
+	covered := map[string]map[string]struct{}{}
+	for index := range result.ClaimedFacts {
+		claim := &result.ClaimedFacts[index]
+		if claim.CompletionForecast == nil {
+			continue
+		}
+		team := read[claim.Subject.CanonicalID]
+		if team == nil {
+			continue
+		}
+		total := int64(len(team.read))
+		claim.CompletionForecast.ScopeCount = &total
+		claim.CompletionForecast.ScopeCountAtLeast = atLeast
+		if covered[claim.Subject.CanonicalID] == nil {
+			covered[claim.Subject.CanonicalID] = map[string]struct{}{}
+		}
+		covered[claim.Subject.CanonicalID][claim.CompletionForecast.WorkScopeID] = struct{}{}
+	}
+	var sentences []string
+	gap := false
+	for _, id := range order {
+		scopes := covered[id]
+		team := read[id]
+		if len(scopes) == 0 {
+			continue
+		}
+		scopeName := ""
+		for scope := range scopes {
+			scopeName = scope
+		}
+		sentence := contractsv1.ContextFabricForecastScopeLimitation(team.label, scopeName, int64(len(scopes)), int64(len(team.read)), atLeast)
+		if sentence == "" {
+			// Covering every scope the read held states nothing; anything else
+			// that cannot be worded is still a gap, so it is flagged, not skipped.
+			if int64(len(scopes)) < int64(len(team.read)) {
+				gap = true
+			}
+			continue
+		}
+		sentences = append(sentences, sentence)
+	}
+	if len(sentences) == 0 && !gap {
+		return
+	}
+	composed, displaced := appendBoundedLimitations(result.Limitations, sentences)
+	result.Limitations = composed
+	result.LimitationsDisplaced += displaced
+	result.Coverage.Partial = true
+}

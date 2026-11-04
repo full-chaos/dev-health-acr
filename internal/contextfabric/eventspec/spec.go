@@ -2620,6 +2620,24 @@ var DetailTablesAttached = Event{
 	},
 }
 
+// SynthesisDetailTableRows is the Debug line of the detail tables a synthesis input lists and the row count the model is given for each (CHAOS-12887). Names and counts only, never a row. acr stores only digests of the synthesis input, so without this line nobody can say afterwards whether the count reached the model.
+var SynthesisDetailTableRows = Event{
+	ID:                       "contextfabric.synthesis_detail_table_rows",
+	Msg:                      "context fabric synthesis detail table rows",
+	Level:                    LevelDebug,
+	Multiplicity:             MultiplicityZeroOrManyPerRequest,
+	MaxLinesPerScope:         2,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per synthesis call whose input lists a detail table; a request makes at most two synthesis calls (the first and one retry).",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "detail_table_rows", Type: FieldStringSlice, Presence: PresenceRequired, MaxItems: contextfabric.MaxLoggedDetailTables},
+		{Key: "detail_tables_omitted", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // DualTableFacts is the Info line of how many claims carried a second time series table and the extra bytes it cost.
 var DualTableFacts = Event{
 	ID:                       "contextfabric.dual_table_facts",
@@ -6076,6 +6094,7 @@ var All = []Event{
 	ProjectedRowsByFactKind,
 	DualTableFacts,
 	DetailTablesAttached,
+	SynthesisDetailTableRows,
 	ModelRowsStripped,
 	DriverSourceStateCorrected,
 	ServiceLimitationLookalikesDropped,

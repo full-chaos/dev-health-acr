@@ -18,7 +18,7 @@ import (
 // default (North Star check 10).
 
 // detailTableRule is the one prompt line, pinned word for word.
-const detailTableRule = "A canonical_fact may list detail_tables, breakdowns of that fact that the input leaves out, and detail_table_rows, the number of rows each listed breakdown holds. Claim a listed detail table, with its name as the field and value null, only when the question asks for that breakdown; never claim one by default. For a breakdown listed with rows, do not write that the breakdown is unavailable or holds no values, and do not state its values: the input does not give them to you."
+const detailTableRule = "A canonical_fact may list detail_tables, breakdowns of that fact that the input leaves out, and detail_table_rows, the number of rows each listed breakdown holds. Claim a listed detail table, with its name as the field and value null, only when the question asks for that breakdown; never claim one by default. For a breakdown listed with rows, the service shows those rows to the reader as a table or chart beside your answer unless it states that it left them out. Do not write that the breakdown is unavailable, missing or holds no values, do not write that its rows or contents were not supplied, and do not list or state its values."
 
 // The prompt before this rule.
 const (
