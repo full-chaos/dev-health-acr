@@ -126,4 +126,12 @@ func ParseContextFabricFactRowTruncationLimitation(limitation string) (served, d
 // withheld instead, and this says so.
 const ContextFabricRepositoryFlowWithheldLimitation = "This answer leaves out the team's effort by repository and theme, because the assembled answer exceeded the size budget; a part of that table would not be the team's whole effort."
 
+// ContextFabricRepositorySplitUnclaimedLimitation is the disclosure of a team
+// allocation answer on the scope-anchor route that claims no
+// repository_theme_breakdown table (CHAOS-12890). The question asked for the
+// team's effort split by repository, and an answer that states none of it is
+// partial, never complete. It differs from the withheld sentence above, which
+// is for a table the size cut removed.
+const ContextFabricRepositorySplitUnclaimedLimitation = "This answer does not state the team's effort by repository and theme, which the question asked for, so it does not answer the whole question."
+
 const ContextFabricDistributionWithheldLimitation = "This answer leaves out the completion forecast's distribution of simulation runs, because the assembled answer exceeded the size budget; the forecast's percentile days are still stated."
