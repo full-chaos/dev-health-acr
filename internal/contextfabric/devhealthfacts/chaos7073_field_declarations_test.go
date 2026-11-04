@@ -212,6 +212,14 @@ func t4Cases() []t4Case {
 			return landscapeProjectRow("linear", "proj-1", fmt.Sprintf("team-%02d", i), 1, 10, 1, 5.0, 2)
 		})},
 	}})
+	// CHAOS-12958: two teams on different latest days carry the day they share.
+	add(t4Case{name: "landscape/team_common_day", kind: contextfabric.FactLandscape, subjects: []contextfabric.SubjectRef{teamSubject("CHAOS"), teamSubject("OPS")}, tables: []fakeTable{
+		{match: "day_identities", rows: [][]any{{"2026-02-20"}}},
+		{match: "sumIf(one_churn", rows: [][]any{
+			landscapeTeamRow("CHAOS", 4, 1200, 30, 18.5, 6),
+			{"OPS", "2026-02-20", int64(3), int64(900), int64(12), 9.5, int64(2), int64(0)},
+		}},
+	}})
 	add(t4Case{name: "landscape/team_no_cycle", kind: contextfabric.FactLandscape, subjects: team, tables: []fakeTable{
 		{match: "sumIf(one_churn", rows: [][]any{landscapeTeamRowCycle("CHAOS", 2, nil)}},
 	}})

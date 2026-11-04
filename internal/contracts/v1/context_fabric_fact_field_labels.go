@@ -68,6 +68,7 @@ var contextFabricFactFieldLabels = map[string]string{
 	"code_ownership_gini":                                     "Code ownership Gini (ratio)",
 	"collection_basis":                                        "Collection basis",
 	"commit_counts_basis":                                     "Commit count basis",
+	"common_live_day":                                         "Latest day the compared teams share",
 	"commitment_status":                                       "Commitment status",
 	"commits_count":                                           "Commits",
 	"completed":                                               "Completed",
