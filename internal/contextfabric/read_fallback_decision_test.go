@@ -11,6 +11,7 @@ func readFallbackTestCapabilities() []FactCapability {
 		{Kind: FactStatus, SupportedSubjectKinds: []SubjectKind{SubjectWorkItem}},
 		{Kind: FactSourceHealth, SupportedSubjectKinds: []SubjectKind{SubjectOrganization}},
 		{Kind: FactCommitment, SupportedSubjectKinds: []SubjectKind{SubjectProject}},
+		{Kind: FactLandscape, SupportedSubjectKinds: []SubjectKind{SubjectTeam, SubjectProject}},
 	}
 }
 
