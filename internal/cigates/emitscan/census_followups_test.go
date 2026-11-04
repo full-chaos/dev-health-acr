@@ -71,3 +71,23 @@ func TestFormattedValueIsErrorTextOnlyWithAnErrorVerb(t *testing.T) {
 		}
 	}
 }
+
+// A format held in a named string constant is its value: the verb decides, not the spelling of the argument.
+func TestNamedConstantFormatIsReadByItsValue(t *testing.T) {
+	cases := []struct{ name, body, want string }{
+		{"local const, no error verb", "func f(n int) { const format = \"%d\"; _ = attribute.String(\"count\", fmt.Sprintf(format, n)) }", ""},
+		{"package const, no error verb", "const format = \"%d\"\nfunc f(n int) { _ = attribute.String(\"count\", fmt.Sprintf(format, n)) }", ""},
+		{"typed string const, no error verb", "type layout string\nconst format layout = \"%d\"\nfunc f(n int) { _ = attribute.String(\"count\", fmt.Sprintf(string(format), n)) }", ""},
+		{"const from another package as Sprintf format", "func f() { _ = attribute.String(\"method\", fmt.Sprintf(http.MethodGet)) }", ""},
+		{"const built from two consts", "const a = \"%\"\nconst b = \"d\"\nfunc f(n int) { _ = attribute.String(\"count\", fmt.Sprintf(a+b, n)) }", ""},
+		{"package const with an error verb", "const format = \"%v\"\nfunc f(err error) { _ = attribute.String(\"reason\", fmt.Sprintf(format, err)) }", "R3"},
+		{"local const with an error verb", "func f(err error) { const format = \"x %w\"; _ = attribute.String(\"reason\", fmt.Errorf(format, err).Error()) }", "R3"},
+		{"parameter format stays unfolded", "func f(format string, n int) { _ = attribute.String(\"count\", fmt.Sprintf(format, n)) }", "R3"},
+		{"package var format stays unfolded", "var format = \"%d\"\nfunc f(n int) { _ = attribute.String(\"count\", fmt.Sprintf(format, n)) }", "R3"},
+	}
+	for _, c := range cases {
+		if got := ruleList(t, c.body); got != c.want {
+			t.Errorf("%s: rules %q, want %q", c.name, got, c.want)
+		}
+	}
+}
