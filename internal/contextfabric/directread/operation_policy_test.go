@@ -103,8 +103,8 @@ func TestCatalogueServesNineteenAndTwo(t *testing.T) {
 	for _, op := range cat.Operations(CallerRestricted) {
 		restricted = append(restricted, op.Name)
 	}
-	if !slices.Equal(restricted, []string{"compoundingRisk", "hotspots"}) {
-		t.Fatalf("restricted caller: %v, want compoundingRisk, hotspots", restricted)
+	if !slices.Equal(restricted, []string{"compoundingRisk", "hotspots", "investmentBreakdownRepository"}) {
+		t.Fatalf("restricted caller: %v, want compoundingRisk, hotspots, investmentBreakdownRepository", restricted)
 	}
 	for _, class := range PrincipalClassVocabulary() {
 		want := CallerRestricted
@@ -316,6 +316,21 @@ func TestLoaderStructuralGuards(t *testing.T) {
 		{"restricted_without_row_id", func(f *CatalogueFile) { restrictedScope(f).RowIDPaths = nil }, "restricted scope served without"},
 		{"restricted_without_forced_path", func(f *CatalogueFile) { restrictedScope(f).ForcedVariablePath = "" }, "restricted scope served without"},
 		{"restricted_wrong_subject_kind", func(f *CatalogueFile) { restrictedScope(f).SubjectKind = SubjectKindTeam }, "restricted scope served without"},
+		{"aggregate_only_with_row_id", func(f *CatalogueFile) {
+			aggregateScope(t, f).RowIDPaths = []string{"analytics.breakdowns[*].items[*].key"}
+		}, "aggregate-only restricted scope must declare no row id path"},
+		{"aggregate_only_forced_list_wider_than_one", func(f *CatalogueFile) {
+			i := operationIndex(t, *f, "investmentBreakdownRepository")
+			for j, v := range f.Operations[i].Variables {
+				if v.Path == "batch.filters.scope.ids" {
+					f.Operations[i].Variables[j].MaxItems = 2
+				}
+			}
+		}, "must hold exactly one repository"},
+		{"aggregate_only_output_names_a_repository", func(f *CatalogueFile) {
+			i := operationIndex(t, *f, "investmentBreakdownRepository")
+			f.Operations[i].Outputs = append(f.Operations[i].Outputs, OutputPath{Path: "analytics.breakdowns[*].items[*].repoId", Type: "String", Leaf: LeafScalar})
+		}, "names a repository"},
 		{"restricted_row_id_not_output", func(f *CatalogueFile) {
 			restrictedScope(f).RowIDPaths = []string{"compoundingRisk.rows[*].nope"}
 		}, "is not an allowed scalar output"},
@@ -669,4 +684,16 @@ func TestRefusalVocabularyIsClosed(t *testing.T) {
 			}
 		}
 	}
+}
+
+func aggregateScope(t *testing.T, f *CatalogueFile) *CallerScope {
+	t.Helper()
+	i := operationIndex(t, *f, "investmentBreakdownRepository")
+	for j := range f.Operations[i].Scopes {
+		if f.Operations[i].Scopes[j].Caller == CallerRestricted {
+			return &f.Operations[i].Scopes[j]
+		}
+	}
+	t.Fatal("no restricted scope")
+	return nil
 }

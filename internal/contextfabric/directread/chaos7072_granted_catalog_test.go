@@ -98,6 +98,9 @@ func TestGrantedRepositoriesCapFitsGateAndPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, op := range cat.Operations(CallerRestricted) {
+		if op.Scope(CallerRestricted).AggregateOnly {
+			continue // names exactly one repository; the grant never fills it
+		}
 		rule, ok := op.Variable(op.Scope(CallerRestricted).ForcedVariablePath)
 		if !ok || rule.MaxItems == 0 || MaxGrantedRepositories > rule.MaxItems {
 			t.Fatalf("%s forced variable max_items %d < cap %d", op.Name, rule.MaxItems, MaxGrantedRepositories)
@@ -124,7 +127,7 @@ func TestDataCatalogOperationsPerCallerClass(t *testing.T) {
 	restricted := catalogFor(t, ClassRestricted, true, true)
 	unrestricted := catalogFor(t, ClassUnrestricted, true, true)
 	universal := catalogFor(t, ClassUniversal, true, true)
-	if got := len(restricted.Operations.Operations); got != 2 {
+	if got := len(restricted.Operations.Operations); got != 3 {
 		t.Fatalf("restricted: %d operations", got)
 	}
 	if got := len(unrestricted.Operations.Operations); got != 22 || len(universal.Operations.Operations) != 22 {
@@ -135,7 +138,7 @@ func TestDataCatalogOperationsPerCallerClass(t *testing.T) {
 			t.Fatalf("restricted entry %+v", op)
 		}
 	}
-	// Restricted: the 20 operations served only to unrestricted callers are
+	// Restricted: the 19 operations served only to unrestricted callers are
 	// listed as not served with the class refusal.
 	classRefused := 0
 	for _, ns := range restricted.Operations.NotServed {
@@ -143,7 +146,7 @@ func TestDataCatalogOperationsPerCallerClass(t *testing.T) {
 			classRefused++
 		}
 	}
-	if classRefused != 20 {
+	if classRefused != 19 {
 		t.Fatalf("restricted: %d class refusals, want 20", classRefused)
 	}
 	cat, _ := DefaultCatalogue()

@@ -73,7 +73,17 @@ func TestGraphQLTwoOperationRootOverlapIsPinned(t *testing.T) {
 	}
 	for _, p := range pairs {
 		root, _ := policy.Root(p.root)
-		want := append(append([]string{p.strict}, p.scoped...), p.other)
+		// A candidate served to a restricted caller is tried last (candidateStricter).
+		want := []string{p.strict}
+		var scopedServed []string
+		for _, name := range p.scoped {
+			if lookup(name).Scope(directread.CallerRestricted).Served {
+				scopedServed = append(scopedServed, name)
+				continue
+			}
+			want = append(want, name)
+		}
+		want = append(append(want, p.other), scopedServed...)
 		if got := root.Operations(); !slices.Equal(got, want) {
 			t.Fatalf("%s candidates %v, want %v", p.root, got, want)
 		}
@@ -82,7 +92,7 @@ func TestGraphQLTwoOperationRootOverlapIsPinned(t *testing.T) {
 		// scope constraints, pinned by the scoped investment tests).
 		for _, name := range p.scoped {
 			s := lookup(name)
-			if s.Scope(directread.CallerRestricted).Served || s.CostClass != a.CostClass || s.DeadlineSeconds != a.DeadlineSeconds || s.MaxInFlightPerOrg != a.MaxInFlightPerOrg {
+			if restricted := s.Scope(directread.CallerRestricted); restricted.Served && !restricted.AggregateOnly || s.CostClass != a.CostClass || s.DeadlineSeconds != a.DeadlineSeconds || s.MaxInFlightPerOrg != a.MaxInFlightPerOrg {
 				t.Fatalf("%s: caller class, cost, deadline or concurrency differs from %s", name, a.Name)
 			}
 			if got := keyDiff(outputSet(a), outputSet(s)); len(got) != 0 || len(keyDiff(outputSet(s), outputSet(a))) != 0 {

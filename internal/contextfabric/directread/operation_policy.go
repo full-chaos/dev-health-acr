@@ -411,15 +411,19 @@ type Constraint struct {
 
 // CallerScope is the operation's rule for one caller class.
 type CallerScope struct {
-	Caller             CallerClass  `json:"caller"`
-	Served             bool         `json:"served"`
-	ForcedVariablePath string       `json:"forced_variable_path,omitempty"`
-	SubjectKind        string       `json:"subject_kind,omitempty"`
-	RowIDPaths         []string     `json:"row_id_paths,omitempty"`
-	UncheckedPaths     []string     `json:"unchecked_paths,omitempty"`
-	Constraints        []Constraint `json:"constraints,omitempty"`
-	Refusal            *Refusal     `json:"refusal,omitempty"`
-	Basis              string       `json:"basis"`
+	Caller             CallerClass `json:"caller"`
+	Served             bool        `json:"served"`
+	ForcedVariablePath string      `json:"forced_variable_path,omitempty"`
+	SubjectKind        string      `json:"subject_kind,omitempty"`
+	RowIDPaths         []string    `json:"row_id_paths,omitempty"`
+	// AggregateOnly replaces RowIDPaths for an operation whose answer holds
+	// no repository-keyed row: the forced path names exactly one granted
+	// repository, so every number is that repository's own.
+	AggregateOnly  bool         `json:"aggregate_only,omitempty"`
+	UncheckedPaths []string     `json:"unchecked_paths,omitempty"`
+	Constraints    []Constraint `json:"constraints,omitempty"`
+	Refusal        *Refusal     `json:"refusal,omitempty"`
+	Basis          string       `json:"basis"`
 }
 
 // OutputPath is one allowlisted response path.
@@ -823,8 +827,21 @@ func validateOperation(op *OperationPolicy) error {
 			return fmt.Errorf("scope %q: no basis", s.Caller)
 		}
 		if s.Caller == CallerRestricted && s.Served {
-			if s.ForcedVariablePath == "" || len(s.RowIDPaths) == 0 || s.SubjectKind != SubjectKindRepository {
+			if s.ForcedVariablePath == "" || (len(s.RowIDPaths) == 0 && !s.AggregateOnly) || s.SubjectKind != SubjectKindRepository {
 				return errors.New("restricted scope served without forced repository path and row id paths")
+			}
+			if s.AggregateOnly {
+				if len(s.RowIDPaths) > 0 || len(s.UncheckedPaths) > 0 || len(op.emits) > 0 {
+					return errors.New("aggregate-only restricted scope must declare no row id path, no unchecked path and no emitted subject")
+				}
+				if v, ok := op.Variable(s.ForcedVariablePath); !ok || v.MinItems != 1 || v.MaxItems != 1 {
+					return fmt.Errorf("aggregate-only restricted scope: forced path %q must hold exactly one repository (min_items 1, max_items 1)", s.ForcedVariablePath)
+				}
+				for path := range op.outputs {
+					if slices.ContainsFunc(pathSegments(path), func(seg string) bool { return strings.Contains(strings.ToLower(seg), "repo") }) {
+						return fmt.Errorf("aggregate-only restricted scope: output %q names a repository", path)
+					}
+				}
 			}
 			forced, ok := op.Variable(s.ForcedVariablePath)
 			if !ok {
@@ -841,7 +858,7 @@ func validateOperation(op *OperationPolicy) error {
 					return fmt.Errorf("row id path %q must reach each row of one list through exactly one [*]: a nested list leaves a row with an empty nested list unchecked", row)
 				}
 			}
-			if op.PrimaryListPath != "" {
+			if op.PrimaryListPath != "" && !s.AggregateOnly {
 				for list := range op.topLevelLists() {
 					checked := slices.ContainsFunc(s.RowIDPaths, func(row string) bool { return strings.HasPrefix(row, list+"[*].") })
 					declaredUnchecked := slices.ContainsFunc(s.UncheckedPaths, func(path string) bool { return list == path || strings.HasPrefix(list, path+".") })
