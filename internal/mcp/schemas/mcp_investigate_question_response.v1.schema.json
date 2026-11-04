@@ -3335,6 +3335,13 @@
               "type": "integer",
               "minimum": 0
             },
+            "scope_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "scope_count_at_least": {
+              "type": "boolean"
+            },
             "forecast_p50_days": {
               "type": "integer",
               "minimum": 0
@@ -3362,6 +3369,21 @@
               "maxLength": 128,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
             }
+          },
+          "if": {
+            "properties": {
+              "scope_count_at_least": {
+                "const": true
+              }
+            },
+            "required": [
+              "scope_count_at_least"
+            ]
+          },
+          "then": {
+            "required": [
+              "scope_count"
+            ]
           }
         }
       },
@@ -10474,6 +10496,13 @@
               "type": "integer",
               "minimum": 0
             },
+            "scope_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "scope_count_at_least": {
+              "type": "boolean"
+            },
             "forecast_p50_days": {
               "type": "integer",
               "minimum": 0
@@ -10501,6 +10530,21 @@
               "maxLength": 128,
               "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
             }
+          },
+          "if": {
+            "properties": {
+              "scope_count_at_least": {
+                "const": true
+              }
+            },
+            "required": [
+              "scope_count_at_least"
+            ]
+          },
+          "then": {
+            "required": [
+              "scope_count"
+            ]
           }
         }
       },

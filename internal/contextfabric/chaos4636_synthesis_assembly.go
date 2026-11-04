@@ -845,6 +845,7 @@ func (e *Engine) synthesizeAndAssemble(ctx context.Context, principal storage.Pr
 	// teams' roll-up, from the fact it is grounded against.
 	result.ClaimedFacts = discloseInvestmentMix(result.ClaimedFacts, facts.Facts)
 	result.ClaimedFacts = discloseCompletionForecast(result.ClaimedFacts, facts.Facts)
+	discloseForecastScopes(&result, facts)
 	// THE PROSE, COMPOSED AFTER THE RECOMPOSE -- and the split from the mint
 	// above is deliberate, not an accident of layout.
 	//
