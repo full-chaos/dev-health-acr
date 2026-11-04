@@ -15829,6 +15829,83 @@
     ]
   },
   {
+    "id": "genkitruntime.model_plan_reads_decision",
+    "msg": "context fabric model decision",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id",
+      "operation"
+    ],
+    "bounded_aggregation": "at most one line per investigation: one per PlanReads call, including a call that returned before the model was reached, and the engine calls the planner at most once per turn.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "org_id_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "operation",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "plan_reads",
+          ""
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "model_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "model_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "prompt_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_retried",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_outcomes",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_elapsed_ms",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "genkitruntime.model_synthesize_decision",
     "msg": "context fabric model decision",
     "level": "info",

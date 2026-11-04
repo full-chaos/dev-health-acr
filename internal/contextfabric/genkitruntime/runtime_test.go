@@ -1562,3 +1562,11 @@ func TestDecisionEventNeverCarriesCorpusText(t *testing.T) {
 
 var _ generator = (*generatorStub)(nil)
 var _ contextfabric.ModelRuntime = fallbackRuntime{}
+
+func (g *generatorStub) PlanReads(context.Context, generationRequest) (planReadsOutput, contextfabric.ModelUsage, error) {
+	return planReadsOutput{}, contextfabric.ModelUsage{}, errors.New("generatorStub.PlanReads is unused")
+}
+
+func (g *echoingGenerator) PlanReads(context.Context, generationRequest) (planReadsOutput, contextfabric.ModelUsage, error) {
+	return planReadsOutput{}, contextfabric.ModelUsage{}, errors.New("echoingGenerator.PlanReads is unused")
+}

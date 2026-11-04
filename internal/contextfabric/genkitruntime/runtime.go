@@ -548,6 +548,13 @@ const (
 	// this call happens (see composeStructureNeeds's own callers), so
 	// there is no reuse-eligible row this version could ever need to key.
 	DefaultPhrasingPromptVersion = "context-fabric-offer-phrasing.v1"
+	// DefaultPlanReadsPromptVersion and DefaultPlanReadsSchemaVersion name the
+	// read planner's prompt and output contract (CHAOS-13002). Bump each on
+	// every change to planReadsSystemPrompt or planReadsOutput. Neither is a
+	// ReuseKey dimension: an answer whose reads the planner chose is saved
+	// non-reusable.
+	DefaultPlanReadsPromptVersion = "context-fabric-plan-reads.v1"
+	DefaultPlanReadsSchemaVersion = "context-fabric-plan-reads-output.v1"
 
 	// DefaultMaxSynthesisResynthesisAttempts (CHAOS-5655) is the
 	// operator-facing default for Config.MaxSynthesisResynthesisAttempts --
@@ -654,11 +661,17 @@ type Config struct {
 	PhrasingModelRef      string
 	PhrasingModelVersion  string
 	PhrasingPromptVersion string
-	SchemaVersion         string
-	EvaluatorVersion      string
-	Timeout               time.Duration
-	MaxAttempts           int
-	MaxInputBytes         int
+	// PlanReadsModel (CHAOS-13002) is the read planner's model, defaulting
+	// to Model like PhrasingModel; its Ref and Version default the same way.
+	PlanReadsModel         string
+	PlanReadsModelRef      string
+	PlanReadsModelVersion  string
+	PlanReadsPromptVersion string
+	SchemaVersion          string
+	EvaluatorVersion       string
+	Timeout                time.Duration
+	MaxAttempts            int
+	MaxInputBytes          int
 	// MaxSynthesisInputTokens caps the estimated tokens of one synthesize
 	// prompt before it is sent; 0 is off. An input over it is answered as a
 	// ModelInputOverflow, so the caller cuts the facts and discloses the cut.
@@ -733,6 +746,8 @@ type generator interface {
 	// Phrase (CHAOS-4171 PR2) is the offer-phrasing call's own generation
 	// boundary, mirroring Interpret/Synthesize exactly.
 	Phrase(context.Context, generationRequest) (phrasingOutput, contextfabric.ModelUsage, error)
+	// PlanReads (CHAOS-13002) is the read planner's generation boundary.
+	PlanReads(context.Context, generationRequest) (planReadsOutput, contextfabric.ModelUsage, error)
 }
 
 type generationRequest struct {
@@ -945,6 +960,26 @@ func newWithGenerator(config Config, gen generator) (*Runtime, error) {
 	}
 	if strings.TrimSpace(config.PhrasingPromptVersion) == "" {
 		config.PhrasingPromptVersion = DefaultPhrasingPromptVersion
+	}
+	if strings.TrimSpace(config.PlanReadsModel) == "" {
+		config.PlanReadsModel = config.Model
+	}
+	if strings.TrimSpace(config.PlanReadsModelRef) == "" {
+		if config.PlanReadsModel == config.Model {
+			config.PlanReadsModelRef = config.ModelRef
+		} else {
+			config.PlanReadsModelRef = config.PlanReadsModel
+		}
+	}
+	if strings.TrimSpace(config.PlanReadsModelVersion) == "" {
+		if config.PlanReadsModel == config.Model {
+			config.PlanReadsModelVersion = config.ModelVersion
+		} else {
+			config.PlanReadsModelVersion = config.PlanReadsModel
+		}
+	}
+	if strings.TrimSpace(config.PlanReadsPromptVersion) == "" {
+		config.PlanReadsPromptVersion = DefaultPlanReadsPromptVersion
 	}
 	if strings.TrimSpace(config.SchemaVersion) == "" {
 		config.SchemaVersion = DefaultSchemaVersion
@@ -4209,3 +4244,5 @@ func cloneStringMap(values map[string]string) map[string]string {
 
 var _ contextfabric.ModelRuntime = (*Runtime)(nil)
 var _ contextfabric.OfferPhrasingModelRuntime = (*Runtime)(nil)
+
+var _ contextfabric.ReadPlanningModelRuntime = (*Runtime)(nil)
