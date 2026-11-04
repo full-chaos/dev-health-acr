@@ -36,6 +36,15 @@ func TestComposeCurrentStateSkipsNullValueOfATableClaim(t *testing.T) {
 	if strings.Contains(only, "null") {
 		t.Fatalf("CurrentState lists a lone table claim as null: %q", only)
 	}
+	withValue := table
+	withValue.Value = ScalarValue{Integer: &ten}
+	if got := composeCurrentState(SynthesisDraft{ClaimedFacts: []ClaimedFact{withValue}}); !strings.Contains(got, "10 (Fullchaos)") || strings.Contains(got, "rows") {
+		t.Fatalf("a scalar value beside a table must stay stated as the scalar: %q", got)
+	}
+	one := table
+	if got := composeCurrentState(SynthesisDraft{ClaimedFacts: []ClaimedFact{one}}); !strings.Contains(got, "1 row (Fullchaos)") {
+		t.Fatalf("a one-row table reads %q, want \"1 row\"", got)
+	}
 	bare := table
 	bare.Rows = nil
 	if got := composeCurrentState(SynthesisDraft{ClaimedFacts: []ClaimedFact{bare}}); !strings.Contains(got, "null") {

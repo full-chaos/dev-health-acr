@@ -1426,7 +1426,11 @@ import (
 // allocation route that claims no repository_theme_breakdown table is floored
 // to partial with ContextFabricRepositorySplitUnclaimedLimitation (CHAOS-12890).
 // An answer saved under v277 reads complete without the split.
-const QueryVersion = "devhealthfacts.clickhouse.v278"
+//
+// v278 -> v279: current_state states "N rows" for a claim that carries a table
+// and a null scalar, where it printed "null" (CHAOS-12951). An answer saved
+// under v278 holds the old text.
+const QueryVersion = "devhealthfacts.clickhouse.v279"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
