@@ -1427,11 +1427,15 @@ import (
 // to partial with ContextFabricRepositorySplitUnclaimedLimitation (CHAOS-12890).
 // An answer saved under v277 reads complete without the split.
 //
-// v278 -> v279: a team forecast claim that covers fewer of the team's work
+// v278 -> v279: current_state states "N rows" for a claim that carries a table
+// and a null scalar, where it printed "null" (CHAOS-12951). An answer saved
+// under v278 holds the old text.
+//
+// v279 -> v280: a team forecast claim that covers fewer of the team's work
 // scopes than the read held carries scope_count and a limitation naming the
-// scope and the count (CHAOS-12726). An answer saved under v278 presents one
+// scope and the count (CHAOS-12726). An answer saved under v279 presents one
 // scope's forecast without either.
-const QueryVersion = "devhealthfacts.clickhouse.v279"
+const QueryVersion = "devhealthfacts.clickhouse.v280"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

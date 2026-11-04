@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http/httptest"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -76,6 +77,8 @@ func startClickHouseServer(t *testing.T) *clickHouseServer {
 func TestOracleOnTheSeededStore(t *testing.T) {
 	seededServer = startClickHouseServer(t)
 	t.Cleanup(func() { seededServer = nil })
+	var recordedGap float64
+	var recordedGapValues int
 	for _, sub := range []struct {
 		name string
 		run  func(*testing.T)
@@ -93,6 +96,18 @@ func TestOracleOnTheSeededStore(t *testing.T) {
 		if !t.Run(sub.name, sub.run) {
 			t.Logf("subtest %s failed", sub.name)
 		}
+		if sub.name == "RecordedVenueRunReproducesTheVenue" {
+			recordedGap, recordedGapValues = takeOpsFloat32Gap()
+		}
+	}
+	// Only the recorded venue run measures the Float32 effect: the other
+	// subtests plant changed values on purpose.
+	t.Logf("o4 float32 gap: arch=%s max relative gap ops vs store rows (recorded venue run, %d values) = %.6g, bound 2^-24 = %.6g", runtime.GOARCH, recordedGapValues, recordedGap, relOpsFloat32)
+	if recordedGapValues == 0 {
+		t.Errorf("the recorded venue run compared no ops value with the store rows: the Float32 gap was not measured")
+	}
+	if recordedGap > relOpsFloat32 {
+		t.Errorf("max relative gap %.6g between the recorded ops values and the store rows is above the Float32 bound %.6g", recordedGap, relOpsFloat32)
 	}
 }
 
