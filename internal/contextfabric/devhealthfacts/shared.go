@@ -1454,7 +1454,11 @@ import (
 // a read the server stops at a memory limit is served as stopped at its memory
 // limit, not as "read failed" (CHAOS-13003). An answer saved under v284 holds
 // the blockers as unavailable.
-const QueryVersion = "devhealthfacts.clickhouse.v285"
+//
+// v285 -> v286: two ISO dates in a question are read as its range when the
+// interpreter read it as current (CHAOS-13010). An answer saved under v285 to
+// such a question holds a current-state read.
+const QueryVersion = "devhealthfacts.clickhouse.v286"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

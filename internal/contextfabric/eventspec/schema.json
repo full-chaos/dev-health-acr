@@ -11398,7 +11398,8 @@
         "closed_vocabulary": [
           "evidence_window",
           "question_phrase",
-          "interpreter_range"
+          "interpreter_range",
+          "question_dates"
         ]
       },
       {

@@ -275,6 +275,15 @@ func scopedInvestmentDecl(documentName, level string, subject *dr.SubjectConvers
 		investmentWindow(),
 	}
 	decl.Unrestricted = served(basis)
+	if level == "REPO" {
+		decl.Restricted = dr.CallerScope{
+			Served:             true,
+			ForcedVariablePath: "batch.filters.scope.ids",
+			SubjectKind:        dr.SubjectKindRepository,
+			AggregateOnly:      true,
+			Basis:              "forced batch.filters.scope.ids = the one repository that passes the subject gate against the caller's grant (min and max one id); ops filters the investment rows by that id ([ops] analytics/filtertranslation.go:47-55), and the answer holds theme and subcategory aggregates only: no repository id, no list keyed by repository, so no foreign row can reach it (CHAOS-12690 I1a)",
+		}
+	}
 	return decl
 }
 

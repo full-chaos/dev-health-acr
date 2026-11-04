@@ -1124,6 +1124,8 @@ const (
 	StatedWindowOriginField            = "evidence_window"
 	StatedWindowOriginQuestionPhrase   = "question_phrase"
 	StatedWindowOriginInterpreterRange = "interpreter_range"
+	// StatedWindowOriginQuestionDates: two ISO dates in the question (CHAOS-13010).
+	StatedWindowOriginQuestionDates = "question_dates"
 )
 
 // StatedWindowAxisOutcome is the closed outcome vocabulary of the stated

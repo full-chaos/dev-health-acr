@@ -106,6 +106,9 @@ func TestT12ForcedScopeRestrictedCallerNeverReceivesAForeignRow(t *testing.T) {
 	executed := map[string]int{}
 	for _, op := range ops {
 		scope := op.Scope(directread.CallerRestricted)
+		if scope.AggregateOnly {
+			continue // no row to check: TestRestrictedCallerReadsGrantedRepositoryBreakdownOnly
+		}
 		cases := t12Cases(t, op, scope)
 		for _, honest := range []bool{true, false} {
 			h := newOpHarness(t, t12Answer(op, scope, honest), opHarnessOptions{})
@@ -176,7 +179,7 @@ func TestT12ForcedScopeRestrictedCallerNeverReceivesAForeignRow(t *testing.T) {
 		}
 	}
 	for _, op := range ops {
-		if executed[op.Name] == 0 {
+		if executed[op.Name] == 0 && !op.Scope(directread.CallerRestricted).AggregateOnly {
 			t.Errorf("restricted operation %s has no T12 case", op.Name)
 		}
 	}
@@ -224,6 +227,9 @@ func TestT12RowCheckClauses(t *testing.T) {
 func TestT12RestrictedWithoutGrantPortAndEmptyIntersection(t *testing.T) {
 	cat, _ := directread.DefaultCatalogue()
 	for _, op := range cat.Operations(directread.CallerRestricted) {
+		if op.Scope(directread.CallerRestricted).AggregateOnly {
+			continue // names its one repository; the grant never fills the scope
+		}
 		t.Run(op.Name+"/no_grant_port", func(t *testing.T) {
 			h := newOpHarness(t, func(opRecorded) (int, string) { return 200, opNullAnswer(op) }, opHarnessOptions{noGrants: true})
 			resp := h.run(t, opRestrictedA(), op.Name, opMinimalVariables(t, op))
