@@ -444,6 +444,8 @@ func goVarName(e Event) string {
 		return "MCPHTTPReadiness"
 	case OAuthStep.ID:
 		return "OAuthStep"
+	case CredentialRevokeOnBehalf.ID:
+		return "CredentialRevokeOnBehalf"
 	case OTelExport.ID:
 		return "OTelExport"
 	case SuppliedInterpretationDecision.ID:

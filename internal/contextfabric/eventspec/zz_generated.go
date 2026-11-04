@@ -19,7 +19,8 @@ func FieldKeys(e Event) []string {
 // ByID is the generated lookup from Event.ID to its declaration -- generated
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
-	"api.oauth_step": OAuthStep,
+	"api.credential_revoke_on_behalf":                                  CredentialRevokeOnBehalf,
+	"api.oauth_step":                                                   OAuthStep,
 	"contextfabric.anchor_binding_transition":                          AnchorBindingTransition,
 	"contextfabric.answer_display":                                     AnswerDisplay,
 	"contextfabric.answer_reuse_bypass":                                AnswerReuseBypass,
@@ -209,6 +210,56 @@ var ByID = map[string]Event{
 	"mcp.http_serving":                                                 MCPHTTPServing,
 	"process.otel_export":                                              OTelExport,
 	"projectionrun.graph_count_check_finished":                         GraphCountCheckFinished,
+}
+
+// CredentialRevokeOnBehalfFields is api.credential_revoke_on_behalf's generated typed construction interface
+// (CHAOS-5516): one Go field per Field CredentialRevokeOnBehalf.Fields declares in spec.go.
+type CredentialRevokeOnBehalfFields struct {
+	RequestID string
+	ActorType string
+	Decision  string
+	Reason    string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CredentialRevokeOnBehalfFields uniformly, set ONLY by NewCredentialRevokeOnBehalfFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCredentialRevokeOnBehalfFields is the generated constructor for CredentialRevokeOnBehalfFields -- every
+// field CredentialRevokeOnBehalf.Fields declares is a required parameter.
+func NewCredentialRevokeOnBehalfFields(requestID string, actorType string, decision string, reason string) CredentialRevokeOnBehalfFields {
+	return CredentialRevokeOnBehalfFields{
+		RequestID:   requestID,
+		ActorType:   actorType,
+		Decision:    decision,
+		Reason:      reason,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCredentialRevokeOnBehalfFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CredentialRevokeOnBehalfFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns CredentialRevokeOnBehalf's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CredentialRevokeOnBehalfFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"actor_type", contextfabric.SanitizeLogAttr(f.ActorType),
+		"decision", contextfabric.SanitizeLogAttr(f.Decision),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+	}
 }
 
 // OAuthStepFields is api.oauth_step's generated typed construction interface

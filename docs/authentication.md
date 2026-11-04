@@ -89,6 +89,16 @@ What it lists. The source is `acr.credential_lifecycle_outbox`: the newest row o
 
 A page is a keyset read: a credential added during a walk that sorts after the cursor appears, one that sorts before it does not, and a revision may advance between pages. The walk is served by `ix_acr_credential_lifecycle_outbox_org_aggregate` (migration `0069`, which also admits the role `reconcile`).
 
+## Revoke an MCP-bound credential on behalf of a user or admin
+
+`POST /internal/v1/credentials/{credential_id}/revoke` revokes an MCP-bound credential for a person who no longer holds its token (a lost laptop, a forgotten client). The Auth Control Plane decides who the person is and names them in the body, schema `credential_revoke_on_behalf_request.v1`: `actor_type` `admin` (an admin of the organization) or `user` (the credential's approving user), and `actor_id`. The organization is the caller's binding's organization; the body never names one. A success is `204` with no body.
+
+Who may call it. Only a workload-class credential whose workload binding has the role `revoke`. The role carries the single scope `credential_lifecycle:revoke` and no other, so a `read`, `ops` or `reconcile` binding cannot call the route, and a `revoke` binding cannot list. The refusals before the credential service run in the listing's order (401 `invalid_token`, 403 `credential_class_refused`, 403 `insufficient_scope`); a malformed body is 400 `invalid_request`.
+
+What it revokes. Only a credential bound to a resource (`resource` set at issuance: an OAuth or RFC 8628 credential for acr-mcp) in the caller's organization, and for `actor_type` `user` only when `actor_id` equals the row's `approving_user_id`. An unknown id, a credential bound to no resource, another organization's credential and a user who did not approve the credential all answer the same `404 not_found`; only an actor the credential admits can learn that it is already revoked (`409 credential_lifecycle_conflict`). The revoke takes the storage path of the operator command (`acr-api credentials revoke`): one `credential_revoked` audit row with the body's actor type and id, and one lifecycle `revoked` event (actor `user`, ref the actor id) in the same transaction. The decision line `acr-api credential revoke on behalf` records the actor type, the decision and the refusal reason; it never names the credential or the actor id.
+
+A binding has one organization, so revoking in N organizations takes N `revoke` bindings, provisioned out of band like every binding. The route has no caller until such a binding exists, and the chart's HTTPRoute matches only `/api/v1/agent-context` by default, so a caller reaches `/internal/v1/` through the in-cluster service.
+
 ## Sidecar loading
 
 The local sidecar resolves a credential with a fixed precedence:
