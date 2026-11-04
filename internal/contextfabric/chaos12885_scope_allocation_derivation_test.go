@@ -275,13 +275,34 @@ func TestTheUnclaimedSplitFloorHoldsOnlyOnTheRouteWithoutTheTable(t *testing.T) 
 		"on the route, no table":    {routed, result(InvestigationComplete, scalar), true},
 		"off the route":             {&frame, result(InvestigationComplete, scalar), false},
 		"on the route, table named": {routed, result(InvestigationComplete, scalar, table), false},
-		"already partial":           {routed, result(InvestigationPartial, scalar), false},
+		"no_match":                  {routed, result(InvestigationNoMatch, scalar), false},
 		"no frame":                  {nil, result(InvestigationComplete, scalar), false},
 	} {
 		got := withUnclaimedRepositorySplitFloor(tc.result, tc.frame)
 		floored := roleContains(got.Limitations, contractsv1.ContextFabricRepositorySplitUnclaimedLimitation)
+		if again := withUnclaimedRepositorySplitFloor(got, tc.frame); len(again.Limitations) != len(got.Limitations) {
+			t.Fatalf("%s: a second pass added the sentence again", name)
+		}
 		if floored != tc.floor || (tc.floor && got.Status != InvestigationPartial) || (!tc.floor && got.Status != tc.result.Status) {
 			t.Fatalf("%s: status %q, floored %v; want floored %v", name, got.Status, floored, tc.floor)
+		}
+	}
+}
+
+// An answer already partial for another cause, with the split unclaimed on the
+// route, says both: its own sentence stays and the unclaimed-split one joins it.
+func TestTheUnclaimedSplitIsDisclosedBesideAnotherPartialCause(t *testing.T) {
+	t.Parallel()
+	frame := fullchaosChildrenFrame()
+	routed := scopeAllocationRequirementFrame(&frame, scopeAllocationOutcome(&frame, SubjectTeam))
+	share := 0.55
+	scalar := ClaimedFact{ClaimID: "claim_scalar", Kind: FactInvestment, Field: "theme_quality", Value: ScalarValue{Number: &share}}
+	for _, status := range []InvestigationStatus{InvestigationPartial, InvestigationDegraded} {
+		in := InvestigationResult{Status: status, ClaimedFacts: []ClaimedFact{scalar}, Limitations: []string{contractsv1.ContextFabricGraphHopWalkTruncatedLimitation}}
+		got := withUnclaimedRepositorySplitFloor(in, routed)
+		if got.Status != status || !roleContains(got.Limitations, contractsv1.ContextFabricGraphHopWalkTruncatedLimitation) ||
+			!roleContains(got.Limitations, contractsv1.ContextFabricRepositorySplitUnclaimedLimitation) {
+			t.Fatalf("%s: status %q, limitations %q; want both sentences and the status kept", status, got.Status, got.Limitations)
 		}
 	}
 }
