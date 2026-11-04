@@ -253,10 +253,11 @@ func TestScopedInvestmentEntriesAgreeWithTheSDL(t *testing.T) {
 	}
 }
 
-// ISSUE_SIZE is a breakdown measure of the scoped entries only: their measure
-// allowlist is the shared measures list plus ISSUE_SIZE, the ORG entries keep
-// the shared list, and CHURN_LOC is on none.
-func TestIssueSizeIsAMeasureOfTheScopedEntriesOnly(t *testing.T) {
+// ISSUE_SIZE is a breakdown measure of every investment entry (lead ruling,
+// CHAOS-12948, which widens the CHAOS-12691 scoped-only rule to the ORG
+// entries): the measure allowlist is the shared measures list plus ISSUE_SIZE,
+// and CHURN_LOC is on none.
+func TestIssueSizeIsAMeasureOfEveryInvestmentEntry(t *testing.T) {
 	artifact, err := generate(vendoredInputs(t))
 	if err != nil {
 		t.Fatal(err)
@@ -266,8 +267,8 @@ func TestIssueSizeIsAMeasureOfTheScopedEntriesOnly(t *testing.T) {
 	for name, want := range map[string][]string{
 		"investmentBreakdownTeam":       scoped,
 		"investmentBreakdownRepository": scoped,
-		"investmentBreakdown":           measures,
-		"investmentFull":                measures,
+		"investmentBreakdown":           scoped,
+		"investmentFull":                scoped,
 	} {
 		rule := ruleAt(t, ops[name], "batch.breakdowns[*].measure")
 		if !slices.Equal(rule.AllowedValues, want) || slices.Contains(rule.AllowedValues, "CHURN_LOC") {

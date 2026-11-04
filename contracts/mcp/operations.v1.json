@@ -3059,7 +3059,8 @@
             "FLAG_FRICTION_DELTA",
             "FLAG_ERROR_RATE_DELTA",
             "FLAG_COVERAGE_RATIO",
-            "FLAG_ACTIVATION_RATE"
+            "FLAG_ACTIVATION_RATE",
+            "ISSUE_SIZE"
           ]
         },
         {
@@ -5900,7 +5901,8 @@
             "FLAG_FRICTION_DELTA",
             "FLAG_ERROR_RATE_DELTA",
             "FLAG_COVERAGE_RATIO",
-            "FLAG_ACTIVATION_RATE"
+            "FLAG_ACTIVATION_RATE",
+            "ISSUE_SIZE"
           ]
         },
         {
