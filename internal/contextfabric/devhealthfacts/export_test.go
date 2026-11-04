@@ -299,3 +299,6 @@ func BlockerStatementMaxThreadsForTest(ctx context.Context) (uint64, error) {
 	settings, err := workItemReaderSettings(ctx)
 	return settings.MaxThreads, err
 }
+
+// BlockerStatementMaxMemoryUsage is the team blocker statements' memory cap (CHAOS-13003).
+var BlockerStatementMaxMemoryUsage = blockerStatementMaxMemoryUsage

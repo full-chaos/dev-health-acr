@@ -461,6 +461,11 @@ type FactPrerequisiteLoader interface {
 	LoadPrerequisites(context.Context, storage.Principal, FactQuery) (context.Context, error)
 }
 
+// FactReadMemoryLimitReason is the Reason of a read the server stopped at a
+// memory limit (ClickHouse code 241): the kind's read is served as stopped at
+// its memory limit, not as a generic failure (CHAOS-13003).
+const FactReadMemoryLimitReason = "canonical fact read stopped at the memory limit"
+
 // factReadTimedOutReason is the registry's own wording of a provider read that
 // ran past its deadline; classifyFactReadError turns it into the served sentence.
 const factReadTimedOutReason = "canonical fact capability timed out"
@@ -2265,6 +2270,8 @@ func classifyFactReadError(kind FactKind, err error) (SourceState, string) {
 			return failure.State, failure.Error()
 		case factReadTimedOutReason:
 			return failure.State, "The " + label + " read timed out; the facts for it are not shown."
+		case FactReadMemoryLimitReason:
+			return failure.State, "The " + label + " read stopped at its memory limit; the facts for it are not shown."
 		}
 		return failure.State, "The " + label + " read failed; the facts for it are not shown."
 	}
