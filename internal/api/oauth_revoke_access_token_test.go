@@ -233,3 +233,17 @@ func TestBrowserAccessTokenIsNotRevokedAtTheRevocationEndpoint(t *testing.T) {
 		t.Fatalf("refresh after the refused access-token revoke = %d %s, want 200", status, raw)
 	}
 }
+
+// luna r3 P3 on #2026: an fcacr_ token with no client_id is the caller's
+// mistake (400), not an outage (503).
+func TestRevocationOfAnAccessTokenWithoutAClientIDIsInvalidRequest(t *testing.T) {
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}, ConsentURL: oauthTestConsentURL}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, _ := mcpBoundOAuthToken(t, app)
+	status, answer, raw := postOAuthForm(t, app, OAuthRevocationPath, url.Values{"token": {token}, "token_type_hint": {"access_token"}})
+	if status != http.StatusBadRequest || answer.Error != "invalid_request" {
+		t.Fatalf("no client_id = %d %s, want 400 invalid_request", status, raw)
+	}
+}

@@ -1019,6 +1019,10 @@ func (a *App) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 	// revoke cascades to the whole refresh family, which its refresh token
 	// already asks for (CHAOS-12124).
 	if strings.HasPrefix(token, auth.TokenPrefix) && !a.oauth.IsBrowserClient(clientID) {
+		if clientID == "" {
+			invalid()
+			return
+		}
 		a.revokeAccessToken(w, r, token, clientID)
 		return
 	}
