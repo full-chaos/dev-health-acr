@@ -52,7 +52,28 @@ func TestTheMetricsGlossaryNamesTheTeamCycleTheRegistryDeclares(t *testing.T) {
 	}
 
 	prompt := genkitruntime.InterpretationSystemPrompt()
-	if !strings.Contains(prompt, `"cycle time" of a team or a project`) {
-		t.Error("the fact_requirements rules do not route a team or project cycle time to metrics")
+	if !strings.Contains(prompt, `The "cycle time" of a team, and`) {
+		t.Error("the fact_requirements rules do not route a team cycle time to metrics")
+	}
+	// The registry declares the field for a team and a repository only, so the
+	// rule must send a project's cycle time to flow (codex round 1).
+	if !strings.Contains(prompt, "The cycle time of a project, ") || strings.Contains(prompt, `"cycle time" of a team or a project`) {
+		t.Error("a project's cycle time is not routed to flow, or the rule still sends it to metrics")
+	}
+	for _, provider := range devhealthfacts.NewProviders(nil) {
+		capability := provider.Capability()
+		if capability.Kind != contextfabric.FactMetrics {
+			continue
+		}
+		for _, field := range capability.Fields {
+			if field.Name != "window_pr_cycle_hours_median" {
+				continue
+			}
+			for _, kind := range field.SubjectKinds {
+				if kind == contextfabric.SubjectProject {
+					t.Error("the registry now declares the window pull request cycle for a project; the rule and glossary must follow")
+				}
+			}
+		}
 	}
 }

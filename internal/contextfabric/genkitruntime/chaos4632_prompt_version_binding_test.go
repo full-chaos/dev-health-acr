@@ -93,8 +93,8 @@ func TestVersionedModelContractsAreBoundToTheirContent(t *testing.T) {
 			// v35 -> v36 (CHAOS-12595): the prompt says what each window_class means.
 			// v36 -> v37 (CHAOS-12632): one pull request named inside its repository keeps the repository as the subject term; two worked examples.
 			// v37 -> v38 (CHAOS-12632): the same rule names GitLab merge requests; two more worked examples.
-			// v38 -> v39 (CHAOS-13000): the metrics line names a team's window pull request cycle median; a rule routes a team's or project's cycle time to metrics.
-			digest: "e8a29080d8ed3d64d2ee10b663ae07d43b139153b24798f03cd05f69b0b3ee40",
+			// v38 -> v39 (CHAOS-13000): the metrics line names a team's window pull request cycle median; a rule routes a team's cycle time to metrics; a project's stays flow.
+			digest: "49887e70eb0ce0d7cbca4b4c82766343ced47bd92f4160d08bcbb71f2e5eccdc",
 		},
 		{
 			name:    "synthesis system prompt",

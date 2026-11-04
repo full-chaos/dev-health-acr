@@ -58,8 +58,9 @@ const (
 	// ("merge request !N in X", "MR !N in X"), with a worked example.
 	//
 	// v38 -> v39 (CHAOS-13000): the metrics glossary line says a team's metrics
-	// hold the window pull request cycle median, and a rule routes a team's or
-	// project's cycle time to metrics (work item cycle and lead time stay flow).
+	// hold the window pull request cycle median, and a rule routes a team's cycle time
+	// (and a team's or repository's PR cycle) to metrics; a project's cycle time, work
+	// item cycle and lead time stay flow.
 	PromptVersion = "context-fabric-interpretation.v39"
 	// OutputVersion names the model-output contract the prompt asks for.
 	//
