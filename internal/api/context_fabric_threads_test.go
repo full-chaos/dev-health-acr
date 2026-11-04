@@ -331,8 +331,7 @@ func TestThreadRoutes_refuseWithoutAStore(t *testing.T) {
 	expectErrorCode(t, recorder, http.StatusUnauthorized, "invalid_token")
 }
 
-// CHAOS-12271: the thread list serves first_question always (the switch of
-// CHAOS-12235 is gone). The item names its first turn's question, validates
+// CHAOS-12271: the thread list serves first_question always. The item names its first turn's question, validates
 // against the published schema, and the list line counts it without its text.
 func TestThreadRoutes_listServesFirstQuestionAlways(t *testing.T) {
 	h := threadHarness(t)

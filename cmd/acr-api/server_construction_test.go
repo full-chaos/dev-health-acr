@@ -47,8 +47,6 @@ func TestAppConfig_PassesThroughContextFabricEventStreamEnabled(t *testing.T) {
 // the deployment answers CORS for nobody whatever it sets. This loads the
 // variable, builds the app through appConfig, and sends a browser preflight.
 
-// CHAOS-12235: the thread list's first_question switch reaches the API's own
-// config in both states.
 func TestAppConfig_HandsTheLoadedCORSOriginsToTheApp(t *testing.T) {
 	const origin = "https://www.fullchaos.dev"
 	t.Setenv(config.CORSAllowedOriginsEnv, origin)
