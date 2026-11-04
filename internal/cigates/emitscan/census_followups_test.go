@@ -1,6 +1,9 @@
 package emitscan_test
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func ruleList(t *testing.T, body string) string {
 	t.Helper()
@@ -86,8 +89,10 @@ func TestNamedConstantFormatIsReadByItsValue(t *testing.T) {
 		{"package var format stays unfolded", "var format = \"%d\"\nfunc f(n int) { _ = attribute.String(\"count\", fmt.Sprintf(format, n)) }", "R3"},
 	}
 	for _, c := range cases {
-		if got := ruleList(t, c.body); got != c.want {
-			t.Errorf("%s: rules %q, want %q", c.name, got, c.want)
-		}
+		t.Run(strings.ReplaceAll(c.name, " ", "_"), func(t *testing.T) {
+			if got := ruleList(t, c.body); got != c.want {
+				t.Errorf("rules %q, want %q", got, c.want)
+			}
+		})
 	}
 }
