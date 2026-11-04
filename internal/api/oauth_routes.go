@@ -11,6 +11,7 @@ import (
 	"errors"
 	"html/template"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -87,12 +88,12 @@ type oauthAuthorizationServerMetadata struct {
 func (a *App) handleOAuthMetadata(w http.ResponseWriter, _ *http.Request) {
 	issuer := a.oauth.Issuer()
 	grantTypes := []string{"authorization_code", auth.OAuthDeviceCodeGrantType}
-	revocationEndpoint, revocationAuthMethods := "", []string(nil)
+	// The revocation endpoint always serves access tokens (CHAOS-12825).
+	revocationEndpoint, revocationAuthMethods := issuer+OAuthRevocationPath, []string{"none"}
 	if a.oauth.RefreshGrantSupported() {
 		// The refresh grant serves the first-party browser client only;
 		// /register still downgrades a dynamic client asking for it.
 		grantTypes = append(grantTypes, "refresh_token")
-		revocationEndpoint, revocationAuthMethods = issuer+OAuthRevocationPath, []string{"none"}
 	}
 	writeOAuthJSON(w, http.StatusOK, oauthAuthorizationServerMetadata{
 		Issuer:                                 issuer,
@@ -311,6 +312,19 @@ func (a *App) oauthLimitKey(r *http.Request, clientID string) string {
 	}
 	sum := sha256.Sum256([]byte(clientID))
 	return "client:" + hex.EncodeToString(sum[:])
+}
+
+// revokeLimitKey is the limiter key of a /revoke request. An access token
+// (fcacr_) of a non-browser client is keyed by client AND source address
+// (CHAOS-12825): the client_id is public, so a client-wide key would let
+// anyone who knows it use up the holder's revoke, while a per-secret key would
+// let distinct bogus tokens skip the budget. Everything else keeps
+// oauthTokenLimitKey.
+func (a *App) revokeLimitKey(r *http.Request, clientID, secret string) string {
+	if strings.HasPrefix(secret, auth.TokenPrefix) && !a.oauth.IsBrowserClient(clientID) {
+		return a.oauthLimitKey(r, clientID) + "|ip:" + a.clientIP(r)
+	}
+	return a.oauthTokenLimitKey(r, clientID, secret)
 }
 
 // oauthTokenLimitKey is the limiter key of a /token or /revoke request. Every
@@ -979,7 +993,7 @@ func (a *App) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 		clientID, clientIDOK = tokenClientID(r)
 		secret = r.PostForm.Get("token")
 	}
-	if a.oauthRateLimited(w, r, oauthvocab.StepRevoke, a.oauthTokenLimitKey(r, clientID, secret), a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
+	if a.oauthRateLimited(w, r, oauthvocab.StepRevoke, a.revokeLimitKey(r, clientID, secret), a.runtime.DeviceAuthorizationLimiter.AllowTokenRequest) {
 		return
 	}
 	invalid := func() {
@@ -1001,6 +1015,17 @@ func (a *App) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 		invalid()
 		return
 	}
+	// A browser client's access token stays unsupported_token_type: its
+	// revoke cascades to the whole refresh family, which its refresh token
+	// already asks for (CHAOS-12124).
+	if strings.HasPrefix(token, auth.TokenPrefix) && !a.oauth.IsBrowserClient(clientID) {
+		if clientID == "" {
+			invalid()
+			return
+		}
+		a.revokeAccessToken(w, r, token, clientID)
+		return
+	}
 	revocation, err := a.oauth.RevokeRefreshToken(r.Context(), token, clientID)
 	if err != nil {
 		if refusal, ok := oauthOutcome(err); ok {
@@ -1015,6 +1040,58 @@ func (a *App) handleOAuthRevoke(w http.ResponseWriter, r *http.Request) {
 	}
 	writeOAuthJSON(w, http.StatusOK, struct{}{})
 	a.emitOAuthStep(r, oauthvocab.StepRevoke, revocation.Outcome, revocation.ClientKind, http.StatusOK)
+}
+
+// revokeAccessToken is the access-token side of the revocation endpoint
+// (CHAOS-12825): the client that holds a credential revokes it, which is the
+// only holder-side revoke for an MCP-bound credential. Every outcome but a
+// store failure answers 200 {} so the endpoint is no oracle for tokens.
+func (a *App) revokeAccessToken(w http.ResponseWriter, r *http.Request, token, clientID string) {
+	if a.credentialService == nil {
+		a.handleRuntimeUnavailable(w, r)
+		return
+	}
+	// The lookup is an unauthenticated credential-store read: bound it per
+	// address exactly as the authenticator bounds a bearer lookup (a
+	// well-formed token over the failure budget keeps a few slots, so an
+	// attacker sharing the holder's address cannot lock the holder out).
+	ip := a.clientIP(r)
+	now := a.now().UTC()
+	var release func()
+	var decision auth.AttemptDecision
+	if a.authAttempts != nil {
+		if auth.IsTokenShapeValid(token) {
+			release, decision = auth.BeginVerificationDecision(a.authAttempts, ip, now)
+		} else {
+			release, decision = auth.BeginAttemptDecision(a.authAttempts, ip, now)
+		}
+		if !decision.Admitted() {
+			a.logger.DebugContext(r.Context(), "access token revocation refused by the address bound", "request_id", RequestID(r.Context()), "refusal", decision.Refusal)
+			w.Header().Set("Retry-After", "1")
+			writeOAuthJSON(w, http.StatusTooManyRequests, oauthErrorBody{Error: "slow_down", ErrorDescription: "too many requests"})
+			a.emitOAuthStep(r, oauthvocab.StepRevoke, oauthvocab.OutcomeRateLimited, "", http.StatusTooManyRequests)
+			return
+		}
+		defer release()
+	}
+	revocation, err := a.credentialService.RevokePresentedAccessToken(r.Context(), token, clientID)
+	if err != nil {
+		a.logOAuthDependencyFailure(r, oauthvocab.StepRevoke, err)
+		writeOAuthJSON(w, http.StatusServiceUnavailable, oauthErrorBody{Error: "temporarily_unavailable"})
+		a.emitOAuthStep(r, oauthvocab.StepRevoke, oauthvocab.OutcomeUnavailable, "", http.StatusServiceUnavailable)
+		return
+	}
+	level := slog.LevelDebug
+	if revocation.Outcome == oauthvocab.OutcomeOK {
+		level = slog.LevelInfo
+	} else if a.authAttempts != nil {
+		auth.RecordRejection(a.authAttempts, ip, a.now().UTC(), decision.OverBudget)
+	}
+	// credential_id is a protected key (the redactor drops it), so the audit
+	// event carries the credential and this line carries only the outcome.
+	a.logger.Log(r.Context(), level, "access token revocation", "request_id", RequestID(r.Context()), "outcome", revocation.Outcome)
+	writeOAuthJSON(w, http.StatusOK, struct{}{})
+	a.emitOAuthStep(r, oauthvocab.StepRevoke, revocation.Outcome, "", http.StatusOK)
 }
 
 // oauthClientRefusalReasons names each client refusal in plain words for the

@@ -35,6 +35,7 @@ type credentialLifecycle interface {
 	RollbackCredentialRotation(context.Context, storage.CredentialRotationRollbackInput) (contractsv1.ClientCredential, error)
 	List(context.Context, string) ([]contractsv1.ClientCredential, error)
 	GetByID(context.Context, string, string) (contractsv1.ClientCredential, error)
+	FindByTokenHash(context.Context, string) (contractsv1.ClientCredential, error)
 }
 
 type PreparedCredential struct {

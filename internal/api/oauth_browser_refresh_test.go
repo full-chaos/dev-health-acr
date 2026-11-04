@@ -121,11 +121,14 @@ func TestOAuthRefreshGrantIsAbsentWithoutABrowserClient(t *testing.T) {
 	}
 	metadata := httptest.NewRecorder()
 	app.Handler().ServeHTTP(metadata, httptest.NewRequest(http.MethodGet, OAuthAuthorizationServerMetadataPath, nil))
-	if strings.Contains(metadata.Body.String(), "refresh_token") || strings.Contains(metadata.Body.String(), "revocation_endpoint") {
+	if strings.Contains(metadata.Body.String(), "refresh_token") {
 		t.Fatalf("metadata without a browser client advertises the refresh grant: %s", metadata.Body.String())
 	}
-	if status, _, _ := postOAuthForm(t, app, OAuthRevocationPath, url.Values{"token": {"x"}, "client_id": {"y"}}); status != http.StatusNotFound && status != http.StatusMethodNotAllowed {
-		t.Fatalf("/revoke without a browser client = %d, want not served", status)
+	if !strings.Contains(metadata.Body.String(), `"revocation_endpoint":"`+oauthTestIssuer+`/revoke"`) {
+		t.Fatalf("metadata without a browser client omits the access-token revocation endpoint: %s", metadata.Body.String())
+	}
+	if status, answer, _ := postOAuthForm(t, app, OAuthRevocationPath, url.Values{"token": {"acrrt_" + strings.Repeat("A", 43)}, "client_id": {"y"}}); status != http.StatusBadRequest || answer.Error != "unauthorized_client" {
+		t.Fatalf("/revoke of a refresh token without a browser client = %d %q, want unauthorized_client", status, answer.Error)
 	}
 	if status, answer, _ := postOAuthForm(t, app, OAuthTokenPath, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"x"}, "client_id": {auth.DevBrowserClientID}}); status != http.StatusBadRequest || answer.Error != "unsupported_grant_type" {
 		t.Fatalf("refresh without a browser client = %d %q, want unsupported_grant_type", status, answer.Error)
