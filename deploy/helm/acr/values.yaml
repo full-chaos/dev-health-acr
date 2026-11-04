@@ -200,6 +200,11 @@ deployment:
     rollingUpdate:
       maxSurge: 1
       maxUnavailable: 0
+  # On SIGTERM the pod first sleeps preStopSleepSeconds while the ingress drops
+  # its endpoint, then config.shutdownTimeout drains. 0 = no preStop. Render
+  # fails unless preStopSleepSeconds + config.shutdownTimeout < this grace period.
+  preStopSleepSeconds: 10
+  terminationGracePeriodSeconds: 30
   podAnnotations: {}
   podLabels: {}
   resources:

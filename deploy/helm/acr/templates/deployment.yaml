@@ -8,6 +8,7 @@ least-privilege runtime credentials; acr-mcp is a separate workload.
 {{- include "acr.validateDeviceVerificationURL" . -}}
 {{- include "acr.validateEntitlementOrigin" . -}}
 {{- include "acr.validateWorkloadTokenExchange" . -}}
+{{- include "acr.validateShutdownBudget" . -}}
 {{- $image := include "acr.image" . -}}
 {{- $remoteEntitlement := include "acr.remoteEntitlement" . -}}
 apiVersion: apps/v1
@@ -48,6 +49,7 @@ spec:
       serviceAccountName: {{ include "acr.apiServiceAccountName" . | quote }}
       automountServiceAccountToken: false
       {{- include "acr.imagePullSecrets" . | nindent 6 }}
+      terminationGracePeriodSeconds: {{ .Values.deployment.terminationGracePeriodSeconds }}
       securityContext:
         {{- include "acr.podSecurityContext" . | nindent 8 }}
       {{- with .Values.deployment.nodeSelector }}
@@ -299,6 +301,12 @@ spec:
               port: http
             periodSeconds: 5
             failureThreshold: 30
+          {{- if gt (int .Values.deployment.preStopSleepSeconds) 0 }}
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ int .Values.deployment.preStopSleepSeconds }}
+          {{- end }}
           resources:
             {{- toYaml .Values.deployment.resources | nindent 12 }}
           volumeMounts:

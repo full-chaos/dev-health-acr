@@ -41,6 +41,10 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               unsupported-entitlement-scheme, userinfo-url, query-url, fragment-url, unknown-root-key,
               unknown-config-key, alternate-port, mutable-token-copy-image,
               missing-device-verification-url, invalid-device-verification-url,
+              shutdown-budget-exceeded, shutdown-budget-minutes, shutdown-budget-bad-duration,
+              shutdown-timeout-empty-set-string, shutdown-timeout-empty-set,
+              shutdown-timeout-empty-file, shutdown-timeout-null-file, shutdown-timeout-null-json,
+              prestop-sleep-negative, prestop-render,
               acr-mcp-mutable-image, acr-mcp-missing-image, acr-mcp-api-url,
               acr-mcp-base-path, acr-mcp-gateway-no-parent.
               The acr-api query embedder scenarios (positive ones render and assert, the rest fail closed):
@@ -441,6 +445,58 @@ case "$scenario" in
     negative invalid-device-verification-url "device-verification-url" \
       --set "config.requireBackingStores=true" \
       --set-string "config.deviceVerificationUrl=/acr/device"
+    exit 0 ;;
+  shutdown-budget-exceeded)
+    negative shutdown-budget-exceeded "shutdown-budget: deployment.preStopSleepSeconds (20) + config.shutdownTimeout (10s)" \
+      --set deployment.preStopSleepSeconds=20 \
+      --set deployment.terminationGracePeriodSeconds=30
+    exit 0 ;;
+  shutdown-budget-minutes)
+    negative shutdown-budget-minutes "config.shutdownTimeout (60s)" \
+      --set-string config.shutdownTimeout=1m
+    exit 0 ;;
+  shutdown-budget-bad-duration)
+    negative shutdown-budget-bad-duration "shutdown-budget: config.shutdownTimeout \"1m30s\"" \
+      --set-string config.shutdownTimeout=1m30s
+    exit 0 ;;
+  shutdown-timeout-empty-set-string)
+    negative shutdown-timeout-empty-set-string "shutdown-budget: config.shutdownTimeout must be set" \
+      --set-string "config.shutdownTimeout="
+    exit 0 ;;
+  shutdown-timeout-empty-set)
+    negative shutdown-timeout-empty-set "shutdown-budget: config.shutdownTimeout must be set" \
+      --set "config.shutdownTimeout="
+    exit 0 ;;
+  shutdown-timeout-empty-file)
+    printf 'config:\n  shutdownTimeout: ""\n' >"$workdir/timeout-empty.yaml"
+    negative shutdown-timeout-empty-file "shutdown-budget: config.shutdownTimeout must be set" \
+      -f "$workdir/timeout-empty.yaml"
+    exit 0 ;;
+  shutdown-timeout-null-file)
+    printf 'config:\n  shutdownTimeout: null\n' >"$workdir/timeout-null.yaml"
+    negative shutdown-timeout-null-file "shutdown-budget: config.shutdownTimeout must be set" \
+      -f "$workdir/timeout-null.yaml"
+    exit 0 ;;
+  shutdown-timeout-null-json)
+    negative shutdown-timeout-null-json "shutdown-budget: config.shutdownTimeout must be set" \
+      --set-json "config.shutdownTimeout=null"
+    exit 0 ;;
+  prestop-sleep-negative)
+    negative prestop-sleep-negative "/deployment/preStopSleepSeconds': minimum" \
+      --set deployment.preStopSleepSeconds=-1
+    exit 0 ;;
+  prestop-render)
+    printf 'scenario: prestop-render (default sleep and grace; sleep 0 renders no preStop)\n'
+    render -s templates/deployment.yaml >"$workdir/prestop-default.yaml"
+    grep -qE '^      terminationGracePeriodSeconds: 30$' "$workdir/prestop-default.yaml" \
+      || fail_gate "prestop-render: default render lacks terminationGracePeriodSeconds: 30"
+    grep -A3 -E '^          lifecycle:$' "$workdir/prestop-default.yaml" | grep -qE '^                seconds: 10$' \
+      || fail_gate "prestop-render: default render lacks lifecycle.preStop.sleep.seconds: 10 on acr-api"
+    render -s templates/deployment.yaml --set deployment.preStopSleepSeconds=0 >"$workdir/prestop-off.yaml"
+    ! grep -qE 'preStop:' "$workdir/prestop-off.yaml" \
+      || fail_gate "prestop-render: preStopSleepSeconds=0 still renders a preStop hook"
+    pass "prestop-render: default sleep 10 + grace 30 rendered; sleep 0 renders none"
+    printf 'RESULT: scenario prestop-render passed\n'
     exit 0 ;;
   acr-mcp-mutable-image)
     # Production-shaped inputs so the digest rule (not the development tag
