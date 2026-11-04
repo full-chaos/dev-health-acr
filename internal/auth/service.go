@@ -215,11 +215,7 @@ func (s *Service) revoke(ctx context.Context, orgID, credentialID, actorID strin
 	if orgID == "" || credentialID == "" || actorID == "" {
 		return contractsv1.ClientCredential{}, fmt.Errorf("%w: org_id, credential_id, and actor are required", ErrInvalidCredential)
 	}
-	credential, err := s.store.RevokeCredential(ctx, storage.CredentialRevocationInput{OrgID: orgID, CredentialID: credentialID, ActorID: actorID, SelfCredential: self})
-	if err != nil {
-		return contractsv1.ClientCredential{}, fmt.Errorf("revoke credential: %w", err)
-	}
-	return credential, nil
+	return s.revokeWithActor(ctx, storage.CredentialRevocationInput{OrgID: orgID, CredentialID: credentialID, ActorID: actorID, SelfCredential: self})
 }
 
 // RevokeAsOperator revokes a credential through the same storage path as
@@ -236,9 +232,10 @@ func (s *Service) RevokeAsOperator(ctx context.Context, orgID, credentialID, act
 	})
 }
 
-// revokeWithActor is the one revocation path of RevokeAsOperator and
-// RevokeOnBehalf: the storage revoke, which writes the credential_revoked
-// audit row and the lifecycle event in its transaction.
+// revokeWithActor is the one revocation path of the service (Revoke,
+// RevokeSelf, RevokePresentedAccessToken, RevokeAsOperator and RevokeOnBehalf):
+// the storage revoke, which writes the credential_revoked audit row and the
+// lifecycle event in its transaction.
 func (s *Service) revokeWithActor(ctx context.Context, input storage.CredentialRevocationInput) (contractsv1.ClientCredential, error) {
 	credential, err := s.store.RevokeCredential(ctx, input)
 	if err != nil {
