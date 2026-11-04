@@ -22,6 +22,7 @@ import (
 // package. Each has a reason; a message that is neither here nor declared in eventspec fails the
 // guard below.
 var operationalLogEvents = map[string]string{
+	"landscape common live day read":                       "debug trace of the shared-day read that feeds the refused quadrant's offer",
 	"devhealthfacts.blocker_age_read_failed":               "read failure of one blocker age probe",
 	"context_fabric_owning_teams_read_failed":              "read failure of the owning team lookup",
 	"context_fabric_tree_work_item_filter":                 "debug trace of the tree work item filter",

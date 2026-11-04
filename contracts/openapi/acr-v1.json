@@ -384,9 +384,6 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {
-            "webAssertionAuth": []
           }
         ],
         "parameters": [
@@ -500,9 +497,6 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {
-            "webAssertionAuth": []
           }
         ],
         "parameters": [
@@ -636,9 +630,6 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {
-            "webAssertionAuth": []
           }
         ],
         "parameters": [
@@ -711,9 +702,6 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {
-            "webAssertionAuth": []
           }
         ],
         "parameters": [
@@ -809,9 +797,6 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {
-            "webAssertionAuth": []
           }
         ],
         "parameters": [
@@ -880,9 +865,6 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {
-            "webAssertionAuth": []
           }
         ],
         "parameters": [
@@ -952,9 +934,6 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {
-            "webAssertionAuth": []
           }
         ],
         "parameters": [
@@ -1039,9 +1018,6 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {
-            "webAssertionAuth": []
           }
         ],
         "parameters": [
@@ -1127,9 +1103,6 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {
-            "webAssertionAuth": []
           }
         ],
         "parameters": [
@@ -1215,9 +1188,6 @@
         "security": [
           {
             "bearerAuth": []
-          },
-          {
-            "webAssertionAuth": []
           }
         ],
         "parameters": [

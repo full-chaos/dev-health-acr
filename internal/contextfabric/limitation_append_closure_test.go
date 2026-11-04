@@ -60,6 +60,14 @@ var auditedLimitationWrites = map[string]limitationAudit{
 		sameShapedTotal: 1,
 		reason:          "removes every copy of the quadrant's one line when the flag drops the quadrant: the list only shrinks, so the bound cannot move (CHAOS-12626)",
 	},
+	"finalizeResult#withLandscapeDaysDifferLimitation#0": {
+		sameShapedTotal: 1,
+		reason:          "withLandscapeDaysDifferLimitation removes the earlier refusal lines and adds the current one only through appendBoundedLimitations, so the list is never longer than the bounded appender makes it (CHAOS-12958)",
+	},
+	"WithoutDisabledRenderShapes#withoutDaysDifferLimitations#0": {
+		sameShapedTotal: 1,
+		reason:          "removes every refusal line when the flag drops the quadrant: the list only shrinks, so the bound cannot move (CHAOS-12958)",
+	},
 	"withServedDetailTableLimitation#withoutLimitation#0": {
 		sameShapedTotal: 1,
 		reason:          "removes the service's own served-table sentence when the size cut left no served table: the list only shrinks, so the bound cannot move (CHAOS-12887)",

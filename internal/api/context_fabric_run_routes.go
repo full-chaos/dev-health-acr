@@ -140,7 +140,7 @@ func (a *App) ContextFabricSubmissionCancelHandler() http.Handler {
 			w.WriteHeader(http.StatusAccepted)
 		}
 	})
-	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
+	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, handler)
 }
 
 // attachCursor reads Last-Event-ID: absent is 0; one well-formed value is its
@@ -241,7 +241,7 @@ func (a *App) ContextFabricSubmissionEventsHandler() http.Handler {
 			"run_request_id", contextfabric.SanitizeLogAttr(record.RunRequestID))
 		a.serveRunAttach(w, r, principal, runs, record, run, cursor, page)
 	})
-	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
+	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, handler)
 }
 
 // attachWriter writes an attach's frames, each under its write deadline.

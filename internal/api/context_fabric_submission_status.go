@@ -122,5 +122,5 @@ func (a *App) ContextFabricSubmissionStatusHandler(submissions contextfabric.Sub
 		a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_submission_status_read", "context_fabric_investigation_submission", record.ReservedResultID, "success", map[string]any{"state": string(record.State)})
 		writeJSON(w, http.StatusOK, status)
 	})
-	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
+	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, handler)
 }

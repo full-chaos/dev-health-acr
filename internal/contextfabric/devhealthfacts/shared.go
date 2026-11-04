@@ -1441,7 +1441,14 @@ import (
 // v281 -> v282: a model limitation that cites a detail table the answer serves
 // is replaced by the service's own sentence, and the synthesis prompt is v32
 // (CHAOS-12887). An answer saved under v281 holds the model's "not supplied".
-const QueryVersion = "devhealthfacts.clickhouse.v282"
+//
+// v282 -> v283: a team landscape fact on a read of two or more teams whose own
+// latest days differ carries common_live_day, the latest day every team holds
+// live rows for at least the quadrant's person floor, and the answer serves a
+// line naming each team's day and offering that window when it refuses the
+// quadrant (CHAOS-12958). An answer saved under v282 refuses the quadrant
+// without saying why.
+const QueryVersion = "devhealthfacts.clickhouse.v283"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

@@ -202,7 +202,7 @@ func (a *App) ContextFabricThreadListHandler() http.Handler {
 		a.recordReadAudit(r.Context(), principal, "context_fabric_thread_list_read", "context_fabric_thread", "", "success", map[string]any{"threads": len(list.Threads)})
 		writeJSON(w, http.StatusOK, list)
 	})
-	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
+	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, handler)
 }
 
 // ContextFabricThreadHandler serves GET and DELETE
@@ -229,7 +229,7 @@ func (a *App) ContextFabricThreadHandler() http.Handler {
 		}
 		a.readThread(w, r, threads, principal, key)
 	})
-	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, true, handler)
+	return a.protectedRuntimeHandler(limits.RequestClassContext, auth.ScopeContextRead, true, false, handler)
 }
 
 // deleteThread closes the thread: 204 for any well-formed id, whether or not

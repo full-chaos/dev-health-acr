@@ -410,6 +410,10 @@ ORDER BY team_id, map_name`)
 	if scanErr != nil {
 		return max(rowCount, coordinateRows), 0, rejected, scanErr
 	}
+	commonDay, commonErr := p.readCommonLiveDay(ctx, orgID, teamOrder, byTeam, timeBound)
+	if commonErr != nil {
+		return max(rowCount, coordinateRows), 0, rejected, commonErr
+	}
 	seriesOmitted := 0
 	dailyByTeam := make(map[string][]landscapeDailyRow)
 	scanErr = p.facts.query(ctx, landscapeDailySeriesSQL(timeBound, len(ids)), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
@@ -460,12 +464,66 @@ ORDER BY team_id, map_name`)
 		if coordinates := coordinatesByTeam[teamID]; len(coordinates) > 0 {
 			fields["map_coordinates"] = landscapeCoordinatesTable(coordinates, []string{"map_name", "as_of_day"}, timeBound)
 		}
+		if commonDay != "" {
+			fields["common_live_day"] = contextfabric.StringFactValue(commonDay)
+		}
 		*facts = append(*facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactLandscape, Subject: bySubject[teamID], Fields: fields,
 			EvidenceRefIDs: []string{evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, teamID)},
 		})
 	}
 	return max(rowCount, coordinateRows), seriesOmitted, rejected, nil
+}
+
+// readCommonLiveDay is the latest day every one of the read's teams holds live
+// rows for at least landscapeMinIdentitiesPerDay identities, or "" when the
+// teams' own latest days already agree or they share none in the window read
+// (CHAOS-12958). It only feeds the offer the answer makes when the quadrant is
+// refused for different days: no stat is read on it, and the facts above stay
+// each team's own latest day (CHAOS-4611 ruling 3).
+func (p *LandscapeProvider) readCommonLiveDay(ctx context.Context, orgID string, teamOrder []string, byTeam map[string]landscapeAreaRow, timeBound factTimeBound) (string, error) {
+	if len(teamOrder) < 2 {
+		return "", nil
+	}
+	first := byTeam[teamOrder[0]].asOfDay
+	differ := false
+	ownDays := make([]string, 0, len(teamOrder))
+	for _, teamID := range teamOrder {
+		ownDays = append(ownDays, byTeam[teamID].asOfDay)
+		if byTeam[teamID].asOfDay != first {
+			differ = true
+		}
+	}
+	if !differ {
+		return "", nil
+	}
+	teamPredicate := ` AND toString(team_id) IN {ids:Array(String)}`
+	statement := `SELECT toString(as_of_day)
+FROM (
+	SELECT as_of_day
+	FROM (
+		SELECT as_of_day, team_id, uniqExact(identity_id) AS day_identities
+		FROM (
+` + landscapeRowsSQL(teamPredicate, timeBound) + `
+		)
+		WHERE is_live
+		GROUP BY as_of_day, team_id
+		HAVING day_identities >= ` + strconv.Itoa(contextfabric.LandscapeMinIdentities) + `
+	)
+	GROUP BY as_of_day
+	HAVING uniqExact(team_id) = ` + strconv.Itoa(len(teamOrder)) + `
+)
+ORDER BY as_of_day DESC
+LIMIT 1`
+	day := ""
+	err := p.facts.query(ctx, statement, orgID, teamOrder, func(row contextpacket.ClickHouseRowScanner) error {
+		return row.Scan(&day)
+	}, timeBound.bindings()...)
+	if err != nil {
+		return "", err
+	}
+	slog.DebugContext(ctx, "landscape common live day read", "teams", len(teamOrder), "own_latest_days", contextfabric.SanitizeLogStrings(ownDays), "common_live_day", contextfabric.SanitizeLogAttr(day), "found", day != "")
+	return day, nil
 }
 
 // queryProjectLandscapePopulation is the project population of

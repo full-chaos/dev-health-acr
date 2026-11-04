@@ -46,70 +46,70 @@
       "pattern": "/api/v1/context-fabric/investigations",
       "path": "/api/v1/context-fabric/investigations",
       "scope": "context:read",
-      "web_assertion": true
+      "web_assertion": false
     },
     {
       "method": "GET",
       "pattern": "/api/v1/context-fabric/investigations/{result_id}",
       "path": "/api/v1/context-fabric/investigations/result-00000001",
       "scope": "context:read",
-      "web_assertion": true
+      "web_assertion": false
     },
     {
       "method": "GET",
       "pattern": "/api/v1/context-fabric/investigations/submissions/{submission_id}",
       "path": "/api/v1/context-fabric/investigations/submissions/submission-00000001",
       "scope": "context:read",
-      "web_assertion": true
+      "web_assertion": false
     },
     {
       "method": "GET",
       "pattern": "/api/v1/context-fabric/investigations/submissions/{submission_id}/events",
       "path": "/api/v1/context-fabric/investigations/submissions/submission-00000001/events",
       "scope": "context:read",
-      "web_assertion": true
+      "web_assertion": false
     },
     {
       "method": "POST",
       "pattern": "/api/v1/context-fabric/investigations/submissions/{submission_id}/cancel",
       "path": "/api/v1/context-fabric/investigations/submissions/submission-00000001/cancel",
       "scope": "context:read",
-      "web_assertion": true
+      "web_assertion": false
     },
     {
       "method": "GET",
       "pattern": "/api/v1/context-fabric/threads",
       "path": "/api/v1/context-fabric/threads",
       "scope": "context:read",
-      "web_assertion": true
+      "web_assertion": false
     },
     {
       "method": "GET",
       "pattern": "/api/v1/context-fabric/threads/{thread_id}",
       "path": "/api/v1/context-fabric/threads/thread-00000001",
       "scope": "context:read",
-      "web_assertion": true
+      "web_assertion": false
     },
     {
       "method": "DELETE",
       "pattern": "/api/v1/context-fabric/threads/{thread_id}",
       "path": "/api/v1/context-fabric/threads/thread-00000001",
       "scope": "context:read",
-      "web_assertion": true
+      "web_assertion": false
     },
     {
       "method": "GET",
       "pattern": "/api/v1/context-fabric/investigations/feedback/{result_id}",
       "path": "/api/v1/context-fabric/investigations/feedback/result-00000001",
       "scope": "context:read",
-      "web_assertion": true
+      "web_assertion": false
     },
     {
       "method": "POST",
       "pattern": "/api/v1/context-fabric/investigations/feedback/{result_id}",
       "path": "/api/v1/context-fabric/investigations/feedback/result-00000001",
       "scope": "context:read",
-      "web_assertion": true
+      "web_assertion": false
     },
     {
       "method": "POST",
