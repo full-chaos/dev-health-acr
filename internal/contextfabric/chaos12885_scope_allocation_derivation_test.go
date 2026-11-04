@@ -188,17 +188,14 @@ func TestAScopeAllocationAnswerWithItsSplitWithheldIsPartial(t *testing.T) {
 	}
 }
 
-// The other half of the lead's residual pin, the case this change does NOT
-// close, pinned as it is today so the follow-up flips it red to green. On the
-// scope allocation route an answer whose claims name no
-// repository_theme_breakdown table (here, one scalar investment claim) still
-// reads COMPLETE: the anchor requirement is satisfied because the team's fact
-// was read, and no floor asks whether the split the question named was claimed.
-// An honest floor needs a service-authored limitation sentence or coverage code
-// in contracts/v1, so it is deferred (the follow-up ticket). When the follow-up
-// lands, this test must change to expect partial with that disclosure; until
-// then it fails if the case silently changes either way.
-func TestAScopeAllocationAnswerThatClaimsNoSplitStillReadsComplete(t *testing.T) {
+// The other half of the lead's residual pin (CHAOS-12890). On the scope
+// allocation route an answer whose claims name no repository_theme_breakdown
+// table (here, one scalar investment claim) is PARTIAL and says why: the
+// question asked for the split, and the anchor requirement's own row stays
+// satisfied because the team's fact was read. The same answer with the table
+// claimed stays complete (TestAScopeAllocationAnswerWithItsSplitWithheldIsPartial
+// holds that control).
+func TestAScopeAllocationAnswerThatClaimsNoSplitIsPartial(t *testing.T) {
 	t.Parallel()
 	frame := fullchaosChildrenFrame()
 	routed := scopeAllocationRequirementFrame(&frame, scopeAllocationOutcome(&frame, SubjectTeam))
@@ -235,11 +232,77 @@ func TestAScopeAllocationAnswerThatClaimsNoSplitStillReadsComplete(t *testing.T)
 	if !found || row.Outcome != contractsv1.ContextFabricRequirementSatisfied {
 		t.Fatalf("anchor row %+v (found %v), want satisfied: the team's fact was read", row, found)
 	}
-	// TODAY'S RESULT, NOT THE WANTED ONE (see the doc comment).
-	if served.Status != InvestigationComplete || served.Completeness.State != contractsv1.ContextFabricAnswerCompletenessComplete {
-		t.Fatalf("unclaimed split: status %q, state %q; this pin says complete until the follow-up lands -- update it with that change", served.Status, served.Completeness.State)
+	// Completeness.State counts outcome rows, which do not state a missing
+	// claim (the CHAOS-12348 precedent), so the terminal status and reason
+	// carry the disclosure: partial, with a limitation, never undisclosed.
+	if served.Status != InvestigationPartial || !served.Coverage.Partial ||
+		served.Completeness.TerminalStatus != InvestigationPartial ||
+		served.Completeness.TerminalReason != contractsv1.ContextFabricTerminalReasonLimitationDisclosed {
+		t.Fatalf("unclaimed split: status %q, terminal %q / %q, coverage partial %v; want partial, limitation_disclosed", served.Status, served.Completeness.TerminalStatus, served.Completeness.TerminalReason, served.Coverage.Partial)
+	}
+	if !roleContains(served.Limitations, contractsv1.ContextFabricRepositorySplitUnclaimedLimitation) {
+		t.Fatalf("limitations %q do not say the split was not stated", served.Limitations)
+	}
+	if roleContains(served.Limitations, contractsv1.ContextFabricRepositoryFlowWithheldLimitation) {
+		t.Fatal("an unclaimed table was reported as withheld")
 	}
 	if err := served.Validate(); err != nil {
 		t.Fatalf("the unclaimed answer is not contract-valid: %v", err)
+	}
+}
+
+// The floor's three clauses, each alone (CHAOS-12890): the route, the claim,
+// and a complete status. Off the route, with the table claimed, or already
+// below complete, the result is returned as it came.
+func TestTheUnclaimedSplitFloorHoldsOnlyOnTheRouteWithoutTheTable(t *testing.T) {
+	t.Parallel()
+	frame := fullchaosChildrenFrame()
+	routed := scopeAllocationRequirementFrame(&frame, scopeAllocationOutcome(&frame, SubjectTeam))
+	share := 0.55
+	scalar := ClaimedFact{ClaimID: "claim_scalar", Kind: FactInvestment, Field: "theme_quality", Value: ScalarValue{Number: &share}}
+	table := ClaimedFact{ClaimID: "claim_table", Kind: FactInvestment, Field: contractsv1.ContextFabricRenderRepositoryFlowTableField}
+	result := func(status InvestigationStatus, claims ...ClaimedFact) InvestigationResult {
+		return InvestigationResult{Status: status, ClaimedFacts: claims}
+	}
+	refused := result(InvestigationComplete, scalar)
+	refused.RefusalBasis = "frame_invariant"
+	for name, tc := range map[string]struct {
+		frame  *QuestionFrame
+		result InvestigationResult
+		floor  bool
+	}{
+		"a refusal":                 {routed, refused, false},
+		"on the route, no table":    {routed, result(InvestigationComplete, scalar), true},
+		"off the route":             {&frame, result(InvestigationComplete, scalar), false},
+		"on the route, table named": {routed, result(InvestigationComplete, scalar, table), false},
+		"no_match":                  {routed, result(InvestigationNoMatch, scalar), false},
+		"no frame":                  {nil, result(InvestigationComplete, scalar), false},
+	} {
+		got := withUnclaimedRepositorySplitFloor(tc.result, tc.frame)
+		floored := roleContains(got.Limitations, contractsv1.ContextFabricRepositorySplitUnclaimedLimitation)
+		if again := withUnclaimedRepositorySplitFloor(got, tc.frame); len(again.Limitations) != len(got.Limitations) {
+			t.Fatalf("%s: a second pass added the sentence again", name)
+		}
+		if floored != tc.floor || (tc.floor && got.Status != InvestigationPartial) || (!tc.floor && got.Status != tc.result.Status) {
+			t.Fatalf("%s: status %q, floored %v; want floored %v", name, got.Status, floored, tc.floor)
+		}
+	}
+}
+
+// An answer already partial for another cause, with the split unclaimed on the
+// route, says both: its own sentence stays and the unclaimed-split one joins it.
+func TestTheUnclaimedSplitIsDisclosedBesideAnotherPartialCause(t *testing.T) {
+	t.Parallel()
+	frame := fullchaosChildrenFrame()
+	routed := scopeAllocationRequirementFrame(&frame, scopeAllocationOutcome(&frame, SubjectTeam))
+	share := 0.55
+	scalar := ClaimedFact{ClaimID: "claim_scalar", Kind: FactInvestment, Field: "theme_quality", Value: ScalarValue{Number: &share}}
+	for _, status := range []InvestigationStatus{InvestigationPartial, InvestigationDegraded} {
+		in := InvestigationResult{Status: status, ClaimedFacts: []ClaimedFact{scalar}, Limitations: []string{contractsv1.ContextFabricGraphHopWalkTruncatedLimitation}}
+		got := withUnclaimedRepositorySplitFloor(in, routed)
+		if got.Status != status || !roleContains(got.Limitations, contractsv1.ContextFabricGraphHopWalkTruncatedLimitation) ||
+			!roleContains(got.Limitations, contractsv1.ContextFabricRepositorySplitUnclaimedLimitation) {
+			t.Fatalf("%s: status %q, limitations %q; want both sentences and the status kept", status, got.Status, got.Limitations)
+		}
 	}
 }

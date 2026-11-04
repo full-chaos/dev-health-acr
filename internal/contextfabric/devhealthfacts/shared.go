@@ -1421,7 +1421,12 @@ import (
 // derivation v4). An answer saved under v276 was lowered to degraded by the
 // member requirement, and answer reuse keys on this version, not on the
 // derivation version.
-const QueryVersion = "devhealthfacts.clickhouse.v277"
+//
+// v277 -> v278: a team's "split across its repositories" answer on the scope
+// allocation route that claims no repository_theme_breakdown table is floored
+// to partial with ContextFabricRepositorySplitUnclaimedLimitation (CHAOS-12890).
+// An answer saved under v277 reads complete without the split.
+const QueryVersion = "devhealthfacts.clickhouse.v278"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
