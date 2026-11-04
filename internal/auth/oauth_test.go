@@ -31,6 +31,7 @@ type oauthHarness struct {
 	devices *DeviceFlowService
 	store   storage.DeviceAuthorizationStore
 	creds   *storage.CredentialLifecycle
+	audit   *memory.AuditStore
 	meta    *fakeMetadata
 	// sessionID is the web session (sid) the harness's consent approvals
 	// sign (CHAOS-12123); "" for none.
@@ -72,11 +73,13 @@ func newOAuthHarnessWith(t *testing.T, configure func(*OAuthConfig)) *oauthHarne
 	t.Helper()
 	h := &oauthHarness{now: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC), meta: &fakeMetadata{documents: map[string]OAuthClientMetadata{}}}
 	clock := func() time.Time { return h.now }
-	credentials, err := memory.NewCredentialStoreWithOptions(memory.CredentialStoreOptions{Audit: memory.NewAuditStore(), Now: clock})
+	audit := memory.NewAuditStore()
+	credentials, err := memory.NewCredentialStoreWithOptions(memory.CredentialStoreOptions{Audit: audit, Now: clock})
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.creds = credentials
+	h.audit = audit
 	store, err := memory.NewDeviceAuthorizationStore(memory.DeviceAuthorizationStoreOptions{Credentials: credentials, Now: clock})
 	if err != nil {
 		t.Fatal(err)
