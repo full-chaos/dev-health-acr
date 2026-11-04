@@ -1441,7 +1441,7 @@ import (
 // v281 -> v282: a model limitation that cites a detail table the answer serves
 // is replaced by the service's own sentence, and the synthesis prompt is v32
 // (CHAOS-12887). An answer saved under v281 holds the model's "not supplied".
-const QueryVersion = "devhealthfacts.clickhouse.v282"
+const QueryVersion = "devhealthfacts.clickhouse.v283"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
