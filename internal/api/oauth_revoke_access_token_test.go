@@ -103,3 +103,35 @@ func TestMCPBoundAccessTokenCanBeRevokedAtTheRevocationEndpoint(t *testing.T) {
 		t.Fatal("the logs carry the token")
 	}
 }
+
+// RFC 7009 s2.2: every outcome that is not a store failure answers the same
+// 200 {} (no oracle), at the HTTP layer.
+func TestRevocationEndpointAnswersEveryAccessTokenOutcomeAlike(t *testing.T) {
+	app, _, err := newOAuthTestApp(t, &OAuthRuntime{Issuer: oauthTestIssuer, Resources: []string{oauthTestResource}, ConsentURL: oauthTestConsentURL}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, clientID := mcpBoundOAuthToken(t, app)
+	other := registerOAuthTestClient(t, app, "other client")
+	unknown := auth.TokenPrefix + strings.Repeat("A", 43)
+	if !auth.IsTokenShapeValid(unknown) {
+		t.Fatalf("test token %q is not well-shaped", unknown)
+	}
+	cases := []struct {
+		name  string
+		token string
+		id    string
+	}{
+		{"another client", token, other},
+		{"owner", token, clientID},
+		{"already revoked", token, clientID},
+		{"unknown well-shaped token", unknown, clientID},
+		{"malformed fcacr token", auth.TokenPrefix + "short", clientID},
+	}
+	for _, c := range cases {
+		status, _, raw := postOAuthForm(t, app, OAuthRevocationPath, url.Values{"token": {c.token}, "token_type_hint": {"access_token"}, "client_id": {c.id}})
+		if status != http.StatusOK || strings.TrimSpace(raw) != "{}" {
+			t.Fatalf("%s: %d %q, want 200 {}", c.name, status, raw)
+		}
+	}
+}
