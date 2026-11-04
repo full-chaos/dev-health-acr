@@ -2650,7 +2650,10 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// The fresh proposal in the snapshot's own shape, so the comparison
 		// reads one representation on both sides. Its declarations are derived
 		// here for the COMPARISON only; they never reach planning on a turn the
-		// continuation applies to.
+		// continuation applies to. They are derived under the fresh reading's
+		// own requirement route (CHAOS-12885), the route a fresh plan would
+		// use, so a snapshot saved on the scope allocation route compares
+		// equal to a fresh reading of the same question.
 		continuation = compareContinuationProposal(continuation, continuationFreshProposal{
 			Available: true,
 			Family:    familyOutcome.Family,
@@ -2660,7 +2663,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				EmittedShape:  interpretation.Shape,
 				GroupKind:     freshEffectiveGroup,
 				FamilyVersion: familyOutcome.Version,
-				Requirements:  deriveTurnRequirements(familyOutcome.Frame, e.requirements),
+				Requirements:  deriveTurnRequirements(scopeAllocationRequirementFrame(familyOutcome.Frame, familyOutcome), e.requirements),
 			}),
 		})
 		familyOutcome = e.applyAndRecordContinuation(ctx, principal, familyOutcome, continuation, accepted)
@@ -2799,10 +2802,16 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// the plan-time omission -- never familyOutcome.Frame directly, which
 	// stays canonical for persistence, the response, and the composition
 	// boundary's own revalidation.
+	//
+	// CHAOS-12885: a turn the scope allocation route serves carries that route
+	// on the same copy (scopeAllocationRequirementFrame), so every one of those
+	// readers derives the anchor team's requirement and none derives a member
+	// requirement the route never reads.
 	requirementFrame := familyOutcome.Frame
 	if workItemTuple {
 		requirementFrame = workItemTupleRequirementFrame(familyOutcome.Frame)
 	}
+	requirementFrame = scopeAllocationRequirementFrame(requirementFrame, familyOutcome)
 	// DERIVED ONCE, AND READ TWICE ON THIS LINE AND THE NEXT. The rows are an
 	// INPUT to the plan (planFactKinds reads a computed step's declared inputs
 	// so the declaration actually plans the read) and they are the plan's own
@@ -3699,7 +3708,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// facts too would put a breakdown per repository beside the team's, which is
 	// a comparison the question did not ask for. With no anchor team committed
 	// nothing is read (Codex r1, executed): the members' facts are not the
-	// team's split, so the turn ends in the subjectless terminal below.
+	// team's split, so the turn ends in the subjectless terminal below. The
+	// plan's requirement is the anchor's for the same reason
+	// (scopeAllocationRequirementFrame; CHAOS-12885).
 	if scopeAllocationRead(familyOutcome) {
 		subjects = scopeAllocationAnchors(familyOutcome, resolution)
 	}
@@ -5212,6 +5223,28 @@ func scopeAllocationAnchorKind(outcome QuestionFamilyOutcome) SubjectKind {
 		return kind
 	}
 	return SubjectTeam
+}
+
+// scopeAllocationRequirementFrame is frame with the scope allocation route set
+// for requirement derivation, when this turn's served family is that route's
+// (scopeAllocationRead; CHAOS-12885). It returns a COPY and never writes frame,
+// which stays canonical for persistence, the response and the composition
+// boundary, the rule workItemTupleRequirementFrame keeps. Any other turn gets
+// frame back as it is. Nil in, nil out.
+//
+// The route reads the anchor team's own investment fact and no member set
+// (scopeAllocationAnchors), so the requirement is the team's,
+// allocation_breakdown/subject/team. Derived from the frame alone it is
+// allocation_breakdown/member/repository, which nothing reads: its population
+// is absent, so the assembled answer called it unavailable and lowered a turn
+// that read its fact to degraded.
+func scopeAllocationRequirementFrame(frame *QuestionFrame, outcome QuestionFamilyOutcome) *QuestionFrame {
+	if frame == nil || !scopeAllocationRead(outcome) {
+		return frame
+	}
+	routed := *frame
+	routed.requirementRoute = RequirementRouteScopeAllocationTeam
+	return &routed
 }
 
 // scopeAllocationAnchors is the anchor team a scope_allocation turn reads:

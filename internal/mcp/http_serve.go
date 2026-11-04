@@ -18,6 +18,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/otelexport"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
+	"github.com/full-chaos/dev-health-acr/internal/trustedproxy"
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
 
@@ -117,10 +118,18 @@ func (o ServeOptions) edgeGate() EdgeGateOptions {
 }
 
 // ErrServeOptionInvalid reports a serve setting that is out of range or
-// unparseable. Its message names the setting, never the value.
-type ErrServeOptionInvalid struct{ Setting string }
+// unparseable. Its message names the setting, never the value. Reason, when
+// set, is a diagnostic that itself names no value (the trusted-proxy parser's
+// entry position).
+type ErrServeOptionInvalid struct {
+	Setting string
+	Reason  string
+}
 
 func (e *ErrServeOptionInvalid) Error() string {
+	if e.Reason != "" {
+		return "acr-mcp: serve setting " + e.Setting + " is invalid: " + e.Reason
+	}
 	return "acr-mcp: serve setting " + e.Setting + " is invalid"
 }
 
@@ -242,7 +251,7 @@ func (o ServeOptions) Validate() error {
 		return &ErrServeOptionInvalid{Setting: HTTPMaxBodyBytesEnvironment}
 	}
 	if _, err := newEdgeGate(o.edgeGate()); err != nil {
-		return &ErrServeOptionInvalid{Setting: TrustedProxyCIDRsEnvironment}
+		return &ErrServeOptionInvalid{Setting: TrustedProxyCIDRsEnvironment, Reason: err.Error()}
 	}
 	return validateOAuthDiscovery(o)
 }
@@ -322,6 +331,8 @@ func serveHTTPOn(ctx context.Context, listener net.Listener, cfg *ProcessConfig,
 		MaxHeaderBytes:    64 << 10,
 		BaseContext:       func(net.Listener) context.Context { return context.WithoutCancel(ctx) },
 	}
+	// Validate refused a list the parser refuses, so only the counts remain.
+	trustedProxies, _ := trustedproxy.Parse(opts.edgeGate().TrustedProxyCIDRs)
 	logger.InfoContext(ctx, HTTPServingLogMessage,
 		"listen_address", listener.Addr().String(),
 		"transport", TransportHTTP,
@@ -331,6 +342,8 @@ func serveHTTPOn(ctx context.Context, listener net.Listener, cfg *ProcessConfig,
 		"server_commit", identity.Commit,
 		"protocol_revisions", ProtocolRevisions(TransportHTTP),
 		"max_body_bytes", opts.MaxBodyBytes,
+		"trusted_proxy_networks", trustedProxies.Networks(),
+		"trusted_proxy_exclusions", trustedProxies.Exclusions(),
 	)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()

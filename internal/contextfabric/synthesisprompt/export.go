@@ -47,7 +47,10 @@ const (
 	// v29 -> v30 (CHAOS-12554): a fact lists its detail tables, and the prompt
 	// asks for one, as a claim with value null, only when the question asks for
 	// that breakdown.
-	PromptVersion = "context-fabric-synthesis.v30"
+	// v30 -> v31 (CHAOS-12887): a fact also gives each detail table's row count
+	// (detail_table_rows), and the detail table rule asks the model not to call
+	// a breakdown with rows unavailable; it never says the breakdown is shown.
+	PromptVersion = "context-fabric-synthesis.v31"
 	// OutputVersion names the model-output contract the prompt asks for.
 	OutputVersion = interpretprompt.OutputVersion
 )
