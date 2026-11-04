@@ -2867,7 +2867,7 @@ func (r RuntimeAnswerSynthesizer) composeSynthesisResult(ctx context.Context, pr
 		// prose next to a principal driver whose claimed fact says
 		// release_ready=false).
 		DirectJudgment:     composeDirectJudgment(draft, input.Graph),
-		CurrentState:       composeCurrentState(draft),
+		CurrentState:       composeCurrentState(SynthesisDraft{ClaimedFacts: claimedFacts, Drivers: draft.Drivers}),
 		StrongestPressures: cloneSlice(draft.StrongestPressures),
 		Drivers:            cloneSlice(draft.Drivers),
 		RemainingWork:      cloneSlice(draft.RemainingWork),
@@ -3623,6 +3623,10 @@ func claimedFactSentences(claims []ClaimedFact) []string {
 	kindsByHead := map[string]map[FactKind]struct{}{}
 	for _, claim := range sorted {
 		display, shown := scalarDisplayString(claim.Field, claim.Value)
+		if claim.Value.Null && len(claim.Rows) > 0 {
+			// CHAOS-12951: a table claim's null scalar is not an observation; its rows are.
+			display, shown = tableRowsDisplay(len(claim.Rows)), true
+		}
 		if !shown {
 			continue
 		}
@@ -3652,6 +3656,13 @@ func claimedFactSentences(claims []ClaimedFact) []string {
 		sentences = append(sentences, head+" ("+strings.Join(subjects[i], ", ")+")")
 	}
 	return sentences
+}
+
+func tableRowsDisplay(n int) string {
+	if n == 1 {
+		return "1 row"
+	}
+	return strconv.Itoa(n) + " rows"
 }
 
 func scalarDisplayString(field string, v ScalarValue) (string, bool) {

@@ -393,6 +393,47 @@ func lastAccessLine(t *testing.T, logs *bytes.Buffer) map[string]any {
 	return found
 }
 
+// refusedOriginCases: each secret is text that only its refused origin can put
+// in the log. A log line also carries a random hex request_id, so a secret made
+// of hex characters alone can match an id and fail a clean run.
+var refusedOriginCases = []struct {
+	origins  []string
+	reason   string
+	nearMiss bool
+	secret   string
+}{
+	{[]string{"https://evil-refused.example"}, "not_listed", false, "evil-refused"},
+	{[]string{"http://www.fullchaos.dev"}, "not_listed", true, "http://www.fullchaos.dev"},
+	{[]string{"https://WWW.FULLCHAOS.dev"}, "not_listed", true, "FULLCHAOS"},
+	{[]string{"https://www.fullchaos.dev:8443"}, "not_listed", true, "fullchaos.dev:8443"},
+	{[]string{corsTestOrigin, "https://second-refused.example"}, "multiple_origins", true, "second-refused"},
+}
+
+// The needles of refusedOriginCases match a log that holds the refused origin
+// and do not match a clean refusal log whose request_id holds hex text
+// (req_d0be82e912c3aa2e925984434f69afa3 is the id of a real false failure).
+func TestRefusedOriginNeedlesMatchOnlyTheOrigin(t *testing.T) {
+	const lowerHexDigits = "0123456789abcdef"
+	const cleanLine = `{"level":"INFO","msg":"` + CORSRefusedLogMessage + `","request_id":"req_d0be82e912c3aa2e925984434f69afa3","reason":"not_listed","near_miss":true,"route":"investigations","preflight":true}`
+	for _, tc := range refusedOriginCases {
+		if strings.Trim(tc.secret, lowerHexDigits) == "" {
+			t.Errorf("%v: secret %q is hex text only; a random request_id can hold it", tc.origins, tc.secret)
+		}
+		if strings.Contains(cleanLine, tc.secret) {
+			t.Errorf("%v: secret %q matches a clean refusal line that holds no origin", tc.origins, tc.secret)
+		}
+		for _, origin := range tc.origins {
+			if origin == corsTestOrigin {
+				continue
+			}
+			planted := `{"level":"INFO","msg":"` + CORSRefusedLogMessage + `","request_id":"req_00000000000000000000000000000000","origin":"` + origin + `"}`
+			if !strings.Contains(planted, tc.secret) {
+				t.Errorf("%v: secret %q does not match a log that holds the origin %q", tc.origins, tc.secret, origin)
+			}
+		}
+	}
+}
+
 // A refused Origin is never written to a log (CodeQL go/clear-text-logging):
 // the refusal line says why and whether it names a listed host, and nothing
 // from the request's Origin header reaches the log.
@@ -400,18 +441,7 @@ func TestARefusedOriginIsNeverLoggedAndSaysWhy(t *testing.T) {
 	harness := corsHarness(t)
 	logs := harness.logs[0]
 	preflight := map[string]string{"Access-Control-Request-Method": "POST"}
-	for _, tc := range []struct {
-		origins  []string
-		reason   string
-		nearMiss bool
-		secret   string
-	}{
-		{[]string{"https://evil-refused.example"}, "not_listed", false, "evil-refused"},
-		{[]string{"http://www.fullchaos.dev"}, "not_listed", true, "http://www.fullchaos.dev"},
-		{[]string{"https://WWW.FULLCHAOS.dev"}, "not_listed", true, "FULLCHAOS"},
-		{[]string{"https://www.fullchaos.dev:8443"}, "not_listed", true, "8443"},
-		{[]string{corsTestOrigin, "https://second-refused.example"}, "multiple_origins", true, "second-refused"},
-	} {
+	for _, tc := range refusedOriginCases {
 		logs.Reset()
 		request := httptest.NewRequest(http.MethodOptions, ContextFabricInvestigationsPath, nil)
 		for _, origin := range tc.origins {

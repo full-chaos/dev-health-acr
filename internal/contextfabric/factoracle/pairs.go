@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Float tolerances. Each one is a declared rule of a pair, with its reason;
@@ -19,9 +20,46 @@ const (
 	// relSum: a sum the two planes add in a different order.
 	relSum = 1e-9
 	// relOpsFloat32: ops casts the subcategory share to Float32 before it
-	// multiplies by the effort (analytics investmentContextFor ARRAY JOIN).
-	relOpsFloat32 = 1e-6
+	// multiplies by the effort (analytics investmentContextFor ARRAY JOIN,
+	// CAST ... Array(Tuple(String, Float32))). A Float32 keeps a 24-bit
+	// significand, so rounding a share to nearest changes it by at most
+	// 2^-24 of its value, and a sum of such positive products keeps that
+	// relative bound. It is this bound exactly, not a rounder number: a
+	// measured gap above it is a finding, never a reason to widen the constant
+	// (CHAOS-12950).
+	relOpsFloat32 = 0x1p-24
 )
+
+// opsFloat32Gap is the largest relative gap seen between an ops theme value
+// and the value recomputed from the store rows (the Float32 effect, measured);
+// the recorded gate logs it per architecture (CHAOS-12950).
+var opsFloat32Gap struct {
+	sync.Mutex
+	max float64
+	n   int
+}
+
+func observeOpsFloat32Gap(ops, store float64) {
+	scale := math.Max(math.Abs(ops), math.Abs(store))
+	gap := 0.0
+	if scale != 0 {
+		gap = math.Abs(ops-store) / scale
+	}
+	opsFloat32Gap.Lock()
+	opsFloat32Gap.max = math.Max(opsFloat32Gap.max, gap)
+	opsFloat32Gap.n++
+	opsFloat32Gap.Unlock()
+}
+
+// takeOpsFloat32Gap returns the largest gap and the number of values compared
+// since the last take, and resets both.
+func takeOpsFloat32Gap() (float64, int) {
+	opsFloat32Gap.Lock()
+	defer opsFloat32Gap.Unlock()
+	gap, n := opsFloat32Gap.max, opsFloat32Gap.n
+	opsFloat32Gap.max, opsFloat32Gap.n = 0, 0
+	return gap, n
+}
 
 func scaled(rel float64, values ...float64) float64 {
 	scale := 0.0
@@ -213,6 +251,7 @@ func compareInvestment(ctx context.Context, o *Oracle, rr *RootReport) error {
 	fromStore := o.Store.OrgThemeEffort(o.Window)
 	for _, theme := range themeKeys(ops, fromStore) {
 		rr.Compared++
+		observeOpsFloat32Gap(ops[theme], fromStore[theme])
 		if math.Abs(ops[theme]-fromStore[theme]) <= themeTolerance(ops[theme], fromStore[theme]) {
 			rr.Matches++
 			continue
