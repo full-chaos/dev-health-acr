@@ -15,10 +15,15 @@
 package emitscan
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"go/ast"
 	"go/parser"
+	"go/printer"
+	"go/scanner"
 	"go/token"
 	"go/types"
 	"io/fs"
@@ -29,6 +34,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-acr/internal/telemetryscrub"
 )
@@ -1335,6 +1341,7 @@ type fileScan struct {
 	nodes       []ast.Node
 	taints      []map[string]bool
 	funcs       []string
+	sites       []string          // per open function, its name with the receiver type (siteName); R9 pins by it
 	unlogged    map[ast.Node]bool // lists no log call can read (markUnloggedLists)
 }
 
@@ -1349,6 +1356,7 @@ func (s *fileScan) Visit(node ast.Node) ast.Visitor {
 		switch top.(type) {
 		case *ast.FuncDecl:
 			s.funcs = s.funcs[:len(s.funcs)-1]
+			s.sites = s.sites[:len(s.sites)-1]
 			s.taints = s.taints[:len(s.taints)-1]
 		case *ast.FuncLit:
 			s.taints = s.taints[:len(s.taints)-1]
@@ -1359,6 +1367,7 @@ func (s *fileScan) Visit(node ast.Node) ast.Visitor {
 	switch fn := node.(type) {
 	case *ast.FuncDecl:
 		s.funcs = append(s.funcs, fn.Name.Name)
+		s.sites = append(s.sites, siteName(fn))
 		s.markUnloggedLists(fn.Body)
 		s.taints = append(s.taints, rawPathIdents(fn.Body, s.pkg.rawFuncs, s.pkg.budget))
 	case *ast.FuncLit:
@@ -1401,7 +1410,7 @@ func (s *fileScan) attrLiteral(lit *ast.CompositeLit) {
 func (s *fileScan) withAttrs(arg ast.Expr) {
 	lit, ok := arg.(*ast.CompositeLit)
 	if !ok {
-		s.add(RuleLogKey, arg.Pos(), "unresolvable key")
+		s.addLogKey(arg.Pos(), arg)
 		return
 	}
 	for _, element := range lit.Elts {
@@ -1410,7 +1419,7 @@ func (s *fileScan) withAttrs(arg ast.Expr) {
 			continue
 		}
 		if !s.isAttrItem(element) {
-			s.add(RuleLogKey, element.Pos(), "unresolvable key")
+			s.addLogKey(element.Pos(), element)
 		}
 	}
 }
@@ -1438,7 +1447,7 @@ func (s *fileScan) attrFields(lit *ast.CompositeLit) {
 		}
 	}
 	if key == nil {
-		s.add(RuleLogKey, lit.Pos(), "unresolvable key")
+		s.addLogKey(lit.Pos(), lit)
 		return
 	}
 	s.logKey(key, value, lit.Pos())
@@ -1733,10 +1742,113 @@ func (s *fileScan) add(rule string, pos token.Pos, detail string) {
 	}
 	s.reported[dedupe] = true
 	fn := "-"
-	if len(s.funcs) > 0 && rule != RuleLogKey { // R9 is pinned by a count per file, so it names no function
+	if len(s.funcs) > 0 {
 		fn = s.funcs[len(s.funcs)-1]
+		if rule == RuleLogKey { // two methods of one name on different receiver types are two sites
+			fn = s.sites[len(s.sites)-1]
+		}
 	}
 	s.out = append(s.out, Finding{Rule: rule, File: s.rel, Line: s.fset.Position(pos).Line, Func: fn, Detail: detail})
+}
+
+// maxKeyText is the longest key expression text kept whole in an R9 detail; a longer one keeps its head and a digest.
+const maxKeyText = 80
+
+// addLogKey reports an R9 finding. Its detail is the source text of the expression that hides the key (whitespace between
+// tokens collapsed to single spaces, so a pins.tsv row stays one line), so a pin follows the site and not a count per file.
+func (s *fileScan) addLogKey(pos token.Pos, expr ast.Expr) {
+	s.add(RuleLogKey, pos, "unresolvable key: "+keyText(s.fset, expr))
+}
+
+// siteName names a function for an R9 pin: a method carries its receiver type, `(*T).name` for a pointer receiver and
+// `T.name` for a value receiver. A generic receiver is named by its base type, without type parameters.
+func siteName(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return fn.Name.Name
+	}
+	pointer := false
+	expr := fn.Recv.List[0].Type
+	for {
+		switch typed := expr.(type) {
+		case *ast.ParenExpr:
+			expr = typed.X
+			continue
+		case *ast.StarExpr:
+			pointer = true
+			expr = typed.X
+			continue
+		case *ast.IndexExpr:
+			expr = typed.X
+			continue
+		case *ast.IndexListExpr:
+			expr = typed.X
+			continue
+		}
+		break
+	}
+	base := "?"
+	if ident, ok := expr.(*ast.Ident); ok {
+		base = ident.Name
+	}
+	if pointer {
+		return "(*" + base + ")." + fn.Name.Name
+	}
+	return base + "." + fn.Name.Name
+}
+
+// keyText renders an expression as one line of source text. Whitespace between tokens is one space; a token keeps its
+// own text, so a string literal keeps its spaces (a literal with a tab or a line break is quoted, to keep the pin on one
+// line). A text over maxKeyText bytes keeps its first bytes and the first 8 hex digits of the digest of the whole text.
+func keyText(fset *token.FileSet, expr ast.Expr) string {
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, fset, expr); err != nil {
+		return "-"
+	}
+	text := tokenText(buf.Bytes())
+	if len(text) <= maxKeyText {
+		return text
+	}
+	sum := sha256.Sum256([]byte(text))
+	cut := maxKeyText
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "...#" + hex.EncodeToString(sum[:4])
+}
+
+// tokenText joins the tokens of printed source with one space where the source had whitespace.
+func tokenText(src []byte) string {
+	var lex scanner.Scanner
+	file := token.NewFileSet().AddFile("", -1, len(src))
+	lex.Init(file, src, nil, scanner.ScanComments)
+	var out strings.Builder
+	end := 0
+	for {
+		pos, tok, lit := lex.Scan()
+		if tok == token.EOF {
+			break
+		}
+		if tok == token.SEMICOLON && lit == "\n" { // the semicolon the scanner adds at a line break
+			continue
+		}
+		offset := file.Offset(pos)
+		text := lit
+		if text == "" {
+			text = tok.String()
+		}
+		if strings.ContainsAny(text, "\t\r\n") {
+			text = strconv.Quote(text)
+		}
+		if out.Len() > 0 && offset > end {
+			out.WriteByte(' ')
+		}
+		out.WriteString(text)
+		end = offset + len(lit)
+		if lit == "" {
+			end = offset + len(tok.String())
+		}
+	}
+	return out.String()
 }
 
 func unquote(literal string) string {
@@ -2016,7 +2128,7 @@ func (s *fileScan) logKeys(args []ast.Expr, from int) {
 func (s *fileScan) logAttrs(args []ast.Expr, from int) {
 	for i := from; i < len(args); i++ {
 		if !s.isAttrItem(args[i]) {
-			s.add(RuleLogKey, args[i].Pos(), "unresolvable key")
+			s.addLogKey(args[i].Pos(), args[i])
 		}
 		s.emitValue(args[i], args[i].Pos())
 	}
@@ -2044,7 +2156,7 @@ func (s *fileScan) isAttrItem(expr ast.Expr) bool {
 func (s *fileScan) logKey(keyExpr, value ast.Expr, pos token.Pos) {
 	keys, literal, over := s.keysOf(keyExpr)
 	if !literal || over {
-		s.add(RuleLogKey, pos, "unresolvable key")
+		s.addLogKey(pos, keyExpr)
 		return
 	}
 	label := "-"

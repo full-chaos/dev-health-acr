@@ -15,7 +15,12 @@ func keyFindings(findings []emitscan.Finding) string {
 	for _, finding := range findings {
 		switch finding.Rule {
 		case emitscan.RuleProtectedKey, emitscan.RuleLogKey, emitscan.RuleBenignKind:
-			out = append(out, finding.Rule+":"+finding.Detail)
+			detail := finding.Detail
+			if finding.Rule == emitscan.RuleLogKey {
+				// an R9 detail is "unresolvable key: <expr text>": the text is checked by the site-pin tests
+				detail, _, _ = strings.Cut(detail, ": ")
+			}
+			out = append(out, finding.Rule+":"+detail)
 		}
 	}
 	sort.Strings(out)
@@ -237,7 +242,7 @@ func oversizedShapes() []keyCase {
 		{"parentheses 30000 deep", "const big = " + strings.Repeat("(", 30000) + `"a"` + strings.Repeat(")", 30000) + trig, refusedAndUnresolved},
 		{"string conversions 20000 deep", "const big = " + strings.Repeat("string(", 20000) + `"a"` + strings.Repeat(")", 20000) + trig, refusedAndUnresolved},
 		{"iota + chain repeated by 2000 implicit names", "const (\n\tn_ = " + chainOf("iota", "+", 2000) + "\n" + implicit.String() + ")" + trig, "R1:census incomplete: work budget"},
-		{"oversized direct key expression", "func f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v); l.Info(\"m\", " + chainOf(`"a"`, "+", 5000) + ", v) }", refusedAndUnresolved},
+		{"oversized direct key expression", "func f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v); l.Info(\"m\", " + chainOf(`"a"`, "+", 5000) + ", v) }", "R10:refusal:typecheck,R9:unresolvable key,R9:unresolvable key"}, // two sites: the local and the chain
 	}
 }
 
