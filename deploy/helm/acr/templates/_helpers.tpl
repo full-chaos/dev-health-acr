@@ -404,7 +404,11 @@ is on and the event stream is not: acr-api would refuse to start
 {{- end -}}
 
 {{- define "acr.validateShutdownBudget" -}}
-{{- $raw := toString (.Values.config.shutdownTimeout | default "10s") -}}
+{{- $value := .Values.config.shutdownTimeout -}}
+{{- if or (kindIs "invalid" $value) (eq (toString $value) "") -}}
+{{- fail "shutdown-budget: config.shutdownTimeout must be set (for example 10s); an empty or null value is refused" -}}
+{{- end -}}
+{{- $raw := toString $value -}}
 {{- if not (regexMatch "^[0-9]+[sm]$" $raw) -}}
 {{- fail (printf "shutdown-budget: config.shutdownTimeout %q must be a whole number of seconds or minutes (for example 10s or 1m)" $raw) -}}
 {{- end -}}

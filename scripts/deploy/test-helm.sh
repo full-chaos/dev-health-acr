@@ -42,6 +42,8 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               unknown-config-key, alternate-port, mutable-token-copy-image,
               missing-device-verification-url, invalid-device-verification-url,
               shutdown-budget-exceeded, shutdown-budget-minutes, shutdown-budget-bad-duration,
+              shutdown-timeout-empty-set-string, shutdown-timeout-empty-set,
+              shutdown-timeout-empty-file, shutdown-timeout-null-file, shutdown-timeout-null-json,
               prestop-sleep-negative, prestop-render,
               acr-mcp-mutable-image, acr-mcp-missing-image, acr-mcp-api-url,
               acr-mcp-base-path, acr-mcp-gateway-no-parent.
@@ -456,6 +458,28 @@ case "$scenario" in
   shutdown-budget-bad-duration)
     negative shutdown-budget-bad-duration "shutdown-budget: config.shutdownTimeout \"1m30s\"" \
       --set-string config.shutdownTimeout=1m30s
+    exit 0 ;;
+  shutdown-timeout-empty-set-string)
+    negative shutdown-timeout-empty-set-string "shutdown-budget: config.shutdownTimeout must be set" \
+      --set-string "config.shutdownTimeout="
+    exit 0 ;;
+  shutdown-timeout-empty-set)
+    negative shutdown-timeout-empty-set "shutdown-budget: config.shutdownTimeout must be set" \
+      --set "config.shutdownTimeout="
+    exit 0 ;;
+  shutdown-timeout-empty-file)
+    printf 'config:\n  shutdownTimeout: ""\n' >"$workdir/timeout-empty.yaml"
+    negative shutdown-timeout-empty-file "shutdown-budget: config.shutdownTimeout must be set" \
+      -f "$workdir/timeout-empty.yaml"
+    exit 0 ;;
+  shutdown-timeout-null-file)
+    printf 'config:\n  shutdownTimeout: null\n' >"$workdir/timeout-null.yaml"
+    negative shutdown-timeout-null-file "shutdown-budget: config.shutdownTimeout must be set" \
+      -f "$workdir/timeout-null.yaml"
+    exit 0 ;;
+  shutdown-timeout-null-json)
+    negative shutdown-timeout-null-json "shutdown-budget: config.shutdownTimeout must be set" \
+      --set-json "config.shutdownTimeout=null"
     exit 0 ;;
   prestop-sleep-negative)
     negative prestop-sleep-negative "/deployment/preStopSleepSeconds': minimum" \
