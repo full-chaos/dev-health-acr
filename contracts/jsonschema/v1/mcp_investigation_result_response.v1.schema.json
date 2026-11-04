@@ -1247,6 +1247,9 @@
               "maxItems": 64,
               "type": "array"
             },
+            "fallback": {
+              "$ref": "#/$defs/context_fabric_common.v1/$defs/AnswerPlanFallback"
+            },
             "family": {
               "$ref": "#/$defs/context_fabric_common.v1/$defs/QuestionFamily"
             },
@@ -1300,6 +1303,69 @@
             "require_drivers",
             "require_ranking",
             "budget"
+          ],
+          "type": "object"
+        },
+        "AnswerPlanFallback": {
+          "description": "CHAOS-13002: the plan's record of a read fallback. Present only when the model planned some of this answer's reads, because no fixed question family serves what the question asks: why the fallback applied, the fact kinds the model planned in plan order, and the outcome. Optional: absent means the family planned every read.",
+          "properties": {
+            "outcome": {
+              "description": "What became of the fallback. Open vocabulary; documented values: applied. A client must tolerate values it does not know.",
+              "type": "string",
+              "x-documented-values": [
+                "applied"
+              ]
+            },
+            "planned_kinds": {
+              "description": "The fact kinds the model planned, in plan order, each once. A kind the family or the interpreter already planned keeps its own entry in fact_kinds.",
+              "items": {
+                "description": "Open vocabulary; documented values: identity, membership, status, actual_completion, work, blockers, required_children, pull_requests, reviews, continuous_integration, deployments, incidents, metrics, health, workload, investment, readiness, operational_deficiencies, source_health, evidence, flow, landscape, security_alerts, commitment, file_hotspots. A client must tolerate values it does not know.",
+                "type": "string",
+                "x-documented-values": [
+                  "identity",
+                  "membership",
+                  "status",
+                  "actual_completion",
+                  "work",
+                  "blockers",
+                  "required_children",
+                  "pull_requests",
+                  "reviews",
+                  "continuous_integration",
+                  "deployments",
+                  "incidents",
+                  "metrics",
+                  "health",
+                  "workload",
+                  "investment",
+                  "readiness",
+                  "operational_deficiencies",
+                  "source_health",
+                  "evidence",
+                  "flow",
+                  "landscape",
+                  "security_alerts",
+                  "commitment",
+                  "file_hotspots"
+                ]
+              },
+              "maxItems": 64,
+              "minItems": 1,
+              "type": "array"
+            },
+            "reason": {
+              "description": "Why the fallback applied. Open vocabulary; documented values: judgment_unservable, kind_unserved_for_member. A client must tolerate values it does not know.",
+              "type": "string",
+              "x-documented-values": [
+                "judgment_unservable",
+                "kind_unserved_for_member"
+              ]
+            }
+          },
+          "required": [
+            "reason",
+            "planned_kinds",
+            "outcome"
           ],
           "type": "object"
         },

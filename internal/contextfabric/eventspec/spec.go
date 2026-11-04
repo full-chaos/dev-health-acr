@@ -2217,6 +2217,29 @@ var PlanSubjectObligationReads = Event{
 	},
 }
 
+// ReadFallbackDecision is the Info line of a turn's read fallback decision
+// (CHAOS-13002): why the family could not serve the question, what became of
+// the fallback, and how many kinds the read planner added. Closed labels and
+// a count only.
+var ReadFallbackDecision = Event{
+	ID:                       "contextfabric.read_fallback_decision",
+	Msg:                      "context fabric read fallback decision",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: recorded once, at the plan seam, by every turn that reaches it.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, arrayTokens(contractsv1.ContextFabricReadFallbackReasonVocabulary())...)},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(contextfabric.ReadFallbackOutcomeVocabulary())},
+		{Key: "planned_kinds", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "error_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextfabric.ReadPlannerErrorClassVocabulary()...)},
+		{Key: "rejection", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, arrayTokens(contextfabric.ReadPlanRejectionVocabulary())...)},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // WindowClassification is the Info line of the window-class decision a current-axis turn with no request window draws its default from (CHAOS-12595).
 var WindowClassification = Event{
 	ID:                       "contextfabric.window_classification",
@@ -6095,6 +6118,7 @@ var All = []Event{
 	WindowCanonicalizationOutcome,
 	PlanOperandReads,
 	PlanSubjectObligationReads,
+	ReadFallbackDecision,
 	WindowClassification,
 	InferredWindowGate,
 	InterpretationTerms,

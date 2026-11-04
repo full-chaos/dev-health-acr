@@ -1,18 +1,20 @@
 package contextfabric
 
+import contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+
 // ReadFallbackReason is why the read fallback (CHAOS-13002) applies to a turn.
 // Empty means it does not apply.
-type ReadFallbackReason string
+type ReadFallbackReason = contractsv1.ContextFabricReadFallbackReason
 
 const (
 	// ReadFallbackReasonJudgmentUnservable (F1): the family ranks, and its
 	// ranking measures attention, which cannot serve the judgment kind the
 	// interpreter named.
-	ReadFallbackReasonJudgmentUnservable ReadFallbackReason = "judgment_unservable"
+	ReadFallbackReasonJudgmentUnservable = contractsv1.ContextFabricReadFallbackReasonJudgmentUnservable
 	// ReadFallbackReasonKindUnservedForMember (F3, static): a kind the
 	// interpreter listed has a registered capability that serves none of the
 	// turn's member kinds, directly or through an enabled fact-scope policy.
-	ReadFallbackReasonKindUnservedForMember ReadFallbackReason = "kind_unserved_for_member"
+	ReadFallbackReasonKindUnservedForMember = contractsv1.ContextFabricReadFallbackReasonKindUnservedForMember
 )
 
 // ReadFallbackDecisionInput is every value DecideReadFallback may read. All

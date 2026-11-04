@@ -1131,6 +1131,23 @@ flag. With the flag off, both doors that serve a result remove a stored table.
 flag. With the flag off, both doors that serve a result remove a stored
 quadrant and its served line.
 
+**The read fallback.** `ACR_CONTEXT_FABRIC_READ_FALLBACK_ENABLED` (chart:
+`contextFabric.readFallbackEnabled`, default `false`, CHAOS-13002) lets the model
+plan which canonical fact kinds an answer reads when the question's fixed family
+cannot serve it: a ranking family asked for a judgment its attention measure
+cannot give, or a listed kind that no capability serves for the member kind. The
+server validates the plan (`read_facts` steps over the kinds offered for the
+member kind, at most 4 steps of 4 kinds) and reads the kinds through the normal
+fact read, after every kind the family planned. The planner call is
+`plan_reads`, with its own receipt; it runs on the interpret model (or on an
+organization's own model) with at most 15 seconds. An applied plan sets
+`answer_plan.fallback`, adds the service sentence that the model chose the reads,
+and saves the answer as never reusable. A planner failure or a refused plan
+leaves the family plan as it is. Every turn writes one
+`context fabric read fallback decision` Info line (reason, outcome, planned kind
+count). Order: web's and ask-dev's pins first, then the flag. With the flag off,
+no planner call is made.
+
 **The roll step "vocabulary labels on".** Confirm that the deployed pins of
 ask-dev, web and every MCP client carry `vocabulary_labels`. Then set the flag
 for `acr-api` and roll it. To turn it off, unset the flag and roll: the next read

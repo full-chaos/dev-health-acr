@@ -460,6 +460,8 @@ func goVarName(e Event) string {
 		return "PlanOperandReads"
 	case PlanSubjectObligationReads.ID:
 		return "PlanSubjectObligationReads"
+	case ReadFallbackDecision.ID:
+		return "ReadFallbackDecision"
 	case WindowClassification.ID:
 		return "WindowClassification"
 	case InferredWindowGate.ID:

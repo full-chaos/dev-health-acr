@@ -60,6 +60,10 @@
           "type": "boolean",
           "description": "ACR_CONTEXT_FABRIC_LANDSCAPE_QUADRANT_ENABLED for acr-api (CHAOS-12626). Keep false until web's and ask-dev's pins hold the landscape_position rule."
         },
+        "readFallbackEnabled": {
+          "type": "boolean",
+          "description": "ACR_CONTEXT_FABRIC_READ_FALLBACK_ENABLED for acr-api (CHAOS-13002). Keep false until web's and ask-dev's pins hold answer_plan.fallback."
+        },
         "runLeaseEnabled": {
           "type": "boolean",
           "description": "ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED for acr-api (CHAOS-12472). Ask Dev's Stop needs it. Requires ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED=true in deployment.extraEnv."

@@ -29,6 +29,10 @@ type EngineOptions struct {
 	// LandscapeQuadrantEnabled turns on the landscape_position rule
 	// (CHAOS-12626). See Config.ContextFabricLandscapeQuadrantEnabled.
 	LandscapeQuadrantEnabled bool
+	// ReadFallbackEnabled lets the read planner choose reads for a question
+	// no fixed family serves (CHAOS-13002). See
+	// Config.ContextFabricReadFallbackEnabled.
+	ReadFallbackEnabled bool
 	// CompletionForecastEnabled turns on the completion_forecast rule
 	// (CHAOS-12608). See Config.CompletionDistributionEnabled.
 	CompletionForecastEnabled bool
@@ -357,6 +361,10 @@ type EngineDependencies struct {
 	// attempted, exactly as if the feature did not exist: every option's
 	// Label stands alone, byte-identical to before this ticket.
 	OfferPhraser OfferPhraser
+	// ReadPlanner (CHAOS-13002) is optional and wired explicitly, never found
+	// by a type assertion on the model runtime. nil means the read fallback
+	// never calls a model; a turn it would apply to keeps its family plan.
+	ReadPlanner ReadPlanner
 	// Requirements (S7c) derives this turn's requirement rows from the
 	// validated question frame, so the served answer can say what it was
 	// SUPPOSED to contain and what became of each part.
@@ -712,6 +720,9 @@ type EngineTelemetry interface {
 	// they name as serving their sides, and how many of those the plan read
 	// only because of them. Plain counts, no kind names.
 	RecordOperandReadKinds(ctx context.Context, principal storage.Principal, operandRows, kindsNamed, kindsAdded int)
+	// RecordReadFallbackDecision (CHAOS-13002) reports the turn's read
+	// fallback decision once, from the plan seam: closed labels and a count.
+	RecordReadFallbackDecision(ctx context.Context, principal storage.Principal, event ReadFallbackDecisionEvent)
 	// RecordSubjectObligationReadKinds (CHAOS-12710) reports, for a turn
 	// whose derived rows hold at least one committed-subject read row that
 	// requires its kinds, how many such rows there were, how many distinct
@@ -1407,6 +1418,8 @@ type Engine struct {
 	priorConsultant             PriorConsultant
 	priorHandleGrammarChecker   HandleGrammarChecker
 	offerPhraser                OfferPhraser
+	readPlanner                 ReadPlanner
+	readFallbackEnabled         bool
 	requirements                RequirementDeriver
 	observationKeys             ObservationKeyDeclarer
 	regimeAOffersDisabled       bool
@@ -1497,6 +1510,8 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		priorConsultant:            dependencies.PriorConsultant,
 		priorHandleGrammarChecker:  dependencies.PriorHandleGrammarChecker,
 		offerPhraser:               dependencies.OfferPhraser,
+		readPlanner:                dependencies.ReadPlanner,
+		readFallbackEnabled:        options.ReadFallbackEnabled,
 		requirements:               dependencies.Requirements,
 		observationKeys:            dependencies.ObservationKeys,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
@@ -2833,6 +2848,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	} else {
 		derivedRequirements = deriveTurnRequirements(requirementFrame, e.requirements)
 	}
+	// CHAOS-13002: before the plan, so the planner's kinds widen it last; a
+	// decision that did not apply adds nothing and the plan is the family's.
+	readFallback := e.decideReadFallback(ctx, principal, request, interpretation, familyOutcome, workItemTuple)
 	plan := PlanAnswer(PlanAnswerInput{
 		Family:           familyOutcome,
 		Interpretation:   interpretation,
@@ -2840,7 +2858,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		MaxCohortMembers: request.Options.MaxCohortMembers,
 		WorkItemList:     workItemTuple,
 		Requirements:     derivedRequirements,
+		ReadPlanKinds:    readFallback.kinds,
 	})
+	plan.Fallback = readFallback.planRecord()
 	// The derived requirement rows belong to the PLAN VARIABLE, not to a copy
 	// of it.
 	//
@@ -3200,6 +3220,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if epoch, epochErr := e.reuseEpochSnapshotter.SnapshotRebuildEpoch(ctx, principal.OrgID); epochErr == nil {
 			reuseEpoch = &epoch
 		}
+	}
+	// CHAOS-13002: an answer whose reads the model chose is never offered for
+	// reuse; nil watermarks are Save's never-reusable state.
+	if plan.Fallback != nil {
+		reuseWatermarkSnapshot, reuseEpoch = nil, nil
 	}
 	// CHAOS-3888: resolveCtx carries a fresh counter cell a GraphReader MAY
 	// report authorization-dropped candidates through (RecordSubjectCandidatesAuthzDropped) --
