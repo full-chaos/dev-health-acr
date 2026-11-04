@@ -104,7 +104,7 @@ func newTLSPostgresFixture(t *testing.T, ctx context.Context) tlsPostgresFixture
 			// SAME ghcr.io/full-chaos mirror digest as the rest -- an
 			// unpinned tag here would have been the one pull left resolving
 			// to whatever "18-alpine" floats to upstream.
-			Image:        "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
+			Image:        "postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5",
 			ExposedPorts: []string{"5432/tcp"},
 			Env:          map[string]string{"POSTGRES_USER": user, "POSTGRES_PASSWORD": password, "POSTGRES_DB": database},
 			Cmd:          []string{"sh", "-c", startCmd},

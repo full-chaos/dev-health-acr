@@ -115,7 +115,7 @@ func newPgBouncerDSNsWithModes(t *testing.T, ctx context.Context, modes pgBounce
 	// TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the ghcr.io
 	// mirror by digest, same as every other postgres:18-alpine pull in
 	// this module.
-	postgres, err := startterm.PostgresRun(ctx, "postgres:18-alpine@sha256:a1d02e4bd40c94d3bf2bdd3678c137388e76d9efcd23c285e9429d336a834b44",
+	postgres, err := startterm.PostgresRun(ctx, "postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5",
 		tcpostgres.WithDatabase("acr"),
 		tcpostgres.WithUsername("acr"),
 		tcpostgres.WithPassword("acr"),
@@ -132,7 +132,7 @@ func newPgBouncerDSNsWithModes(t *testing.T, ctx context.Context, modes pgBounce
 			// so TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX resolves this to the
 			// ghcr.io mirror by digest. Same reviewed digest ops's own
 			// river-compatibility compose pins (edoburu/pgbouncer:1.25.2).
-			Image:        "edoburu/pgbouncer:1.25.2@sha256:4c1ca296ef525f108f5d3552cc337c0c09587cf8dae7f0067fd93349e47dc1cd",
+			Image:        "edoburu/pgbouncer:1.25.2@sha256:8638aa563607256d3c7440437534195f1066a92b68015d89ae9d6b935b444a6d",
 			ExposedPorts: []string{"5432/tcp"},
 			Cmd:          []string{"pgbouncer", "/etc/pgbouncer/pgbouncer.ini"},
 			Networks:     []string{dockerNetwork.Name},

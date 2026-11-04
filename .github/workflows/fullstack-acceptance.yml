@@ -465,7 +465,7 @@ jobs:
           docker run -d --name "${net}-ch" --network "$net" \
             -e CLICKHOUSE_USER=default -e CLICKHOUSE_PASSWORD=ch -e CLICKHOUSE_DB=default \
             -e CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1 \
-            clickhouse/clickhouse-server:latest@sha256:d7556a3841027651307b5aa08d72b5c467d0241d3db5b67d9e158ef3975626f5
+            clickhouse/clickhouse-server:latest@sha256:739e099abd1157390960a59e4532d21781d8fde57e6e4151cb920ea02c30b1ce
           for _ in $(seq 1 60); do
             docker exec "${net}-ch" clickhouse-client --user default --password ch --query 'SELECT 1' >/dev/null 2>&1 && break
             sleep 2
