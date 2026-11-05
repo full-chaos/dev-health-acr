@@ -555,10 +555,28 @@ func init() {
 			name:           "fact_kinds.items",
 			kind:           vocabAdditive,
 			clientValidate: "contractsv1.ValidateStoredResult",
-			sites:          []string{"AnswerPlan.fact_kinds.items", "FactRequirement.kind", "PlanRequirement.fact_kinds.items", "PlanRequirement.input_fact_kinds.items"},
+			sites:          []string{"AnswerPlan.fact_kinds.items", "AnswerPlanFallback.planned_kinds.items", "FactRequirement.kind", "PlanRequirement.fact_kinds.items", "PlanRequirement.input_fact_kinds.items"},
 			// schema: "identity", "membership", "status", "actual_completion", "work", "blockers", "required_children", "pull_requests", "reviews", "continuous_integration", "deployments", "incidents", "metrics", "health", "workload", "investment", "readiness", "operational_deficiencies", "source_health", "evidence", "flow", "landscape"
 			goSet:      []string{string(contractsv1.ContextFabricFactIdentity), string(contractsv1.ContextFabricFactMembership), string(contractsv1.ContextFabricFactStatus), string(contractsv1.ContextFabricFactActualCompletion), string(contractsv1.ContextFabricFactWork), string(contractsv1.ContextFabricFactBlockers), string(contractsv1.ContextFabricFactRequiredChildren), string(contractsv1.ContextFabricFactPullRequests), string(contractsv1.ContextFabricFactReviews), string(contractsv1.ContextFabricFactContinuousIntegration), string(contractsv1.ContextFabricFactDeployments), string(contractsv1.ContextFabricFactIncidents), string(contractsv1.ContextFabricFactMetrics), string(contractsv1.ContextFabricFactHealth), string(contractsv1.ContextFabricFactWorkload), string(contractsv1.ContextFabricFactInvestment), string(contractsv1.ContextFabricFactReadiness), string(contractsv1.ContextFabricFactOperationalDeficiencies), string(contractsv1.ContextFabricFactSourceHealth), string(contractsv1.ContextFabricFactEvidence), string(contractsv1.ContextFabricFactFlow), string(contractsv1.ContextFabricFactLandscape), string(contractsv1.ContextFabricFactSecurityAlerts), string(contractsv1.ContextFabricFactCommitment), string(contractsv1.ContextFabricFactFileHotspots)},
 			exhaustive: false,
+		},
+		outputVocabulary{
+			name:           "AnswerPlanFallback.reason",
+			kind:           vocabAdditive,
+			clientValidate: "contractsv1.ValidateStoredResult",
+			sites:          []string{"AnswerPlanFallback.reason"},
+			// schema: "judgment_unservable", "kind_unserved_for_member"
+			goSet:      []string{string(contractsv1.ContextFabricReadFallbackReasonJudgmentUnservable), string(contractsv1.ContextFabricReadFallbackReasonKindUnservedForMember)},
+			exhaustive: true,
+		},
+		outputVocabulary{
+			name:           "AnswerPlanFallback.outcome",
+			kind:           vocabAdditive,
+			clientValidate: "contractsv1.ValidateStoredResult",
+			sites:          []string{"AnswerPlanFallback.outcome"},
+			// schema: "applied"
+			goSet:      []string{string(contractsv1.ContextFabricReadFallbackOutcomeApplied)},
+			exhaustive: true,
 		},
 		outputVocabulary{
 			name:           "PlanRequirement.obligation",

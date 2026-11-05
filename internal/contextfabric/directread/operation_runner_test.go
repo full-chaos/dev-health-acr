@@ -299,8 +299,8 @@ func TestT13EveryPersonVariableRefusedAtTheEdge(t *testing.T) {
 func TestT2OrgIsolationEveryOperation(t *testing.T) {
 	cat, _ := directread.DefaultCatalogue()
 	ops := cat.Operations(directread.CallerUnrestricted)
-	if len(ops) != 22 {
-		t.Fatalf("unrestricted catalogue has %d operations, want 22", len(ops))
+	if len(ops) != 23 {
+		t.Fatalf("unrestricted catalogue has %d operations, want 23", len(ops))
 	}
 	for _, op := range ops {
 		var orgPaths []string

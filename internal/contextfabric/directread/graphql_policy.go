@@ -362,8 +362,10 @@ func candidateStricter(a, b *rootCandidate) bool {
 	if ar != br {
 		return !ar
 	}
-	if len(a.op.Outputs) != len(b.op.Outputs) {
-		return len(a.op.Outputs) < len(b.op.Outputs)
+	// The document's selection size, withheld outputs included: a basis variant that withholds
+	// outputs of the shared document (teamWorkItemBreakdown, CHAOS-13018) is not stricter for it.
+	if an, bn := len(a.op.Outputs)+len(a.op.WithheldOutputs), len(b.op.Outputs)+len(b.op.WithheldOutputs); an != bn {
+		return an < bn
 	}
 	if len(a.literals) != len(b.literals) {
 		return len(a.literals) > len(b.literals)

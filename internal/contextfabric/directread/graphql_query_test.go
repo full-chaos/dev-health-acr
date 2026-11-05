@@ -127,6 +127,12 @@ func rootVars(t *testing.T, op *directread.OperationPolicy) map[string]any {
 		opMerge(vars, "input.scope", "REPO")
 	case "throughputForecast":
 		vars["input"] = map[string]any{}
+	case "teamWorkItemBreakdown":
+		// The work-item basis: the only candidate of root analytics that admits dimension TEAM (CHAOS-13001).
+		opMerge(vars, "batch.breakdowns", []any{map[string]any{
+			"dimension": "TEAM", "measure": "CYCLE_TIME_HOURS",
+			"dateRange": map[string]any{"startDate": "2026-09-01", "endDate": "2026-09-28"},
+		}})
 	case "investmentBreakdown", "investmentFull", "investmentBreakdownTeam", "investmentBreakdownRepository":
 		// The scoped entries keep the scope opMinimalVariables names.
 		opMerge(vars, "batch.breakdowns", []any{map[string]any{
@@ -171,7 +177,7 @@ func TestGraphQLEveryAllowedRootFieldRoundTrips(t *testing.T) {
 			cases++
 		}
 	}
-	if cases != 18 {
-		t.Fatalf("ran %d root/operation cases, want 18 (one per served operation)", cases)
+	if cases != 19 {
+		t.Fatalf("ran %d root/operation cases, want 19 (one per served operation)", cases)
 	}
 }

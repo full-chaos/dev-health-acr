@@ -103,6 +103,7 @@ var ByID = map[string]Event{
 	"contextfabric.projected_rows_count":                               ProjectedRowsCount,
 	"contextfabric.pull_request_status_filter":                         PullRequestStatusFilter,
 	"contextfabric.question_family_resolution":                         QuestionFamilyResolution,
+	"contextfabric.read_fallback_decision":                             ReadFallbackDecision,
 	"contextfabric.read_requirement_population":                        ReadRequirementPopulation,
 	"contextfabric.remembered_window_axis":                             RememberedWindowAxis,
 	"contextfabric.render_shape_rule_skipped":                          RenderShapeRuleSkipped,
@@ -163,6 +164,7 @@ var ByID = map[string]Event{
 	"devhealthfacts.team_pr_link_state_native_first":                   TeamPRLinkStateNativeFirst,
 	"genkitruntime.model_interpret_decision":                           ModelInterpretDecision,
 	"genkitruntime.model_phrase_decision":                              ModelPhraseDecision,
+	"genkitruntime.model_plan_reads_decision":                          ModelPlanReadsDecision,
 	"genkitruntime.model_synthesize_decision":                          ModelSynthesizeDecision,
 	"graphrank.alias_lookup":                                           AliasLookup,
 	"graphrank.anchor_kind_withheld":                                   AnchorKindWithheld,
@@ -6642,6 +6644,62 @@ func (f QuestionFamilyResolutionFields) SlogArgs() []any {
 	}
 }
 
+// ReadFallbackDecisionFields is contextfabric.read_fallback_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ReadFallbackDecision.Fields declares in spec.go.
+type ReadFallbackDecisionFields struct {
+	OrgID        string
+	Reason       string
+	Outcome      string
+	PlannedKinds int
+	ErrorClass   string
+	Rejection    string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ReadFallbackDecisionFields uniformly, set ONLY by NewReadFallbackDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewReadFallbackDecisionFields is the generated constructor for ReadFallbackDecisionFields -- every
+// field ReadFallbackDecision.Fields declares is a required parameter.
+func NewReadFallbackDecisionFields(orgID string, reason string, outcome string, plannedKinds int, errorClass string, rejection string) ReadFallbackDecisionFields {
+	return ReadFallbackDecisionFields{
+		OrgID:        orgID,
+		Reason:       reason,
+		Outcome:      outcome,
+		PlannedKinds: plannedKinds,
+		ErrorClass:   errorClass,
+		Rejection:    rejection,
+		constructed:  true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewReadFallbackDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ReadFallbackDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ReadFallbackDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ReadFallbackDecisionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"planned_kinds", f.PlannedKinds,
+		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
+		"rejection", contextfabric.SanitizeLogAttr(f.Rejection),
+	}
+}
+
 // ReadRequirementPopulationFields is contextfabric.read_requirement_population's generated typed construction interface
 // (CHAOS-5516): one Go field per Field ReadRequirementPopulation.Fields declares in spec.go.
 type ReadRequirementPopulationFields struct {
@@ -10602,6 +10660,80 @@ func (f ModelPhraseDecisionFields) IsConstructed() bool { return f.constructed }
 // construction site inside this function's body -- the shape CHAOS-5544's
 // own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
 func (f ModelPhraseDecisionFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"org_id_hash", contextfabric.SanitizeLogAttr(f.OrgIDHash),
+		"operation", contextfabric.SanitizeLogAttr(f.Operation),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"attempts", f.Attempts,
+		"model_id", contextfabric.SanitizeLogAttr(f.ModelID),
+		"model_version", contextfabric.SanitizeLogAttr(f.ModelVersion),
+		"prompt_version", contextfabric.SanitizeLogAttr(f.PromptVersion),
+		"attempts_total", f.AttemptsTotal,
+		"attempts_retried", f.AttemptsRetried,
+		"attempt_outcomes", contextfabric.SanitizeLogAttr(f.AttemptOutcomes),
+		"attempt_elapsed_ms", contextfabric.SanitizeLogAttr(f.AttemptElapsedMs),
+	}
+}
+
+// ModelPlanReadsDecisionFields is genkitruntime.model_plan_reads_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ModelPlanReadsDecision.Fields declares in spec.go.
+type ModelPlanReadsDecisionFields struct {
+	RequestID        string
+	OrgIDHash        string
+	Operation        string
+	Outcome          string
+	Attempts         int
+	ModelID          string
+	ModelVersion     string
+	PromptVersion    string
+	AttemptsTotal    int
+	AttemptsRetried  int
+	AttemptOutcomes  string
+	AttemptElapsedMs string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ModelPlanReadsDecisionFields uniformly, set ONLY by NewModelPlanReadsDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewModelPlanReadsDecisionFields is the generated constructor for ModelPlanReadsDecisionFields -- every
+// field ModelPlanReadsDecision.Fields declares is a required parameter.
+func NewModelPlanReadsDecisionFields(requestID string, orgIDHash string, operation string, outcome string, attempts int, modelID string, modelVersion string, promptVersion string, attemptsTotal int, attemptsRetried int, attemptOutcomes string, attemptElapsedMs string) ModelPlanReadsDecisionFields {
+	return ModelPlanReadsDecisionFields{
+		RequestID:        requestID,
+		OrgIDHash:        orgIDHash,
+		Operation:        operation,
+		Outcome:          outcome,
+		Attempts:         attempts,
+		ModelID:          modelID,
+		ModelVersion:     modelVersion,
+		PromptVersion:    promptVersion,
+		AttemptsTotal:    attemptsTotal,
+		AttemptsRetried:  attemptsRetried,
+		AttemptOutcomes:  attemptOutcomes,
+		AttemptElapsedMs: attemptElapsedMs,
+		constructed:      true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewModelPlanReadsDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ModelPlanReadsDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ModelPlanReadsDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ModelPlanReadsDecisionFields) SlogArgs() []any {
 	return []any{
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 		"org_id_hash", contextfabric.SanitizeLogAttr(f.OrgIDHash),

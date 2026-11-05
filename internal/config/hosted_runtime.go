@@ -179,6 +179,10 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.ContextFabricLandscapeQuadrantEnabled, err = boolValue(lookup, ContextFabricLandscapeQuadrantEnabledEnvVar, false); err != nil {
 		return err
 	}
+	// CHAOS-13002: default OFF -- see Config.ContextFabricReadFallbackEnabled.
+	if cfg.ContextFabricReadFallbackEnabled, err = boolValue(lookup, ContextFabricReadFallbackEnabledEnvVar, false); err != nil {
+		return err
+	}
 	// CHAOS-12521: default OFF -- see Config.ContextFabricInvestmentTreemapEnabled.
 	if cfg.ContextFabricInvestmentTreemapEnabled, err = boolValue(lookup, ContextFabricInvestmentTreemapEnabledEnvVar, false); err != nil {
 		return err
@@ -252,6 +256,10 @@ const ContextFabricComparisonTableEnabledEnvVar = "ACR_CONTEXT_FABRIC_COMPARISON
 // ContextFabricLandscapeQuadrantEnabledEnvVar turns on the landscape_position
 // render rule (CHAOS-12626).
 const ContextFabricLandscapeQuadrantEnabledEnvVar = "ACR_CONTEXT_FABRIC_LANDSCAPE_QUADRANT_ENABLED"
+
+// ContextFabricReadFallbackEnabledEnvVar turns on the read fallback
+// (CHAOS-13002).
+const ContextFabricReadFallbackEnabledEnvVar = "ACR_CONTEXT_FABRIC_READ_FALLBACK_ENABLED"
 
 // ContextFabricVocabularyLabelsEnabledEnvVar serves vocabulary_labels (CHAOS-12416).
 const ContextFabricVocabularyLabelsEnabledEnvVar = "ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED"
@@ -351,6 +359,7 @@ func (c Config) SafeAttributes() []any {
 		"context_fabric_investment_sankey_enabled", c.ContextFabricInvestmentSankeyEnabled,
 		"context_fabric_comparison_table_enabled", c.ContextFabricComparisonTableEnabled,
 		"context_fabric_landscape_quadrant_enabled", c.ContextFabricLandscapeQuadrantEnabled,
+		"context_fabric_read_fallback_enabled", c.ContextFabricReadFallbackEnabled,
 		"context_fabric_event_stream_enabled", c.ContextFabricEventStreamEnabled,
 		"context_fabric_run_lease_enabled", c.ContextFabricRunLeaseEnabled,
 		"ask_dev_retention_enabled", c.AskDevRetentionEnabled,

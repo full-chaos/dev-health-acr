@@ -65,7 +65,9 @@ flowchart TD
   REUSEGATE -->|"bypass: this turn confirmed structure,<br/>named a prior-subject receipt, or names<br/>ANY prior result the carries can walk<br/>(keyed on carryReferencedResultIDs --<br/>the carries' own seed population, so the<br/>two cannot drift). Reason counted on<br/>cf answer reuse bypass"| INTERP
   REUSEGATE -->|"no bypass: tryReuse.<br/>a HIT RETURNS TO THE CALLER here --<br/>zero model calls, and before every<br/>carry below, which is why a carriable<br/>turn must never reach this arm.<br/>A miss falls through"| INTERP
   INTERP["Interpret (model call)<br/>RuntimeQuestionInterpreter.Interpret<br/>model_runtime.go:510"]
-  INTERP --> PLANSTAGE["<b>PlanAnswer</b> -- deterministic, NO model call<br/>chaos4636_answer_plan.go (CHAOS-4636 / S5)<br/>family definition x interpretation x budget<br/>-> AnswerPlan (persisted on the result)"]
+  INTERP --> READFB{"read fallback, CHAOS-13002<br/>decideReadFallback (read_fallback_engine.go)<br/>F1: a ranking family asked for a judgment<br/>its attention measure cannot serve<br/>F3: a listed kind no capability serves<br/>for the member kind<br/>switch ON: one plan_reads model call,<br/>plan validated by ValidateReadPlan"}
+  READFB -->|"applied: the planner's kinds widen the plan LAST,<br/>answer_plan.fallback, the service sentence,<br/>saved never reusable"| PLANSTAGE["<b>PlanAnswer</b> -- deterministic, NO model call<br/>chaos4636_answer_plan.go (CHAOS-4636 / S5)<br/>family definition x interpretation x budget<br/>-> AnswerPlan (persisted on the result)"]
+  READFB -->|"not_applicable / suppressed_flag_off /<br/>planner_failed / plan_invalid:<br/>the family plan, unchanged"| PLANSTAGE
   PLANSTAGE --> PLANCARRY{"plan carry, ONE hop<br/>resolveCarriedPlan (chaos4636_plan_carry.go)<br/>-- ONLY when this turn resolved no family<br/>carries family / group kind / narrowing basis<br/><b>NEVER the member list</b> (check 18)"}
   PLANCARRY --> STRUCT
   STRUCT["structure needs: kind / anchor / handle / window<br/>composeEffectiveWindow (window.go)<br/>canonicalizeStructure (chaos3900)"]

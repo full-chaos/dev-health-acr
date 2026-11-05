@@ -462,6 +462,24 @@ func (t SlogEngineTelemetry) RecordSubjectObligationReadKinds(ctx context.Contex
 	t.logger.InfoContext(ctx, "context fabric plan subject obligation reads", args...)
 }
 
+// RecordReadFallbackDecision (CHAOS-13002) logs at Info: every field is a
+// closed vocabulary member or a count. An empty reason is written "none".
+func (t SlogEngineTelemetry) RecordReadFallbackDecision(ctx context.Context, principal storage.Principal, event ReadFallbackDecisionEvent) {
+	reason := string(event.Reason)
+	if reason == "" {
+		reason = readFallbackReasonNone
+	}
+	args := append([]any{
+		"org_id", SanitizeLogAttr(principal.OrgID), "reason", SanitizeLogAttr(reason), "outcome", SanitizeLogAttr(string(event.Outcome)),
+		"planned_kinds", event.PlannedKinds, "error_class", SanitizeLogAttr(event.ErrorClass), "rejection", SanitizeLogAttr(string(event.Rejection)),
+	}, requestIDLogAttrs(ctx)...)
+	t.logger.InfoContext(ctx, "context fabric read fallback decision", args...)
+}
+
+// readFallbackReasonNone is the logged reason of a turn the fallback does not
+// apply to.
+const readFallbackReasonNone = "none"
+
 // RecordWindowClassification (CHAOS-12595) logs at Info: every field is a
 // closed vocabulary member or a bool, never question text.
 func (t SlogEngineTelemetry) RecordWindowClassification(ctx context.Context, principal storage.Principal, modelClass WindowClass, outcome WindowClassOutcome) {
