@@ -26,9 +26,9 @@
     {
       "field": "analytics",
       "operations": [
-        "teamWorkItemBreakdown",
         "investmentBreakdown",
         "investmentBreakdownTeam",
+        "teamWorkItemBreakdown",
         "investmentFull",
         "investmentBreakdownRepository"
       ],
