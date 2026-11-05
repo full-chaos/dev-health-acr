@@ -142,10 +142,10 @@ func (p *InvestmentProvider) repositoryFactFromOps(ctx context.Context, principa
 		}
 	}
 	themes, subcategories := answers["THEME"], answers["SUBCATEGORY"]
-	for key, value := range themes {
-		if !slices.Contains(canonicalInvestmentThemes[:], key) && value > 0 {
-			return nil, why(SubcategoryWithheldUnknownKey, "")
-		}
+	// The two answers must agree, by the rule of the subcategory table: no
+	// unknown positive key, and each theme equals the sum of its subcategories.
+	if _, refusal := subcategoryBreakdownTable(themes, subcategories, grainDaily); refusal != nil && refusal.reason != SubcategoryWithheldNoData {
+		return nil, why(refusal.reason, "")
 	}
 	total := 0.0
 	for _, theme := range canonicalInvestmentThemes {

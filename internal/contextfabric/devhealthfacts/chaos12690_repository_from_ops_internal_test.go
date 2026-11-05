@@ -200,3 +200,32 @@ func TestCHAOS12690VersionJoinsTheReuseKeyOnlyWhenOn(t *testing.T) {
 		t.Fatal("the capability version does not move with the switch")
 	}
 }
+
+func TestCHAOS12690DisagreeingThemeAndSubcategoryAnswersServeNoFact(t *testing.T) {
+	t.Parallel()
+	sized := int64(3)
+	for name, mutate := range map[string]func(*breakdownCaller){
+		"subcategory_above_its_theme": func(c *breakdownCaller) {
+			sub := sunburstSubcategories()
+			sub["quality.bugfix"] = 100
+			c.subcategory = withUnitCounts(breakdownAnswer("SUBCATEGORY", sub), 5, 1, &sized)
+		},
+		"unknown_positive_subcategory": func(c *breakdownCaller) {
+			sub := sunburstSubcategories()
+			sub["quality.invented"] = 1
+			c.subcategory = withUnitCounts(breakdownAnswer("SUBCATEGORY", sub), 5, 1, &sized)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			caller := opsMixCaller(&sized)
+			mutate(caller)
+			result, _ := readRepositoryFromOps(t, true, caller)
+			if fact := investmentFactOf(result, sunburstRepo); fact != nil {
+				t.Fatalf("a fact is served over disagreeing answers: bugfix=%v", fact.Fields[contextfabric.FactFieldThemeQualityBugfix].Number)
+			}
+			if reasons := servedReasons(result, sunburstRepo); !strings.Contains(reasons, repoOpsWithheldPrefix) {
+				t.Fatalf("no named reason: %q", reasons)
+			}
+		})
+	}
+}
