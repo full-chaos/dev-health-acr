@@ -9879,6 +9879,7 @@
           "none",
           "judgment_kind",
           "ranking_inputs",
+          "judgment_kind_and_ranking_inputs",
           "kind_unserved"
         ]
       },
