@@ -9,6 +9,11 @@
 # This polls until the endpoint answers {"status":"ok"} or the deadline passes,
 # and on failure reports the last curl/jq outcome instead of the first.
 #
+# The deadline bounds how long the probe keeps waiting: an attempt that is
+# already running when it passes still finishes (each is capped by curl
+# --max-time 5), so the worst overshoot is 5 s, and an ok that arrives that
+# late means the container is ready, so it passes.
+#
 # wait_for_healthz URL [DEADLINE_SECONDS=60] [INTERVAL_SECONDS=1]
 wait_for_healthz() {
   local url="$1" deadline="${2:-60}" interval="${3:-1}"

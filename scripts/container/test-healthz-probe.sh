@@ -111,6 +111,18 @@ else
 fi
 stop_listener
 
+# 3d. The read is capped at 64 KiB: a reply that is valid JSON with status ok but
+# only past the cap is not a health answer. Without the cap the validator would
+# accept it (the P3 of CHAOS-12966's third review round).
+{ printf '{"status":"ok","pad":"'; head -c 100000 /dev/zero | tr '\000' x; printf '"}'; } >"$fixture/oversize-ok"
+start_listener 0 "@$fixture/oversize-ok"
+if wait_for_healthz "http://127.0.0.1:${port}/healthz" 2 0.2 2>"$fixture/err"; then
+  bad "wait_for_healthz accepted an ok reply larger than its 64 KiB read cap"
+else
+  ok "wait_for_healthz does not accept an ok reply larger than its read cap"
+fi
+stop_listener
+
 # 4. A listener that resets forever fails at the deadline, not never.
 start_listener 100000 '{"status":"ok"}'
 started="$(date +%s)"
