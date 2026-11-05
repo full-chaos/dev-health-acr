@@ -242,6 +242,12 @@ type Config struct {
 	// landscape_position render rule. Default OFF, for the same reason as the
 	// treemap. Turn it on after web's and ask-dev's pins are deployed.
 	ContextFabricLandscapeQuadrantEnabled bool
+	// ContextFabricReadFallbackEnabled (CHAOS-13002,
+	// ACR_CONTEXT_FABRIC_READ_FALLBACK_ENABLED) lets the model plan which
+	// canonical fact kinds an answer reads when no fixed question family
+	// serves the question. Default OFF. Turn it on after web's and ask-dev's
+	// pins hold answer_plan.fallback.
+	ContextFabricReadFallbackEnabled bool
 	// ServerCompletenessAuthorityEnabled (CHAOS-5640,
 	// ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_ENABLED) is the
 	// gated FLIP's master switch -- default OFF, same "ships dark"

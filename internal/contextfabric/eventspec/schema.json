@@ -9846,6 +9846,91 @@
     ]
   },
   {
+    "id": "contextfabric.read_fallback_decision",
+    "msg": "context fabric read fallback decision",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: recorded once, at the plan seam, by every turn that reaches it.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "judgment_unservable",
+          "kind_unserved_for_member"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "applied",
+          "suppressed_flag_off",
+          "planner_failed",
+          "plan_invalid",
+          "not_applicable"
+        ]
+      },
+      {
+        "key": "planned_kinds",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "error_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "platform_model_withheld",
+          "deadline_exceeded",
+          "canceled",
+          "rate_limited",
+          "input_too_large",
+          "model_output",
+          "model_unavailable",
+          "internal",
+          "no_runtime"
+        ]
+      },
+      {
+        "key": "rejection",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "empty_plan",
+          "too_many_steps",
+          "unknown_tool",
+          "step_shape_invalid",
+          "too_many_kinds",
+          "unknown_kind",
+          "kind_not_offered",
+          "duplicate_kind",
+          "unknown_subject_kind",
+          "no_reads"
+        ]
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
     "id": "contextfabric.read_requirement_population",
     "msg": "context fabric read requirement population",
     "level": "info",
@@ -15827,6 +15912,83 @@
         "presence": "required",
         "closed_vocabulary": [
           "phrase_offers",
+          ""
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "model_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "model_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "prompt_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_retried",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_outcomes",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_elapsed_ms",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "genkitruntime.model_plan_reads_decision",
+    "msg": "context fabric model decision",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id",
+      "operation"
+    ],
+    "bounded_aggregation": "at most one line per investigation: one per PlanReads call, including a call that returned before the model was reached, and the engine calls the planner at most once per turn.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "org_id_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "operation",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "plan_reads",
           ""
         ]
       },

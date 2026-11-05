@@ -226,6 +226,8 @@ func goVarName(e Event) string {
 		return "ModelSynthesizeDecision"
 	case ModelPhraseDecision.ID:
 		return "ModelPhraseDecision"
+	case ModelPlanReadsDecision.ID:
+		return "ModelPlanReadsDecision"
 	case FactScopeExpansionGap.ID:
 		return "FactScopeExpansionGap"
 	case FactScopeExpansionDecision.ID:
@@ -460,6 +462,8 @@ func goVarName(e Event) string {
 		return "PlanOperandReads"
 	case PlanSubjectObligationReads.ID:
 		return "PlanSubjectObligationReads"
+	case ReadFallbackDecision.ID:
+		return "ReadFallbackDecision"
 	case WindowClassification.ID:
 		return "WindowClassification"
 	case InferredWindowGate.ID:

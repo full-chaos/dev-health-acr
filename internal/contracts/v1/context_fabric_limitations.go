@@ -836,6 +836,7 @@ func ContextFabricServiceAuthoredLimitations() []string {
 		ContextFabricDistributionWithheldLimitation,
 		ContextFabricRepositoryFlowWithheldLimitation,
 		ContextFabricRepositorySplitUnclaimedLimitation,
+		ContextFabricReadFallbackLimitation,
 		ContextFabricDetailTableServedLimitation,
 		ContextFabricRequestedProjectNarrowingUnavailableLimitation,
 		ContextFabricTruncatedPopulationNoMemberLimitation,

@@ -149,6 +149,9 @@ const (
 	// interpretation composeStructureNeeds built its offers from. See
 	// chaos4171_offer_phrasing.go.
 	ModelOperationPhraseOffers ModelOperation = "phrase_offers"
+	// ModelOperationPlanReads (CHAOS-13002) is the read planner's call: the
+	// model picks fact kinds for a question no fixed family serves.
+	ModelOperationPlanReads ModelOperation = "plan_reads"
 )
 
 type ModelUsage struct {
@@ -430,7 +433,7 @@ type ModelExecutionReceipt struct {
 }
 
 func (r ModelExecutionReceipt) Validate() error {
-	if r.Operation != ModelOperationInterpret && r.Operation != ModelOperationSynthesize && r.Operation != ModelOperationPhraseOffers {
+	if r.Operation != ModelOperationInterpret && r.Operation != ModelOperationSynthesize && r.Operation != ModelOperationPhraseOffers && r.Operation != ModelOperationPlanReads {
 		return fmt.Errorf("model receipt operation is invalid")
 	}
 	for name, value := range map[string]string{

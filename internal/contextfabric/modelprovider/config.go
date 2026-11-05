@@ -145,6 +145,11 @@ type Config struct {
 	// PhrasingModel is an optional distinct model for the offer-phrasing
 	// call; see EnvPhrasingModel.
 	PhrasingModel string
+	// PlanReadsModel is an optional distinct model for the read planner
+	// (CHAOS-13002). Empty means the planner runs on Model. No environment
+	// variable sets it yet: the planner follows the interpret model until a
+	// measured comparison says otherwise.
+	PlanReadsModel string
 	// APIKey is the bearer credential. It is optional only when BaseURL is
 	// set (a local BYO server may not authenticate at all); reaching a
 	// hosted provider on the default base URL always requires it.
@@ -279,6 +284,14 @@ func (c Config) validate() error {
 			return fmt.Errorf("%s must be at most %d bytes", EnvPhrasingModel, maximumProviderOrModelLength)
 		}
 		if err := validateModelID(EnvPhrasingModel, c.PhrasingModel); err != nil {
+			return err
+		}
+	}
+	if c.PlanReadsModel != "" {
+		if len(c.PlanReadsModel) > maximumProviderOrModelLength {
+			return fmt.Errorf("PlanReadsModel must be at most %d bytes", maximumProviderOrModelLength)
+		}
+		if err := validateModelID("PlanReadsModel", c.PlanReadsModel); err != nil {
 			return err
 		}
 	}

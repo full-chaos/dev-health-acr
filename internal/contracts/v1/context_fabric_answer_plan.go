@@ -438,6 +438,9 @@ type ContextFabricAnswerPlan struct {
 	// Joined to the outcome rows by the coordinate string both carry. See
 	// ContextFabricPlanRequirement.
 	Requirements []ContextFabricPlanRequirement `json:"requirements,omitempty"`
+	// Fallback is set only when the model planned some of this answer's
+	// reads (CHAOS-13002). See ContextFabricAnswerPlanFallback.
+	Fallback *ContextFabricAnswerPlanFallback `json:"fallback,omitempty"`
 }
 
 // Narrowed reports whether the plan had to act. It is the one-line question a
@@ -523,6 +526,11 @@ func (p ContextFabricAnswerPlan) validate(bounds contextFabricBounds) error {
 	// it would be a disclosure nothing verifies.
 	if err := validatePlanRequirements(p.Requirements, bounds); err != nil {
 		return fmt.Errorf("requirements: %w", err)
+	}
+	if p.Fallback != nil {
+		if err := p.Fallback.validate(bounds); err != nil {
+			return fmt.Errorf("fallback: %w", err)
+		}
 	}
 	return nil
 }

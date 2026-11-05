@@ -1463,7 +1463,12 @@ import (
 // teams share as a window option the user picks (window_clarification and
 // structure_needs), and the model is no longer shown common_live_day
 // (CHAOS-13009). An answer saved under v286 holds the refusal without the option.
-const QueryVersion = "devhealthfacts.clickhouse.v287"
+//
+// v287 -> v288: when no fixed question family serves a question and the read
+// fallback is on, the model plans which fact kinds the answer reads, and the
+// plan carries answer_plan.fallback (CHAOS-13002). An answer saved under v287
+// reads only the family's kinds.
+const QueryVersion = "devhealthfacts.clickhouse.v288"
 
 // repositoryFromOpsVersionSuffix marks the version of a deployment that reads
 // the repository investment mix from ops (CHAOS-12690): the numbers differ for

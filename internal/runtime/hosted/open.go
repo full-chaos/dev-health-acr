@@ -903,6 +903,13 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	if phrasingRuntime != nil {
 		offerPhraser = contextfabric.RuntimeOfferPhraser{Runtime: phrasingRuntime, Sink: receiptSink, Logger: request.options.Logger}
 	}
+	// CHAOS-13002: the read planner resolves the same way, and it is wired
+	// whatever the switch says; EngineOptions.ReadFallbackEnabled decides
+	// whether it is ever called.
+	var readPlanner contextfabric.ReadPlanner
+	if planningRuntime := readPlanningRuntimeFor(orgResolver, deploymentDefaultRuntime); planningRuntime != nil {
+		readPlanner = contextfabric.RuntimeReadPlanner{Runtime: planningRuntime, Sink: receiptSink, Logger: request.options.Logger}
+	}
 	// orgModelConfigs is already an interface value that is nil when no
 	// per-organization source is configured (buildOrgModelConfigResolver
 	// never returns a typed nil).
@@ -1090,6 +1097,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// contextfabric.OfferPhrasingModelRuntime -- see offerPhraser's
 		// own construction comment above.
 		OfferPhraser: offerPhraser,
+		// CHAOS-13002: see readPlanner's own construction comment above.
+		ReadPlanner: readPlanner,
 	}, contextfabric.EngineOptions{
 		ServiceVersion: request.options.ServiceVersion, Now: request.options.Now, NewResultID: newInvestigationResultID,
 		// CHAOS-4636: the engine measures its own assembled answer against
@@ -1110,6 +1119,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		ComparisonTableEnabled: request.config.ContextFabricComparisonTableEnabled,
 		// See Config.ContextFabricLandscapeQuadrantEnabled.
 		LandscapeQuadrantEnabled: request.config.ContextFabricLandscapeQuadrantEnabled,
+		// See Config.ContextFabricReadFallbackEnabled.
+		ReadFallbackEnabled: request.config.ContextFabricReadFallbackEnabled,
 		// CHAOS-12608: the forecast draws the distribution the same switch serves.
 		CompletionForecastEnabled: request.config.CompletionDistributionEnabled,
 		FactCapabilities:          factRegistry.Capabilities(),
@@ -1527,6 +1538,20 @@ func buildDirectRelationships(investigator contextfabric.Investigator, gate *dir
 // the per-organization resolver when it is wired, otherwise a resolver over
 // the deployment default alone (so a withheld turn is still honored). It
 // returns nil when there is no usable deployment runtime and no resolver.
+// readPlanningRuntimeFor is offerPhrasingRuntimeFor for the read planner.
+func readPlanningRuntimeFor(resolver *modelruntimeresolver.Resolver, deploymentDefault contextfabric.ModelRuntime) contextfabric.ReadPlanningModelRuntime {
+	if resolver != nil {
+		return resolver
+	}
+	if deploymentDefault == nil || isNilRuntime(deploymentDefault) {
+		return nil
+	}
+	if _, ok := deploymentDefault.(contextfabric.ReadPlanningModelRuntime); !ok {
+		return nil
+	}
+	return modelruntimeresolver.New(deploymentDefault, nil, nil)
+}
+
 func offerPhrasingRuntimeFor(resolver *modelruntimeresolver.Resolver, deploymentDefault contextfabric.ModelRuntime) contextfabric.OfferPhrasingModelRuntime {
 	if resolver != nil {
 		return resolver

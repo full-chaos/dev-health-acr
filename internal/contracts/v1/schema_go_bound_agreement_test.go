@@ -202,10 +202,14 @@ func TestSchemaAndGoBoundsAgree(t *testing.T) {
 		// them as "bounded by a shared helper" would be describing
 		// something untrue -- exactly the hole round 18's ruled 0 -> 1
 		// mutation walked through on limitations_displaced above.
-		"common#$defs.AnswerPlan.properties.render_kinds.maxItems":              ContextFabricAnswerPlanRenderKindsMaxCount,
-		"common#$defs.AnswerPlan.properties.axes.maxItems":                      ContextFabricAnswerPlanAxesMaxCount,
-		"common#$defs.AnswerPlan.properties.fact_kinds.maxItems":                ContextFabricFactKindListMaxItems,
-		"common#$defs.AnswerPlan.properties.narrowing.maxItems":                 ContextFabricPlanNarrowingMaxCount,
+		"common#$defs.AnswerPlan.properties.render_kinds.maxItems": ContextFabricAnswerPlanRenderKindsMaxCount,
+		"common#$defs.AnswerPlan.properties.axes.maxItems":         ContextFabricAnswerPlanAxesMaxCount,
+		"common#$defs.AnswerPlan.properties.fact_kinds.maxItems":   ContextFabricFactKindListMaxItems,
+		"common#$defs.AnswerPlan.properties.narrowing.maxItems":    ContextFabricPlanNarrowingMaxCount,
+		// CHAOS-13002: ContextFabricAnswerPlanFallback.validate rejects an
+		// empty planned kind list and one past the fact-kind list bound.
+		"common#$defs.AnswerPlanFallback.properties.planned_kinds.maxItems":     ContextFabricFactKindListMaxItems,
+		"common#$defs.AnswerPlanFallback.properties.planned_kinds.minItems":     1,
 		"common#$defs.AnswerPlanBudget.properties.max_items.minimum":            0,
 		"common#$defs.AnswerPlanBudget.properties.max_serialized_bytes.minimum": 0,
 		"common#$defs.AnswerPlanBudget.properties.max_members.minimum":          0,
