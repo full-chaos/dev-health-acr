@@ -1469,20 +1469,6 @@ const QueryVersion = "devhealthfacts.clickhouse.v287"
 // the repository investment mix from ops (CHAOS-12690): the numbers differ for
 // a unit that spans repositories, so an answer stored under the other source
 // must not be reused. With the switch off the version is QueryVersion itself.
-const repositoryFromOpsVersionSuffix = "+repository_from_ops"
-
-// QueryVersionFor is the version a deployment stamps and keys reuse by.
-func QueryVersionFor(repositoryFromOps bool) string {
-	if repositoryFromOps {
-		return QueryVersion + repositoryFromOpsVersionSuffix
-	}
-	return QueryVersion
-}
-
-// repositoryFromOpsVersionSuffix marks the version of a deployment that reads
-// the repository investment mix from ops (CHAOS-12690): the numbers differ for
-// a unit that spans repositories, so an answer stored under the other source
-// must not be reused. With the switch off the version is QueryVersion itself.
 const (
 	repositoryFromOpsVersionSuffix = "+repository_from_ops"
 	teamFromOpsVersionSuffix       = "+team_from_ops"
