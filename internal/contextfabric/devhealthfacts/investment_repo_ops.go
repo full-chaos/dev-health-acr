@@ -31,10 +31,11 @@ const (
 
 	opsMixWithheldPrefix = "investment_mix_from_ops_withheld"
 
-	RepoOpsWithheldCap      = "read_cap"
-	RepoOpsWithheldNoData   = "no_data"
-	RepoOpsWithheldNoSizing = "sizing_coverage_not_served"
-	RepoOpsWithheldNoPrior  = "prior_window_not_served"
+	RepoOpsWithheldCap            = "read_cap"
+	RepoOpsWithheldNoData         = "no_data"
+	RepoOpsWithheldNoSizing       = "sizing_coverage_not_served"
+	RepoOpsWithheldNoPrior        = "prior_window_not_served"
+	RepoOpsWithheldCountsDisagree = "unit_counts_disagree"
 )
 
 // opsMixWithheld is why one repository carries no fact, or no sizing
@@ -68,6 +69,13 @@ type evidenceQualityAnswer struct {
 type opsUnitCounts struct {
 	total, uncategorized int64
 	sized                *int64
+}
+
+func (c opsUnitCounts) equal(other opsUnitCounts) bool {
+	if c.total != other.total || c.uncategorized != other.uncategorized || (c.sized == nil) != (other.sized == nil) {
+		return false
+	}
+	return c.sized == nil || *c.sized == *other.sized
 }
 
 func parseEvidenceQuality(data json.RawMessage) (opsUnitCounts, bool) {
@@ -110,12 +118,11 @@ func (p *InvestmentProvider) readRepositoryMixFromOps(ctx context.Context, princ
 // opsMixSpec names the ops operation and the provenance of one subject kind.
 type opsMixSpec struct {
 	operation, level, source, basis, prefix string
-	entity                                  contractsv1.ContextFabricEvidenceEntityType
 }
 
 var (
-	repositoryOpsSpec = opsMixSpec{operation: InvestmentBreakdownRepositoryOperationName, level: "REPO", source: repoOpsSource, basis: repoOpsBasis, prefix: repositoryPrefix, entity: contractsv1.ContextFabricEvidenceEntityRepository}
-	teamOpsSpec       = opsMixSpec{operation: InvestmentBreakdownTeamOperationName, level: "TEAM", source: teamOpsSource, basis: teamOpsBasis, prefix: teamPrefix, entity: contractsv1.ContextFabricEvidenceEntityTeam}
+	repositoryOpsSpec = opsMixSpec{operation: InvestmentBreakdownRepositoryOperationName, level: "REPO", source: repoOpsSource, basis: repoOpsBasis, prefix: repositoryPrefix}
+	teamOpsSpec       = opsMixSpec{operation: InvestmentBreakdownTeamOperationName, level: "TEAM", source: teamOpsSource, basis: teamOpsBasis, prefix: teamPrefix}
 )
 
 func (p *InvestmentProvider) repositoryFactFromOps(ctx context.Context, principal storage.Principal, subject contextfabric.SubjectRef, bound factTimeBound) (*contextfabric.CanonicalFact, []opsMixWithheld) {
@@ -154,12 +161,17 @@ func (p *InvestmentProvider) mixFactFromOps(ctx context.Context, principal stora
 			return nil, why(SubcategoryWithheldUnreadable, "")
 		}
 		answers[dimension] = values
-		if dimension == "THEME" {
-			var countsOK bool
-			if counts, countsOK = parseEvidenceQuality(outcome.Data); !countsOK {
-				return nil, why(SubcategoryWithheldUnreadable, "")
-			}
+		dimensionCounts, countsOK := parseEvidenceQuality(outcome.Data)
+		if !countsOK {
+			return nil, why(SubcategoryWithheldUnreadable, "")
 		}
+		// Both calls ask for the same scope and window, so their unit counts are
+		// one answer: a disagreement is not served (a count taken from either
+		// would be a guess).
+		if dimension == "SUBCATEGORY" && !dimensionCounts.equal(counts) {
+			return nil, why(RepoOpsWithheldCountsDisagree, "")
+		}
+		counts = dimensionCounts
 	}
 	themes, subcategories := answers["THEME"], answers["SUBCATEGORY"]
 	// The two answers must agree, by the rule of the subcategory table: no
@@ -200,9 +212,14 @@ func (p *InvestmentProvider) mixFactFromOps(ctx context.Context, principal stora
 		notes = append(notes, p.priorThemeFieldsFromOps(ctx, principal, subject, bound, spec, fields)...)
 	}
 	rawID := subject.CanonicalID[len(spec.prefix):]
+	// Literal entity types: the mint-site sweep reads them.
+	ref := evidenceRefID(contractsv1.ContextFabricEvidenceEntityRepository, rawID)
+	if spec.level == "TEAM" {
+		ref = evidenceRefID(contractsv1.ContextFabricEvidenceEntityTeam, rawID)
+	}
 	return &contextfabric.CanonicalFact{
 		Kind: contextfabric.FactInvestment, Subject: subject, Fields: fields,
-		EvidenceRefIDs: []string{evidenceRefID(spec.entity, rawID)},
+		EvidenceRefIDs: []string{ref},
 	}, notes
 }
 

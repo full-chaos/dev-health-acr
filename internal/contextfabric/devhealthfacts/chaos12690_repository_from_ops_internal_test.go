@@ -229,3 +229,27 @@ func TestCHAOS12690DisagreeingThemeAndSubcategoryAnswersServeNoFact(t *testing.T
 		})
 	}
 }
+
+func TestCHAOS12690DisagreeingUnitCountsServeNoFact(t *testing.T) {
+	t.Parallel()
+	sized := int64(3)
+	otherSized := int64(2)
+	for name, sub := range map[string]OperationOutcome{
+		"total":         withUnitCounts(breakdownAnswer("SUBCATEGORY", sunburstSubcategories()), 101, 0, &sized),
+		"uncategorized": withUnitCounts(breakdownAnswer("SUBCATEGORY", sunburstSubcategories()), 5, 2, &sized),
+		"sized":         withUnitCounts(breakdownAnswer("SUBCATEGORY", sunburstSubcategories()), 5, 1, &otherSized),
+		"sized_absent":  withUnitCounts(breakdownAnswer("SUBCATEGORY", sunburstSubcategories()), 5, 1, nil),
+	} {
+		t.Run(name, func(t *testing.T) {
+			caller := opsMixCaller(&sized)
+			caller.subcategory = sub
+			result, _ := readRepositoryFromOps(t, true, caller)
+			if fact := investmentFactOf(result, sunburstRepo); fact != nil {
+				t.Fatalf("a fact is served over disagreeing counts: %+v", fact.Fields["work_unit_count"])
+			}
+			if reasons := servedReasons(result, sunburstRepo); !strings.Contains(reasons, RepoOpsWithheldCountsDisagree) {
+				t.Fatalf("no named reason: %q", reasons)
+			}
+		})
+	}
+}
