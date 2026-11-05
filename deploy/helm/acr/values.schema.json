@@ -48,6 +48,10 @@
           "type": "boolean",
           "description": "ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED for acr-api (CHAOS-12554). Keep false until web's and ask-dev's pins hold the investment_subcategory_share rule and ACR's run_operation policy serves ISSUE_SIZE on the scoped investment breakdowns."
         },
+        "investmentRepositoryFromOpsEnabled": {
+          "type": "boolean",
+          "description": "ACR_CONTEXT_FABRIC_INVESTMENT_REPOSITORY_FROM_OPS_ENABLED for acr-api (CHAOS-12690). Keep false until the ops pin holds sizedUnitCount and the repository proofs are re-run."
+        },
         "investmentSankeyEnabled": {
           "type": "boolean",
           "description": "ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED for acr-api (CHAOS-12582). Keep false until web's and ask-dev's pins hold the investment_repository_flow rule."
