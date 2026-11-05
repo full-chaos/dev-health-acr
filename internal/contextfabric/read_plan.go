@@ -92,7 +92,9 @@ func ValidateReadPlan(plan ReadPlan, memberKind SubjectKind, capabilities []Fact
 	for _, step := range plan.Steps {
 		switch step.Tool {
 		case ReadPlanToolReadFacts:
-			if step.SubjectKind != "" || len(step.Kinds) == 0 {
+			// The output schema makes every property required, so a read step
+			// always carries a subject_kind the server never reads.
+			if len(step.Kinds) == 0 {
 				return nil, ReadPlanRejectionStepShape
 			}
 			if len(step.Kinds) > ReadPlanMaxKindsPerStep {
@@ -110,10 +112,9 @@ func ValidateReadPlan(plan ReadPlan, memberKind SubjectKind, capabilities []Fact
 				kinds = append(kinds, kind)
 			}
 		case ReadPlanToolFindSubjects:
-			if len(step.Kinds) > 0 {
-				return nil, ReadPlanRejectionStepShape
-			}
-			if !validSubjectKind(step.SubjectKind) {
+			// Lowered to no step: its kinds are never read, and an empty subject
+			// kind is the schema's filler. A named subject kind must still be one.
+			if step.SubjectKind != "" && !validSubjectKind(step.SubjectKind) {
 				return nil, ReadPlanRejectionUnknownSubjectKind
 			}
 		default:
