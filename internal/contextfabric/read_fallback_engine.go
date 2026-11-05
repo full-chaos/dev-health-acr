@@ -37,6 +37,8 @@ type ReadFallbackDecisionEvent struct {
 	Reason       ReadFallbackReason
 	Outcome      ReadFallbackOutcome
 	PlannedKinds int
+	// Trigger names the test that fired; empty when the decision did not apply.
+	Trigger ReadFallbackTrigger
 	// ErrorClass names a planner failure; empty on every other outcome.
 	ErrorClass string
 	// Rejection names the validator's refusal; empty on every other outcome.
@@ -78,11 +80,12 @@ func (e *Engine) decideReadFallback(ctx context.Context, principal storage.Princ
 	for _, requirement := range interpretation.FactRequirements {
 		interpretedKinds = append(interpretedKinds, requirement.Kind)
 	}
-	decision := readFallbackDecision{reason: DecideReadFallback(ReadFallbackDecisionInput{
+	reason, trigger := DecideReadFallbackWithTrigger(ReadFallbackDecisionInput{
 		Definition: definition, JudgmentKind: interpretation.RequestedJudgmentKind, InterpretedKinds: interpretedKinds,
 		MemberKind: memberKind, Capabilities: capabilities, WorkItemList: workItemList,
-	})}
-	event := ReadFallbackDecisionEvent{Reason: decision.reason}
+	})
+	decision := readFallbackDecision{reason: reason}
+	event := ReadFallbackDecisionEvent{Reason: decision.reason, Trigger: trigger}
 	switch {
 	case decision.reason == "":
 		decision.outcome = ReadFallbackOutcomeNotApplicable

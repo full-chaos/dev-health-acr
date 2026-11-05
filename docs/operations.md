@@ -1197,7 +1197,7 @@ quadrant and its served line.
 `contextFabric.readFallbackEnabled`, default `false`, CHAOS-13002) lets the model
 plan which canonical fact kinds an answer reads when the question's fixed family
 cannot serve it: a ranking family asked for a judgment its attention measure
-cannot give, or a listed kind that no capability serves for the member kind. The
+cannot give, a ranking family whose listed kinds include no kind the ranking reads (the interpreter names the judgment kind only sometimes, so this test reads the listed kinds), or a listed kind that no capability serves for the member kind. The decision line names which test fired (`trigger`: `judgment_kind`, `ranking_inputs`, `kind_unserved`, or `none`). The
 server validates the plan (`read_facts` steps over the kinds offered for the
 member kind, at most 4 steps of 4 kinds) and reads the kinds through the normal
 fact read, after every kind the family planned. The planner call is

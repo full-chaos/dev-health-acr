@@ -6649,6 +6649,7 @@ func (f QuestionFamilyResolutionFields) SlogArgs() []any {
 type ReadFallbackDecisionFields struct {
 	OrgID        string
 	Reason       string
+	Trigger      string
 	Outcome      string
 	PlannedKinds int
 	ErrorClass   string
@@ -6666,10 +6667,11 @@ type ReadFallbackDecisionFields struct {
 
 // NewReadFallbackDecisionFields is the generated constructor for ReadFallbackDecisionFields -- every
 // field ReadFallbackDecision.Fields declares is a required parameter.
-func NewReadFallbackDecisionFields(orgID string, reason string, outcome string, plannedKinds int, errorClass string, rejection string) ReadFallbackDecisionFields {
+func NewReadFallbackDecisionFields(orgID string, reason string, trigger string, outcome string, plannedKinds int, errorClass string, rejection string) ReadFallbackDecisionFields {
 	return ReadFallbackDecisionFields{
 		OrgID:        orgID,
 		Reason:       reason,
+		Trigger:      trigger,
 		Outcome:      outcome,
 		PlannedKinds: plannedKinds,
 		ErrorClass:   errorClass,
@@ -6693,6 +6695,7 @@ func (f ReadFallbackDecisionFields) SlogArgs() []any {
 	return []any{
 		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
 		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"trigger", contextfabric.SanitizeLogAttr(f.Trigger),
 		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
 		"planned_kinds", f.PlannedKinds,
 		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
