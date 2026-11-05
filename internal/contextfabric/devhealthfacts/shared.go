@@ -1458,7 +1458,12 @@ import (
 // v285 -> v286: two ISO dates in a question are read as its range when the
 // interpreter read it as current (CHAOS-13010). An answer saved under v285 to
 // such a question holds a current-state read.
-const QueryVersion = "devhealthfacts.clickhouse.v286"
+//
+// v286 -> v287: teamWorkItemBreakdown joins the served run_operation catalogue
+// (a team's work-item cycle time, CHAOS-13001): the data catalogue lists it and a
+// question that read the investment basis for a team cycle time can now be
+// answered from the work-item basis. An answer saved under v286 cannot.
+const QueryVersion = "devhealthfacts.clickhouse.v287"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

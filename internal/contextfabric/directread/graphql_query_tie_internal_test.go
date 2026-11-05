@@ -54,6 +54,7 @@ func TestPinsAreTheVariablesThatTellARootsCandidatesApart(t *testing.T) {
 		"investmentFull":                {"batch.filters.scope.level": "ORG"},
 		"investmentBreakdownTeam":       {"batch.filters.scope.level": "TEAM"},
 		"investmentBreakdownRepository": {"batch.filters.scope.level": "REPO"},
+		"teamWorkItemBreakdown":         {"batch.filters.scope.level": "ORG"},
 	}
 	got := map[string]map[string]string{}
 	for _, cand := range analytics.candidates {

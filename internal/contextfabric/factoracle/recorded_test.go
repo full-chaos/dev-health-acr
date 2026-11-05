@@ -87,6 +87,9 @@ func requireCaptureContractsUnchanged(t *testing.T, policy *directread.GraphQLPo
 func operationsWithChangedContract(policy *directread.GraphQLPolicy, baseline map[string]string) []string {
 	var changed []string
 	for _, op := range policy.Catalogue().Operations(directread.CallerUnrestricted) {
+		if _, notRecorded := notRecordedOperations[op.Name]; notRecorded {
+			continue
+		}
 		if baseline[op.Name] != contractDigest(op) {
 			changed = append(changed, op.Name)
 		}
@@ -385,7 +388,9 @@ var notRecordedRoots = map[string]string{}
 // operation that has a case, so the list cannot outlive a re-capture. The
 // capture of CHAOS-12808 records every operation, so the list is empty; an
 // operation added here again must say why the capture lacks it.
-var notRecordedOperations = map[string]string{}
+var notRecordedOperations = map[string]string{
+	"teamWorkItemBreakdown": "CHAOS-13001: the venue (ops 0b763a85) does not register the TeamWorkItemBreakdown document (ops 5c321277, CHAOS-13017), so the capture of CHAOS-12808 holds no case for it; record it when the venue serves the document",
+}
 
 // replayDivergence is what the venue measured for a root and what the
 // recorded replay of the same capture gives instead.
@@ -556,8 +561,10 @@ func darkCases(t *testing.T, _ Recording, dark map[string]bool) []string {
 // listed as not recorded once one of its shapes has a case.
 func TestTheCaptureRecordsTheScopedInvestmentShapes(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
-	if len(notRecordedOperations) != 0 {
-		t.Fatalf("not recorded operations = %v, want none: the capture records every operation", notRecordedOperations)
+	for name := range notRecordedOperations {
+		if name != "teamWorkItemBreakdown" {
+			t.Fatalf("not recorded operation %s: the capture records every operation but teamWorkItemBreakdown (CHAOS-13001)", name)
+		}
 	}
 	policy := mustPolicy(t)
 	shapes, err := Shapes(policy)
@@ -571,6 +578,9 @@ func TestTheCaptureRecordsTheScopedInvestmentShapes(t *testing.T) {
 	scoped := map[string]int{}
 	for _, shape := range shapes {
 		if shape.Root != "analytics" {
+			continue
+		}
+		if _, notRecorded := notRecordedOperations[shape.Operation]; notRecorded {
 			continue
 		}
 		if cases[shape.ID()] == 0 {

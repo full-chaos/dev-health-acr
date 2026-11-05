@@ -70,6 +70,7 @@ var operationCaps = map[string][]capSpec{
 	"recommendations":                {},
 	"securityOverview":               {},
 	"sourceHealth":                   {},
+	"teamWorkItemBreakdown":          {{"batch.breakdowns[*].topN", "analytics.breakdowns[*].items"}},
 	"throughputForecast":             {},
 	"workGraphArtifacts":             {{"filters.limit", "workGraphArtifacts.rows"}},
 	"workGraphEdges":                 {{"filters.limit", "workGraphEdges.edges"}},

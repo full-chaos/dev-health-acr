@@ -26,7 +26,7 @@ func TestGraphQLTwoOperationRootsResolveToTheStricterOperation(t *testing.T) {
 	if got := catalog.Operations(); !slices.Equal(got, []string{"acrRepositoryScopes", "catalogValues"}) {
 		t.Fatalf("catalog candidate order %v", got)
 	}
-	if got := analytics.Operations(); !slices.Equal(got, []string{"investmentBreakdown", "investmentBreakdownTeam", "investmentFull", "investmentBreakdownRepository"}) {
+	if got := analytics.Operations(); !slices.Equal(got, []string{"investmentBreakdown", "investmentBreakdownTeam", "teamWorkItemBreakdown", "investmentFull", "investmentBreakdownRepository"}) {
 		t.Fatalf("analytics candidate order %v", got)
 	}
 	batch := `{breakdowns: [{dimension: THEME, measure: COUNT, dateRange: {startDate: "2026-09-01", endDate: "2026-09-28"}}]}`
