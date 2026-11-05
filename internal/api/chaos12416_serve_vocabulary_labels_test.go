@@ -59,7 +59,6 @@ func (g storedRowReuseGate) FindReusable(context.Context, storage.Principal, cf.
 
 // labelsRig is the ranking surface's real engine behind the real routes.
 type labelsRig struct {
-	enabled bool
 	store   rankingSurfaceStore
 	deps    cf.EngineDependencies
 	options cf.EngineOptions
@@ -67,7 +66,7 @@ type labelsRig struct {
 	token   string
 }
 
-func newLabelsRig(t *testing.T, enabled bool) *labelsRig {
+func newLabelsRig(t *testing.T) *labelsRig {
 	t.Helper()
 	members := []cf.CohortMember{}
 	bundle := cf.CanonicalFactBundle{Facts: []cf.CanonicalFact{}, Coverage: cf.Coverage{Sources: []cf.SourceObservation{}, DegradedReasons: []string{}}, Version: "ops-labels"}
@@ -94,7 +93,7 @@ func newLabelsRig(t *testing.T, enabled bool) *labelsRig {
 	}
 	store := rankingSurfaceStore{memoryinvestigation.NewStore()}
 	next := 0
-	rig := &labelsRig{enabled: enabled, store: store}
+	rig := &labelsRig{store: store}
 	rig.deps = cf.EngineDependencies{
 		Telemetry: cf.NewSlogEngineTelemetry(slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil))), Interpreter: rankingSurfaceInterpreter{},
 		Graph: rankingSurfaceGraph{surfaceGraph: surfaceGraph{resolution: cf.SubjectResolution{Candidates: []cf.SubjectCandidate{}, Committed: []cf.SubjectRef{members[0].Subject}}}, cohort: cohort},
@@ -115,7 +114,6 @@ func (r *labelsRig) serve(t *testing.T, deps cf.EngineDependencies) (*httptest.S
 		t.Fatal(err)
 	}
 	app, token := newParityHostedApp(t, engine, r.store)
-	app.config.ContextFabricVocabularyLabelsEnabled = r.enabled
 	serveAsNarrowedUser(t, app)
 	server := httptest.NewTLSServer(app.Handler())
 	t.Cleanup(server.Close)
@@ -181,7 +179,7 @@ func assertAnswerWords(t *testing.T, label string, labels map[string]string, sta
 // Fresh, reused, by id, projected, over MCP: the real engine, the real routes,
 // and the narrowed user's principal. The stored row carries no word throughout.
 func TestEveryReadOfAnAnswerCarriesItsWords(t *testing.T) {
-	rig := newLabelsRig(t, true)
+	rig := newLabelsRig(t)
 	principal := storage.Principal{OrgID: callerOrgID}
 
 	fresh := decodeLabeled(t, rig.create(t, rig.server))
@@ -245,7 +243,6 @@ func TestTheEventStreamCarriesTheWords(t *testing.T) {
 	investigator := investigatorOf(answering(t, "context_fabric_investigation_result.v1.json", nil))
 	jsonApp, jsonToken, _ := newStreamTestApp(t, investigator)
 	streamApp, streamToken, _ := newStreamTestApp(t, investigator)
-	jsonApp.config.ContextFabricVocabularyLabelsEnabled, streamApp.config.ContextFabricVocabularyLabelsEnabled = true, true
 	body := investigationRequestBody()
 	answer := serveJSON(t, jsonApp, jsonToken, body)
 	stream := serveStream(t, streamApp, streamToken, body, nil)
@@ -258,11 +255,10 @@ func TestTheEventStreamCarriesTheWords(t *testing.T) {
 	}
 }
 
-// A row stored before this change gets its words on read, in both flag states
-// for the sources, with no rewrite and no migration.
+// A row stored before this change gets its words on read, with no rewrite and no migration.
 func TestAStoredRowGetsItsWordsWithNoRewrite(t *testing.T) {
-	for _, enabled := range []bool{true, false} {
-		t.Run(fmt.Sprintf("enabled=%v", enabled), func(t *testing.T) {
+	{
+		{
 			store := memoryinvestigation.NewStore()
 			row := validContextFabricInvestigationResult()
 			row.ResultID = "result_labels_legacy1"
@@ -275,7 +271,6 @@ func TestAStoredRowGetsItsWordsWithNoRewrite(t *testing.T) {
 			app, token := newParityHostedApp(t, investigatorFunc(func(context.Context, storage.Principal, cf.InvestigationRequest) (cf.InvestigationResult, error) {
 				return cf.InvestigationResult{}, nil
 			}), store)
-			app.config.ContextFabricVocabularyLabelsEnabled = enabled
 			serveAsNarrowedUser(t, app)
 
 			recorder := httptest.NewRecorder()
@@ -287,11 +282,7 @@ func TestAStoredRowGetsItsWordsWithNoRewrite(t *testing.T) {
 			if got := served.Coverage.Sources[0]; got.Label != "Canonical facts — blockers" || got.StateLabel != "partly included" {
 				t.Errorf("source reads %q / %q", got.Label, got.StateLabel)
 			}
-			if enabled {
-				assertStatusWord(t, served)
-			} else if strings.Contains(recorder.Body.String(), "vocabulary_labels") {
-				t.Errorf("off served the key: %s", recorder.Body.String())
-			}
+			assertStatusWord(t, served)
 
 			after, err := store.Get(context.Background(), storage.Principal{OrgID: callerOrgID}, row.ResultID)
 			if err != nil {
@@ -302,7 +293,7 @@ func TestAStoredRowGetsItsWordsWithNoRewrite(t *testing.T) {
 			if !bytes.Equal(beforeEncoded, afterEncoded) {
 				t.Fatalf("the read rewrote the row:\nbefore %s\n after %s", beforeEncoded, afterEncoded)
 			}
-		})
+		}
 	}
 }
 
@@ -314,39 +305,6 @@ func assertStatusWord(t *testing.T, result cf.InvestigationResult) {
 	}
 }
 
-// Off: no door serves the key, for the real engine's own answer.
-func TestOffNoDoorServesTheKey(t *testing.T) {
-	rig := newLabelsRig(t, false)
-	created := rig.create(t, rig.server)
-	if strings.Contains(string(created), "vocabulary_labels") {
-		t.Fatalf("create served the key: %s", created)
-	}
-	fresh := decodeLabeled(t, created)
-	for _, query := range []string{"", "?view=projection"} {
-		request, err := http.NewRequest(http.MethodGet, rig.server.URL+ContextFabricInvestigationsPath+"/"+fresh.ResultID+query, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		request.Header.Set("Authorization", "Bearer "+rig.token)
-		request.Header.Set("X-ACR-Client-Version", "1.2.5")
-		response, err := rig.server.Client().Do(request)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var body bytes.Buffer
-		if _, err := body.ReadFrom(response.Body); err != nil {
-			t.Fatal(err)
-		}
-		response.Body.Close()
-		if response.StatusCode != http.StatusOK {
-			t.Fatalf("read %q: %d %s", query, response.StatusCode, body.String())
-		}
-		if strings.Contains(body.String(), "vocabulary_labels") {
-			t.Fatalf("read %q served the key: %s", query, body.String())
-		}
-	}
-}
-
 func boundedLabelsApp(t *testing.T, results cf.InvestigationResultStore, answer cf.InvestigationResult) (*App, string, *lockedBuffer) {
 	t.Helper()
 	logs := &lockedBuffer{}
@@ -354,7 +312,6 @@ func boundedLabelsApp(t *testing.T, results cf.InvestigationResultStore, answer 
 		answer.RequestID = request.RequestID
 		return answer, nil
 	}), results, limits.ResourceBudget{MaxItems: 500, MaxTokens: 1 << 20, MaxBytes: 1 << 24}, logs)
-	app.config.ContextFabricVocabularyLabelsEnabled = true
 	app.config.MaxSerializedBytes = labelsCallerBytes
 	app.config.MaxItems = 500
 	return app, token, logs
@@ -550,7 +507,7 @@ func TestACreatedAnswerThatFitsOnlyWithFewerWordsStaysCanonical(t *testing.T) {
 func TestAProjectionOverTheCallerBoundCarriesTheWords(t *testing.T) {
 	answer := threeRollupProjectStatusResult("result_labels_bound04")
 	app, token, logs := boundedLabelsApp(t, memoryinvestigation.NewStore(), answer)
-	labeled, _ := cf.ServeVocabularyLabels(answer, true, 0)
+	labeled, _ := cf.ServeVocabularyLabels(answer, 0)
 	bounded, _, projectedBytes, _, _, fits := app.projectToCallerOption(labeled, answer, v1.ContextFabricInvestigationOptions{MaxDrivers: 10, MaxCohortMembers: 50, MaxEvidenceRefs: 100, MaxSerializedBytes: 1 << 20})
 	_, canonicalBytes, err := marshalContextFabricResponse(labeled)
 	if err != nil {
@@ -597,7 +554,7 @@ func assertProjectionStatusWord(t *testing.T, projection v1.ContextFabricAnswerP
 // the ones the full map had.
 func TestAProjectionShedsItsWordsBeforeItsRows(t *testing.T) {
 	answer := threeRollupProjectStatusResult("result_labels_bound05")
-	labeled, tier := cf.ServeVocabularyLabels(answer, true, 0)
+	labeled, tier := cf.ServeVocabularyLabels(answer, 0)
 	if tier != v1.ContextFabricVocabularyLabelsFull || labeled.VocabularyLabels == nil {
 		t.Fatalf("the fixture has no words: %v", labeled.VocabularyLabels)
 	}
@@ -659,28 +616,23 @@ func TestAProjectionsTierNamesWhatItHolds(t *testing.T) {
 // to the byte.
 func TestAClientTurnIsNeverRefusedForAWord(t *testing.T) {
 	fixture := manyFactsFixture(40, 600)
-	post := func(enabled bool, budget int) *httptest.ResponseRecorder {
+	post := func(budget int) *httptest.ResponseRecorder {
 		t.Helper()
 		rig := newClientRouteRig(t, fixture)
-		rig.app.config.ContextFabricVocabularyLabelsEnabled = enabled
 		serveAsNarrowedUser(t, rig.app)
 		return rig.post(t, v1.ContextFabricSynthesisModeClient, func(request *v1.ContextFabricInvestigationRequest) {
 			request.Options.MaxSerializedBytes = budget
 		})
 	}
-	whole := post(false, v1.ContextFabricSerializedBytesMax)
+	whole := post(v1.ContextFabricSerializedBytesMax)
 	if decodeEnvelope(t, whole).SynthesisInput == nil || whole.Body.Len() <= v1.ContextFabricSerializedBytesMin {
 		t.Fatalf("no synthesis input in a %d byte body: this was not the turn under test", whole.Body.Len())
 	}
 	served, carried := 0, 0
 	for budget := v1.ContextFabricSerializedBytesMin; budget <= whole.Body.Len()+1<<12; budget += 97 {
-		plain := post(false, budget)
-		labeled := post(true, budget)
-		if labeled.Code != plain.Code {
-			t.Fatalf("budget %d: answered %d with words, %d with none: %s", budget, labeled.Code, plain.Code, labeled.Body.String())
-		}
+		labeled := post(budget)
 		if labeled.Code != http.StatusOK {
-			continue
+			t.Fatalf("budget %d: refused with %d: %s", budget, labeled.Code, labeled.Body.String())
 		}
 		served++
 		if labeled.Body.Len() > budget {
@@ -707,9 +659,9 @@ func TestTheWordsBoundLeavesRoomForTheSynthesisInput(t *testing.T) {
 		}
 		return size
 	}
-	labeled, _ := cf.ServeVocabularyLabels(answer, true, 0)
+	labeled, _ := cf.ServeVocabularyLabels(answer, 0)
 	app := &App{config: AppConfig{MaxSerializedBytes: v1.ContextFabricSerializedBytesMax}}
-	statusOnly, _ := cf.ServeVocabularyLabels(answer, true, 0)
+	statusOnly, _ := cf.ServeVocabularyLabels(answer, 0)
 	statusOnly.VocabularyLabels = v1.ContextFabricStatusVocabularyLabels(labeled.VocabularyLabels)
 	for name, row := range map[string]struct {
 		caller int64
@@ -720,7 +672,7 @@ func TestTheWordsBoundLeavesRoomForTheSynthesisInput(t *testing.T) {
 		"one byte short of the status words":  {envelope(statusOnly) - 1, v1.ContextFabricVocabularyLabelsNone},
 	} {
 		t.Run(name, func(t *testing.T) {
-			served, tier := cf.ServeVocabularyLabels(answer, true, app.investigationWordsBound(answer, row.caller, input))
+			served, tier := cf.ServeVocabularyLabels(answer, app.investigationWordsBound(answer, row.caller, input))
 			if tier != row.tier {
 				t.Fatalf("tier %q, want %q", tier, row.tier)
 			}
@@ -858,7 +810,7 @@ type cutAnswerRig struct {
 // newCutAnswerRig serves the cut answer. The trim lowers it to partial. With no
 // facts its ranking row is unavailable, so authority corrects it to degraded,
 // and that is what puts a correction note on the answer.
-func newCutAnswerRig(t *testing.T, enabled, authority bool) *cutAnswerRig {
+func newCutAnswerRig(t *testing.T, authority bool) *cutAnswerRig {
 	t.Helper()
 	members := []cf.CohortMember{}
 	subjects := []cf.SubjectRef{}
@@ -897,7 +849,6 @@ func newCutAnswerRig(t *testing.T, enabled, authority bool) *cutAnswerRig {
 	}
 	logs := &lockedBuffer{}
 	app, token := newParityHostedAppWithLogs(t, engine, store, limits.ResourceBudget{MaxItems: 500, MaxTokens: 1 << 20, MaxBytes: 1 << 24}, logs)
-	app.config.ContextFabricVocabularyLabelsEnabled = enabled
 	app.config.ServerCompletenessAuthorityEnabled, app.config.ServerCompletenessAuthoritySymmetricEnabled = authority, authority
 	app.config.MaxSerializedBytes = v1.ContextFabricSerializedBytesMax
 	app.config.MaxItems = 500
@@ -910,7 +861,7 @@ func newCutAnswerRig(t *testing.T, enabled, authority bool) *cutAnswerRig {
 // bound, so the door reaches its projection only for a document handed over
 // larger than that bound, and a stub investigator is the one way to hand it over.
 // The document is the engine's; only the hand-over is stubbed.
-func (r *cutAnswerRig) overBoundDoor(t *testing.T, answer cf.InvestigationResult, enabled bool) func(int) (*httptest.ResponseRecorder, *lockedBuffer) {
+func (r *cutAnswerRig) overBoundDoor(t *testing.T, answer cf.InvestigationResult) func(int) (*httptest.ResponseRecorder, *lockedBuffer) {
 	t.Helper()
 	stored, err := r.store.Get(context.Background(), storage.Principal{OrgID: callerOrgID}, answer.ResultID)
 	if err != nil {
@@ -920,7 +871,6 @@ func (r *cutAnswerRig) overBoundDoor(t *testing.T, answer cf.InvestigationResult
 		t.Fatalf("the stored document carries the map: %v", stored.Result.VocabularyLabels)
 	}
 	app, token, logs := boundedLabelsApp(t, memoryinvestigation.NewStore(), stored.Result)
-	app.config.ContextFabricVocabularyLabelsEnabled = enabled
 	serveAsNarrowedUser(t, app)
 	return func(bound int) (*httptest.ResponseRecorder, *lockedBuffer) {
 		t.Helper()
@@ -977,7 +927,7 @@ func bareBytes(t *testing.T, answer cf.InvestigationResult) int {
 // status word, the note and the limitation are all in the body, and the document
 // stays canonical.
 func TestACutAnswerKeepsItsStatusWordsNoteAndLimitation(t *testing.T) {
-	rig := newCutAnswerRig(t, true, true)
+	rig := newCutAnswerRig(t, true)
 	whole, answer := rig.whole(t)
 	if answer.StatusCorrection == nil || answer.VocabularyLabels[v1.ContextFabricStatusCorrectionNoteKey] == "" {
 		t.Fatalf("no correction note on this answer, so this proves nothing: status %q %+v", answer.Status, answer.StatusCorrection)
@@ -1010,7 +960,7 @@ func TestACutAnswerKeepsItsStatusWordsNoteAndLimitation(t *testing.T) {
 // (b) A trimmed answer's status is partial, and with no map its pill reads the
 // neutral word. The status tier keeps the partial word.
 func TestATrimmedAnswersPillReadsThePartialWord(t *testing.T) {
-	rig := newCutAnswerRig(t, true, false)
+	rig := newCutAnswerRig(t, false)
 	whole, answer := rig.whole(t)
 	if answer.Status != v1.ContextFabricInvestigationPartial || answer.StatusCorrection != nil {
 		t.Fatalf("status %q correction %+v: the trim itself must be what lowered it", answer.Status, answer.StatusCorrection)
@@ -1029,9 +979,9 @@ func TestATrimmedAnswersPillReadsThePartialWord(t *testing.T) {
 // result left out, and at one byte short of its full map it keeps the same
 // words, each read against its own completeness.
 func TestACutProjectionKeepsItsStatusWordsNoteAndLimitation(t *testing.T) {
-	rig := newCutAnswerRig(t, true, true)
+	rig := newCutAnswerRig(t, true)
 	_, answer := rig.whole(t)
-	door := rig.overBoundDoor(t, answer, true)
+	door := rig.overBoundDoor(t, answer)
 	first, _ := door(bareBytes(t, answer) - 1)
 	if first.Code != http.StatusOK {
 		t.Fatalf("over the caller's bound: %d %s", first.Code, first.Body.String())
@@ -1074,7 +1024,7 @@ func TestAProjectionThatLeftTheFullResultOutNeverReadsFullAnswer(t *testing.T) {
 	answer.Status = v1.ContextFabricInvestigationComplete
 	answer.Completeness.State = v1.ContextFabricAnswerCompletenessComplete
 	answer.Completeness.TerminalStatus = v1.ContextFabricInvestigationComplete
-	labeled, _ := cf.ServeVocabularyLabels(answer, true, 0)
+	labeled, _ := cf.ServeVocabularyLabels(answer, 0)
 	if labeled.VocabularyLabels["answer_status:complete"] != "Full answer" {
 		t.Fatalf("the canonical word is %q: this proves nothing", labeled.VocabularyLabels["answer_status:complete"])
 	}
@@ -1183,7 +1133,7 @@ func TestAStampedProjectionByIDIsNotRefusedForItsStamps(t *testing.T) {
 // still declares the full result left out.
 func TestAStampedProjectionCutsNoRowForItsStamps(t *testing.T) {
 	answer := withUnstampedSources(threeRollupProjectStatusResult("result_labels_bound09"))
-	labeled, _ := cf.ServeVocabularyLabels(answer, true, 0)
+	labeled, _ := cf.ServeVocabularyLabels(answer, 0)
 	app := &App{}
 	options := v1.ContextFabricInvestigationOptions{MaxDrivers: 10, MaxCohortMembers: 50, MaxEvidenceRefs: 100, MaxSerializedBytes: 1 << 20}
 	whole, _, _, _, _, fits := app.projectToCallerOption(labeled, answer, options)
@@ -1232,7 +1182,7 @@ func TestTheUnstampedProjectionCarriesNoMap(t *testing.T) {
 // The same on the read by id: no full result is left out there, and the tier is
 // the projection's own.
 func TestACutProjectionByIDKeepsItsStatusWordsNoteAndLimitation(t *testing.T) {
-	rig := newCutAnswerRig(t, true, true)
+	rig := newCutAnswerRig(t, true)
 	_, answer := rig.whole(t)
 	first := readByID(t, rig.app, rig.token, answer.ResultID, "view=projection")
 	if first.Code != http.StatusOK {
@@ -1260,11 +1210,9 @@ func TestACutProjectionByIDKeepsItsStatusWordsNoteAndLimitation(t *testing.T) {
 // (d) A bound too small for the status tier serves no map, and the answer is the
 // one a reader gets with no words at all, on both documents.
 func TestABoundTooSmallForTheStatusWordsLeavesTheAnswerUnharmed(t *testing.T) {
-	plain := newCutAnswerRig(t, false, true)
-	plainWhole, plainAnswer := plain.whole(t)
-	if plainAnswer.VocabularyLabels != nil {
-		t.Fatalf("off served a map: %v", plainAnswer.VocabularyLabels)
-	}
+	rig := newCutAnswerRig(t, true)
+	_, plainAnswer := rig.whole(t)
+	plainBytes := bareBytes(t, plainAnswer)
 	plainSentence := cutSentence(t, plainAnswer.Limitations)
 	assertUnharmed := func(t *testing.T, label string, recorder *httptest.ResponseRecorder, wantBytes int) {
 		t.Helper()
@@ -1276,9 +1224,8 @@ func TestABoundTooSmallForTheStatusWordsLeavesTheAnswerUnharmed(t *testing.T) {
 		}
 	}
 
-	rig := newCutAnswerRig(t, true, true)
-	canonical := rig.post(t, plainWhole.Body.Len())
-	assertUnharmed(t, "canonical", canonical, plainWhole.Body.Len())
+	canonical := rig.post(t, plainBytes)
+	assertUnharmed(t, "canonical", canonical, plainBytes)
 	served := decodeLabeled(t, canonical.Body.Bytes())
 	if served.Status != plainAnswer.Status || len(served.ClaimedFacts) != len(plainAnswer.ClaimedFacts) || served.DirectJudgment != plainAnswer.DirectJudgment {
 		t.Fatalf("the answer changed: status %q/%q claims %d/%d", served.Status, plainAnswer.Status, len(served.ClaimedFacts), len(plainAnswer.ClaimedFacts))
@@ -1287,11 +1234,17 @@ func TestABoundTooSmallForTheStatusWordsLeavesTheAnswerUnharmed(t *testing.T) {
 		t.Fatalf("the shed did not name its tier:\n%s", rig.logs.String())
 	}
 
-	plainProjection, _ := plain.overBoundDoor(t, plainAnswer, false)(plainWhole.Body.Len() - 1)
-	if plainProjection.Code != http.StatusOK || decodeProjection(t, plainProjection.Body.Bytes()).VocabularyLabels != nil {
+	// The projection with no map is the smallest one the door serves: shrink the
+	// bound until the map is gone, then hold the door to exactly that size.
+	door := rig.overBoundDoor(t, plainAnswer)
+	plainProjection, _ := door(plainBytes - 1)
+	for plainProjection.Code == http.StatusOK && strings.Contains(plainProjection.Body.String(), "vocabulary_labels") {
+		plainProjection, _ = door(plainProjection.Body.Len() - 1)
+	}
+	if plainProjection.Code != http.StatusOK {
 		t.Fatalf("plain projection: %d %s", plainProjection.Code, plainProjection.Body.String())
 	}
-	projected, logs := rig.overBoundDoor(t, plainAnswer, true)(plainProjection.Body.Len())
+	projected, logs := door(plainProjection.Body.Len())
 	assertUnharmed(t, "projection", projected, plainProjection.Body.Len())
 	if !decodeProjection(t, projected.Body.Bytes()).ProjectionBudget.FullResultOmitted {
 		t.Fatal("the full result is not declared left out")

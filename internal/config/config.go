@@ -188,17 +188,6 @@ type Config struct {
 	// deploy hold the shape (lead ruling on CHAOS-12607). The forecast's
 	// scalar percentiles and dates do not depend on it.
 	CompletionDistributionEnabled bool
-	// ContextFabricVocabularyLabelsEnabled (CHAOS-12416,
-	// ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED) serves the
-	// vocabulary_labels map at both doors that serve a result
-	// (contextfabric.ServeVocabularyLabels). Default OFF, because a deploy
-	// order cannot protect main: the result root is additionalProperties:false,
-	// and acr and web roll separately, so a consumer on a pin that does not
-	// carry the field fails every answer that holds the map. Turn it on after
-	// every consumer's pin is deployed. CHAOS-12458 removes the flag
-	// then. Off serves no map; coverage.sources[] words are stamped either way,
-	// because those fields are on every pin.
-	ContextFabricVocabularyLabelsEnabled bool
 	// ContextFabricInvestmentTreemapEnabled (CHAOS-12521,
 	// ACR_CONTEXT_FABRIC_INVESTMENT_TREEMAP_ENABLED) turns on the
 	// investment_theme_share render rule. Default OFF, for the same reason as

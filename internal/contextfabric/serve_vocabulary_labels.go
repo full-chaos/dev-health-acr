@@ -32,7 +32,6 @@ import (
 //   - a stored row's raw source ids in subject labels, why_relevant and graph
 //     driver text read in reader words (withReaderSubjectText, CHAOS-12619);
 //     like the series words they need no flag and shed with nothing.
-//   - enabled off serves no map (ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED).
 //
 // A word never costs an answer, and it never costs a row: the words are added
 // after the engine fits the document. maxBytes is the bound the door enforces,
@@ -42,27 +41,24 @@ import (
 // stamped words. When none is within maxBytes the input stands, and the door
 // refuses or projects it exactly as it would with no words. A non-positive
 // maxBytes measures nothing: the caller bounds what it builds from the copy. The
-// tier is the one this copy reached, and off when enabled is off.
-func ServeVocabularyLabels(result InvestigationResult, enabled bool, maxBytes int64) (InvestigationResult, contractsv1.ContextFabricVocabularyLabelsTier) {
+// tier is the one this copy reached.
+func ServeVocabularyLabels(result InvestigationResult, maxBytes int64) (InvestigationResult, contractsv1.ContextFabricVocabularyLabelsTier) {
 	result.VocabularyLabels = nil
 	result.RenderShapes = withDriverSeriesWords(result.RenderShapes)
 	result = ReaderEvidenceLabels(result)
 	result = withReaderSubjectText(result)
 	stamped := withStampedSourceWords(result)
-	tier := contractsv1.ContextFabricVocabularyLabelsOff
-	if enabled {
-		words := composeVocabularyLabels(stamped)
-		labeled := stamped
-		labeled.VocabularyLabels = words
-		if withinServedBound(labeled, maxBytes) {
-			return labeled, contractsv1.ContextFabricVocabularyLabelsFull
-		}
-		labeled.VocabularyLabels = contractsv1.ContextFabricStatusVocabularyLabels(words)
-		if labeled.VocabularyLabels != nil && withinServedBound(labeled, maxBytes) {
-			return labeled, contractsv1.ContextFabricVocabularyLabelsStatusOnly
-		}
-		tier = contractsv1.ContextFabricVocabularyLabelsNone
+	words := composeVocabularyLabels(stamped)
+	labeled := stamped
+	labeled.VocabularyLabels = words
+	if withinServedBound(labeled, maxBytes) {
+		return labeled, contractsv1.ContextFabricVocabularyLabelsFull
 	}
+	labeled.VocabularyLabels = contractsv1.ContextFabricStatusVocabularyLabels(words)
+	if labeled.VocabularyLabels != nil && withinServedBound(labeled, maxBytes) {
+		return labeled, contractsv1.ContextFabricVocabularyLabelsStatusOnly
+	}
+	tier := contractsv1.ContextFabricVocabularyLabelsNone
 	if withinServedBound(stamped, maxBytes) {
 		return stamped, tier
 	}

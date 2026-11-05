@@ -321,7 +321,7 @@ func (a *App) serveStoredInvestigationResultOn(w http.ResponseWriter, r *http.Re
 	// The stored row is not touched, so it gets them with no migration.
 	maximumBytes := int64(a.config.MaxSerializedBytes)
 	answer := a.withoutDisabledRenderShapes(result)
-	result, wordsTier := contextfabric.ServeVocabularyLabels(answer, a.config.ContextFabricVocabularyLabelsEnabled, maximumBytes)
+	result, wordsTier := contextfabric.ServeVocabularyLabels(answer, maximumBytes)
 	// The consumer projection is served from THIS route, through the
 	// same answerprojection.Project the MCP tool calls (CHAOS-3746
 	// codex round-1 F2). Before this, the API only ever returned the
@@ -340,7 +340,7 @@ func (a *App) serveStoredInvestigationResultOn(w http.ResponseWriter, r *http.Re
 		budget.MaxSerializedBytes = a.config.MaxSerializedBytes
 		// The canonical document may stand over the bound where its projection
 		// does not, so the words are measured on the projection below.
-		labeled, _ := contextfabric.ServeVocabularyLabels(answer, a.config.ContextFabricVocabularyLabelsEnabled, 0)
+		labeled, _ := contextfabric.ServeVocabularyLabels(answer, 0)
 		projection := answerprojection.Project(labeled, budget)
 		// Validate before emitting (codex round-6 F2). The route
 		// serves a DERIVED document, and the derivation runs over

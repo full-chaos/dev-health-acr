@@ -41,12 +41,10 @@ func TestAStoredEvidenceLabelServesInReaderWords(t *testing.T) {
 	t.Parallel()
 	result, want := storedLabelResult()
 	stored := result.EvidenceRefLabels[("acr:v1:repository:" + storedRepoID)]
-	for _, enabled := range []bool{false, true} {
-		served, _ := ServeVocabularyLabels(result, enabled, 0)
-		for ref, label := range want {
-			if got := served.EvidenceRefLabels[ref]; got != label {
-				t.Errorf("enabled %v: %s served %q, want %q", enabled, ref, got, label)
-			}
+	served, _ := ServeVocabularyLabels(result, 0)
+	for ref, label := range want {
+		if got := served.EvidenceRefLabels[ref]; got != label {
+			t.Errorf("%s served %q, want %q", ref, got, label)
 		}
 	}
 	if result.EvidenceRefLabels["acr:v1:repository:"+storedRepoID] != stored {
@@ -94,7 +92,7 @@ func TestASubjectLabelThatIsItsIDIsNoName(t *testing.T) {
 func TestAStoredEvidenceLabelIsRestatedInTheByteBoundFallback(t *testing.T) {
 	t.Parallel()
 	result, want := storedLabelResult()
-	served, _ := ServeVocabularyLabels(result, true, 1)
+	served, _ := ServeVocabularyLabels(result, 1)
 	for ref, label := range want {
 		if got := served.EvidenceRefLabels[ref]; got != label {
 			t.Errorf("%s served %q in the fallback, want %q", ref, got, label)
