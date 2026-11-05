@@ -652,6 +652,9 @@ func (o *Oracle) generatedCases(ctx context.Context) ([]ShapeCase, error) {
 					sets = append(sets, scopedInvestmentVariables(o.Window, dimension, measure, level, id))
 				}
 			}
+		case "teamWorkItemBreakdown":
+			// The work-item basis: TEAM x CYCLE_TIME_HOURS (useInvestment is forced false by the policy, CHAOS-13001).
+			sets = append(sets, workItemTeamVariables(o.Window))
 		case "capacityForecast", "capacityCompletionDistribution":
 			sets = append(sets, map[string]any{"input": map[string]any{"teamId": team, "historyDays": 90, "simulations": 1000}})
 		case "capacityForecasts":
@@ -797,6 +800,15 @@ func scopedInvestmentVariables(w Window, dimension, measure, level, id string) m
 func investmentVariables(w Window, dimension string) map[string]any {
 	return map[string]any{"batch": map[string]any{"breakdowns": []any{map[string]any{
 		"dimension": dimension, "measure": "COUNT",
+		"dateRange": map[string]any{"startDate": w.startDate(), "endDate": w.endDate()},
+		"topN":      100,
+	}}}}
+}
+
+// workItemTeamVariables is the request of teamWorkItemBreakdown: every team's work-item cycle time over the window.
+func workItemTeamVariables(w Window) map[string]any {
+	return map[string]any{"batch": map[string]any{"breakdowns": []any{map[string]any{
+		"dimension": "TEAM", "measure": "CYCLE_TIME_HOURS",
 		"dateRange": map[string]any{"startDate": w.startDate(), "endDate": w.endDate()},
 		"topN":      100,
 	}}}}

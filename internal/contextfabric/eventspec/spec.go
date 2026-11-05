@@ -5118,7 +5118,7 @@ var (
 	graphqlQueryOperations   = []string{
 		"acrRepositoryScopes", "capacityCompletionDistribution", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad",
 		"complexityTimeseries", "compoundingRisk", "hotspots", "investmentBreakdown", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentFull",
-		"securityOverview", "throughputForecast", "workGraphArtifacts", "workGraphEdges",
+		"securityOverview", "teamWorkItemBreakdown", "throughputForecast", "workGraphArtifacts", "workGraphEdges",
 		"workGraphFlow",
 	}
 )

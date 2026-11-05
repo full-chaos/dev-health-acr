@@ -50,7 +50,7 @@ func TestGraphQLTwoOperationRootOverlapIsPinned(t *testing.T) {
 		{root: "catalog", strict: "acrRepositoryScopes", other: "catalogValues", otherOnly: []string{"dimension"}},
 		{
 			root: "analytics", strict: "investmentBreakdown", other: "investmentFull",
-			scoped:      []string{"investmentBreakdownRepository", "investmentBreakdownTeam"},
+			scoped:      []string{"investmentBreakdownRepository", "investmentBreakdownTeam", "teamWorkItemBreakdown"},
 			scopedRules: []string{"batch.filters.scope.ids", "batch.filters.scope.level"},
 			onlyStrict: []string{
 				"analytics.evidenceQualityDistribution", "analytics.evidenceQualityStats.__typename",
@@ -95,7 +95,15 @@ func TestGraphQLTwoOperationRootOverlapIsPinned(t *testing.T) {
 			if restricted := s.Scope(directread.CallerRestricted); restricted.Served && !restricted.AggregateOnly || s.CostClass != a.CostClass || s.DeadlineSeconds != a.DeadlineSeconds || s.MaxInFlightPerOrg != a.MaxInFlightPerOrg {
 				t.Fatalf("%s: caller class, cost, deadline or concurrency differs from %s", name, a.Name)
 			}
-			if got := keyDiff(outputSet(a), outputSet(s)); len(got) != 0 || len(keyDiff(outputSet(s), outputSet(a))) != 0 {
+			if name == "teamWorkItemBreakdown" {
+				// Its outputs are the strict entry's but the two evidence-quality JSON outputs, withheld on the
+				// work-item basis (CHAOS-13018).
+				want := keyDiff(outputSet(a), outputSet(s))
+				sort.Strings(want)
+				if !slices.Equal(want, []string{"analytics.evidenceQualityDistribution", "analytics.evidenceQualityStats.bandCounts"}) || len(keyDiff(outputSet(s), outputSet(a))) != 0 {
+					t.Errorf("%s: outputs differ from %s by %v, want only the two evidence-quality JSON outputs", name, a.Name, want)
+				}
+			} else if got := keyDiff(outputSet(a), outputSet(s)); len(got) != 0 || len(keyDiff(outputSet(s), outputSet(a))) != 0 {
 				t.Errorf("%s: outputs differ from %s", name, a.Name)
 			}
 			va, vs := normalizedRules(a), normalizedRules(s)
@@ -106,8 +114,14 @@ func TestGraphQLTwoOperationRootOverlapIsPinned(t *testing.T) {
 				}
 			}
 			sort.Strings(differ)
-			if len(va) != len(vs) || !slices.Equal(differ, p.scopedRules) {
-				t.Errorf("%s: variable rules differing from %s: %v, want %v", name, a.Name, differ, p.scopedRules)
+			wantRules := p.scopedRules
+			if name == "teamWorkItemBreakdown" {
+				// The work-item basis (CHAOS-13001): TEAM x CYCLE_TIME_HOURS with useInvestment forced false,
+				// the ORG scope of the strict entry unchanged.
+				wantRules = []string{"batch.breakdowns[*].dimension", "batch.breakdowns[*].measure", "batch.useInvestment"}
+			}
+			if len(va) != len(vs) || !slices.Equal(differ, wantRules) {
+				t.Errorf("%s: variable rules differing from %s: %v, want %v", name, a.Name, differ, wantRules)
 			}
 		}
 		for _, op := range []*directread.OperationPolicy{a, b} {
