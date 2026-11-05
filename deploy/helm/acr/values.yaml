@@ -328,6 +328,10 @@ contextFabric:
   # repositories; keep false until the ops pin holds sizedUnitCount and the
   # proofs are re-run.
   investmentRepositoryFromOpsEnabled: false
+  # CHAOS-12690 I2: read a team's investment mix from the ops
+  # investmentBreakdownTeam answers (owner-share weighted). Keep false until
+  # the ops pin holds sizedUnitCount and the team proofs are re-run.
+  investmentTeamFromOpsEnabled: false
   # CHAOS-12582: serves the investment_repository_flow sankey (one team's effort
   # from its repositories to the themes). selected_by is a closed enum, so keep
   # false until web's and ask-dev's pins hold the rule. Its own switch: the

@@ -104,7 +104,7 @@ func TestCHAOS12690RepositoryMixIsTheOpsAnswer(t *testing.T) {
 			t.Errorf("%s = %v, want %s", field, got, want)
 		}
 	}
-	if reasons := servedReasons(result, sunburstRepo); strings.Contains(reasons, repoOpsWithheldPrefix) {
+	if reasons := servedReasons(result, sunburstRepo); strings.Contains(reasons, opsMixWithheldPrefix) {
 		t.Errorf("a full answer carries a withheld reason: %q", reasons)
 	}
 }
@@ -130,7 +130,7 @@ func TestCHAOS12690SizingCoverageNotServedIsNamedNotZero(t *testing.T) {
 			t.Errorf("%s is served although ops did not serve the sized unit count", field)
 		}
 	}
-	if reasons := servedReasons(result, sunburstRepo); !strings.Contains(reasons, repoOpsWithheldPrefix+": "+RepoOpsWithheldNoSizing) {
+	if reasons := servedReasons(result, sunburstRepo); !strings.Contains(reasons, opsMixWithheldPrefix+": "+RepoOpsWithheldNoSizing) {
 		t.Errorf("reasons %q lack the sizing reason", reasons)
 	}
 }
@@ -162,7 +162,7 @@ func TestCHAOS12690RefusedOrUnreadableCallsServeNoFact(t *testing.T) {
 			if fact := investmentFactOf(result, sunburstRepo); fact != nil {
 				t.Fatalf("a fact is served: %+v", fact.Fields)
 			}
-			if reasons := servedReasons(result, sunburstRepo); !strings.Contains(reasons, repoOpsWithheldPrefix) {
+			if reasons := servedReasons(result, sunburstRepo); !strings.Contains(reasons, opsMixWithheldPrefix) {
 				t.Fatalf("no named reason: %q", reasons)
 			}
 		})
@@ -188,11 +188,11 @@ func TestCHAOS12690ReadCapNamesTheRepositoriesPastIt(t *testing.T) {
 
 func TestCHAOS12690VersionJoinsTheReuseKeyOnlyWhenOn(t *testing.T) {
 	t.Parallel()
-	if QueryVersionFor(false) != QueryVersion {
+	if QueryVersionFor(false, false) != QueryVersion {
 		t.Fatal("switch off must keep the version")
 	}
-	if QueryVersionFor(true) == QueryVersion || !strings.HasPrefix(QueryVersionFor(true), QueryVersion) {
-		t.Fatalf("switch on version %q", QueryVersionFor(true))
+	if QueryVersionFor(true, false) == QueryVersion || !strings.HasPrefix(QueryVersionFor(true, false), QueryVersion) || QueryVersionFor(false, true) == QueryVersionFor(true, false) || QueryVersionFor(true, true) == QueryVersionFor(true, false) {
+		t.Fatalf("switch on version %q", QueryVersionFor(true, false))
 	}
 	on, off := newInvestmentProvider(nil), newInvestmentProvider(nil)
 	on.repositoryFromOps = true
@@ -223,7 +223,7 @@ func TestCHAOS12690DisagreeingThemeAndSubcategoryAnswersServeNoFact(t *testing.T
 			if fact := investmentFactOf(result, sunburstRepo); fact != nil {
 				t.Fatalf("a fact is served over disagreeing answers: bugfix=%v", fact.Fields[contextfabric.FactFieldThemeQualityBugfix].Number)
 			}
-			if reasons := servedReasons(result, sunburstRepo); !strings.Contains(reasons, repoOpsWithheldPrefix) {
+			if reasons := servedReasons(result, sunburstRepo); !strings.Contains(reasons, opsMixWithheldPrefix) {
 				t.Fatalf("no named reason: %q", reasons)
 			}
 		})
