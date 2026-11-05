@@ -108,7 +108,9 @@ func TestScopedInvestmentEntriesAtTheEdge(t *testing.T) {
 			{label: "sankey", vars: opMerge(scopedBreakdownVars(map[string]any{"level": e.level, "ids": ids(e.owned)}), "batch.sankey", map[string]any{"path": []any{"THEME"}, "measure": "COUNT"}), want: directread.RefusalBasisDependentShape},
 			{label: "what_repos", vars: opMerge(scopedBreakdownVars(map[string]any{"level": e.level, "ids": ids(e.owned)}), "batch.filters.what.repos", []any{"acme/a"}), want: directread.RefusalBasisDependentShape},
 			{label: "use_investment_from_client", vars: opMerge(scopedBreakdownVars(map[string]any{"level": e.level, "ids": ids(e.owned)}), "batch.useInvestment", false), want: directread.RefusalVariableNotAllowed},
-			{label: "restricted_caller", principal: opRestrictedA(), vars: scopedBreakdownVars(map[string]any{"level": e.level, "ids": ids(e.owned)}), want: directread.RefusalOperationNotServedForCaller, reasonHas: k14Restricted.Reason},
+		}
+		if e.level == "TEAM" {
+			cases = append(cases, tc{label: "restricted_caller", principal: opRestrictedA(), vars: scopedBreakdownVars(map[string]any{"level": e.level, "ids": ids(e.owned)}), want: directread.RefusalOperationNotServedForCaller, reasonHas: k14Restricted.Reason})
 		}
 		for i, id := range e.outside {
 			cases = append(cases, tc{label: "outside_grant_" + string(rune('a'+i)), vars: scopedBreakdownVars(map[string]any{"level": e.level, "ids": ids(id)}), want: directread.RefusalDeniedOrNotFound})
@@ -248,7 +250,7 @@ func TestGraphQLAnalyticsMapsTheScopeToItsEntry(t *testing.T) {
 		{"TEAM_empty_ids", `{scope: {level: TEAM, ids: []}}`, opUnrestricted(opOrgA), ""},
 		{"TEAM_ids_omitted", `{scope: {level: TEAM}}`, opUnrestricted(opOrgA), ""},
 		{"TEAM_restricted", `{scope: {level: TEAM, ids: ["` + opTeamT + `"]}}`, opRestrictedA(), directread.RefusalOperationNotServedForCaller},
-		{"REPO_restricted", `{scope: {level: REPO, ids: ["` + opRepo(opRepoA) + `"]}}`, opRestrictedA(), directread.RefusalOperationNotServedForCaller},
+		{"REPO_restricted_ungranted", `{scope: {level: REPO, ids: ["` + opRepo(opRepoB) + `"]}}`, opRestrictedA(), directread.RefusalDeniedOrNotFound},
 	} {
 		t.Run(c.label, func(t *testing.T) {
 			h.listener.reset()
@@ -261,6 +263,20 @@ func TestGraphQLAnalyticsMapsTheScopeToItsEntry(t *testing.T) {
 			}
 			h.wantRefused(t, resp, c.want)
 		})
+	}
+}
+
+func TestGraphQLRestrictedCallerServedItsGrantedRepositoryBreakdown(t *testing.T) {
+	h := newGQLHarness(t, gqlHarnessOptions{})
+	batch := `{breakdowns: [{dimension: THEME, measure: COUNT, dateRange: {startDate: "2026-09-01", endDate: "2026-09-28"}}], filters: {scope: {level: REPO, ids: ["` + opRepo(opRepoA) + `"]}}}`
+	resp := h.run(t, opRestrictedA(), `{ analytics(batch: `+batch+`) { breakdowns { dimension items { key value } } } }`, nil)
+	h.wantServed(t, resp)
+	if got := resp.RootFields[0].Operation; got != "investmentBreakdownRepository" {
+		t.Fatalf("mapped to %s", got)
+	}
+	reqs := h.listener.requests()
+	if len(reqs) != 1 || !strings.Contains(mustJSON(t, reqs[0].Variables)+reqs[0].Query, opRepoA) {
+		t.Fatalf("want one request carrying the granted id, got %d", len(reqs))
 	}
 }
 

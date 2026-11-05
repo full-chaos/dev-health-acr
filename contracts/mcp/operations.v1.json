@@ -4628,12 +4628,11 @@
         },
         {
           "caller": "restricted",
-          "served": false,
-          "refusal": {
-            "code": "operation_not_served_for_caller",
-            "reason": "K14-A: forced scope inside the nested analytics batch is not proved; team and repository investment comes from read_facts (kind investment)"
-          },
-          "basis": "K14-A: forced scope inside the nested analytics batch is not proved; team and repository investment comes from read_facts (kind investment)"
+          "served": true,
+          "forced_variable_path": "batch.filters.scope.ids",
+          "subject_kind": "repository",
+          "aggregate_only": true,
+          "basis": "forced batch.filters.scope.ids = the one repository that passes the subject gate against the caller's grant (min and max one id); ops filters the investment rows by that id ([ops] analytics/filtertranslation.go:47-55), and the answer holds theme and subcategory aggregates only: no repository id, no list keyed by repository, so no foreign row can reach it (CHAOS-12690 I1a)"
         }
       ],
       "outputs": [
