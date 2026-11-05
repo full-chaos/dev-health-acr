@@ -2571,7 +2571,7 @@ Run the statements below as the migration role (the login in `ACR_POSTGRES_MIGRA
 | `namespace` | The Kubernetes namespace of the ServiceAccount. |
 | `service_account_name` | The ServiceAccount name. |
 | `service_account_uid` | The ServiceAccount UID. A recreated ServiceAccount has a new UID. |
-| `role` | `read`, `ops` or `reconcile`. The scopes of each role are in `RoleScopes` (`internal/auth/workload_scopes.go`). |
+| `role` | `read`, `ops`, `reconcile` or `revoke`. The scopes of each role are in `RoleScopes` (`internal/auth/workload_scopes.go`). |
 | `repository_scopes` | A JSON array of repository scopes. It must be an array. |
 | `created_at` | Required timestamp. |
 | `created_by` | Required text: who made the row. |

@@ -76,6 +76,7 @@ var publicRoutes = []publicRoute{
 	{pattern: "POST " + OAuthRevocationPath, method: "POST", path: OAuthRevocationPath, oauthOnly: true},
 	{pattern: "POST /api/v1/auth/credentials/self/ack", method: "POST", path: "/api/v1/auth/credentials/self/ack", gated: true},
 	{pattern: "GET " + CredentialLifecycleListPath, method: "GET", path: CredentialLifecycleListPath, gated: true},
+	{pattern: "POST " + CredentialRevokeOnBehalfPath, method: "POST", path: "/internal/v1/credentials/cred_routembound01/revoke", gated: true},
 }
 
 type foreignToken struct {

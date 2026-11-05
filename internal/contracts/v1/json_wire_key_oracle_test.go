@@ -400,6 +400,7 @@ var contractRootExemplars = []any{
 	CredentialAckRequest{}, CredentialAckResponse{},
 	CredentialLifecycleList{},
 	CredentialRevokeRequest{}, CredentialRevokeResponse{},
+	CredentialRevokeOnBehalfRequest{},
 	CredentialRotateRequest{}, CredentialRotateResponse{},
 	DeviceApprovalPreviewRequest{}, DeviceApprovalPreviewResponse{},
 	DeviceApprovalRequest{}, DeviceApprovalResponse{},
