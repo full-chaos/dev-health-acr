@@ -661,8 +661,19 @@ func declaredPolicyFor(scoped bool) policyDeclaration {
 // entries keep forcing true, so one operation name serves one basis: the same breakdown on the investment path
 // returns work-unit values 7x to 28x larger (439.9 and 103.2 against 15.81 hours for linear:CHAOS, window
 // 2026-08-06..2026-11-04). The shape is ORG with no ids, as the investment entries; the unrestricted caller only.
+// workItemBasisWithheld is the reason the evidence-quality outputs of the InvestmentBreakdown document are
+// withheld on the work-item basis.
+const workItemBasisWithheld = "computed only with useInvestment=true ([ops] analytics/investmentquality.go; RM §8-9); this entry forces it false, so the output is empty and a JSON leaf is not passed (CHAOS-13018)"
+
 func teamWorkItemBreakdownDecl(scoped bool) operationDecl {
-	decl := investmentDecl("TeamWorkItemBreakdown", investmentBreakdownExceptions, nil)
+	// The evidence-quality outputs of the shared document are computed only on the investment path
+	// (useInvestment true), so on this basis they are withheld, not excepted: an excepted JSON leaf
+	// passes any key that is not a person-name token.
+	decl := investmentDecl("TeamWorkItemBreakdown", nil, nil)
+	decl.WithheldOutputs = map[string]string{
+		"analytics.evidenceQualityDistribution":     workItemBasisWithheld,
+		"analytics.evidenceQualityStats.bandCounts": workItemBasisWithheld,
+	}
 	if scoped {
 		decl = withLevelReasons(decl, scopedLevelReasons)
 	}

@@ -8104,12 +8104,6 @@
           "leaf": "typename"
         },
         {
-          "path": "analytics.evidenceQualityDistribution",
-          "type": "JSON",
-          "leaf": "json",
-          "exception": "aggregate evidence-quality band counts, no person field ([ops] analytics/investmentquality.go; RM §8-9); computed only with useInvestment=true, which acr forces"
-        },
-        {
           "path": "analytics.evidenceQualityStats.mean",
           "type": "Float",
           "leaf": "scalar"
@@ -8123,12 +8117,6 @@
           "path": "analytics.evidenceQualityStats.total",
           "type": "Int!",
           "leaf": "scalar"
-        },
-        {
-          "path": "analytics.evidenceQualityStats.bandCounts",
-          "type": "JSON!",
-          "leaf": "json",
-          "exception": "aggregate evidence-quality band counts, no person field ([ops] analytics/investmentquality.go; RM §8-9)"
         },
         {
           "path": "analytics.evidenceQualityStats.uncategorizedCount",
@@ -8146,7 +8134,16 @@
           "leaf": "typename"
         }
       ],
-      "withheld_outputs": [],
+      "withheld_outputs": [
+        {
+          "path": "analytics.evidenceQualityDistribution",
+          "reason": "computed only with useInvestment=true ([ops] analytics/investmentquality.go; RM §8-9); this entry forces it false, so the output is empty and a JSON leaf is not passed (CHAOS-13018)"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.bandCounts",
+          "reason": "computed only with useInvestment=true ([ops] analytics/investmentquality.go; RM §8-9); this entry forces it false, so the output is empty and a JSON leaf is not passed (CHAOS-13018)"
+        }
+      ],
       "disclosure": [],
       "notes": [
         "work items completed in the window; a team with none has no row, which is not a zero",

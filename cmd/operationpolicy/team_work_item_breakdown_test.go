@@ -60,4 +60,21 @@ func TestTheGeneratedArtifactServesTeamWorkItemBreakdownToTheUnrestrictedCallerO
 	if err := json.Unmarshal(rule.ForcedValue, &forced); err != nil || forced != false {
 		t.Fatalf("forced value = %s, want false", rule.ForcedValue)
 	}
+	// CHAOS-13018: a JSON leaf with an output exception passes any key that is not a person-name token, so
+	// the evidence-quality JSON outputs (computed only on the investment path) are withheld on this basis.
+	for _, path := range []string{"analytics.evidenceQualityDistribution", "analytics.evidenceQualityStats.bandCounts"} {
+		if op.OutputAllowed(path) {
+			t.Errorf("%s is an allowed output of teamWorkItemBreakdown: a JSON leaf here can carry a person name", path)
+		}
+		withheld := false
+		for _, w := range op.WithheldOutputs {
+			withheld = withheld || w.Path == path
+		}
+		if !withheld {
+			t.Errorf("%s is not listed as withheld", path)
+		}
+	}
+	if _, excepted := declaredPolicy().Served["teamWorkItemBreakdown"].OutputExceptions["analytics.evidenceQualityDistribution"]; excepted {
+		t.Error("the declaration excepts the evidence-quality JSON output")
+	}
 }
