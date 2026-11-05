@@ -48,7 +48,7 @@ func TestDecideReadFallback(t *testing.T) {
 		{
 			name: "control: the same family asked for attention",
 			input: ReadFallbackDecisionInput{Definition: ranking, JudgmentKind: RequestedJudgmentKindAttention,
-				InterpretedKinds: []FactKind{FactBlockers}, MemberKind: SubjectTeam, Capabilities: capabilities},
+				InterpretedKinds: []FactKind{FactHealth}, MemberKind: SubjectTeam, Capabilities: capabilities},
 		},
 		{
 			name: "control: performance on a family that does not rank",
@@ -58,12 +58,12 @@ func TestDecideReadFallback(t *testing.T) {
 		{
 			name: "control: a ranking family with no judgment kind",
 			input: ReadFallbackDecisionInput{Definition: ranking,
-				InterpretedKinds: []FactKind{FactBlockers}, MemberKind: SubjectTeam, Capabilities: capabilities},
+				InterpretedKinds: []FactKind{FactHealth}, MemberKind: SubjectTeam, Capabilities: capabilities},
 		},
 		{
 			name: "control: a judgment kind this build does not know",
 			input: ReadFallbackDecisionInput{Definition: ranking, JudgmentKind: "productivity",
-				InterpretedKinds: []FactKind{FactBlockers}, MemberKind: SubjectTeam, Capabilities: capabilities},
+				InterpretedKinds: []FactKind{FactHealth}, MemberKind: SubjectTeam, Capabilities: capabilities},
 		},
 		{
 			name: "control: no member kind to plan reads for",
@@ -140,5 +140,89 @@ func TestDecideReadFallback(t *testing.T) {
 				t.Fatalf("DecideReadFallback() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestDecideReadFallbackTrigger: F4 fires from typed values when the family
+// ranks and none of the kinds the interpreter listed is an input of that
+// ranking, whatever judgment kind the model emitted (CHAOS-13002: one question
+// carried "performance" once and nothing twice). F1 is tried first.
+func TestDecideReadFallbackTrigger(t *testing.T) {
+	t.Parallel()
+	ranking := readFallbackTestDefinition(t, QuestionFamilyDiscoveredCohortRanking)
+	scoped := readFallbackTestDefinition(t, QuestionFamilyScopedCohortStatus)
+	capabilities := readFallbackTestCapabilities()
+	for _, tc := range []struct {
+		name        string
+		input       ReadFallbackDecisionInput
+		wantReason  ReadFallbackReason
+		wantTrigger ReadFallbackTrigger
+	}{
+		{
+			name: "the cycle-time turn with no judgment kind",
+			input: ReadFallbackDecisionInput{Definition: ranking,
+				InterpretedKinds: []FactKind{FactMetrics, FactBlockers}, MemberKind: SubjectTeam, Capabilities: capabilities},
+			wantReason: ReadFallbackReasonJudgmentUnservable, wantTrigger: ReadFallbackTriggerRankingInputs,
+		},
+		{
+			name: "the same turn with the judgment kind performance fires F1 first",
+			input: ReadFallbackDecisionInput{Definition: ranking, JudgmentKind: RequestedJudgmentKindPerformance,
+				InterpretedKinds: []FactKind{FactMetrics, FactBlockers}, MemberKind: SubjectTeam, Capabilities: capabilities},
+			wantReason: ReadFallbackReasonJudgmentUnservable, wantTrigger: ReadFallbackTriggerJudgmentKind,
+		},
+		{
+			name: "attention is named but the listed kind is no ranking input",
+			input: ReadFallbackDecisionInput{Definition: ranking, JudgmentKind: RequestedJudgmentKindAttention,
+				InterpretedKinds: []FactKind{FactBlockers}, MemberKind: SubjectTeam, Capabilities: capabilities},
+			wantReason: ReadFallbackReasonJudgmentUnservable, wantTrigger: ReadFallbackTriggerRankingInputs,
+		},
+		{
+			name: "never: a listed kind that is a ranking input",
+			input: ReadFallbackDecisionInput{Definition: ranking,
+				InterpretedKinds: []FactKind{FactMetrics, FactHealth}, MemberKind: SubjectTeam, Capabilities: capabilities},
+		},
+		{
+			name:  "never: nothing listed",
+			input: ReadFallbackDecisionInput{Definition: ranking, MemberKind: SubjectTeam, Capabilities: capabilities},
+		},
+		{
+			name: "never: one listed kind has no registered capability",
+			input: ReadFallbackDecisionInput{Definition: ranking,
+				InterpretedKinds: []FactKind{FactMetrics, FactEvidence}, MemberKind: SubjectTeam, Capabilities: capabilities},
+		},
+		{
+			name: "never: a family that does not rank",
+			input: ReadFallbackDecisionInput{Definition: scoped,
+				InterpretedKinds: []FactKind{FactMetrics, FactBlockers}, MemberKind: SubjectTeam, Capabilities: capabilities},
+		},
+		{
+			name: "never: a work-item walk",
+			input: ReadFallbackDecisionInput{Definition: ranking,
+				InterpretedKinds: []FactKind{FactMetrics}, MemberKind: SubjectTeam, Capabilities: capabilities, WorkItemList: true},
+		},
+		{
+			name: "never: no member kind",
+			input: ReadFallbackDecisionInput{Definition: ranking,
+				InterpretedKinds: []FactKind{FactMetrics}, Capabilities: capabilities},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			reason, trigger := DecideReadFallbackWithTrigger(tc.input)
+			if reason != tc.wantReason || trigger != tc.wantTrigger {
+				t.Fatalf("DecideReadFallbackWithTrigger() = %q / %q, want %q / %q", reason, trigger, tc.wantReason, tc.wantTrigger)
+			}
+		})
+	}
+}
+
+func TestReadFallbackTriggerVocabularyIsClosedAndUnique(t *testing.T) {
+	t.Parallel()
+	seen := map[ReadFallbackTrigger]bool{}
+	for _, member := range ReadFallbackTriggerVocabulary() {
+		if member == "" || seen[member] {
+			t.Fatalf("trigger vocabulary member %q is empty or repeated", member)
+		}
+		seen[member] = true
 	}
 }

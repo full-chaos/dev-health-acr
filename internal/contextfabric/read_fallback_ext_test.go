@@ -18,15 +18,15 @@ func TestReadFallbackDecisionLineCertifies(t *testing.T) {
 	var buf bytes.Buffer
 	sink, ctx := answerLineSink(&buf, slog.LevelInfo)
 	sink.RecordReadFallbackDecision(ctx, principalOrg1, contextfabric.ReadFallbackDecisionEvent{
-		Reason: contextfabric.ReadFallbackReasonJudgmentUnservable, Outcome: contextfabric.ReadFallbackOutcomeApplied, PlannedKinds: 1,
+		Reason: contextfabric.ReadFallbackReasonJudgmentUnservable, Trigger: contextfabric.ReadFallbackTriggerRankingInputs, Outcome: contextfabric.ReadFallbackOutcomeApplied, PlannedKinds: 1,
 	})
-	pinKeys(t, bytes.NewBuffer(buf.Bytes()), []string{"time", "level", "msg", "org_id", "reason", "outcome", "planned_kinds", "error_class", "rejection", "request_id"}, 1)
-	certifyRequestLine(t, buf.Bytes(), eventspec.ReadFallbackDecision, map[string]any{"org_id": "org_1", "reason": "judgment_unservable", "outcome": "applied", "planned_kinds": 1})
+	pinKeys(t, bytes.NewBuffer(buf.Bytes()), []string{"time", "level", "msg", "org_id", "reason", "trigger", "outcome", "planned_kinds", "error_class", "rejection", "request_id"}, 1)
+	certifyRequestLine(t, buf.Bytes(), eventspec.ReadFallbackDecision, map[string]any{"org_id": "org_1", "reason": "judgment_unservable", "trigger": "ranking_inputs", "outcome": "applied", "planned_kinds": 1})
 
 	var none bytes.Buffer
 	noneSink, noneCtx := answerLineSink(&none, slog.LevelInfo)
 	noneSink.RecordReadFallbackDecision(noneCtx, principalOrg1, contextfabric.ReadFallbackDecisionEvent{Outcome: contextfabric.ReadFallbackOutcomeNotApplicable})
-	certifyRequestLine(t, none.Bytes(), eventspec.ReadFallbackDecision, map[string]any{"reason": "none", "outcome": "not_applicable", "planned_kinds": 0})
+	certifyRequestLine(t, none.Bytes(), eventspec.ReadFallbackDecision, map[string]any{"reason": "none", "trigger": "none", "outcome": "not_applicable", "planned_kinds": 0})
 
 	var failed bytes.Buffer
 	failedSink, failedCtx := answerLineSink(&failed, slog.LevelInfo)

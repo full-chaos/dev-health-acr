@@ -106,11 +106,19 @@ type readFallbackRun struct {
 // question. planner nil means no planner is wired at all.
 func runReadFallback(t *testing.T, kind RequestedJudgmentKind, enabled bool, planner ReadPlanner) readFallbackRun {
 	t.Helper()
+	return runReadFallbackListing(t, kind, []FactKind{FactBlockers}, enabled, planner)
+}
+
+// runReadFallbackListing is runReadFallback with the kinds the interpreter listed.
+func runReadFallbackListing(t *testing.T, kind RequestedJudgmentKind, listed []FactKind, enabled bool, planner ReadPlanner) readFallbackRun {
+	t.Helper()
 	run := readFallbackRun{telemetry: &recordingTelemetry{}, store: &resultStoreStub{}}
 	interpretation := InterpretedQuestion{
 		Shape: ShapeDiscoveredCohort, RequestedJudgment: "the team with the highest cycle time, stuck the most", RequestedJudgmentKind: kind,
-		TimeContext:      TimeContext{Axis: TemporalCurrent},
-		FactRequirements: []FactRequirement{{Kind: FactBlockers}},
+		TimeContext: TimeContext{Axis: TemporalCurrent},
+	}
+	for _, listedKind := range listed {
+		interpretation.FactRequirements = append(interpretation.FactRequirements, FactRequirement{Kind: listedKind})
 	}
 	cohort := &Cohort{
 		Kind: SubjectTeam, Rationale: "kind census match",
@@ -238,7 +246,7 @@ func TestReadFallbackPlansTheCycleTimeQuestionsReads(t *testing.T) {
 	if run.store.savedSnapshot != nil || run.store.savedEpoch != nil {
 		t.Fatalf("saved reuse snapshot %v epoch %v, want none: an answer whose reads the model chose is never reused", run.store.savedSnapshot, run.store.savedEpoch)
 	}
-	requireOneReadFallbackDecision(t, run, ReadFallbackDecisionEvent{Reason: ReadFallbackReasonJudgmentUnservable, Outcome: ReadFallbackOutcomeApplied, PlannedKinds: 1})
+	requireOneReadFallbackDecision(t, run, ReadFallbackDecisionEvent{Reason: ReadFallbackReasonJudgmentUnservable, Trigger: ReadFallbackTriggerJudgmentKind, Outcome: ReadFallbackOutcomeApplied, PlannedKinds: 1})
 }
 
 // TestReadFallbackThatDoesNotApplyLeavesTheAnswerAsToday holds every path
@@ -250,6 +258,7 @@ func TestReadFallbackThatDoesNotApplyLeavesTheAnswerAsToday(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		kind    RequestedJudgmentKind
+		listed  []FactKind
 		enabled bool
 		planner *scriptedReadPlanner
 		calls   int
@@ -258,28 +267,32 @@ func TestReadFallbackThatDoesNotApplyLeavesTheAnswerAsToday(t *testing.T) {
 		{
 			name: "switch off", kind: RequestedJudgmentKindPerformance,
 			planner: &scriptedReadPlanner{result: ReadPlanningResult{Kinds: []FactKind{FactMetrics}}},
-			event:   ReadFallbackDecisionEvent{Reason: ReadFallbackReasonJudgmentUnservable, Outcome: ReadFallbackOutcomeSuppressedFlagOff},
+			event:   ReadFallbackDecisionEvent{Reason: ReadFallbackReasonJudgmentUnservable, Trigger: ReadFallbackTriggerJudgmentKind, Outcome: ReadFallbackOutcomeSuppressedFlagOff},
 		},
 		{
 			name: "planner error", kind: RequestedJudgmentKindPerformance, enabled: true,
 			planner: &scriptedReadPlanner{result: ReadPlanningResult{Err: ErrModelUnavailable}}, calls: 1,
-			event: ReadFallbackDecisionEvent{Reason: ReadFallbackReasonJudgmentUnservable, Outcome: ReadFallbackOutcomePlannerFailed, ErrorClass: "model_unavailable"},
+			event: ReadFallbackDecisionEvent{Reason: ReadFallbackReasonJudgmentUnservable, Trigger: ReadFallbackTriggerJudgmentKind, Outcome: ReadFallbackOutcomePlannerFailed, ErrorClass: "model_unavailable"},
 		},
 		{
 			name: "refused plan", kind: RequestedJudgmentKindPerformance, enabled: true,
 			planner: &scriptedReadPlanner{result: ReadPlanningResult{Rejection: ReadPlanRejectionKindNotOffered}}, calls: 1,
-			event: ReadFallbackDecisionEvent{Reason: ReadFallbackReasonJudgmentUnservable, Outcome: ReadFallbackOutcomePlanInvalid, Rejection: ReadPlanRejectionKindNotOffered},
+			event: ReadFallbackDecisionEvent{Reason: ReadFallbackReasonJudgmentUnservable, Trigger: ReadFallbackTriggerJudgmentKind, Outcome: ReadFallbackOutcomePlanInvalid, Rejection: ReadPlanRejectionKindNotOffered},
 		},
 		{
-			name: "fit family", kind: RequestedJudgmentKindAttention, enabled: true,
+			name: "fit family", kind: RequestedJudgmentKindAttention, listed: []FactKind{FactHealth}, enabled: true,
 			planner: &scriptedReadPlanner{result: ReadPlanningResult{Kinds: []FactKind{FactMetrics}}},
 			event:   ReadFallbackDecisionEvent{Outcome: ReadFallbackOutcomeNotApplicable},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			baseline := runReadFallback(t, tc.kind, false, nil)
-			run := runReadFallback(t, tc.kind, tc.enabled, tc.planner)
+			listed := []FactKind{FactBlockers}
+			if tc.listed != nil {
+				listed = tc.listed
+			}
+			baseline := runReadFallbackListing(t, tc.kind, listed, false, nil)
+			run := runReadFallbackListing(t, tc.kind, listed, tc.enabled, tc.planner)
 			if len(tc.planner.inputs) != tc.calls {
 				t.Fatalf("planner calls = %d, want %d", len(tc.planner.inputs), tc.calls)
 			}
@@ -307,7 +320,7 @@ func TestReadFallbackWithNoPlannerWiredKeepsTheFamilyPlan(t *testing.T) {
 	if got, want := resultJSON(t, run.result), resultJSON(t, baseline.result); got != want {
 		t.Fatalf("served result differs from today's:\n got %s\nwant %s", got, want)
 	}
-	requireOneReadFallbackDecision(t, run, ReadFallbackDecisionEvent{Reason: ReadFallbackReasonJudgmentUnservable, Outcome: ReadFallbackOutcomePlannerFailed, ErrorClass: readPlannerNoRuntime})
+	requireOneReadFallbackDecision(t, run, ReadFallbackDecisionEvent{Reason: ReadFallbackReasonJudgmentUnservable, Trigger: ReadFallbackTriggerJudgmentKind, Outcome: ReadFallbackOutcomePlannerFailed, ErrorClass: readPlannerNoRuntime})
 }
 
 // TestReadPlanKindsOnlyWidenThePlanLast is the differential over PlanAnswer:
@@ -385,5 +398,25 @@ func TestReadPlannerDeadlineIsCappedAndLeavesTheSynthesisReserve(t *testing.T) {
 	defer cancelSpent()
 	if got := engine.readPlannerDeadline(spent); got != 0 {
 		t.Fatalf("a deadline inside the reserve: %v, want 0", got)
+	}
+}
+
+// TestReadFallbackFiresFromTheListedKindsWhenTheModelNamedNoJudgmentKind is the
+// second live turn of the cycle-time question (result_59f32ed4): no judgment
+// kind, the interpreter listed metrics and blockers, neither a ranking input.
+// The planner runs and its kinds are applied, with the trigger on the decision.
+func TestReadFallbackFiresFromTheListedKindsWhenTheModelNamedNoJudgmentKind(t *testing.T) {
+	t.Parallel()
+	planner := &scriptedReadPlanner{result: ReadPlanningResult{Kinds: []FactKind{FactMetrics}}}
+	run := runReadFallbackListing(t, "", []FactKind{FactMetrics, FactBlockers}, true, planner)
+	if len(planner.inputs) != 1 || run.result.AnswerPlan.Fallback == nil {
+		t.Fatalf("planner calls %d, fallback %+v: want one call and an applied record", len(planner.inputs), run.result.AnswerPlan.Fallback)
+	}
+	requireOneReadFallbackDecision(t, run, ReadFallbackDecisionEvent{Reason: ReadFallbackReasonJudgmentUnservable, Trigger: ReadFallbackTriggerRankingInputs, Outcome: ReadFallbackOutcomeApplied, PlannedKinds: 1})
+	// The same turn listing a ranking input does not call the planner.
+	control := &scriptedReadPlanner{result: ReadPlanningResult{Kinds: []FactKind{FactMetrics}}}
+	runControl := runReadFallbackListing(t, "", []FactKind{FactMetrics, FactHealth}, true, control)
+	if len(control.inputs) != 0 || runControl.result.AnswerPlan.Fallback != nil {
+		t.Fatalf("planner calls %d, fallback %+v: a ranking input among the listed kinds must not fire F4", len(control.inputs), runControl.result.AnswerPlan.Fallback)
 	}
 }

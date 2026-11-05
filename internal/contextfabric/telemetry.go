@@ -469,8 +469,12 @@ func (t SlogEngineTelemetry) RecordReadFallbackDecision(ctx context.Context, pri
 	if reason == "" {
 		reason = readFallbackReasonNone
 	}
+	trigger := string(event.Trigger)
+	if trigger == "" {
+		trigger = readFallbackReasonNone
+	}
 	args := append([]any{
-		"org_id", SanitizeLogAttr(principal.OrgID), "reason", SanitizeLogAttr(reason), "outcome", SanitizeLogAttr(string(event.Outcome)),
+		"org_id", SanitizeLogAttr(principal.OrgID), "reason", SanitizeLogAttr(reason), "trigger", SanitizeLogAttr(trigger), "outcome", SanitizeLogAttr(string(event.Outcome)),
 		"planned_kinds", event.PlannedKinds, "error_class", SanitizeLogAttr(event.ErrorClass), "rejection", SanitizeLogAttr(string(event.Rejection)),
 	}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric read fallback decision", args...)
