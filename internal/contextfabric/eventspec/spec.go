@@ -6185,6 +6185,7 @@ var All = []Event{
 	MCPHTTPServing,
 	MCPHTTPReadiness,
 	OAuthStep,
+	CredentialRevokeOnBehalf,
 	OTelExport,
 	GraphCountCheckFinished,
 	SuppliedInterpretationDecision,

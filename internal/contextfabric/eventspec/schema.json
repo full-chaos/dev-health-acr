@@ -1,5 +1,53 @@
 [
   {
+    "id": "api.credential_revoke_on_behalf",
+    "msg": "acr-api credential revoke on behalf",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per request to /internal/v1/credentials/{credential_id}/revoke: one for each request whose body names a valid actor and that reaches the credential service; none for a request refused before it (authenticator, class, scope, limiter, malformed body) or one the service could not answer. The credential id, the actor id and the token never reach the line",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "actor_type",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "user",
+          "admin"
+        ]
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "revoked",
+          "refused",
+          "conflict"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "unknown_credential",
+          "not_mcp_bound",
+          "not_approver"
+        ],
+        "applicability": "why a refused request was refused; none when the credential was revoked or was already revoked"
+      }
+    ]
+  },
+  {
     "id": "api.oauth_step",
     "msg": "acr-api oauth step",
     "level": "info",
@@ -7,7 +55,7 @@
     "attribution": [
       "request_id"
     ],
-    "bounded_aggregation": "exactly one line per request to /register, /authorize, /authorize/consent, /device_authorization, /token or the self-credential routes (/api/v1/auth/credentials/self/ack, /rotate, /revoke), including POSTs refused by the authenticator or limiter before their handler (a method the router rejects with 405 never reaches the route and writes none); metadata routes emit none. On a credential step the outcome reads: ok = done; invalid_request = malformed body; unauthenticated = no valid credential; invalid_grant = nothing to act on or a state conflict (no credential awaiting acknowledgement, stale credential, rotation conflict); expired = the acknowledgement window closed; rate_limited; unavailable = the credential service or runtime could not answer. The credential id and the token never reach the line",
+    "bounded_aggregation": "exactly one line per request to /register, /authorize, /authorize/consent, /device_authorization, /token or the credential routes (/api/v1/auth/credentials/self/ack, /rotate, /revoke and the on-behalf /internal/v1/credentials/{credential_id}/revoke, which shares the credential_revoke step), including POSTs refused by the authenticator or limiter before their handler (a method the router rejects with 405 never reaches the route and writes none); metadata routes emit none. On a credential step the outcome reads: ok = done; invalid_request = malformed body; unauthenticated = no valid credential; invalid_grant = nothing to act on or a state conflict (no credential awaiting acknowledgement, stale credential, rotation conflict); expired = the acknowledgement window closed; rate_limited; unavailable = the credential service or runtime could not answer. The credential id and the token never reach the line",
     "fields": [
       {
         "key": "request_id",

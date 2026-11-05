@@ -162,6 +162,9 @@ spec:
             # CHAOS-12554: always rendered, like the flag above. See values.yaml.
             - name: ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED
               value: {{ .Values.contextFabric.investmentSunburstEnabled | default false | quote }}
+            # CHAOS-12690: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_INVESTMENT_REPOSITORY_FROM_OPS_ENABLED
+              value: {{ .Values.contextFabric.investmentRepositoryFromOpsEnabled | default false | quote }}
             # CHAOS-12582: always rendered, like the flag above. See values.yaml.
             - name: ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED
               value: {{ .Values.contextFabric.investmentSankeyEnabled | default false | quote }}

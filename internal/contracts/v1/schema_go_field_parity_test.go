@@ -125,6 +125,7 @@ var schemaRootTypes = map[string]string{
 	"credential_ack_response.v1.schema.json":                     "CredentialAckResponse",
 	"credential_lifecycle_list.v1.schema.json":                   "CredentialLifecycleList",
 	"credential_revoke_request.v1.schema.json":                   "CredentialRevokeRequest",
+	"credential_revoke_on_behalf_request.v1.schema.json":         "CredentialRevokeOnBehalfRequest",
 	"credential_revoke_response.v1.schema.json":                  "CredentialRevokeResponse",
 	"credential_rotate_request.v1.schema.json":                   "CredentialRotateRequest",
 	"credential_rotate_response.v1.schema.json":                  "CredentialRotateResponse",
