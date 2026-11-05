@@ -224,6 +224,11 @@ type Config struct {
 	// repository numbers for units that span repositories, so it also joins
 	// the answer-reuse key (devhealthfacts.QueryVersionFor).
 	ContextFabricInvestmentRepositoryFromOpsEnabled bool
+	// ContextFabricInvestmentTeamFromOpsEnabled (CHAOS-12690 I2,
+	// ACR_CONTEXT_FABRIC_INVESTMENT_TEAM_FROM_OPS_ENABLED) reads a team's
+	// investment mix from the ops investmentBreakdownTeam answers (owner-share
+	// weighted over the team's repositories). Default OFF; joins the reuse key.
+	ContextFabricInvestmentTeamFromOpsEnabled bool
 	// ContextFabricInvestmentSankeyEnabled (CHAOS-12582,
 	// ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED) turns on the
 	// investment_repository_flow render rule: one team's effort from its

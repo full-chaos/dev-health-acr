@@ -22,7 +22,7 @@ import (
 // authority moved.
 func TestContextFabricSynthesizerOptionsCarryEveryStaticVersion(t *testing.T) {
 	t.Parallel()
-	options := contextFabricSynthesizerOptions("acr-test-1.2.3", false)
+	options := contextFabricSynthesizerOptions("acr-test-1.2.3", false, false)
 
 	if options.ServiceVersion != "acr-test-1.2.3" {
 		t.Fatalf("ServiceVersion = %q, want the composition's own service version", options.ServiceVersion)

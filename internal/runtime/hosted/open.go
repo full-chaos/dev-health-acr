@@ -804,6 +804,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 				InvestmentSunburstEnabled: request.config.ContextFabricInvestmentSunburstEnabled,
 				// CHAOS-12690: the repository mix from the ops breakdown.
 				InvestmentRepositoryFromOps: request.config.ContextFabricInvestmentRepositoryFromOpsEnabled,
+				InvestmentTeamFromOps:       request.config.ContextFabricInvestmentTeamFromOpsEnabled,
 			}),
 		// CHAOS-4099 stage 2: the real ScopeExpander over the SAME
 		// ClickHouse client every FactProvider above shares -- activating
@@ -1021,7 +1022,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		ObservationKeys: factRegistry,
 		Graph:           graphReader,
 		Facts:           factRegistry,
-		Synthesizer:     contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion, request.config.ContextFabricInvestmentRepositoryFromOpsEnabled), Telemetry: engineTelemetry, ClientSynthesis: clientSynthesis, FactCapabilities: factRegistry.Capabilities()},
+		Synthesizer:     contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion, request.config.ContextFabricInvestmentRepositoryFromOpsEnabled, request.config.ContextFabricInvestmentTeamFromOpsEnabled), Telemetry: engineTelemetry, ClientSynthesis: clientSynthesis, FactCapabilities: factRegistry.Capabilities()},
 		Results:         investigationStore,
 		ReuseGate:       investigationStore,
 		// CHAOS-3782 Codex round-1 F1: same *pginvestigation.Store also
@@ -1175,7 +1176,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// above already reads from. Wired unconditionally for the same
 		// reason as ReusePromptVersions immediately above.
 		ReuseVersionAuthorities: contextfabric.ReuseVersionAuthorities{
-			QueryVersion:             devhealthfacts.QueryVersionFor(request.config.ContextFabricInvestmentRepositoryFromOpsEnabled),
+			QueryVersion:             devhealthfacts.QueryVersionFor(request.config.ContextFabricInvestmentRepositoryFromOpsEnabled, request.config.ContextFabricInvestmentTeamFromOpsEnabled),
 			CanonicalServiceVersion:  contextfabric.CanonicalFactRegistryVersion,
 			ModelOutputSchemaVersion: genkitruntime.DefaultSchemaVersion,
 			// CHAOS-3884: one more deployment-current version authority --
@@ -1270,12 +1271,12 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 // static versions from this struct alone, through
 // RuntimeAnswerSynthesizer.StaticResultVersions -- so an unset field there
 // is permanently unattributable across a rebuild.
-func contextFabricSynthesizerOptions(serviceVersion string, repositoryFromOps bool) contextfabric.RuntimeAnswerSynthesizerOptions {
+func contextFabricSynthesizerOptions(serviceVersion string, repositoryFromOps, teamFromOps bool) contextfabric.RuntimeAnswerSynthesizerOptions {
 	return contextfabric.RuntimeAnswerSynthesizerOptions{
 		ServiceVersion:          serviceVersion,
 		Backend:                 "graph",
 		ProjectionVersion:       contextFabricProjectionVersion,
-		QueryVersion:            devhealthfacts.QueryVersionFor(repositoryFromOps),
+		QueryVersion:            devhealthfacts.QueryVersionFor(repositoryFromOps, teamFromOps),
 		CanonicalServiceVersion: contextfabric.CanonicalFactRegistryVersion,
 	}
 }
