@@ -84,6 +84,10 @@ func parseEvidenceQuality(data json.RawMessage) (opsUnitCounts, bool) {
 		return opsUnitCounts{}, false
 	}
 	stats := answer.Analytics.EvidenceQualityStats
+	// A window with no unit: ops answers the stats object with every count null.
+	if stats.Total == nil && stats.UncategorizedCount == nil && stats.SizedUnitCount == nil {
+		return opsUnitCounts{}, true
+	}
 	if stats.Total == nil || stats.UncategorizedCount == nil || *stats.Total < 0 || *stats.UncategorizedCount < 0 || *stats.UncategorizedCount > *stats.Total {
 		return opsUnitCounts{}, false
 	}

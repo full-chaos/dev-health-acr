@@ -253,3 +253,28 @@ func TestCHAOS12690DisagreeingUnitCountsServeNoFact(t *testing.T) {
 		})
 	}
 }
+
+// An ops window with no unit answers evidenceQualityStats with total,
+// uncategorizedCount and sizedUnitCount all null and an empty breakdown
+// (ops analytics/investmentquality.go: the empty result returns the stats object
+// with bandCounts only). That is "no data", not an unreadable answer.
+func TestCHAOS12690EmptyOpsWindowIsNoDataNotUnreadable(t *testing.T) {
+	t.Parallel()
+	empty := func(dimension string) OperationOutcome {
+		out := breakdownAnswer(dimension, map[string]float64{})
+		var answer map[string]any
+		_ = json.Unmarshal(out.Data, &answer)
+		answer["analytics"].(map[string]any)["evidenceQualityStats"] = map[string]any{"bandCounts": "{}", "__typename": "EvidenceQualityStats"}
+		out.Data, _ = json.Marshal(answer)
+		return out
+	}
+	caller := &breakdownCaller{theme: empty("THEME"), subcategory: empty("SUBCATEGORY")}
+	result, _ := readRepositoryFromOps(t, true, caller)
+	if fact := investmentFactOf(result, sunburstRepo); fact != nil {
+		t.Fatalf("a fact is served over an empty window: %+v", fact.Fields)
+	}
+	reasons := servedReasons(result, sunburstRepo)
+	if !strings.Contains(reasons, opsMixWithheldPrefix+": "+RepoOpsWithheldNoData) || strings.Contains(reasons, SubcategoryWithheldUnreadable) {
+		t.Fatalf("want the no_data reason, got %q", reasons)
+	}
+}
