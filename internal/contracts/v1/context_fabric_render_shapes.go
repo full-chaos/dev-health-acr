@@ -307,6 +307,24 @@ func ContextFabricLandscapeDaysDifferLimitation(labels, days []string, sharedDay
 	return line.String()
 }
 
+// contextFabricLandscapeWindowOptionLabelPrefix opens the label of the window
+// option a refused landscape quadrant offers (CHAOS-13009).
+const contextFabricLandscapeWindowOptionLabelPrefix = "the window ending "
+
+// ContextFabricLandscapeWindowOptionLabel is the label of the window option a
+// quadrant refused for different days offers: the window that ends on the day
+// every compared team holds live rows, worded as the answer words a day.
+func ContextFabricLandscapeWindowOptionLabel(day string) string {
+	return contextFabricLandscapeWindowOptionLabelPrefix + day
+}
+
+// IsContextFabricLandscapeWindowOptionLabel recognizes the labels
+// ContextFabricLandscapeWindowOptionLabel composes.
+func IsContextFabricLandscapeWindowOptionLabel(label string) bool {
+	day, ok := strings.CutPrefix(label, contextFabricLandscapeWindowOptionLabelPrefix)
+	return ok && day != "" && len(label) <= 200 && !strings.ContainsAny(day, "\n")
+}
+
 // IsContextFabricLandscapeDaysDifferLimitation recognizes the sentences
 // ContextFabricLandscapeDaysDifferLimitation composes.
 func IsContextFabricLandscapeDaysDifferLimitation(limitation string) bool {
