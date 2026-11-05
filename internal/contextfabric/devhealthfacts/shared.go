@@ -1459,11 +1459,16 @@ import (
 // interpreter read it as current (CHAOS-13010). An answer saved under v285 to
 // such a question holds a current-state read.
 //
-// v286 -> v287: when no fixed question family serves a question and the read
+// v286 -> v287: a quadrant refused for different days also offers the day the
+// teams share as a window option the user picks (window_clarification and
+// structure_needs), and the model is no longer shown common_live_day
+// (CHAOS-13009). An answer saved under v286 holds the refusal without the option.
+//
+// v287 -> v288: when no fixed question family serves a question and the read
 // fallback is on, the model plans which fact kinds the answer reads, and the
-// plan carries answer_plan.fallback (CHAOS-13002). An answer saved under v286
+// plan carries answer_plan.fallback (CHAOS-13002). An answer saved under v287
 // reads only the family's kinds.
-const QueryVersion = "devhealthfacts.clickhouse.v287"
+const QueryVersion = "devhealthfacts.clickhouse.v288"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

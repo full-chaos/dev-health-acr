@@ -689,13 +689,19 @@ func (e *Engine) finalizeResult(
 	// A quadrant refused because the teams speak for different days says so and
 	// offers the latest day they share (CHAOS-12958). With the rule off the
 	// quadrant is not asked for, so nothing is refused and no line is served.
-	daysDifferLine, daysDifferRefused := "", false
+	daysDifferLine, daysDifferShared, daysDifferRefused := "", "", false
 	if e.renderShapeOptions.LandscapePosition {
-		daysDifferLine, daysDifferRefused = landscapeDaysDifferLine(result, facts)
+		daysDifferLine, daysDifferShared, daysDifferRefused = landscapeDaysDifference(result, facts)
 	}
 	limitations, displaced = withLandscapeDaysDifferLimitation(result.Limitations, daysDifferLine, daysDifferRefused)
 	result.Limitations = limitations
 	result.LimitationsDisplaced += displaced
+	// The day the teams share is also offered as a window to pick (CHAOS-13009).
+	offered, disclosedNeeds := withLandscapeWindowOffer(result, daysDifferShared, daysDifferRefused)
+	result = offered
+	if disclosedNeeds && e.telemetry != nil {
+		e.telemetry.RecordStructureNeedsDisclosed(ctx, principal, contractsv1.ContextFabricStructureNeedWindow)
+	}
 	// Seed the outcome set from this turn's requirement rows, ONCE.
 	//
 	// Idempotent on purpose: this function runs again on a retry pass and

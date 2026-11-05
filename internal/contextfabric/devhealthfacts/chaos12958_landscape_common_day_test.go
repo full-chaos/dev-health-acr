@@ -146,3 +146,13 @@ func TestLandscapeOneTeamIsNotReadForASharedDay(t *testing.T) {
 		t.Fatalf("%d common-day statements for one team", n)
 	}
 }
+
+// The provider writes the field by its literal name (the declaration/emission
+// artifact parses the source for it); the engine and the synthesis input name it
+// by the contextfabric constant. They are one name.
+func TestTheProviderAndTheEngineNameTheCommonDayFieldAlike(t *testing.T) {
+	t.Parallel()
+	if contextfabric.FactFieldCommonLiveDay != "common_live_day" {
+		t.Fatalf("FactFieldCommonLiveDay = %q", contextfabric.FactFieldCommonLiveDay)
+	}
+}
