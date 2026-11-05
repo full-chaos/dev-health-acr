@@ -208,6 +208,13 @@
       "path": "/internal/v1/credentials/lifecycle",
       "scope": "",
       "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "pattern": "/internal/v1/credentials/{credential_id}/revoke",
+      "path": "/internal/v1/credentials/cred_routembound01/revoke",
+      "scope": "",
+      "web_assertion": false
     }
   ]
 }

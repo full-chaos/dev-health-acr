@@ -147,6 +147,9 @@ func ModelFacingFacts(facts []contextfabric.CanonicalFact) []contextfabric.Canon
 		if len(fact.Fields) > 0 {
 			fields := make(map[string]contextfabric.FactValue, len(fact.Fields))
 			for key, value := range fact.Fields {
+				if key == contextfabric.FactFieldCommonLiveDay {
+					continue
+				}
 				if len(value.Rows) > 0 {
 					if value.Table != nil && value.Table.Detail {
 						clone.DetailTables = append(clone.DetailTables, key)

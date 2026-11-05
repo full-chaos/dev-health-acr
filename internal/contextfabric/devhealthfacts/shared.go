@@ -1459,11 +1459,16 @@ import (
 // interpreter read it as current (CHAOS-13010). An answer saved under v285 to
 // such a question holds a current-state read.
 //
-// v286 -> v287: teamWorkItemBreakdown joins the served run_operation catalogue
+// v286 -> v287: a quadrant refused for different days also offers the day the
+// teams share as a window option the user picks (window_clarification and
+// structure_needs), and the model is no longer shown common_live_day
+// (CHAOS-13009). An answer saved under v286 holds the refusal without the option.
+//
+// v287 -> v288: teamWorkItemBreakdown joins the served run_operation catalogue
 // (a team's work-item cycle time, CHAOS-13001): the data catalogue lists it and a
 // question that read the investment basis for a team cycle time can now be
-// answered from the work-item basis. An answer saved under v286 cannot.
-const QueryVersion = "devhealthfacts.clickhouse.v287"
+// answered from the work-item basis. An answer saved under v287 cannot.
+const QueryVersion = "devhealthfacts.clickhouse.v288"
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each
