@@ -1127,6 +1127,51 @@ table is withheld too. The switch joins the answer-reuse key. Same order: pins f
 the flag. With the flag off, no call is made and both doors that serve a result
 remove a stored sunburst.
 
+**The repository and team mix from ops.**
+`ACR_CONTEXT_FABRIC_INVESTMENT_REPOSITORY_FROM_OPS_ENABLED` and
+`ACR_CONTEXT_FABRIC_INVESTMENT_TEAM_FROM_OPS_ENABLED` (chart:
+`contextFabric.investmentRepositoryFromOpsEnabled` and
+`investmentTeamFromOpsEnabled`, default `false`, CHAOS-12690) make the
+repository and the team investment fact the ops answer of
+`investmentBreakdownRepository` and `investmentBreakdownTeam` (THEME and
+SUBCATEGORY under `ISSUE_SIZE`, plus `evidenceQualityStats`): ACR writes no SQL
+for the number. The facts say so in `mix_source` (`ops.investmentBreakdown...`)
+and `attribution_basis` (`ops_repo_effort_lines_changed`,
+`ops_team_owner_share_lines_changed`). Each switch moves the stamped version
+(`QueryVersionFor` adds `+repository_from_ops` or `+team_from_ops`), so stored
+answers of the other source are not reused. Set them after the ops pin and the
+proofs are re-run. Differences from the SQL read, measured on askdev-1 (ACR
+b396b7d4, ops 9559a382, org 70d529e0, trailing 30 days, switches off then on):
+
+- A unit is split across repositories by lines changed (ops
+  `work_unit_repo_effort`), not by PR-ref count, and a team's number is its
+  owned repositories weighted by owner share (D5988); a project's linked pull
+  requests are not added to a team (team-attribution.md:1566-1576). Shares move:
+  repositories by up to 1.6 points, the team by up to 1.2 points.
+- `work_unit_count` and `uncategorized_unit_count` count the units that touch the
+  repository (the unit's own repository or any repository effort row, ops
+  `teamscope.UnitScope`), not the units its PR refs attribute to it; the
+  denominator stays share-weighted, so a unit counts whole in the count and by
+  its share in the denominator. Measured: 1031 to 1993, 2629 to 3709, 453 to 1414
+  units; denominators 992.998 to 1085.16, 2607.44 to 2825.12, 414.811 to 485.041.
+  A team whose repositories have only a sliver of a unit's effort (team
+  gl:full.chaos, 533 units, denominator 34.93) now has a mix where the SQL read
+  had none.
+- Not emitted: `owned_repository_count`, the project-reached fields,
+  `repository_theme_breakdown` and the SQL empty-cause tokens. A subject with no
+  ops answer gets one closed `investment_mix_from_ops_withheld` reason
+  (`window_not_whole_days`, `not_served`, `incomplete`, `unreadable`,
+  `unknown_key`, `theme_cross_check`, `unit_counts_disagree`, `no_data`,
+  `read_cap`, `sizing_coverage_not_served`, `prior_window_not_served`).
+- Sizing coverage needs the ops pin that selects `sizedUnitCount`; without it
+  `sizing_coverage` and `unsized_unit_count` are not served and the reason says
+  so.
+- A window is sent only as whole UTC days whose last day is over. A `range` window
+  with an end at a UTC midnight is the same period as a `trailing` one (the mix
+  reads `to_ts < end` either way), so it is served (CHAOS-13059).
+- A read asks ops for at most 10 repositories or teams (two calls each, three for
+  a team with a prior window); the rest get `read_cap`.
+
 **The investment sankey.** `ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED`
 (chart: `contextFabric.investmentSankeyEnabled`, default `false`) turns on the
 `investment_repository_flow` render rule: one team's effort from its
