@@ -1205,17 +1205,6 @@ What an operator can rely on and see:
   stream's lock (a frame write can hold it up to the 30 s write deadline).
 
 
-### Ask Dev thread list first question (CHAOS-12235)
-
-`ACR_THREAD_LIST_FIRST_QUESTION_ENABLED` (default `false`) serves the optional
-`first_question` on each `GET /api/v1/context-fabric/threads` item. Off, the
-item is exactly the earlier published shape. The switch exists because a
-client that validates the list against the earlier schema
-(`additionalProperties: false`) refuses the new field, and acr is rolled to
-production by more than one owner, so no roll order can be relied on. Turn it
-on only when every consumer's pin (web, ask-dev) accepts the field; then the
-switch is removed. The startup line reports `thread_list_first_question_enabled`.
-
 ### Ask Dev page context subject hints (CHAOS-12230)
 
 Web sends the entities of the page an Ask Dev question is asked from as
@@ -2582,7 +2571,7 @@ Run the statements below as the migration role (the login in `ACR_POSTGRES_MIGRA
 | `namespace` | The Kubernetes namespace of the ServiceAccount. |
 | `service_account_name` | The ServiceAccount name. |
 | `service_account_uid` | The ServiceAccount UID. A recreated ServiceAccount has a new UID. |
-| `role` | `read`, `ops` or `reconcile`. The scopes of each role are in `RoleScopes` (`internal/auth/workload_scopes.go`). |
+| `role` | `read`, `ops`, `reconcile` or `revoke`. The scopes of each role are in `RoleScopes` (`internal/auth/workload_scopes.go`). |
 | `repository_scopes` | A JSON array of repository scopes. It must be an array. |
 | `created_at` | Required timestamp. |
 | `created_by` | Required text: who made the row. |

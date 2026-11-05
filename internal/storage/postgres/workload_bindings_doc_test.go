@@ -85,10 +85,25 @@ func TestWorkloadBindingsDocColumnsMatchMigration(t *testing.T) {
 }
 
 func TestWorkloadBindingsDocRolesMatchMigration(t *testing.T) {
-	sql := readRepoFile(t, "migrations/postgres/0069_credential_lifecycle_listing.sql")
-	m := regexp.MustCompile(`ck_acr_workload_bindings_role CHECK \(role IN \(([^)]*)\)\)`).FindStringSubmatch(sql)
+	// The newest migration that sets the constraint holds the live role set.
+	files, err := filepath.Glob(filepath.Join("..", "..", "..", "migrations", "postgres", "*.sql"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("glob migrations: %v (%d files)", err, len(files))
+	}
+	sort.Strings(files)
+	check := regexp.MustCompile(`ck_acr_workload_bindings_role CHECK \(role IN \(([^)]*)\)\)`)
+	var m []string
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if found := check.FindStringSubmatch(string(raw)); found != nil {
+			m = found
+		}
+	}
 	if m == nil {
-		t.Fatal("migration 0069: ck_acr_workload_bindings_role not found")
+		t.Fatal("no migration sets ck_acr_workload_bindings_role")
 	}
 	var roles []string
 	for _, r := range strings.Split(m[1], ",") {

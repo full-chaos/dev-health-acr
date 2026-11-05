@@ -175,12 +175,6 @@ func (a *App) ContextFabricThreadListHandler() http.Handler {
 		firstQuestions := 0
 		for _, record := range records {
 			summary := threadSummary(record)
-			// CHAOS-12235: served only when the switch is on (see
-			// config.Config.ThreadListFirstQuestionEnabled); off, the item is
-			// exactly the earlier published shape.
-			if !a.config.ThreadListFirstQuestionEnabled {
-				summary.FirstQuestion = ""
-			}
 			if summary.FirstQuestion != "" {
 				firstQuestions++
 			}

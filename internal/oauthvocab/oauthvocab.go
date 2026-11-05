@@ -182,3 +182,33 @@ const (
 func ScopeVocabulary() []string {
 	return []string{ScopeContextRead, ScopeEvidenceRead, ScopeDataRead}
 }
+
+// The on-behalf credential revoke (POST /internal/v1/credentials/{credential_id}/revoke):
+// the actor types the Auth Control Plane names, the decisions, and the reasons
+// of a refusal.
+const (
+	OnBehalfActorUser  = "user"
+	OnBehalfActorAdmin = "admin"
+
+	OnBehalfDecisionRevoked  = "revoked"
+	OnBehalfDecisionRefused  = "refused"
+	OnBehalfDecisionConflict = "conflict"
+
+	OnBehalfReasonNone              = "none"
+	OnBehalfReasonUnknownCredential = "unknown_credential"
+	OnBehalfReasonNotMCPBound       = "not_mcp_bound"
+	OnBehalfReasonNotApprover       = "not_approver"
+)
+
+// OnBehalfActorVocabulary lists every on-behalf actor type.
+func OnBehalfActorVocabulary() []string { return []string{OnBehalfActorUser, OnBehalfActorAdmin} }
+
+// OnBehalfDecisionVocabulary lists every on-behalf revoke decision.
+func OnBehalfDecisionVocabulary() []string {
+	return []string{OnBehalfDecisionRevoked, OnBehalfDecisionRefused, OnBehalfDecisionConflict}
+}
+
+// OnBehalfReasonVocabulary lists every on-behalf revoke reason, none first.
+func OnBehalfReasonVocabulary() []string {
+	return []string{OnBehalfReasonNone, OnBehalfReasonUnknownCredential, OnBehalfReasonNotMCPBound, OnBehalfReasonNotApprover}
+}

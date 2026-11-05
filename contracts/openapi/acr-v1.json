@@ -1664,6 +1664,69 @@
         }
       }
     },
+    "/internal/v1/credentials/{credential_id}/revoke": {
+      "post": {
+        "operationId": "revokeCredentialOnBehalf",
+        "x-required-scope": "credential_lifecycle:revoke",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "credential_id",
+            "in": "path",
+            "required": true,
+            "description": "The credential to revoke, in the caller's organization.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../jsonschema/v1/credential_revoke_on_behalf_request.v1.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "The MCP-bound credential is revoked; one credential_revoked audit row names the actor type and id the body gave. Only a workload-class credential whose binding role is revoke is served."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/context-fabric/data/catalog": {
       "get": {
         "operationId": "readContextFabricDataCatalog",

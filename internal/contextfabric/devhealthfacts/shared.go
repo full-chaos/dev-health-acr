@@ -1458,7 +1458,26 @@ import (
 // v285 -> v286: two ISO dates in a question are read as its range when the
 // interpreter read it as current (CHAOS-13010). An answer saved under v285 to
 // such a question holds a current-state read.
-const QueryVersion = "devhealthfacts.clickhouse.v286"
+//
+// v286 -> v287: a quadrant refused for different days also offers the day the
+// teams share as a window option the user picks (window_clarification and
+// structure_needs), and the model is no longer shown common_live_day
+// (CHAOS-13009). An answer saved under v286 holds the refusal without the option.
+const QueryVersion = "devhealthfacts.clickhouse.v287"
+
+// repositoryFromOpsVersionSuffix marks the version of a deployment that reads
+// the repository investment mix from ops (CHAOS-12690): the numbers differ for
+// a unit that spans repositories, so an answer stored under the other source
+// must not be reused. With the switch off the version is QueryVersion itself.
+const repositoryFromOpsVersionSuffix = "+repository_from_ops"
+
+// QueryVersionFor is the version a deployment stamps and keys reuse by.
+func QueryVersionFor(repositoryFromOps bool) string {
+	if repositoryFromOps {
+		return QueryVersion + repositoryFromOpsVersionSuffix
+	}
+	return QueryVersion
+}
 
 // repositoryFromOpsVersionSuffix marks the version of a deployment that reads
 // the repository investment mix from ops (CHAOS-12690): the numbers differ for
