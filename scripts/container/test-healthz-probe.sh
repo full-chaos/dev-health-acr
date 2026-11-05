@@ -26,13 +26,15 @@ fail=0
 ok() { printf 'ok: %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf 'FAIL: %s\n' "$1" >&2; fail=$((fail + 1)); }
 
-# start_listener RESETS BODY: resets the first RESETS connections, then answers BODY.
+# start_listener RESETS BODY: resets the first RESETS connections, then answers BODY (@file reads it from a file).
 start_listener() {
   local resets="$1" body="$2"
   rm -f "$fixture/port"
   python3 - "$resets" "$body" "$fixture/port" <<'PY' &
 import socket, struct, sys
 resets, body, portfile = int(sys.argv[1]), sys.argv[2], sys.argv[3]
+if body.startswith("@"):
+    body = open(body[1:]).read()
 srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 srv.bind(("127.0.0.1", 0)); srv.listen(16)
 open(portfile, "w").write(str(srv.getsockname()[1]))
@@ -44,9 +46,12 @@ while True:
         conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
         conn.close()
         continue
-    conn.recv(4096)
-    payload = body.encode()
-    conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s" % (len(payload), payload))
+    try:
+        conn.recv(4096)
+        payload = body.encode()
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s" % (len(payload), payload))
+    except OSError:
+        pass
     conn.close()
 PY
   listener_pid=$!
@@ -91,6 +96,18 @@ if wait_for_healthz "http://127.0.0.1:${port}/healthz" 2 0.2 2>"$fixture/err"; t
   bad "wait_for_healthz accepted a body with two JSON values, the last one ok"
 else
   ok "wait_for_healthz refuses a body with more than one JSON value"
+fi
+stop_listener
+
+# 3c. A huge reply is neither held whole nor printed whole.
+head -c 1048576 /dev/zero | tr '\000' x >"$fixture/huge"
+start_listener 0 "@$fixture/huge"
+if wait_for_healthz "http://127.0.0.1:${port}/healthz" 2 0.2 2>"$fixture/err"; then
+  bad "wait_for_healthz accepted a 1 MiB junk body"
+elif [[ "$(wc -c <"$fixture/err")" -lt 2048 ]]; then
+  ok "wait_for_healthz reports a bounded diagnostic for a 1 MiB reply"
+else
+  bad "wait_for_healthz printed $(wc -c <"$fixture/err") bytes for a 1 MiB reply"
 fi
 stop_listener
 

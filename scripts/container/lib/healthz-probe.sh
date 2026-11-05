@@ -16,13 +16,15 @@ wait_for_healthz() {
   started="$(date +%s)"
   while :; do
     attempts=$((attempts + 1))
-    if body="$(curl --fail --silent --show-error --max-time 5 "$url" 2>&1)"; then
+    # At most 64 KiB of a reply is read (a faulty handler cannot fill memory or
+    # the CI log), and only the first 300 characters of it are ever reported.
+    if body="$(set -o pipefail; curl --fail --silent --show-error --max-time 5 "$url" 2>&1 | head -c 65536)"; then
       if printf '%s' "$body" | jq -e -s 'length == 1 and .[0].status == "ok"' >/dev/null 2>&1; then
         return 0
       fi
-      last="answered without status ok: ${body}"
+      last="answered without status ok: ${body:0:300}"
     else
-      last="$body"
+      last="${body:0:300}"
     fi
     now="$(date +%s)"
     if ((now - started >= deadline)); then

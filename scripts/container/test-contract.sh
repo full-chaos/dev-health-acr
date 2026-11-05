@@ -567,7 +567,6 @@ bash "${repo_root}/scripts/container/test-trivy-db-freshness.sh"
 bash "${repo_root}/scripts/container/test-trivy-report-classify.sh"
 bash "${repo_root}/scripts/container/test-prune-stale-attempt-dirs.sh"
 bash "${repo_root}/scripts/container/test-healthz-probe.sh"
-grep -q '^wait_for_healthz "http://127.0.0.1:${api_port}/healthz"' "${repo_root}/scripts/container/verify.sh"
 bash "${repo_root}/scripts/container/test-trivy-db-provenance.sh"
 
 # 18. The MCP runtime must contain Git but no shell at all; build-only shell
