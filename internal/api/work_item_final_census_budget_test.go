@@ -165,7 +165,10 @@ func TestWorkItemFinalCensusParticipatesInBudgetRetry(t *testing.T) {
 				if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil {
 					t.Fatal(err)
 				}
-				measurement, err := contractsv1.MeasureContextFabricResponse(result)
+				// The engine measures the document before the words are composed.
+				unworded := result
+				unworded.VocabularyLabels = nil
+				measurement, err := contractsv1.MeasureContextFabricResponse(unworded)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -184,7 +187,10 @@ func TestWorkItemFinalCensusParticipatesInBudgetRetry(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !reflect.DeepEqual(stored.Result, result) {
+				// The served words are composed on read and never stored.
+				storedForm := result
+				storedForm.VocabularyLabels = nil
+				if !reflect.DeepEqual(stored.Result, storedForm) {
 					t.Fatal("served result differs from codec-persisted result")
 				}
 				census := stored.SemanticState.WorkItemCensus

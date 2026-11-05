@@ -281,6 +281,8 @@ func TestWorkItemFreshHTTPUsesActualProducers(t *testing.T) {
 			if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
 				t.Fatal(err)
 			}
+			// The served words are composed on read and never stored.
+			result.VocabularyLabels = nil
 			if graph.resolve != 1 || graph.discover != 0 {
 				t.Fatalf("graph resolve=%d discover=%d", graph.resolve, graph.discover)
 			}

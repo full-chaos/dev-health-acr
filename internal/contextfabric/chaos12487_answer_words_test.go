@@ -115,8 +115,8 @@ func TestAnUnknownDriverStateOrScoreMeaningHasNoKey(t *testing.T) {
 func TestTheMismatchSentenceSurvivesTheStatusTier(t *testing.T) {
 	bare := correctedFixture()
 	bare.Cohort = &contractsv1.ContextFabricCohort{ScoreMeaning: contractsv1.ContextFabricCohortScoreMeaningAttention, JudgmentMismatch: true}
-	labeled, _ := ServeVocabularyLabels(bare, true, 0)
-	served, tier := ServeVocabularyLabels(bare, true, encodedSize(t, labeled)-1)
+	labeled, _ := ServeVocabularyLabels(bare, 0)
+	served, tier := ServeVocabularyLabels(bare, encodedSize(t, labeled)-1)
 	if tier != contractsv1.ContextFabricVocabularyLabelsStatusOnly {
 		t.Fatalf("one byte short of the full map: tier %q", tier)
 	}

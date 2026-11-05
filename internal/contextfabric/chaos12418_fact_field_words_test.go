@@ -64,11 +64,11 @@ func TestTheMapHoldsOnlyTheFieldsOfThisResult(t *testing.T) {
 func TestTheStatusTierHoldsNoFactFieldWord(t *testing.T) {
 	bare := correctedFixture()
 	bare.ClaimedFacts = []contractsv1.ContextFabricClaimedFact{claimedFactWithTables()}
-	labeled, tier := ServeVocabularyLabels(bare, true, 0)
+	labeled, tier := ServeVocabularyLabels(bare, 0)
 	if tier != contractsv1.ContextFabricVocabularyLabelsFull {
 		t.Fatalf("no bound: tier %q", tier)
 	}
-	served, tier := ServeVocabularyLabels(bare, true, encodedSize(t, labeled)-1)
+	served, tier := ServeVocabularyLabels(bare, encodedSize(t, labeled)-1)
 	if tier != contractsv1.ContextFabricVocabularyLabelsStatusOnly {
 		t.Fatalf("one byte short of the full map: tier %q", tier)
 	}

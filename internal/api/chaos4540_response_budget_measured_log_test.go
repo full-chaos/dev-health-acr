@@ -64,7 +64,7 @@ func decodeLogLine(t *testing.T, logs string, want string) map[string]any {
 // response was built from.
 func TestContextFabricInvestigationRoutePassingAnswerLogsBudgetMeasurement(t *testing.T) {
 	result := threeRollupProjectStatusResult("result_4540_pass")
-	measuredBytes := marshaledSize(t, result)
+	measuredBytes := servedMeasuredBytes(t, result)
 	estimatedTokens := (measuredBytes + 3) / 4
 	wantItems := contextFabricResultItemCounts(result).Total()
 
@@ -164,7 +164,7 @@ func TestContextFabricInvestigationRouteExceededPathStillLogsTheExceedLine(t *te
 // measurement either.
 func TestContextFabricInvestigationResultRoutePassingAnswerLogsBudgetMeasurement(t *testing.T) {
 	result := storedNamingItsInterpreter(threeRollupProjectStatusResult("result_4540_get_pass"))
-	measuredBytes := marshaledSize(t, result)
+	measuredBytes := servedMeasuredBytes(t, result)
 	estimatedTokens := (measuredBytes + 3) / 4
 	wantItems := contextFabricResultItemCounts(result).Total()
 	store := memoryinvestigation.NewStore()

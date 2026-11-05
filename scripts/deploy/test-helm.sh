@@ -1050,15 +1050,11 @@ extract_container_block() {
   '
 }
 
-# CHAOS-12416: acr-api always declares the vocabulary labels flag: off by
-# default, because a consumer on an old pin fails every answer that holds the
-# map, and on only when the value is set.
-vocabulary_labels_value() {
-  extract_container_block acr-api | grep -A1 'name: ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED' | sed -n 's/^ *value: //p'
-}
-[[ "$(vocabulary_labels_value <"$rendered")" == '"false"' ]] || fail_gate "vocabulary-labels: acr-api does not declare the flag off by default"
-[[ "$(render --set contextFabric.vocabularyLabelsEnabled=true | vocabulary_labels_value)" == '"true"' ]] || fail_gate "vocabulary-labels: contextFabric.vocabularyLabelsEnabled=true does not reach acr-api"
-pass "vocabulary-labels: acr-api declares the flag off by default and on only when set"
+# CHAOS-12458: the vocabulary labels flag is gone; the map is always served.
+# acr-api no longer renders the variable, with or without the old value set.
+! extract_container_block acr-api <"$rendered" | grep -q 'ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED' || fail_gate "vocabulary-labels: acr-api still declares the removed flag"
+! render --set contextFabric.vocabularyLabelsEnabled=true | extract_container_block acr-api | grep -q 'ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED' || fail_gate "vocabulary-labels: the removed value still reaches acr-api"
+pass "vocabulary-labels: acr-api no longer declares the removed flag"
 
 # CHAOS-12472: Ask Dev's Stop needs the run lease. acr-api declares it off by
 # default, on only when set, and acr-api refuses to start with the lease on and

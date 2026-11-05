@@ -167,10 +167,6 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.ServerCompletenessAuthoritySymmetricEnabled, err = boolValue(lookup, "ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_SYMMETRIC_ENABLED", false); err != nil {
 		return err
 	}
-	// CHAOS-12416: default OFF -- see Config.ContextFabricVocabularyLabelsEnabled.
-	if cfg.ContextFabricVocabularyLabelsEnabled, err = boolValue(lookup, ContextFabricVocabularyLabelsEnabledEnvVar, false); err != nil {
-		return err
-	}
 	// CHAOS-12513: default OFF -- see Config.ContextFabricComparisonTableEnabled.
 	if cfg.ContextFabricComparisonTableEnabled, err = boolValue(lookup, ContextFabricComparisonTableEnabledEnvVar, false); err != nil {
 		return err
@@ -236,9 +232,6 @@ const ContextFabricComparisonTableEnabledEnvVar = "ACR_CONTEXT_FABRIC_COMPARISON
 // ContextFabricLandscapeQuadrantEnabledEnvVar turns on the landscape_position
 // render rule (CHAOS-12626).
 const ContextFabricLandscapeQuadrantEnabledEnvVar = "ACR_CONTEXT_FABRIC_LANDSCAPE_QUADRANT_ENABLED"
-
-// ContextFabricVocabularyLabelsEnabledEnvVar serves vocabulary_labels (CHAOS-12416).
-const ContextFabricVocabularyLabelsEnabledEnvVar = "ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED"
 
 // ContextFabricEventStreamEnabledEnvVar turns the investigation event stream
 // on (CHAOS-11911).
@@ -327,7 +320,6 @@ func (c Config) SafeAttributes() []any {
 		"context_fabric_completion_distribution_enabled", c.CompletionDistributionEnabled,
 		"context_fabric_server_completeness_authority_enabled", c.ServerCompletenessAuthorityEnabled,
 		"context_fabric_server_completeness_authority_symmetric_enabled", c.ServerCompletenessAuthoritySymmetricEnabled,
-		"context_fabric_vocabulary_labels_enabled", c.ContextFabricVocabularyLabelsEnabled,
 		"context_fabric_investment_treemap_enabled", c.ContextFabricInvestmentTreemapEnabled,
 		"context_fabric_investment_sunburst_enabled", c.ContextFabricInvestmentSunburstEnabled,
 		"context_fabric_investment_sankey_enabled", c.ContextFabricInvestmentSankeyEnabled,

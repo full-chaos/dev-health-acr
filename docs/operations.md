@@ -1057,27 +1057,21 @@ by default, and a release with it off renders exactly as before.
 
 ### Vocabulary labels on an answer (CHAOS-12416)
 
-`ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED` (helm
-`contextFabric.vocabularyLabelsEnabled`, default `false`) serves the
-`vocabulary_labels` map on every answer: the service's own word for each closed
-value in that result, and the status correction sentence.
+`vocabulary_labels` is always served on every answer: the service's own word for
+each closed value in that result, and the status correction sentence. It was
+behind `ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED` until CHAOS-12458; that
+setting and the helm value `contextFabric.vocabularyLabelsEnabled` are gone.
 
-**Why it is a flag.** An existing deploy order cannot protect `main`. The result
-root is `additionalProperties:false`, and acr and web roll separately, so a
-consumer on a pin that does not carry the field fails every answer that holds
-the map. CHAOS-12458 removes the flag once every consumer's pin is
-deployed.
+**Consumer pins.** The result root is `additionalProperties:false`, and acr and web
+roll separately, so a consumer on a pin that does not carry the field fails every
+answer that holds the map. Before rolling acr at or after CHAOS-12458 to an
+environment, confirm that the deployed pins of ask-dev, web and every MCP client
+there carry `vocabulary_labels` (web 5c3e1ee6, ask-dev b92ac2c).
 
-| State | What is served |
-|---|---|
-| Off (default) | No map, and no key on the wire. `coverage.sources[].label` and `.state_label` are stamped from the structured state, so a stored result reads today's words with no migration. |
-| On | The same, plus the map on the result, on the bounded projection and on MCP. |
-
-The stamped source words are not gated, because those fields are on every pin.
 The map is composed on a served copy at both doors that serve a result: the
 create route, for every engine exit and the event stream, and the read by id,
 for the replay of a done submission and the attach terminal. It is never stored, so
-turning the flag on or off needs no migration and no backfill.
+it needs no migration and no backfill.
 
 **The investment treemap.** `ACR_CONTEXT_FABRIC_INVESTMENT_TREEMAP_ENABLED`
 (chart: `contextFabric.investmentTreemapEnabled`, default `false`) turns on the
@@ -1130,11 +1124,6 @@ flag. With the flag off, both doors that serve a result remove a stored table.
 `landscape_position` render rule, with the same order: pins first, then the
 flag. With the flag off, both doors that serve a result remove a stored
 quadrant and its served line.
-
-**The roll step "vocabulary labels on".** Confirm that the deployed pins of
-ask-dev, web and every MCP client carry `vocabulary_labels`. Then set the flag
-for `acr-api` and roll it. To turn it off, unset the flag and roll: the next read
-of the same result carries no map.
 
 **Budget.** The map counts against the byte budget it is served under. The engine
 fits an answer with no map, so a label never costs a row, and a label never refuses

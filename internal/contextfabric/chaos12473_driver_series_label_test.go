@@ -49,7 +49,7 @@ func rankingSignals() []string {
 func TestADriverSeriesReadsTheServedRankingSignalWord(t *testing.T) {
 	t.Parallel()
 	result, stack := driverSeriesAnswer(t, rankingSignals())
-	served, _ := ServeVocabularyLabels(result, true, 1<<20)
+	served, _ := ServeVocabularyLabels(result, 1<<20)
 	for _, series := range stack.Series {
 		word := served.VocabularyLabels[contractsv1.ContextFabricVocabularyLabelKey(contractsv1.ContextFabricVocabularyRankingSignal, series.Key)]
 		if word == "" {
@@ -83,19 +83,17 @@ func TestAStoredDriverSeriesIsRestatedAtServe(t *testing.T) {
 	other := contractsv1.ContextFabricRenderShape{SelectedBy: contractsv1.ContextFabricRenderRuleCohortAttentionScore,
 		Series: []contractsv1.ContextFabricRenderSeries{{Key: "attention_score", Label: "Attention. score"}}}
 	result.RenderShapes = []contractsv1.ContextFabricRenderShape{*stack, other}
-	for _, enabled := range []bool{true, false} {
-		served, _ := ServeVocabularyLabels(result, enabled, 1<<20)
-		restated := shapeByRule(served.RenderShapes, contractsv1.ContextFabricRenderRuleCohortDriverContribution)
-		if got := restated.Series[0].Label; got != "Health risk" {
-			t.Errorf("flag %v: legend %q, want the word", enabled, got)
-		}
-		if got := shapeByRule(served.RenderShapes, contractsv1.ContextFabricRenderRuleCohortAttentionScore).Series[0].Label; got != "Attention. score" {
-			t.Errorf("flag %v: another shape's label became %q", enabled, got)
-		}
+	served, _ := ServeVocabularyLabels(result, 1<<20)
+	restated := shapeByRule(served.RenderShapes, contractsv1.ContextFabricRenderRuleCohortDriverContribution)
+	if got := restated.Series[0].Label; got != "Health risk" {
+		t.Errorf("legend %q, want the word", got)
+	}
+	if got := shapeByRule(served.RenderShapes, contractsv1.ContextFabricRenderRuleCohortAttentionScore).Series[0].Label; got != "Attention. score" {
+		t.Errorf("another shape's label became %q", got)
 	}
 	// Past the bound the door falls back to a document with no stamps. The legend
 	// stays the word there too, and that document is what a refusal measures.
-	tooSmall, _ := ServeVocabularyLabels(result, true, 1)
+	tooSmall, _ := ServeVocabularyLabels(result, 1)
 	if got := shapeByRule(tooSmall.RenderShapes, contractsv1.ContextFabricRenderRuleCohortDriverContribution).Series[0].Label; got != "Health risk" {
 		t.Errorf("past the bound: legend %q, want the word", got)
 	}

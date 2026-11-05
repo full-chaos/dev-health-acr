@@ -188,6 +188,11 @@ func TestRetainedRankingProductionSnapshotServing(t *testing.T) {
 					// A ceiling that fits the served copy without its added row
 					// must refuse after that row is included. Use measured bytes,
 					// not an assumed row size or an increased proof budget.
+					// The served copy also carries the words, which the door sheds
+					// before it refuses: measure both documents without them, as
+					// the row is stored.
+					got.VocabularyLabels = nil
+					got.Coverage.Sources = stored.Result.Coverage.Sources
 					without := got
 					without.Completeness.Outcomes = nil
 					for _, row := range got.Completeness.Outcomes {

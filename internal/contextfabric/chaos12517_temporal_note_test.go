@@ -24,7 +24,7 @@ func TestAHistoricalAnswerServesItsEffectiveTime(t *testing.T) {
 	if result.Temporal == nil || result.Temporal.CoverageComplete {
 		t.Fatalf("the example must carry an incomplete temporal label: %+v", result.Temporal)
 	}
-	served, _ := ServeVocabularyLabels(result, true, 0)
+	served, _ := ServeVocabularyLabels(result, 0)
 	want := "This answer speaks for 2026-02-28, not the 2026-03-01 you asked about, and not every source covers it."
 	if got := served.VocabularyLabels["temporal:note"]; got != want {
 		t.Fatalf("temporal:note = %q, want %q", got, want)
@@ -49,8 +49,8 @@ func TestTheTemporalNoteSurvivesTheStatusTier(t *testing.T) {
 	if err := json.Unmarshal(raw, &bare); err != nil {
 		t.Fatal(err)
 	}
-	labeled, _ := ServeVocabularyLabels(bare, true, 0)
-	served, tier := ServeVocabularyLabels(bare, true, encodedSize(t, labeled)-1)
+	labeled, _ := ServeVocabularyLabels(bare, 0)
+	served, tier := ServeVocabularyLabels(bare, encodedSize(t, labeled)-1)
 	if tier != contractsv1.ContextFabricVocabularyLabelsStatusOnly {
 		t.Fatalf("one byte short of the full map: tier %q", tier)
 	}

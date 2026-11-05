@@ -21,7 +21,7 @@ func TestEachEdgeTypeInAServedPathHasAWord(t *testing.T) {
 	if err := json.Unmarshal(raw, &result); err != nil {
 		t.Fatal(err)
 	}
-	served, _ := ServeVocabularyLabels(result, true, 0)
+	served, _ := ServeVocabularyLabels(result, 0)
 	edges := 0
 	for _, path := range served.Paths {
 		for _, edge := range path.Edges {
