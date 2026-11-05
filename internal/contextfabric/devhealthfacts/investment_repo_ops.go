@@ -291,6 +291,12 @@ func (p *InvestmentProvider) priorThemeFieldsFromOps(ctx context.Context, princi
 	if !readable {
 		return []opsMixWithheld{{subject: subject, reason: RepoOpsWithheldNoPrior}}
 	}
+	// The current window refuses an unknown positive theme; so does the prior.
+	for key, value := range themes {
+		if !slices.Contains(canonicalInvestmentThemes[:], key) && value > 0 {
+			return []opsMixWithheld{{subject: subject, reason: RepoOpsWithheldNoPrior}}
+		}
+	}
 	total := 0.0
 	for _, theme := range canonicalInvestmentThemes {
 		total += themes[theme]

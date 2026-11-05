@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -130,4 +131,49 @@ func TestCHAOS12690TeamWithNoAnswerGetsAClosedReason(t *testing.T) {
 	if reasons := servedReasons(result, opsTeam); !strings.Contains(reasons, opsMixWithheldPrefix) {
 		t.Fatalf("no named reason: %q", reasons)
 	}
+}
+
+func TestCHAOS12690TeamPriorAnswerWithAnUnknownPositiveThemeServesNoPrior(t *testing.T) {
+	t.Parallel()
+	sized := int64(3)
+	caller := opsMixCaller(&sized)
+	prior := sunburstThemes()
+	prior["future_theme"] = 100
+	start, end := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC)
+	holder := NewOperationHolder()
+	holder.Set(priorOverrideCaller{inner: caller, prior: breakdownAnswer("THEME", prior)})
+	provider := newInvestmentProvider(&statementCountingClient{})
+	provider.operations = holder
+	provider.teamFromOps = true
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{opsTeam}, TimeEndExclusive: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fact := investmentFactOf(result, opsTeam)
+	if fact == nil {
+		t.Fatal("the current-window fact must still be served")
+	}
+	if _, ok := fact.Fields[contextfabric.FactFieldPriorTheme("feature_delivery")]; ok {
+		t.Fatal("a prior answer with an unknown positive theme served a prior share")
+	}
+	if reasons := servedReasons(result, opsTeam); !strings.Contains(reasons, RepoOpsWithheldNoPrior) {
+		t.Fatalf("no named reason: %q", reasons)
+	}
+}
+
+// priorOverrideCaller answers the prior-window call (start 2026-08-17) with
+// prior and every other call with inner.
+type priorOverrideCaller struct {
+	inner *breakdownCaller
+	prior OperationOutcome
+}
+
+func (c priorOverrideCaller) CallOperation(ctx context.Context, p storage.Principal, operation string, variables json.RawMessage) (OperationOutcome, error) {
+	if strings.Contains(string(variables), `"startDate":"2026-08-17"`) {
+		return c.prior, nil
+	}
+	return c.inner.CallOperation(ctx, p, operation, variables)
 }
