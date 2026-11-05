@@ -165,10 +165,22 @@ func TestDecideReadFallbackTrigger(t *testing.T) {
 			wantReason: ReadFallbackReasonJudgmentUnservable, wantTrigger: ReadFallbackTriggerRankingInputs,
 		},
 		{
-			name: "the same turn with the judgment kind performance fires F1 first",
+			name: "the same turn with the judgment kind performance holds F1 and F4 both",
 			input: ReadFallbackDecisionInput{Definition: ranking, JudgmentKind: RequestedJudgmentKindPerformance,
 				InterpretedKinds: []FactKind{FactMetrics, FactBlockers}, MemberKind: SubjectTeam, Capabilities: capabilities},
+			wantReason: ReadFallbackReasonJudgmentUnservable, wantTrigger: ReadFallbackTriggerJudgmentKindAndRankingInputs,
+		},
+		{
+			name: "F1 alone: performance with a listed ranking input",
+			input: ReadFallbackDecisionInput{Definition: ranking, JudgmentKind: RequestedJudgmentKindPerformance,
+				InterpretedKinds: []FactKind{FactMetrics, FactHealth}, MemberKind: SubjectTeam, Capabilities: capabilities},
 			wantReason: ReadFallbackReasonJudgmentUnservable, wantTrigger: ReadFallbackTriggerJudgmentKind,
+		},
+		{
+			name: "an unknown judgment kind with blockers only is F4 alone",
+			input: ReadFallbackDecisionInput{Definition: ranking, JudgmentKind: "productivity",
+				InterpretedKinds: []FactKind{FactBlockers}, MemberKind: SubjectTeam, Capabilities: capabilities},
+			wantReason: ReadFallbackReasonJudgmentUnservable, wantTrigger: ReadFallbackTriggerRankingInputs,
 		},
 		{
 			name: "attention is named but the listed kind is no ranking input",

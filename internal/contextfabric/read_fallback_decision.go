@@ -29,6 +29,10 @@ const (
 	// listed kinds, and none of them is an input of that ranking (CHAOS-13002:
 	// the same question carried a judgment kind once and none twice).
 	ReadFallbackTriggerRankingInputs ReadFallbackTrigger = "ranking_inputs"
+	// ReadFallbackTriggerJudgmentKindAndRankingInputs: F1 and F4 both hold, so
+	// a turn that carried a judgment kind still shows whether F4 alone would
+	// have fired.
+	ReadFallbackTriggerJudgmentKindAndRankingInputs ReadFallbackTrigger = "judgment_kind_and_ranking_inputs"
 	// ReadFallbackTriggerKindUnserved (F3): a listed kind serves none of the
 	// member kinds.
 	ReadFallbackTriggerKindUnserved ReadFallbackTrigger = "kind_unserved"
@@ -36,7 +40,7 @@ const (
 
 // ReadFallbackTriggerVocabulary is the closed trigger vocabulary in order.
 func ReadFallbackTriggerVocabulary() []ReadFallbackTrigger {
-	return []ReadFallbackTrigger{ReadFallbackTriggerJudgmentKind, ReadFallbackTriggerRankingInputs, ReadFallbackTriggerKindUnserved}
+	return []ReadFallbackTrigger{ReadFallbackTriggerJudgmentKind, ReadFallbackTriggerRankingInputs, ReadFallbackTriggerJudgmentKindAndRankingInputs, ReadFallbackTriggerKindUnserved}
 }
 
 // ReadFallbackDecisionInput is every value DecideReadFallback may read. All
@@ -62,15 +66,19 @@ func DecideReadFallback(input ReadFallbackDecisionInput) ReadFallbackReason {
 }
 
 // DecideReadFallbackWithTrigger is DecideReadFallback that also names the
-// test that fired. F1 is tried first, then F4, then F3.
+// test that fired: F1, F4, both (when F1 and F4 hold), or else F3.
 func DecideReadFallbackWithTrigger(input ReadFallbackDecisionInput) (ReadFallbackReason, ReadFallbackTrigger) {
 	if input.WorkItemList || input.MemberKind == "" {
 		return "", ""
 	}
-	if input.Definition.RequireRanking && !scoreMeaningSupportsJudgmentKind(CohortScoreMeaningAttention, input.JudgmentKind) {
+	judgmentUnservable := input.Definition.RequireRanking && !scoreMeaningSupportsJudgmentKind(CohortScoreMeaningAttention, input.JudgmentKind)
+	noRankingInput := input.Definition.RequireRanking && listedKindsAreNoRankingInput(input.InterpretedKinds, input.Capabilities)
+	switch {
+	case judgmentUnservable && noRankingInput:
+		return ReadFallbackReasonJudgmentUnservable, ReadFallbackTriggerJudgmentKindAndRankingInputs
+	case judgmentUnservable:
 		return ReadFallbackReasonJudgmentUnservable, ReadFallbackTriggerJudgmentKind
-	}
-	if input.Definition.RequireRanking && listedKindsAreNoRankingInput(input.InterpretedKinds, input.Capabilities) {
+	case noRankingInput:
 		return ReadFallbackReasonJudgmentUnservable, ReadFallbackTriggerRankingInputs
 	}
 	policies := input.scopePolicies
