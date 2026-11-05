@@ -27,9 +27,10 @@ const (
 
 	repoOpsWithheldPrefix = "investment_repository_from_ops_withheld"
 
-	RepoOpsWithheldCap      = "read_cap"
-	RepoOpsWithheldNoData   = "no_data"
-	RepoOpsWithheldNoSizing = "sizing_coverage_not_served"
+	RepoOpsWithheldCap            = "read_cap"
+	RepoOpsWithheldNoData         = "no_data"
+	RepoOpsWithheldNoSizing       = "sizing_coverage_not_served"
+	RepoOpsWithheldCountsDisagree = "unit_counts_disagree"
 )
 
 // repoOpsWithheld is why one repository carries no fact, or no sizing
@@ -63,6 +64,13 @@ type evidenceQualityAnswer struct {
 type opsUnitCounts struct {
 	total, uncategorized int64
 	sized                *int64
+}
+
+func (c opsUnitCounts) equal(other opsUnitCounts) bool {
+	if c.total != other.total || c.uncategorized != other.uncategorized || (c.sized == nil) != (other.sized == nil) {
+		return false
+	}
+	return c.sized == nil || *c.sized == *other.sized
 }
 
 func parseEvidenceQuality(data json.RawMessage) (opsUnitCounts, bool) {
@@ -134,12 +142,17 @@ func (p *InvestmentProvider) repositoryFactFromOps(ctx context.Context, principa
 			return nil, why(SubcategoryWithheldUnreadable, "")
 		}
 		answers[dimension] = values
-		if dimension == "THEME" {
-			var countsOK bool
-			if counts, countsOK = parseEvidenceQuality(outcome.Data); !countsOK {
-				return nil, why(SubcategoryWithheldUnreadable, "")
-			}
+		dimensionCounts, countsOK := parseEvidenceQuality(outcome.Data)
+		if !countsOK {
+			return nil, why(SubcategoryWithheldUnreadable, "")
 		}
+		// Both calls ask for the same scope and window, so their unit counts are
+		// one answer: a disagreement is not served (a count taken from either
+		// would be a guess).
+		if dimension == "SUBCATEGORY" && !dimensionCounts.equal(counts) {
+			return nil, why(RepoOpsWithheldCountsDisagree, "")
+		}
+		counts = dimensionCounts
 	}
 	themes, subcategories := answers["THEME"], answers["SUBCATEGORY"]
 	// The two answers must agree, by the rule of the subcategory table: no
