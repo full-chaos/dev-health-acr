@@ -464,8 +464,10 @@ func TestEveryProjectionStringFieldIsClassified(t *testing.T) {
 		// CHAOS-12608: 388 -> 394 -- claimed_facts[].completion_forecast's six
 		// strings (work_scope_id, state, computed_at, three dates), as on the
 		// projection (267 -> 273). CHAOS-12639: 394 -> 398 -- the same four
-		// column word leaves as the projection.
-		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 398},
+		// column word leaves as the projection. CHAOS-13002: 398 -> 401 --
+		// answer_plan.fallback's reason, planned_kinds[] and outcome; the
+		// projection carries no plan.
+		{name: "investigation_result", root: "result", prefix: "structured", untrusted: MCPInvestigationResultUntrustedFields, expectedPaths: 401},
 	} {
 		t.Run(surface.name, func(t *testing.T) {
 			paths := stringPathsIn(t, documents, surface.root, surface.prefix)
@@ -523,6 +525,14 @@ func trustedBecauseClosed(path string) bool {
 	// the bare leaf "reason", which other shapes in this contract use for
 	// free text: allowlisting the leaf would trust them too.
 	if strings.HasSuffix(path, ".semantic_reading.reason") {
+		return true
+	}
+	// answer_plan.fallback (CHAOS-13002): reason is
+	// ContextFabricReadFallbackReason and planned_kinds the closed fact-kind
+	// enum, each rejected by ContextFabricAnswerPlan.Validate before a result
+	// is stored. The model picks the kinds, but only from the vocabulary.
+	// Matched on full suffixes, never the bare leaf "reason".
+	if strings.HasSuffix(path, ".answer_plan.fallback.reason") || strings.HasSuffix(path, ".answer_plan.fallback.planned_kinds[]") {
 		return true
 	}
 	// investment_mix (CHAOS-12160) is set by the server from the claim's

@@ -179,12 +179,20 @@ func loadHostedRuntimeValues(lookup lookupEnv, cfg *Config, defaultRequireStores
 	if cfg.ContextFabricLandscapeQuadrantEnabled, err = boolValue(lookup, ContextFabricLandscapeQuadrantEnabledEnvVar, false); err != nil {
 		return err
 	}
+	// CHAOS-13002: default OFF -- see Config.ContextFabricReadFallbackEnabled.
+	if cfg.ContextFabricReadFallbackEnabled, err = boolValue(lookup, ContextFabricReadFallbackEnabledEnvVar, false); err != nil {
+		return err
+	}
 	// CHAOS-12521: default OFF -- see Config.ContextFabricInvestmentTreemapEnabled.
 	if cfg.ContextFabricInvestmentTreemapEnabled, err = boolValue(lookup, ContextFabricInvestmentTreemapEnabledEnvVar, false); err != nil {
 		return err
 	}
 	// CHAOS-12554: default OFF -- see Config.ContextFabricInvestmentSunburstEnabled.
 	if cfg.ContextFabricInvestmentSunburstEnabled, err = boolValue(lookup, ContextFabricInvestmentSunburstEnabledEnvVar, false); err != nil {
+		return err
+	}
+	// CHAOS-12690: default OFF -- see Config.ContextFabricInvestmentRepositoryFromOpsEnabled.
+	if cfg.ContextFabricInvestmentRepositoryFromOpsEnabled, err = boolValue(lookup, ContextFabricInvestmentRepositoryFromOpsEnabledEnvVar, false); err != nil {
 		return err
 	}
 	// CHAOS-12582: default OFF -- see Config.ContextFabricInvestmentSankeyEnabled.
@@ -225,6 +233,10 @@ const ContextFabricInvestmentTreemapEnabledEnvVar = "ACR_CONTEXT_FABRIC_INVESTME
 // (CHAOS-12554).
 const ContextFabricInvestmentSunburstEnabledEnvVar = "ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED"
 
+// ContextFabricInvestmentRepositoryFromOpsEnabledEnvVar reads the repository
+// investment mix from the ops breakdown (CHAOS-12690).
+const ContextFabricInvestmentRepositoryFromOpsEnabledEnvVar = "ACR_CONTEXT_FABRIC_INVESTMENT_REPOSITORY_FROM_OPS_ENABLED"
+
 // ContextFabricInvestmentSankeyEnabledEnvVar turns on the
 // investment_repository_flow render rule (CHAOS-12582).
 const ContextFabricInvestmentSankeyEnabledEnvVar = "ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED"
@@ -236,6 +248,10 @@ const ContextFabricComparisonTableEnabledEnvVar = "ACR_CONTEXT_FABRIC_COMPARISON
 // ContextFabricLandscapeQuadrantEnabledEnvVar turns on the landscape_position
 // render rule (CHAOS-12626).
 const ContextFabricLandscapeQuadrantEnabledEnvVar = "ACR_CONTEXT_FABRIC_LANDSCAPE_QUADRANT_ENABLED"
+
+// ContextFabricReadFallbackEnabledEnvVar turns on the read fallback
+// (CHAOS-13002).
+const ContextFabricReadFallbackEnabledEnvVar = "ACR_CONTEXT_FABRIC_READ_FALLBACK_ENABLED"
 
 // ContextFabricVocabularyLabelsEnabledEnvVar serves vocabulary_labels (CHAOS-12416).
 const ContextFabricVocabularyLabelsEnabledEnvVar = "ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED"
@@ -330,9 +346,11 @@ func (c Config) SafeAttributes() []any {
 		"context_fabric_vocabulary_labels_enabled", c.ContextFabricVocabularyLabelsEnabled,
 		"context_fabric_investment_treemap_enabled", c.ContextFabricInvestmentTreemapEnabled,
 		"context_fabric_investment_sunburst_enabled", c.ContextFabricInvestmentSunburstEnabled,
+		"context_fabric_investment_repository_from_ops_enabled", c.ContextFabricInvestmentRepositoryFromOpsEnabled,
 		"context_fabric_investment_sankey_enabled", c.ContextFabricInvestmentSankeyEnabled,
 		"context_fabric_comparison_table_enabled", c.ContextFabricComparisonTableEnabled,
 		"context_fabric_landscape_quadrant_enabled", c.ContextFabricLandscapeQuadrantEnabled,
+		"context_fabric_read_fallback_enabled", c.ContextFabricReadFallbackEnabled,
 		"context_fabric_event_stream_enabled", c.ContextFabricEventStreamEnabled,
 		"context_fabric_run_lease_enabled", c.ContextFabricRunLeaseEnabled,
 		"ask_dev_retention_enabled", c.AskDevRetentionEnabled,

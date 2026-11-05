@@ -429,3 +429,7 @@ func TestSynthesizeSendsThePromptThatAsksForRelevantFactsAsClaims(t *testing.T) 
 		t.Fatalf("the request sent to the model lacks %q", instruction)
 	}
 }
+
+func (g *scriptedGenerator) PlanReads(context.Context, generationRequest) (planReadsOutput, contextfabric.ModelUsage, error) {
+	return planReadsOutput{}, contextfabric.ModelUsage{}, errors.New("scriptedGenerator.PlanReads is unused")
+}

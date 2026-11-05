@@ -123,9 +123,11 @@ var contextFabricCommonDefsRewrites = map[string]string{
 	// CHAOS-4636: the grouped cohort's own new common $defs entry, plus the
 	// answer plan's eight (the plan, its budget, one narrowing step, and
 	// the five closed vocabularies they key on).
-	"#/$defs/CohortGroup":          "#/$defs/context_fabric_common.v1/$defs/CohortGroup",
-	"#/$defs/AnswerPlan":           "#/$defs/context_fabric_common.v1/$defs/AnswerPlan",
-	"#/$defs/AnswerPlanBudget":     "#/$defs/context_fabric_common.v1/$defs/AnswerPlanBudget",
+	"#/$defs/CohortGroup":      "#/$defs/context_fabric_common.v1/$defs/CohortGroup",
+	"#/$defs/AnswerPlan":       "#/$defs/context_fabric_common.v1/$defs/AnswerPlan",
+	"#/$defs/AnswerPlanBudget": "#/$defs/context_fabric_common.v1/$defs/AnswerPlanBudget",
+	// CHAOS-13002: AnswerPlan.fallback's own $defs entry.
+	"#/$defs/AnswerPlanFallback":   "#/$defs/context_fabric_common.v1/$defs/AnswerPlanFallback",
 	"#/$defs/PlanNarrowing":        "#/$defs/context_fabric_common.v1/$defs/PlanNarrowing",
 	"#/$defs/PlanNarrowingStage":   "#/$defs/context_fabric_common.v1/$defs/PlanNarrowingStage",
 	"#/$defs/NarrowingBasis":       "#/$defs/context_fabric_common.v1/$defs/NarrowingBasis",

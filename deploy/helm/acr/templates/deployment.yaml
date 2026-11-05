@@ -162,6 +162,9 @@ spec:
             # CHAOS-12554: always rendered, like the flag above. See values.yaml.
             - name: ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED
               value: {{ .Values.contextFabric.investmentSunburstEnabled | default false | quote }}
+            # CHAOS-12690: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_INVESTMENT_REPOSITORY_FROM_OPS_ENABLED
+              value: {{ .Values.contextFabric.investmentRepositoryFromOpsEnabled | default false | quote }}
             # CHAOS-12582: always rendered, like the flag above. See values.yaml.
             - name: ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED
               value: {{ .Values.contextFabric.investmentSankeyEnabled | default false | quote }}
@@ -171,6 +174,9 @@ spec:
             # CHAOS-12626: always rendered, like the flag above. See values.yaml.
             - name: ACR_CONTEXT_FABRIC_LANDSCAPE_QUADRANT_ENABLED
               value: {{ .Values.contextFabric.landscapeQuadrantEnabled | default false | quote }}
+            # CHAOS-13002: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_READ_FALLBACK_ENABLED
+              value: {{ .Values.contextFabric.readFallbackEnabled | default false | quote }}
             # CHAOS-12472: always rendered, like the flag above. Ask Dev's Stop
             # needs it; see values.yaml's own comment.
             - name: ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED

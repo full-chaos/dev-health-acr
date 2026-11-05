@@ -525,6 +525,7 @@ type recordingTelemetry struct {
 	windowGatedForConfirmation     []windowGatedRecord
 	operandReadKinds               [][3]int
 	subjectObligationReads         []recordedSubjectObligationReads
+	readFallbackDecisions          []ReadFallbackDecisionEvent
 	windowClassifications          []recordedWindowClassification
 	inferredWindowGates            []recordedInferredWindowGate
 	interpretationTerms            []InterpretationTermsEvent
@@ -811,6 +812,10 @@ func (r *recordingTelemetry) RecordWindowCanonicalization(_ context.Context, _ s
 
 func (r *recordingTelemetry) RecordOperandReadKinds(_ context.Context, _ storage.Principal, operandRows, kindsNamed, kindsAdded int) {
 	r.operandReadKinds = append(r.operandReadKinds, [3]int{operandRows, kindsNamed, kindsAdded})
+}
+
+func (r *recordingTelemetry) RecordReadFallbackDecision(_ context.Context, _ storage.Principal, event ReadFallbackDecisionEvent) {
+	r.readFallbackDecisions = append(r.readFallbackDecisions, event)
 }
 
 // recordedSubjectObligationReads is one RecordSubjectObligationReadKinds call

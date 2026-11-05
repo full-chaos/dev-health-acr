@@ -30,6 +30,7 @@ func TestCachedSchemaAcceptsAFactKindListOfAGrownVocabulary(t *testing.T) {
 			value any
 		}{
 			{"AnswerPlan.fact_kinds", common["AnswerPlan"].(map[string]any)["properties"].(map[string]any)["fact_kinds"], grown},
+			{"AnswerPlanFallback.planned_kinds", common["AnswerPlanFallback"].(map[string]any)["properties"].(map[string]any)["planned_kinds"], grown},
 			{"PlanRequirement.fact_kinds", common["PlanRequirement"].(map[string]any)["properties"].(map[string]any)["fact_kinds"], grown},
 			{"PlanRequirement.input_fact_kinds", common["PlanRequirement"].(map[string]any)["properties"].(map[string]any)["input_fact_kinds"], grown},
 			{"InterpretedQuestion.fact_requirements", common["InterpretedQuestion"].(map[string]any)["properties"].(map[string]any)["fact_requirements"], requirements},

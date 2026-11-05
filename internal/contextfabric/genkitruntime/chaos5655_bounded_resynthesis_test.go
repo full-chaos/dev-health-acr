@@ -942,3 +942,11 @@ func TestBoundedResynthesisRunsThroughTheProductionWrapperWithItsOwnWithheldRese
 		t.Fatalf("resynthesis_deadline_reserved_ms = %#v, want 44000", got)
 	}
 }
+
+func (g *drawSequenceGenerator) PlanReads(context.Context, generationRequest) (planReadsOutput, contextfabric.ModelUsage, error) {
+	return planReadsOutput{}, contextfabric.ModelUsage{}, errors.New("drawSequenceGenerator.PlanReads is unused")
+}
+
+func (g *rejectThenBlockUntilCanceledGenerator) PlanReads(context.Context, generationRequest) (planReadsOutput, contextfabric.ModelUsage, error) {
+	return planReadsOutput{}, contextfabric.ModelUsage{}, errors.New("rejectThenBlockUntilCanceledGenerator.PlanReads is unused")
+}

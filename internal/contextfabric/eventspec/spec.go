@@ -1648,6 +1648,31 @@ var ModelPhraseDecision = Event{
 	),
 }
 
+// ModelPlanReadsDecision is the Info line Runtime.logPlanReadsDecision writes
+// once per PlanReads call (CHAOS-13002). Its operation is empty when the call
+// returned before a receipt was built.
+var ModelPlanReadsDecision = Event{
+	ID:                 "genkitruntime.model_plan_reads_decision",
+	Msg:                modelDecisionMsg,
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id", "operation"},
+	BoundedAggregation: "at most one line per investigation: one per PlanReads call, including a call that returned before the model was reached, and the engine calls the planner at most once per turn.",
+	Fields: concatFields(
+		[]Field{
+			{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+			{Key: "org_id_hash", Type: FieldString, Presence: PresenceRequired},
+			{Key: "operation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"plan_reads", ""}},
+			{Key: "outcome", Type: FieldString, Presence: PresenceRequired},
+			{Key: "attempts", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "model_id", Type: FieldString, Presence: PresenceRequired},
+			{Key: "model_version", Type: FieldString, Presence: PresenceRequired},
+			{Key: "prompt_version", Type: FieldString, Presence: PresenceRequired},
+		},
+		modelDecisionAttemptFields(),
+	),
+}
+
 // factScopeExpansionDegradedOutcomes and factScopeExpansionServedOutcomes
 // split the outcome vocabulary exactly as factScopeGapDegrades does: a degraded
 // outcome writes the Warn line, every other writes the Info line.
@@ -2188,6 +2213,29 @@ var PlanSubjectObligationReads = Event{
 		{Key: "kinds_named", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "kinds_added", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "added_kinds", Type: FieldStringSlice, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(factKindArr[:]), Applicability: "the kinds the fact read gained only because the committed subject's read obligations require them, in fact-kind vocabulary order; empty when an earlier group already asked for every required kind. Its length is kinds_added"},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
+// ReadFallbackDecision is the Info line of a turn's read fallback decision
+// (CHAOS-13002): why the family could not serve the question, what became of
+// the fallback, and how many kinds the read planner added. Closed labels and
+// a count only.
+var ReadFallbackDecision = Event{
+	ID:                       "contextfabric.read_fallback_decision",
+	Msg:                      "context fabric read fallback decision",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: recorded once, at the plan seam, by every turn that reaches it.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, arrayTokens(contractsv1.ContextFabricReadFallbackReasonVocabulary())...)},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(contextfabric.ReadFallbackOutcomeVocabulary())},
+		{Key: "planned_kinds", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "error_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextfabric.ReadPlannerErrorClassVocabulary()...)},
+		{Key: "rejection", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, arrayTokens(contextfabric.ReadPlanRejectionVocabulary())...)},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},
 }
@@ -6020,6 +6068,7 @@ var All = []Event{
 	ModelInterpretDecision,
 	ModelSynthesizeDecision,
 	ModelPhraseDecision,
+	ModelPlanReadsDecision,
 	FactScopeExpansionGap,
 	FactScopeExpansionDecision,
 	CohortRanked,
@@ -6069,6 +6118,7 @@ var All = []Event{
 	WindowCanonicalizationOutcome,
 	PlanOperandReads,
 	PlanSubjectObligationReads,
+	ReadFallbackDecision,
 	WindowClassification,
 	InferredWindowGate,
 	InterpretationTerms,

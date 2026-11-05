@@ -112,6 +112,8 @@ type Resolver struct {
 
 var _ contextfabric.ModelRuntime = (*Resolver)(nil)
 
+var _ contextfabric.ReadPlanningModelRuntime = (*Resolver)(nil)
+
 // New constructs a Resolver. build must be non-nil whenever configs is
 // non-nil; a nil configs is valid (falls straight through to default on
 // every call).
@@ -160,6 +162,27 @@ func (r *Resolver) PhraseStructureOffers(ctx context.Context, principal storage.
 		return contextfabric.StructureOfferPhrasingDraft{}, contextfabric.ModelExecutionReceipt{}, fmt.Errorf("%w: %w: no model runtime configured", contextfabric.ErrModelUnavailable, contextfabric.ErrPlatformModelWithheld)
 	}
 	return phraser.PhraseStructureOffers(ctx, principal, input)
+}
+
+// PlanReads implements contextfabric.ReadPlanningModelRuntime (CHAOS-13002)
+// through the same per-organization resolution as every other call: an
+// organization's own model plans its reads, and a withheld deployment model
+// is never used in its place.
+func (r *Resolver) PlanReads(ctx context.Context, principal storage.Principal, input contextfabric.ReadPlanningInput) (contextfabric.ReadPlan, contextfabric.ModelExecutionReceipt, error) {
+	runtime, err := r.runtimeFor(ctx, principal.OrgID)
+	if err != nil {
+		return contextfabric.ReadPlan{}, contextfabric.ModelExecutionReceipt{}, err
+	}
+	planner, ok := runtime.(contextfabric.ReadPlanningModelRuntime)
+	if !ok || isNilRuntime(runtime) {
+		logger := r.Logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.WarnContext(ctx, "context fabric read planner withheld: no model runtime", "org_id", contextfabric.SanitizeLogAttr(principal.OrgID), "basis", "no_model_configured", "request_id", contextfabric.SanitizeLogAttr(input.RequestID))
+		return contextfabric.ReadPlan{}, contextfabric.ModelExecutionReceipt{}, fmt.Errorf("%w: %w: no model runtime configured", contextfabric.ErrModelUnavailable, contextfabric.ErrPlatformModelWithheld)
+	}
+	return planner.PlanReads(ctx, principal, input)
 }
 
 // runtimeFor is the resolution decision AC-3775-1..3 describe. It returns

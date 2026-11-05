@@ -802,6 +802,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 				// CHAOS-12554: the sunburst's table, read through the same
 				// operation holder (see Config.ContextFabricInvestmentSunburstEnabled).
 				InvestmentSunburstEnabled: request.config.ContextFabricInvestmentSunburstEnabled,
+				// CHAOS-12690: the repository mix from the ops breakdown.
+				InvestmentRepositoryFromOps: request.config.ContextFabricInvestmentRepositoryFromOpsEnabled,
 			}),
 		// CHAOS-4099 stage 2: the real ScopeExpander over the SAME
 		// ClickHouse client every FactProvider above shares -- activating
@@ -900,6 +902,13 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 	phrasingRuntime := offerPhrasingRuntimeFor(orgResolver, deploymentDefaultRuntime)
 	if phrasingRuntime != nil {
 		offerPhraser = contextfabric.RuntimeOfferPhraser{Runtime: phrasingRuntime, Sink: receiptSink, Logger: request.options.Logger}
+	}
+	// CHAOS-13002: the read planner resolves the same way, and it is wired
+	// whatever the switch says; EngineOptions.ReadFallbackEnabled decides
+	// whether it is ever called.
+	var readPlanner contextfabric.ReadPlanner
+	if planningRuntime := readPlanningRuntimeFor(orgResolver, deploymentDefaultRuntime); planningRuntime != nil {
+		readPlanner = contextfabric.RuntimeReadPlanner{Runtime: planningRuntime, Sink: receiptSink, Logger: request.options.Logger}
 	}
 	// orgModelConfigs is already an interface value that is nil when no
 	// per-organization source is configured (buildOrgModelConfigResolver
@@ -1019,7 +1028,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		ObservationKeys: factRegistry,
 		Graph:           graphReader,
 		Facts:           factRegistry,
-		Synthesizer:     contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion), Telemetry: engineTelemetry, ClientSynthesis: clientSynthesis, FactCapabilities: factRegistry.Capabilities()},
+		Synthesizer:     contextfabric.RuntimeAnswerSynthesizer{Runtime: modelRuntime, Sink: receiptSink, Options: contextFabricSynthesizerOptions(request.options.ServiceVersion, request.config.ContextFabricInvestmentRepositoryFromOpsEnabled), Telemetry: engineTelemetry, ClientSynthesis: clientSynthesis, FactCapabilities: factRegistry.Capabilities()},
 		Results:         investigationStore,
 		ReuseGate:       investigationStore,
 		// CHAOS-3782 Codex round-1 F1: same *pginvestigation.Store also
@@ -1088,6 +1097,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// contextfabric.OfferPhrasingModelRuntime -- see offerPhraser's
 		// own construction comment above.
 		OfferPhraser: offerPhraser,
+		// CHAOS-13002: see readPlanner's own construction comment above.
+		ReadPlanner: readPlanner,
 	}, contextfabric.EngineOptions{
 		ServiceVersion: request.options.ServiceVersion, Now: request.options.Now, NewResultID: newInvestigationResultID,
 		// CHAOS-4636: the engine measures its own assembled answer against
@@ -1108,6 +1119,8 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		ComparisonTableEnabled: request.config.ContextFabricComparisonTableEnabled,
 		// See Config.ContextFabricLandscapeQuadrantEnabled.
 		LandscapeQuadrantEnabled: request.config.ContextFabricLandscapeQuadrantEnabled,
+		// See Config.ContextFabricReadFallbackEnabled.
+		ReadFallbackEnabled: request.config.ContextFabricReadFallbackEnabled,
 		// CHAOS-12608: the forecast draws the distribution the same switch serves.
 		CompletionForecastEnabled: request.config.CompletionDistributionEnabled,
 		FactCapabilities:          factRegistry.Capabilities(),
@@ -1173,7 +1186,7 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 		// above already reads from. Wired unconditionally for the same
 		// reason as ReusePromptVersions immediately above.
 		ReuseVersionAuthorities: contextfabric.ReuseVersionAuthorities{
-			QueryVersion:             devhealthfacts.QueryVersion,
+			QueryVersion:             devhealthfacts.QueryVersionFor(request.config.ContextFabricInvestmentRepositoryFromOpsEnabled),
 			CanonicalServiceVersion:  contextfabric.CanonicalFactRegistryVersion,
 			ModelOutputSchemaVersion: genkitruntime.DefaultSchemaVersion,
 			// CHAOS-3884: one more deployment-current version authority --
@@ -1268,12 +1281,12 @@ func buildContextFabricInvestigator(ctx context.Context, request buildRequest, p
 // static versions from this struct alone, through
 // RuntimeAnswerSynthesizer.StaticResultVersions -- so an unset field there
 // is permanently unattributable across a rebuild.
-func contextFabricSynthesizerOptions(serviceVersion string) contextfabric.RuntimeAnswerSynthesizerOptions {
+func contextFabricSynthesizerOptions(serviceVersion string, repositoryFromOps bool) contextfabric.RuntimeAnswerSynthesizerOptions {
 	return contextfabric.RuntimeAnswerSynthesizerOptions{
 		ServiceVersion:          serviceVersion,
 		Backend:                 "graph",
 		ProjectionVersion:       contextFabricProjectionVersion,
-		QueryVersion:            devhealthfacts.QueryVersion,
+		QueryVersion:            devhealthfacts.QueryVersionFor(repositoryFromOps),
 		CanonicalServiceVersion: contextfabric.CanonicalFactRegistryVersion,
 	}
 }
@@ -1525,6 +1538,20 @@ func buildDirectRelationships(investigator contextfabric.Investigator, gate *dir
 // the per-organization resolver when it is wired, otherwise a resolver over
 // the deployment default alone (so a withheld turn is still honored). It
 // returns nil when there is no usable deployment runtime and no resolver.
+// readPlanningRuntimeFor is offerPhrasingRuntimeFor for the read planner.
+func readPlanningRuntimeFor(resolver *modelruntimeresolver.Resolver, deploymentDefault contextfabric.ModelRuntime) contextfabric.ReadPlanningModelRuntime {
+	if resolver != nil {
+		return resolver
+	}
+	if deploymentDefault == nil || isNilRuntime(deploymentDefault) {
+		return nil
+	}
+	if _, ok := deploymentDefault.(contextfabric.ReadPlanningModelRuntime); !ok {
+		return nil
+	}
+	return modelruntimeresolver.New(deploymentDefault, nil, nil)
+}
+
 func offerPhrasingRuntimeFor(resolver *modelruntimeresolver.Resolver, deploymentDefault contextfabric.ModelRuntime) contextfabric.OfferPhrasingModelRuntime {
 	if resolver != nil {
 		return resolver
