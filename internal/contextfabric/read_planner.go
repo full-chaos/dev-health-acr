@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -60,7 +61,7 @@ func (r RuntimeReadPlanner) PlanReads(ctx context.Context, principal storage.Pri
 		logger = slog.Default()
 	}
 	if r.Runtime == nil {
-		r.logDecision(ctx, logger, principal, input, ModelExecutionReceipt{}, readPlannerNoRuntime, "", 0)
+		r.logDecision(ctx, logger, principal, input, ModelExecutionReceipt{}, readPlannerNoRuntime, "", ReadPlanRejectionDetail{StepIndex: -1}, 0)
 		return ReadPlanningResult{Err: ErrModelUnavailable}
 	}
 	plan, receipt, err := r.Runtime.PlanReads(ctx, principal, input)
@@ -71,11 +72,11 @@ func (r RuntimeReadPlanner) PlanReads(ctx context.Context, principal storage.Pri
 			"operation", SanitizeLogAttr(string(receipt.Operation)), "outcome", SanitizeLogAttr(receipt.Outcome))
 	}
 	if err != nil {
-		r.logDecision(ctx, logger, principal, input, receipt, readPlannerErrorClass(err), "", 0)
+		r.logDecision(ctx, logger, principal, input, receipt, readPlannerErrorClass(err), "", ReadPlanRejectionDetail{StepIndex: -1}, 0)
 		return ReadPlanningResult{Err: err}
 	}
-	kinds, rejection := ValidateReadPlan(plan, input.MemberKind, input.Capabilities)
-	r.logDecision(ctx, logger, principal, input, receipt, "", rejection, len(kinds))
+	kinds, rejection, detail := ValidateReadPlanWithDetail(plan, input.MemberKind, input.Capabilities)
+	r.logDecision(ctx, logger, principal, input, receipt, "", rejection, detail, len(kinds))
 	return ReadPlanningResult{Kinds: kinds, Rejection: rejection}
 }
 
@@ -109,7 +110,7 @@ func ReadPlannerErrorClassVocabulary() []string {
 	return []string{"platform_model_withheld", "deadline_exceeded", "canceled", "rate_limited", "input_too_large", "model_output", "model_unavailable", "internal", readPlannerNoRuntime}
 }
 
-func (r RuntimeReadPlanner) logDecision(ctx context.Context, logger *slog.Logger, principal storage.Principal, input ReadPlanningInput, receipt ModelExecutionReceipt, errorClass string, rejection ReadPlanRejection, kinds int) {
+func (r RuntimeReadPlanner) logDecision(ctx context.Context, logger *slog.Logger, principal storage.Principal, input ReadPlanningInput, receipt ModelExecutionReceipt, errorClass string, rejection ReadPlanRejection, detail ReadPlanRejectionDetail, kinds int) {
 	logger.InfoContext(ctx, "context fabric read planner decision",
 		"org_id", SanitizeLogAttr(principal.OrgID),
 		"request_id", SanitizeLogAttr(input.RequestID),
@@ -117,6 +118,9 @@ func (r RuntimeReadPlanner) logDecision(ctx context.Context, logger *slog.Logger
 		"model_outcome", SanitizeLogAttr(receipt.Outcome),
 		"error_class", SanitizeLogAttr(errorClass),
 		"rejection", SanitizeLogAttr(string(rejection)),
+		"rejected_step", detail.StepIndex,
+		"rejected_tool", SanitizeLogAttr(detail.Tool),
+		"rejected_fields", SanitizeLogAttr(strings.Join(detail.Fields, ",")),
 		"offered_kinds", len(input.OfferedKinds),
 		"planned_kinds", kinds,
 	)
