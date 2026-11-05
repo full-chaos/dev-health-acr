@@ -56,7 +56,12 @@ const (
 	//
 	// v37 -> v38 (CHAOS-12632): the same rule names GitLab merge requests
 	// ("merge request !N in X", "MR !N in X"), with a worked example.
-	PromptVersion = "context-fabric-interpretation.v38"
+	//
+	// v38 -> v39 (CHAOS-13000): the metrics glossary line says a team's metrics
+	// hold the window pull request cycle median, and a rule routes a team's cycle time
+	// (and a team's or repository's PR cycle) to metrics; a project's cycle time, work
+	// item cycle and lead time stay flow.
+	PromptVersion = "context-fabric-interpretation.v39"
 	// OutputVersion names the model-output contract the prompt asks for.
 	//
 	// v10 -> v11: the fact_requirements kind enum names commitment.
