@@ -80,7 +80,7 @@ func TestRuntimeReadPlannerRecordsEveryAttemptedCall(t *testing.T) {
 		},
 		{
 			name:          "invalid plan",
-			runtime:       &scriptedReadPlanningRuntime{plan: ReadPlan{Steps: []ReadPlanStep{readsStep(FactFileHotspots)}}, receipt: planReadsReceipt("success")},
+			runtime:       &scriptedReadPlanningRuntime{plan: ReadPlan{Steps: []ReadPlanStep{readsStep(FactMetrics), readsStep(FactFileHotspots)}}, receipt: planReadsReceipt("success")},
 			wantRejection: ReadPlanRejectionKindNotOffered,
 		},
 		{
@@ -114,6 +114,16 @@ func TestRuntimeReadPlannerRecordsEveryAttemptedCall(t *testing.T) {
 			}
 			if tc.wantRejection != "" && !strings.Contains(line, "rejection="+string(tc.wantRejection)) {
 				t.Fatalf("decision line does not name the rejection:\n%s", line)
+			}
+			if tc.wantRejection != "" {
+				for _, want := range []string{"rejected_step=1", "rejected_tool=read_facts", "rejected_fields=kinds"} {
+					if !strings.Contains(line, want) {
+						t.Fatalf("decision line does not carry %q:\n%s", want, line)
+					}
+				}
+				if strings.Contains(line, string(FactFileHotspots)) {
+					t.Fatalf("decision line echoes a kind the model wrote:\n%s", line)
+				}
 			}
 		})
 	}

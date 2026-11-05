@@ -163,13 +163,16 @@ func subcategoryBreakdownVariables(dimension, level, canonicalID, startDate, end
 // internal/queryapi/timewindow ExclusiveEnd: last day + 1, never later than the
 // last final day; analytics/window.go windowEndExclusive), so the fact's
 // exclusive end is sent as the day before it (CHAOS-12690). Only a window of
-// whole UTC days with an exclusive end whose last day is over has dates; any
-// other (a bound inside a day, an inclusive end, all history which has no
-// start, or a last day that is not over, which ops clips to the last final
-// day) is not sent, so ops never reads a different period than the fact states
-// (reason window_not_whole_days).
+// whole UTC days whose last day is over has dates; any other (a bound inside a
+// day, all history which has no start, or a last day that is not over, which
+// ops clips to the last final day) is not sent, so ops never reads a different
+// period than the fact states (reason window_not_whole_days). A bound whose end
+// is inclusive (a read_facts range) at a UTC midnight is the same period: the
+// work unit predicate of every mix read is to_ts < end whether or not the end
+// is declared exclusive (mixWindowPredicate), so the end day is not in the
+// window either way (CHAOS-13059).
 func subcategoryBreakdownDates(bound factTimeBound) (startDate, endDate string, ok bool) {
-	if !bound.active || !bound.hasStart || !bound.endExclusive || !bound.start.Before(bound.end) {
+	if !bound.active || !bound.hasStart || !bound.start.Before(bound.end) {
 		return "", "", false
 	}
 	if !wholeUTCDay(bound.start) || !wholeUTCDay(bound.end) {

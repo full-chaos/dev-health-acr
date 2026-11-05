@@ -2232,6 +2232,7 @@ var ReadFallbackDecision = Event{
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, arrayTokens(contractsv1.ContextFabricReadFallbackReasonVocabulary())...)},
+		{Key: "trigger", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, arrayTokens(contextfabric.ReadFallbackTriggerVocabulary())...)},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(contextfabric.ReadFallbackOutcomeVocabulary())},
 		{Key: "planned_kinds", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "error_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextfabric.ReadPlannerErrorClassVocabulary()...)},

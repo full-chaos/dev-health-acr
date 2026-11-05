@@ -9872,6 +9872,17 @@
         ]
       },
       {
+        "key": "trigger",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "judgment_kind",
+          "ranking_inputs",
+          "kind_unserved"
+        ]
+      },
+      {
         "key": "outcome",
         "type": "string",
         "presence": "required",

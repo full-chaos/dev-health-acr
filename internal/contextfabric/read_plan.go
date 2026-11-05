@@ -76,38 +76,77 @@ func ReadPlanOfferedKinds(capabilities []FactCapability, memberKind SubjectKind)
 	return offered
 }
 
+// ReadPlanRejectionDetail names where a refused plan failed, by position and
+// field name only: never a value the model wrote. StepIndex is -1 for a
+// refusal of the plan as a whole.
+type ReadPlanRejectionDetail struct {
+	StepIndex int
+	// Tool is "read_facts", "find_subjects" or "other" (a tool outside the
+	// vocabulary is never echoed).
+	Tool string
+	// Fields are the names, among kinds and subject_kind, the step carried
+	// non-empty.
+	Fields []string
+}
+
+func stepRejectionDetail(index int, step ReadPlanStep) ReadPlanRejectionDetail {
+	detail := ReadPlanRejectionDetail{StepIndex: index, Tool: "other"}
+	switch step.Tool {
+	case ReadPlanToolReadFacts, ReadPlanToolFindSubjects:
+		detail.Tool = string(step.Tool)
+	}
+	if len(step.Kinds) > 0 {
+		detail.Fields = append(detail.Fields, "kinds")
+	}
+	if step.SubjectKind != "" {
+		detail.Fields = append(detail.Fields, "subject_kind")
+	}
+	return detail
+}
+
 // ValidateReadPlan returns the ordered kinds a valid plan adds, or the class
 // of the first invalid step. The whole plan is refused on that step; nothing
 // is repaired.
 func ValidateReadPlan(plan ReadPlan, memberKind SubjectKind, capabilities []FactCapability) ([]FactKind, ReadPlanRejection) {
+	kinds, rejection, _ := ValidateReadPlanWithDetail(plan, memberKind, capabilities)
+	return kinds, rejection
+}
+
+// ValidateReadPlanWithDetail is ValidateReadPlan that also names the refused
+// step, so a log line can say which step failed and what it carried.
+func ValidateReadPlanWithDetail(plan ReadPlan, memberKind SubjectKind, capabilities []FactCapability) ([]FactKind, ReadPlanRejection, ReadPlanRejectionDetail) {
+	whole := ReadPlanRejectionDetail{StepIndex: -1}
 	if len(plan.Steps) == 0 {
-		return nil, ReadPlanRejectionEmpty
+		return nil, ReadPlanRejectionEmpty, whole
 	}
 	if len(plan.Steps) > ReadPlanMaxSteps {
-		return nil, ReadPlanRejectionTooManySteps
+		return nil, ReadPlanRejectionTooManySteps, whole
 	}
 	offered := ReadPlanOfferedKinds(capabilities, memberKind)
 	vocabulary := contractsv1.ContextFabricFactKindVocabulary()
 	var kinds []FactKind
-	for _, step := range plan.Steps {
+	for index, step := range plan.Steps {
+		refuse := func(rejection ReadPlanRejection) ([]FactKind, ReadPlanRejection, ReadPlanRejectionDetail) {
+			return nil, rejection, stepRejectionDetail(index, step)
+		}
 		switch step.Tool {
 		case ReadPlanToolReadFacts:
 			// The output schema makes every property required, so a read step
 			// always carries a subject_kind the server never reads.
 			if len(step.Kinds) == 0 {
-				return nil, ReadPlanRejectionStepShape
+				return refuse(ReadPlanRejectionStepShape)
 			}
 			if len(step.Kinds) > ReadPlanMaxKindsPerStep {
-				return nil, ReadPlanRejectionTooManyKinds
+				return refuse(ReadPlanRejectionTooManyKinds)
 			}
 			for _, kind := range step.Kinds {
 				switch {
 				case !slices.Contains(vocabulary[:], kind):
-					return nil, ReadPlanRejectionUnknownKind
+					return refuse(ReadPlanRejectionUnknownKind)
 				case !slices.Contains(offered, kind):
-					return nil, ReadPlanRejectionKindNotOffered
+					return refuse(ReadPlanRejectionKindNotOffered)
 				case slices.Contains(kinds, kind):
-					return nil, ReadPlanRejectionDuplicateKind
+					return refuse(ReadPlanRejectionDuplicateKind)
 				}
 				kinds = append(kinds, kind)
 			}
@@ -115,14 +154,14 @@ func ValidateReadPlan(plan ReadPlan, memberKind SubjectKind, capabilities []Fact
 			// Lowered to no step: its kinds are never read, and an empty subject
 			// kind is the schema's filler. A named subject kind must still be one.
 			if step.SubjectKind != "" && !validSubjectKind(step.SubjectKind) {
-				return nil, ReadPlanRejectionUnknownSubjectKind
+				return refuse(ReadPlanRejectionUnknownSubjectKind)
 			}
 		default:
-			return nil, ReadPlanRejectionUnknownTool
+			return refuse(ReadPlanRejectionUnknownTool)
 		}
 	}
 	if len(kinds) == 0 {
-		return nil, ReadPlanRejectionNoReads
+		return nil, ReadPlanRejectionNoReads, whole
 	}
-	return kinds, ""
+	return kinds, "", whole
 }
