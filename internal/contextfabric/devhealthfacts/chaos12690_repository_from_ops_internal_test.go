@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -251,5 +252,57 @@ func TestCHAOS12690DisagreeingUnitCountsServeNoFact(t *testing.T) {
 				t.Fatalf("no named reason: %q", reasons)
 			}
 		})
+	}
+}
+
+// CHAOS-13059: the investment mix SQL reads every range as [start, end) (the
+// work unit predicate is to_ts < end whether or not the bound says the end is
+// exclusive, mixWindowPredicate), so a read_facts range window, whose end is
+// inclusive, is the same period as a trailing window with that end. The ops
+// call must not refuse it.
+func TestCHAOS13059AWholeDayInclusiveRangeIsSentAsTheSameEndExclusiveDays(t *testing.T) {
+	t.Parallel()
+	start, end := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	startDate, endDate, ok := subcategoryBreakdownDates(factTimeBound{active: true, hasStart: true, start: start, end: end})
+	if !ok || startDate != "2026-10-01" || endDate != "2026-10-31" {
+		t.Fatalf("inclusive whole-day range: %q %q %v, want 2026-10-01..2026-10-31", startDate, endDate, ok)
+	}
+	exclusiveStart, exclusiveEnd, _ := subcategoryBreakdownDates(factTimeBound{active: true, hasStart: true, start: start, end: end, endExclusive: true})
+	if exclusiveStart != startDate || exclusiveEnd != endDate {
+		t.Fatalf("inclusive and exclusive forms of one range differ: %s..%s vs %s..%s", startDate, endDate, exclusiveStart, exclusiveEnd)
+	}
+	for name, bound := range map[string]factTimeBound{
+		"end inside a day":   {active: true, hasStart: true, start: start, end: end.Add(6 * time.Hour)},
+		"start inside a day": {active: true, hasStart: true, start: start.Add(time.Hour), end: end},
+		"no start":           {active: true, end: end},
+	} {
+		if _, _, ok := subcategoryBreakdownDates(bound); ok {
+			t.Errorf("%s: sent to ops", name)
+		}
+	}
+}
+
+func TestCHAOS13059ARangeReadServesTheRepositoryFactFromOps(t *testing.T) {
+	t.Parallel()
+	sized := int64(3)
+	caller := opsMixCaller(&sized)
+	start, end := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	holder := NewOperationHolder()
+	holder.Set(caller)
+	provider := newInvestmentProvider(&statementCountingClient{})
+	provider.operations = holder
+	provider.repositoryFromOps = true
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
+		Kind: contextfabric.FactInvestment, Subjects: []contextfabric.SubjectRef{sunburstRepo},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fact := investmentFactOf(result, sunburstRepo); fact == nil {
+		t.Fatalf("a range read served no fact: %q", servedReasons(result, sunburstRepo))
+	}
+	if len(caller.calls) != 2 || !strings.Contains(caller.calls[0].variables, `"startDate":"2026-09-01","endDate":"2026-09-30"`) {
+		t.Fatalf("calls %+v", caller.calls)
 	}
 }
