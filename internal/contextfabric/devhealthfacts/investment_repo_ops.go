@@ -1,6 +1,7 @@
 package devhealthfacts
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"slices"
@@ -78,15 +79,33 @@ func (c opsUnitCounts) equal(other opsUnitCounts) bool {
 	return c.sized == nil || *c.sized == *other.sized
 }
 
+// rawEvidenceQualityStats keeps the stats members as sent, so an omitted
+// selected count and a null one can be told apart.
+type rawEvidenceQualityStats struct {
+	Analytics *struct {
+		EvidenceQualityStats map[string]json.RawMessage `json:"evidenceQualityStats"`
+	} `json:"analytics"`
+}
+
+// isJSONNull reports a member that is present and the literal null.
+func isJSONNull(raw json.RawMessage) bool { return string(bytes.TrimSpace(raw)) == "null" }
+
 func parseEvidenceQuality(data json.RawMessage) (opsUnitCounts, bool) {
 	var answer evidenceQualityAnswer
 	if err := json.Unmarshal(data, &answer); err != nil || answer.Analytics == nil || answer.Analytics.EvidenceQualityStats == nil {
 		return opsUnitCounts{}, false
 	}
 	stats := answer.Analytics.EvidenceQualityStats
-	// A window with no unit: ops answers the stats object with every count null.
+	// A window with no unit: ops answers the stats object with total and
+	// uncategorizedCount present and null (sizedUnitCount null, or not selected by
+	// an older pinned document). A selected count that is missing is no empty window.
 	if stats.Total == nil && stats.UncategorizedCount == nil && stats.SizedUnitCount == nil {
-		return opsUnitCounts{}, true
+		var raw rawEvidenceQualityStats
+		if err := json.Unmarshal(data, &raw); err == nil && raw.Analytics != nil &&
+			isJSONNull(raw.Analytics.EvidenceQualityStats["total"]) && isJSONNull(raw.Analytics.EvidenceQualityStats["uncategorizedCount"]) {
+			return opsUnitCounts{}, true
+		}
+		return opsUnitCounts{}, false
 	}
 	if stats.Total == nil || stats.UncategorizedCount == nil || *stats.Total < 0 || *stats.UncategorizedCount < 0 || *stats.UncategorizedCount > *stats.Total {
 		return opsUnitCounts{}, false
@@ -192,6 +211,11 @@ func (p *InvestmentProvider) mixFactFromOps(ctx context.Context, principal stora
 	var notes []opsMixWithheld
 	if total <= 0 {
 		return nil, why(RepoOpsWithheldNoData, "")
+	}
+	// A positive mix beside counts that say there is no unit is an answer that
+	// disagrees with itself.
+	if counts.total == 0 {
+		return nil, why(RepoOpsWithheldCountsDisagree, "")
 	}
 	fields := make(map[string]contextfabric.FactValue, 2*len(canonicalInvestmentThemes)+8)
 	totals := &repoThemeTotals{theme: make(map[string]float64, len(canonicalInvestmentThemes))}

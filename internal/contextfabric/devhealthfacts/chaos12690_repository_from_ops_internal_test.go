@@ -264,7 +264,7 @@ func TestCHAOS12690EmptyOpsWindowIsNoDataNotUnreadable(t *testing.T) {
 		out := breakdownAnswer(dimension, map[string]float64{})
 		var answer map[string]any
 		_ = json.Unmarshal(out.Data, &answer)
-		answer["analytics"].(map[string]any)["evidenceQualityStats"] = map[string]any{"bandCounts": "{}", "__typename": "EvidenceQualityStats"}
+		answer["analytics"].(map[string]any)["evidenceQualityStats"] = map[string]any{"total": nil, "uncategorizedCount": nil, "bandCounts": "{}", "__typename": "EvidenceQualityStats"}
 		out.Data, _ = json.Marshal(answer)
 		return out
 	}
@@ -276,5 +276,46 @@ func TestCHAOS12690EmptyOpsWindowIsNoDataNotUnreadable(t *testing.T) {
 	reasons := servedReasons(result, sunburstRepo)
 	if !strings.Contains(reasons, opsMixWithheldPrefix+": "+RepoOpsWithheldNoData) || strings.Contains(reasons, SubcategoryWithheldUnreadable) {
 		t.Fatalf("want the no_data reason, got %q", reasons)
+	}
+}
+
+// Review of #2046: an empty window is the stats object with total and
+// uncategorizedCount PRESENT and null. A selected count that is missing from
+// the answer is not an empty window, and null counts beside a positive
+// breakdown are an answer that disagrees with itself.
+func TestCHAOS13060OnlyPresentNullCountsAreAnEmptyWindow(t *testing.T) {
+	t.Parallel()
+	statsOf := func(stats map[string]any, items map[string]float64) func(string) OperationOutcome {
+		return func(dimension string) OperationOutcome {
+			out := breakdownAnswer(dimension, items)
+			var answer map[string]any
+			_ = json.Unmarshal(out.Data, &answer)
+			answer["analytics"].(map[string]any)["evidenceQualityStats"] = stats
+			out.Data, _ = json.Marshal(answer)
+			return out
+		}
+	}
+	for name, tc := range map[string]struct {
+		stats map[string]any
+		items map[string]map[string]float64
+		want  string
+	}{
+		"selected counts omitted":           {stats: map[string]any{"bandCounts": "{}"}, items: map[string]map[string]float64{"THEME": {}, "SUBCATEGORY": {}}, want: SubcategoryWithheldUnreadable},
+		"only total omitted":                {stats: map[string]any{"uncategorizedCount": nil, "bandCounts": "{}"}, items: map[string]map[string]float64{"THEME": {}, "SUBCATEGORY": {}}, want: SubcategoryWithheldUnreadable},
+		"null counts beside a positive mix": {stats: map[string]any{"total": nil, "uncategorizedCount": nil, "bandCounts": "{}"}, items: map[string]map[string]float64{"THEME": sunburstThemes(), "SUBCATEGORY": sunburstSubcategories()}, want: RepoOpsWithheldCountsDisagree},
+		"present null counts, empty":        {stats: map[string]any{"total": nil, "uncategorizedCount": nil, "bandCounts": "{}"}, items: map[string]map[string]float64{"THEME": {}, "SUBCATEGORY": {}}, want: RepoOpsWithheldNoData},
+	} {
+		t.Run(name, func(t *testing.T) {
+			caller := &breakdownCaller{}
+			caller.theme = statsOf(tc.stats, tc.items["THEME"])("THEME")
+			caller.subcategory = statsOf(tc.stats, tc.items["SUBCATEGORY"])("SUBCATEGORY")
+			result, _ := readRepositoryFromOps(t, true, caller)
+			if fact := investmentFactOf(result, sunburstRepo); fact != nil {
+				t.Fatalf("a fact is served: %+v", fact.Fields["work_unit_count"])
+			}
+			if reasons := servedReasons(result, sunburstRepo); !strings.Contains(reasons, opsMixWithheldPrefix+": "+tc.want) {
+				t.Fatalf("want reason %s, got %q", tc.want, reasons)
+			}
+		})
 	}
 }
