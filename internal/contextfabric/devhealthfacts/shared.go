@@ -1473,7 +1473,12 @@ import (
 // (a team's work-item cycle time, CHAOS-13001): the data catalogue lists it and a
 // question that read the investment basis for a team cycle time can now be
 // answered from the work-item basis. An answer saved under v288 cannot.
-const QueryVersion = "devhealthfacts.clickhouse.v289"
+//
+// v289 -> v290: a team's investment mix can be read from the ops
+// investmentBreakdownTeam answers (CHAOS-12690 I2, behind a default-off switch;
+// QueryVersionFor adds "+team_from_ops" while it is on). With the switch off the
+// facts are unchanged, but the bump keeps one version per main merge.
+const QueryVersion = "devhealthfacts.clickhouse.v290"
 
 // repositoryFromOpsVersionSuffix marks the version of a deployment that reads
 // the repository investment mix from ops (CHAOS-12690): the numbers differ for
