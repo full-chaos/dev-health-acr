@@ -199,6 +199,30 @@ assert_reports_version() {
     exit 1
   fi
 }
+# The package check above reads the database only; this runs git and git-lfs in
+# the image and prints the versions they report, so the CI log is the record.
+report_mcp_git_versions() {
+  local image="$1" git_version lfs_version
+  git_version="$(docker run --rm "${readonly_probe_flags[@]}" --entrypoint /usr/bin/git "$image" --version)" || {
+    printf 'MCP image: git --version failed\n' >&2
+    exit 1
+  }
+  lfs_version="$(docker run --rm "${readonly_probe_flags[@]}" --entrypoint /usr/bin/git "$image" lfs version)" || {
+    printf 'MCP image: git lfs version failed\n' >&2
+    exit 1
+  }
+  git_version="${git_version%%$'\n'*}"
+  lfs_version="${lfs_version%%$'\n'*}"
+  [[ "$git_version" =~ ^git\ version\ [0-9] ]] || {
+    printf 'MCP image: git --version reported %q\n' "$git_version" >&2
+    exit 1
+  }
+  [[ "$lfs_version" =~ ^git-lfs/[0-9] ]] || {
+    printf 'MCP image: git lfs version reported %q\n' "$lfs_version" >&2
+    exit 1
+  }
+  printf 'MCP image: %s; %s\n' "$git_version" "${lfs_version%% *}"
+}
 assert_reports_version API "$api_image" --version
 api_help="$(docker run --rm "${readonly_probe_flags[@]}" "$api_image" --help)"
 grep -Fq 'Usage: acr-api' <<<"$api_help"
@@ -314,7 +338,7 @@ docker run --rm "${readonly_probe_flags[@]}" \
   -e ACR_API_ALLOW_INSECURE_INTERNAL_HTTP=true \
   "$mcp_image" doctor --offline | jq -e \
   '.transport.mode == "http" and .transport.valid == true and .transport.protocol_revisions[0] == "2026-07-28" and .transport.listen_address == ":8081" and .credential_set == false' >/dev/null
-docker run --rm "${readonly_probe_flags[@]}" --entrypoint /usr/bin/git "$mcp_image" --version >/dev/null
+report_mcp_git_versions "$mcp_image"
 
 # Real read-only mounted Git workspace: `git` must operate on an actual
 # repository bind-mounted read-only under the container's own read-only
