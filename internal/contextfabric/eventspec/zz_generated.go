@@ -162,6 +162,9 @@ var ByID = map[string]Event{
 	"devhealthfacts.team_linked_mix_native_first":                      TeamLinkedMixNativeFirst,
 	"devhealthfacts.team_linked_mix_set":                               TeamLinkedMixSet,
 	"devhealthfacts.team_pr_link_state_native_first":                   TeamPRLinkStateNativeFirst,
+	"devhealthsource.table_read_drained":                               DevhealthsourceTableReadDrained,
+	"devhealthsource.table_read_not_new":                               DevhealthsourceTableReadNotNew,
+	"devhealthsource.table_read_page":                                  DevhealthsourceTableReadPage,
 	"genkitruntime.model_interpret_decision":                           ModelInterpretDecision,
 	"genkitruntime.model_phrase_decision":                              ModelPhraseDecision,
 	"genkitruntime.model_plan_reads_decision":                          ModelPlanReadsDecision,
@@ -10504,6 +10507,210 @@ func (f TeamPRLinkStateNativeFirstFields) SlogArgs() []any {
 		"pull_requests", f.PullRequests,
 		"linked", f.Linked,
 		"suppressed_pull_requests", f.SuppressedPullRequests,
+	}
+}
+
+// DevhealthsourceTableReadDrainedFields is devhealthsource.table_read_drained's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DevhealthsourceTableReadDrained.Fields declares in spec.go.
+type DevhealthsourceTableReadDrainedFields struct {
+	OrgID      string
+	Source     string
+	Table      string
+	Run        int
+	RowsTotal  int
+	Pages      int
+	Statements int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DevhealthsourceTableReadDrainedFields uniformly, set ONLY by NewDevhealthsourceTableReadDrainedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDevhealthsourceTableReadDrainedFields is the generated constructor for DevhealthsourceTableReadDrainedFields -- every
+// field DevhealthsourceTableReadDrained.Fields declares is a required parameter.
+func NewDevhealthsourceTableReadDrainedFields(orgID string, source string, table string, run int, rowsTotal int, pages int, statements int) DevhealthsourceTableReadDrainedFields {
+	return DevhealthsourceTableReadDrainedFields{
+		OrgID:       orgID,
+		Source:      source,
+		Table:       table,
+		Run:         run,
+		RowsTotal:   rowsTotal,
+		Pages:       pages,
+		Statements:  statements,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDevhealthsourceTableReadDrainedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DevhealthsourceTableReadDrainedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DevhealthsourceTableReadDrained's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DevhealthsourceTableReadDrainedFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"source", contextfabric.SanitizeLogAttr(f.Source),
+		"table", contextfabric.SanitizeLogAttr(f.Table),
+		"run", f.Run,
+		"rows_total", f.RowsTotal,
+		"pages", f.Pages,
+		"statements", f.Statements,
+	}
+}
+
+// DevhealthsourceTableReadNotNewFields is devhealthsource.table_read_not_new's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DevhealthsourceTableReadNotNew.Fields declares in spec.go.
+type DevhealthsourceTableReadNotNewFields struct {
+	OrgID              string
+	Source             string
+	Table              string
+	Run                int
+	PageN              int
+	ConsumedRows       int
+	ConsumedNew        int
+	SharedPositionRows int
+	LastStamp          string
+	LastKeyDigest      string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DevhealthsourceTableReadNotNewFields uniformly, set ONLY by NewDevhealthsourceTableReadNotNewFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDevhealthsourceTableReadNotNewFields is the generated constructor for DevhealthsourceTableReadNotNewFields -- every
+// field DevhealthsourceTableReadNotNew.Fields declares is a required parameter.
+func NewDevhealthsourceTableReadNotNewFields(orgID string, source string, table string, run int, pageN int, consumedRows int, consumedNew int, sharedPositionRows int, lastStamp string, lastKeyDigest string) DevhealthsourceTableReadNotNewFields {
+	return DevhealthsourceTableReadNotNewFields{
+		OrgID:              orgID,
+		Source:             source,
+		Table:              table,
+		Run:                run,
+		PageN:              pageN,
+		ConsumedRows:       consumedRows,
+		ConsumedNew:        consumedNew,
+		SharedPositionRows: sharedPositionRows,
+		LastStamp:          lastStamp,
+		LastKeyDigest:      lastKeyDigest,
+		constructed:        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDevhealthsourceTableReadNotNewFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DevhealthsourceTableReadNotNewFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DevhealthsourceTableReadNotNew's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DevhealthsourceTableReadNotNewFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"source", contextfabric.SanitizeLogAttr(f.Source),
+		"table", contextfabric.SanitizeLogAttr(f.Table),
+		"run", f.Run,
+		"page_n", f.PageN,
+		"consumed_rows", f.ConsumedRows,
+		"consumed_new", f.ConsumedNew,
+		"shared_position_rows", f.SharedPositionRows,
+		"last_stamp", contextfabric.SanitizeLogAttr(f.LastStamp),
+		"last_key_digest", contextfabric.SanitizeLogAttr(f.LastKeyDigest),
+	}
+}
+
+// DevhealthsourceTableReadPageFields is devhealthsource.table_read_page's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DevhealthsourceTableReadPage.Fields declares in spec.go.
+type DevhealthsourceTableReadPageFields struct {
+	OrgID         string
+	Source        string
+	Table         string
+	Run           int
+	PageN         int
+	StatementRows int
+	StatementMore bool
+	ConsumedRows  int
+	ConsumedNew   int
+	ConsumedTotal int
+	Replay        bool
+	LastStamp     string
+	LastKeyDigest string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DevhealthsourceTableReadPageFields uniformly, set ONLY by NewDevhealthsourceTableReadPageFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDevhealthsourceTableReadPageFields is the generated constructor for DevhealthsourceTableReadPageFields -- every
+// field DevhealthsourceTableReadPage.Fields declares is a required parameter.
+func NewDevhealthsourceTableReadPageFields(orgID string, source string, table string, run int, pageN int, statementRows int, statementMore bool, consumedRows int, consumedNew int, consumedTotal int, replay bool, lastStamp string, lastKeyDigest string) DevhealthsourceTableReadPageFields {
+	return DevhealthsourceTableReadPageFields{
+		OrgID:         orgID,
+		Source:        source,
+		Table:         table,
+		Run:           run,
+		PageN:         pageN,
+		StatementRows: statementRows,
+		StatementMore: statementMore,
+		ConsumedRows:  consumedRows,
+		ConsumedNew:   consumedNew,
+		ConsumedTotal: consumedTotal,
+		Replay:        replay,
+		LastStamp:     lastStamp,
+		LastKeyDigest: lastKeyDigest,
+		constructed:   true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDevhealthsourceTableReadPageFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DevhealthsourceTableReadPageFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DevhealthsourceTableReadPage's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DevhealthsourceTableReadPageFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"source", contextfabric.SanitizeLogAttr(f.Source),
+		"table", contextfabric.SanitizeLogAttr(f.Table),
+		"run", f.Run,
+		"page_n", f.PageN,
+		"statement_rows", f.StatementRows,
+		"statement_more", f.StatementMore,
+		"consumed_rows", f.ConsumedRows,
+		"consumed_new", f.ConsumedNew,
+		"consumed_total", f.ConsumedTotal,
+		"replay", f.Replay,
+		"last_stamp", contextfabric.SanitizeLogAttr(f.LastStamp),
+		"last_key_digest", contextfabric.SanitizeLogAttr(f.LastKeyDigest),
 	}
 }
 

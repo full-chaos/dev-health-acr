@@ -15749,6 +15749,233 @@
     ]
   },
   {
+    "id": "devhealthsource.table_read_drained",
+    "msg": "devhealthsource table read drained",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id",
+      "table",
+      "run"
+    ],
+    "bounded_aggregation": "at most five lines (one per table) each time a read drains.",
+    "unbounded_reason": "one line per table each time the read drains, and a run drains again whenever new rows arrive after it, so the count follows how often the organization's tables change.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "dev_health_teams_projects"
+        ]
+      },
+      {
+        "key": "table",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "teams",
+          "projects",
+          "work_item_team_attributions",
+          "team_project_ownership",
+          "team_repo_ownership"
+        ]
+      },
+      {
+        "key": "run",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "rows_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pages",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "statements",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthsource.table_read_not_new",
+    "msg": "devhealthsource table read page consumed rows that are not new and is not a replay",
+    "level": "error",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id",
+      "table",
+      "run",
+      "page_n"
+    ],
+    "bounded_aggregation": "at most one line per table per page, only for a page that consumed rows that are not new and is not a replay.",
+    "unbounded_reason": "one line per page of the cursor walk for each table that has a row in the page, so the count follows the rows the organization holds in these tables divided by the page size.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "dev_health_teams_projects"
+        ]
+      },
+      {
+        "key": "table",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "teams",
+          "projects",
+          "work_item_team_attributions",
+          "team_project_ownership",
+          "team_repo_ownership"
+        ]
+      },
+      {
+        "key": "run",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "page_n",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "consumed_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "consumed_new",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "shared_position_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "last_stamp",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "last_key_digest",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthsource.table_read_page",
+    "msg": "devhealthsource table read page",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id",
+      "table",
+      "run",
+      "page_n"
+    ],
+    "bounded_aggregation": "at most one line per table per page, and only for a table with a statement row or a consumed row in the page; at most five tables. No row id: the last key is a digest.",
+    "unbounded_reason": "one line per page of the cursor walk for each table that has a row in the page, so the count follows the rows the organization holds in these tables divided by the page size.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "dev_health_teams_projects"
+        ]
+      },
+      {
+        "key": "table",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "teams",
+          "projects",
+          "work_item_team_attributions",
+          "team_project_ownership",
+          "team_repo_ownership"
+        ]
+      },
+      {
+        "key": "run",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "page_n",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "statement_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "statement_more",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "consumed_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "consumed_new",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "consumed_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "replay",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "last_stamp",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "last_key_digest",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "genkitruntime.model_interpret_decision",
     "msg": "context fabric model decision",
     "level": "info",

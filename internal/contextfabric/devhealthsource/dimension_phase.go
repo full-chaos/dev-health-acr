@@ -123,6 +123,7 @@ func (p sourcePlan) dimensionBatch(ctx context.Context, orgID, cursor string, at
 		from := cursorState{Since: at.Since, After: at.After}
 		page, truncated, err := readTable(ctx, table, p.client, orgID, from, incrementalBatchCap)
 		if err == nil {
+			p.noteRead(table.name, page, truncated)
 			var bound pageBound
 			err = p.boundRead(ctx, orgID, table.name, from, &bound, page, truncated)
 		}
@@ -136,6 +137,7 @@ func (p sourcePlan) dimensionBatch(ctx context.Context, orgID, cursor string, at
 			break
 		}
 		normalizeCandidates(page, p.observeNormalization)
+		p.notePage(page)
 		all = append(all, page...)
 		rows += sourceRows(page)
 		pages++
