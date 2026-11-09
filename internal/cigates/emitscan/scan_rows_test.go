@@ -115,21 +115,24 @@ func TestConstFixpointBounded(t *testing.T) {
 	}
 }
 
-// timedScale is the factor timed applies to every limit; the race detector slows the scan, see raceSlowdown.
-var timedScale = raceSlowdown
-
 type errorfer interface {
 	Helper()
 	Errorf(format string, args ...any)
+	Fatalf(format string, args ...any)
 }
 
 func timed(t *testing.T, id string, limit time.Duration, run func() string) string {
 	t.Helper()
-	return timedScaled(t, cpuTime, id, limit, timedScale, run)
+	return timedScaled(t, cpuTime, id, limit, calibrationCPU(t), run)
 }
 
-func timedScaled(t errorfer, clock func(*testing.T) time.Duration, id string, limit time.Duration, scale int, run func() string) string {
+func timedScaled(t errorfer, clock func(*testing.T) time.Duration, id string, limit, calibration time.Duration, run func() string) string {
 	t.Helper()
+	enforced, note, err := cpuBound(limit, calibration)
+	if err != nil {
+		t.Fatalf("%s: %v", id, err)
+		return ""
+	}
 	tt, _ := t.(*testing.T)
 	start := clock(tt)
 	got := run()
@@ -137,9 +140,8 @@ func timedScaled(t errorfer, clock func(*testing.T) time.Duration, id string, li
 	if tt != nil {
 		tt.Logf("%s: %s cpu", id, elapsed)
 	}
-	enforced := limit * time.Duration(scale)
 	if elapsed > enforced {
-		t.Errorf("%s: used %s cpu, want < %s", id, elapsed, enforced)
+		t.Errorf("%s: used %s cpu, want < %s (%s)", id, elapsed, enforced, note)
 	}
 	return got
 }
@@ -150,16 +152,21 @@ func (r *recordingT) Helper() {}
 func (r *recordingT) Errorf(format string, args ...any) {
 	r.msgs = append(r.msgs, fmt.Sprintf(format, args...))
 }
+func (r *recordingT) Fatalf(format string, args ...any) {
+	r.msgs = append(r.msgs, "fatal: "+fmt.Sprintf(format, args...))
+}
 
-// The failure text must name the limit that was enforced (after the scale), and timed must pass the race scale.
+// The failure text must name the enforced limit and the calibration that set it; a broken calibration must stop the test.
 func TestTimedFailureNamesEnforcedLimit(t *testing.T) {
 	rows := []struct {
-		scale   int
-		elapsed time.Duration
-		want    string
+		calibration time.Duration
+		elapsed     time.Duration
+		want        string
 	}{
-		{1, 150 * time.Millisecond, "j1: used 150ms cpu, want < 100ms"},
-		{10, 1500 * time.Millisecond, "j1: used 1.5s cpu, want < 1s"},
+		{45 * time.Millisecond, 150 * time.Millisecond, "j1: used 150ms cpu, want < 100ms (limit 100ms x 1.00: calibration scan 45ms cpu, plain-build baseline 45ms)"},
+		{450 * time.Millisecond, 1500 * time.Millisecond, "j1: used 1.5s cpu, want < 1s (limit 100ms x 10.00: calibration scan 450ms cpu, plain-build baseline 45ms)"},
+		{0, 0, "fatal: j1: calibration scan used 0s cpu: it measured no work"},
+		{9 * time.Second, 0, "fatal: j1: calibration scan used 9s cpu, 200.0x the 45ms plain-build baseline, over the 160x ceiling"},
 	}
 	for _, row := range rows {
 		var calls int
@@ -171,13 +178,10 @@ func TestTimedFailureNamesEnforcedLimit(t *testing.T) {
 			return row.elapsed
 		}
 		rec := &recordingT{}
-		timedScaled(rec, clock, "j1", 100*time.Millisecond, row.scale, func() string { return "" })
+		timedScaled(rec, clock, "j1", 100*time.Millisecond, row.calibration, func() string { return "" })
 		if len(rec.msgs) != 1 || rec.msgs[0] != row.want {
-			t.Errorf("scale %d: messages = %q, want [%q]", row.scale, rec.msgs, row.want)
+			t.Errorf("calibration %s: messages = %q, want [%q]", row.calibration, rec.msgs, row.want)
 		}
-	}
-	if timedScale != raceSlowdown {
-		t.Errorf("timedScale = %d, want raceSlowdown %d", timedScale, raceSlowdown)
 	}
 }
 
