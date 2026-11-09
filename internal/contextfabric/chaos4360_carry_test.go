@@ -159,6 +159,9 @@ func TestWindowCarry_TurnThreeCommitsWithCarriedWindow(t *testing.T) {
 	if len(telemetry.windowCarries) != 1 || telemetry.windowCarries[0] != (windowCarryRecord{WindowCarryHit, 0, CarrySeedReceipt, false}) {
 		t.Fatalf("telemetry.windowCarries = %#v, want exactly one hit at depth 0", telemetry.windowCarries)
 	}
+	if len(telemetry.windowCarryWalks) != 1 || telemetry.windowCarryWalks[0].Visited != 1 {
+		t.Fatalf("telemetry.windowCarryWalks = %#v, want one walk that visited exactly the one referenced result", telemetry.windowCarryWalks)
+	}
 	if len(telemetry.windowCanonicalizationOutcomes) == 0 || telemetry.windowCanonicalizationOutcomes[len(telemetry.windowCanonicalizationOutcomes)-1] != WindowCanonicalizationCarried {
 		t.Fatalf("telemetry.windowCanonicalizationOutcomes = %#v, want the final entry to be %q (never inferred_default)", telemetry.windowCanonicalizationOutcomes, WindowCanonicalizationCarried)
 	}

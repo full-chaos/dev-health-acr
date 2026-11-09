@@ -38,7 +38,11 @@ func (r *carryWalkRecorder) begin() func(visited int) {
 	if r == nil {
 		return func(int) {}
 	}
-	return func(int) {}
+	start := r.now()
+	return func(visited int) {
+		r.stats.Visited += visited
+		r.stats.Duration += r.now().Sub(start)
+	}
 }
 
 func (r *carryWalkRecorder) snapshot() CarryWalkStats {
