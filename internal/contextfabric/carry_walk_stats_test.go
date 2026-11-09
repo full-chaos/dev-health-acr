@@ -126,7 +126,7 @@ func TestCarryWalkStats_MissLinesCarryTheStatsToo(t *testing.T) {
 	telemetry := &recordingTelemetry{}
 	engine := buildCarryTestEngine(t, &staticResultStore{})
 	engine.telemetry = telemetry
-	walk := CarryWalkStats{Visited: 3, Duration: 7 * time.Millisecond}
+	walk := CarryWalkStats{Visited: 3, OtherEpochVisited: 2, Duration: 7 * time.Millisecond}
 	engine.recordWindowCarry(context.Background(), storage.Principal{}, windowCarryResult{Outcome: WindowCarryMissNoConfirmedWindow}, CarrySeedReceipt, walk)
 	engine.recordKindCarry(context.Background(), storage.Principal{}, kindCarryResult{Outcome: KindCarryMissNoConfirmedKind}, CarrySeedReceipt, walk)
 	if len(telemetry.windowCarryWalks) != 1 || telemetry.windowCarryWalks[0] != walk {

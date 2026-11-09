@@ -7293,7 +7293,6 @@
           "hit",
           "miss_no_reference",
           "miss_unloadable",
-          "miss_stale_graph_epoch",
           "miss_no_confirmed_kind",
           "miss_depth_exceeded",
           "miss_vetoed_carrier",
@@ -7372,6 +7371,11 @@
       },
       {
         "key": "visited",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "other_epoch_visited",
         "type": "int",
         "presence": "required"
       },
@@ -13429,7 +13433,6 @@
           "hit",
           "miss_no_reference",
           "miss_unloadable",
-          "miss_stale_graph_epoch",
           "miss_no_confirmed_window",
           "miss_depth_exceeded",
           "miss_conflicting_windows",
@@ -13460,6 +13463,11 @@
       },
       {
         "key": "visited",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "other_epoch_visited",
         "type": "int",
         "presence": "required"
       },

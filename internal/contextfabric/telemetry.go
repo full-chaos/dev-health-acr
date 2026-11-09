@@ -518,14 +518,15 @@ func (t SlogEngineTelemetry) RecordInterpretationTerms(ctx context.Context, prin
 }
 
 // RecordWindowCarry (CHAOS-4360) logs at Info: outcome/chain_depth (and the
-// walk's visited count and walk_ms, which chain_depth hides) are both
+// walk's visited count, how many of those came from another graph epoch,
+// and walk_ms, which chain_depth hides) are both
 // closed-vocabulary/plain-integer, content-safe by construction -- never a
 // question, subject label, or canonical id. hit vs. every miss reason is
 // this stream's own hit-rate denominator (RecordWindowCarry's own doc
 // comment, engine.go, for why it fires only on the carry-eligible
 // population).
 func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource, viaStoredAncestry bool, walk CarryWalkStats) {
-	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)), "chain_depth", chainDepth, "seed_source", SanitizeLogAttr(string(seedSource)), "via_stored_ancestry", viaStoredAncestry, "visited", walk.Visited, "walk_ms", walk.WalkMillis()}, requestIDLogAttrs(ctx)...)
+	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)), "chain_depth", chainDepth, "seed_source", SanitizeLogAttr(string(seedSource)), "via_stored_ancestry", viaStoredAncestry, "visited", walk.Visited, "other_epoch_visited", walk.OtherEpochVisited, "walk_ms", walk.WalkMillis()}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric window carry", args...)
 }
 
@@ -536,7 +537,7 @@ func (t SlogEngineTelemetry) RecordWindowCarry(ctx context.Context, principal st
 // be counted apart.
 func (t SlogEngineTelemetry) RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource, viaStoredAncestry bool, walk CarryWalkStats) {
 	args := append([]any{"org_id", SanitizeLogAttr(principal.OrgID), "outcome", SanitizeLogAttr(string(outcome)), "chain_depth", chainDepth,
-		"carried_kind", SanitizeLogAttr(string(carriedKind)), "redeemed_kind", SanitizeLogAttr(string(redeemedKind)), "seed_source", SanitizeLogAttr(string(seedSource)), "via_stored_ancestry", viaStoredAncestry, "visited", walk.Visited, "walk_ms", walk.WalkMillis()}, requestIDLogAttrs(ctx)...)
+		"carried_kind", SanitizeLogAttr(string(carriedKind)), "redeemed_kind", SanitizeLogAttr(string(redeemedKind)), "seed_source", SanitizeLogAttr(string(seedSource)), "via_stored_ancestry", viaStoredAncestry, "visited", walk.Visited, "other_epoch_visited", walk.OtherEpochVisited, "walk_ms", walk.WalkMillis()}, requestIDLogAttrs(ctx)...)
 	t.logger.InfoContext(ctx, "context fabric kind carry", args...)
 }
 

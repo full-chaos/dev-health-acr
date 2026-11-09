@@ -2298,7 +2298,7 @@ var InterpretationTerms = Event{
 	},
 }
 
-// WindowCarry is the Info line of one window carry attempt: the outcome, the depth of the chain, the seed it started from, whether stored ancestry supplied it, and how many prior results the walk visited and how many milliseconds it took.
+// WindowCarry is the Info line of one window carry attempt: the outcome, the depth of the chain, the seed it started from, whether stored ancestry supplied it, and how many prior results the walk visited, how many of those were saved under another graph epoch or none, and how many milliseconds it took.
 var WindowCarry = Event{
 	ID:                       "contextfabric.window_carry",
 	Msg:                      "context fabric window carry",
@@ -2314,12 +2314,13 @@ var WindowCarry = Event{
 		{Key: "seed_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CarrySeedSourceVocabulary()},
 		{Key: "via_stored_ancestry", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "visited", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "other_epoch_visited", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "walk_ms", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},
 }
 
-// KindCarry is the Info line of one kind carry attempt: the outcome, the chain depth, the kind carried and the kind redeemed, the seed, whether stored ancestry supplied it, and how many prior results the walk visited and how many milliseconds it took.
+// KindCarry is the Info line of one kind carry attempt: the outcome, the chain depth, the kind carried and the kind redeemed, the seed, whether stored ancestry supplied it, and how many prior results the walk visited, how many of those were saved under another graph epoch or none, and how many milliseconds it took.
 var KindCarry = Event{
 	ID:                       "contextfabric.kind_carry",
 	Msg:                      "context fabric kind carry",
@@ -2337,6 +2338,7 @@ var KindCarry = Event{
 		{Key: "seed_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CarrySeedSourceVocabulary()},
 		{Key: "via_stored_ancestry", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "visited", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "other_epoch_visited", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "walk_ms", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},

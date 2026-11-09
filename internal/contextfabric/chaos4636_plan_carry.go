@@ -60,8 +60,9 @@ const (
 	// PlanCarryMissStaleGraphEpoch: a carrier loaded but failed the
 	// CHAOS-3898 ingress taint gate -- its graph epoch is absent or differs
 	// from this investigation's binding. The SAME fail-closed check
-	// resolvePriorSubjectHints and resolveCarriedWindow both apply, reused
-	// rather than re-implemented.
+	// resolvePriorSubjectHints applies. The kind and window walks do not
+	// apply it (their values are not graph ids); the plan keeps it for the
+	// cohort-comparability reason this file's header states.
 	PlanCarryMissStaleGraphEpoch PlanCarryOutcome = "miss_stale_graph_epoch"
 	// PlanCarryMissNoPlan: every reachable, taint-gate-passing prior result
 	// carried no plan, or carried one whose family was itself unclassified.
@@ -202,8 +203,9 @@ func (e *Engine) walkCarriedPlan(ctx context.Context, principal storage.Principa
 				sawUnloadable = true
 				continue
 			}
-			// Same CHAOS-3898 §2.2 ingress taint gate every other carrier
-			// check applies. A preloaded entry has already passed it -- see
+			// Same CHAOS-3898 §2.2 ingress taint gate the candidate-hint
+			// path applies (see this file's header for why the plan keeps
+			// it while the kind and window walks do not). A preloaded entry has already passed it -- see
 			// resolvePriorSubjectHints, which only ever stores a result in
 			// that map after the gate -- so it is not re-checked here, and
 			// it is not skipped here either.

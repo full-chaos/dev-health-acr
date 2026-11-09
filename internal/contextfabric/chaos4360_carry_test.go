@@ -265,31 +265,30 @@ func TestResolveCarriedWindow_WalksChainToNearestConfirmation(t *testing.T) {
 	}
 }
 
-// TestResolveCarriedWindow_FailsClosedOnStaleGraphEpoch proves the
-// CHAOS-3898 §2.2 ingress taint gate applies to a carry lookup identically
-// to resolvePriorSubjectHints' own: a candidate whose stored GraphEpoch
-// disagrees with this investigation's own binding is never trusted, even
-// though its own window would otherwise be a clean hit.
-func TestResolveCarriedWindow_FailsClosedOnStaleGraphEpoch(t *testing.T) {
+// TestResolveCarriedWindow_CarriesAcrossADifferentGraphEpoch: a confirmed
+// window is a closed relative id whose bounds come from the engine clock,
+// never from the graph, so a carrier from another graph epoch still carries
+// it. Candidate ids keep their own epoch gate (resolvePriorSubjectHints).
+func TestResolveCarriedWindow_CarriesAcrossADifferentGraphEpoch(t *testing.T) {
 	t.Parallel()
 	prior := validInvestigationResult()
-	prior.ResultID = "result_prior_stale"
+	prior.ResultID = "result_prior_other_epoch"
 	prior.EffectiveEvidenceWindow = &contractsv1.ContextFabricEffectiveEvidenceWindow{
 		RelativeID: RelativeWindowTrailing90D, Provenance: WindowClarificationConfirmed,
 	}
-	staleEpoch := int64(3)
+	otherEpoch := int64(3)
 	store := &staticResultStore{
-		results:    map[string]InvestigationResult{"result_prior_stale": prior},
-		graphEpoch: &staleEpoch,
+		results:    map[string]InvestigationResult{"result_prior_other_epoch": prior},
+		graphEpoch: &otherEpoch,
 	}
 	engine := buildCarryTestEngine(t, store)
 
 	request := validInvestigationRequest()
-	request.PriorSubjectReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_stale", ReceiptID: "receipt_abc"}}
+	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_prior_other_epoch", ReceiptID: "candr_abc"}}
 
-	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, request.PriorSubjectReceipts, ResolvedGraphBinding{Epoch: 7})
-	if got.Outcome != WindowCarryMissStaleGraphEpoch || got.Window != nil {
-		t.Fatalf("resolveCarriedWindow() = %#v, want miss_stale_graph_epoch and no window", got)
+	got := engine.resolveCarriedWindow(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 7})
+	if got.Outcome != WindowCarryHit || got.Window == nil || got.Window.RelativeID != RelativeWindowTrailing90D {
+		t.Fatalf("resolveCarriedWindow() = %#v, want a hit carrying trailing_90d across the epoch change", got)
 	}
 }
 
@@ -336,7 +335,7 @@ func TestComposeCarriedWindowEntry_NilOnEveryMissOutcome(t *testing.T) {
 	t.Parallel()
 	for _, outcome := range []WindowCarryOutcome{
 		WindowCarryNotAttempted, WindowCarryMissNoReference, WindowCarryMissUnloadable,
-		WindowCarryMissStaleGraphEpoch, WindowCarryMissNoConfirmedWindow, WindowCarryMissDepthExceeded,
+		WindowCarryMissNoConfirmedWindow, WindowCarryMissDepthExceeded,
 	} {
 		if got := composeCarriedWindowEntry(windowCarryResult{Outcome: outcome}); got != nil {
 			t.Fatalf("composeCarriedWindowEntry(%q) = %#v, want nil", outcome, got)

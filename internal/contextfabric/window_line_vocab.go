@@ -96,7 +96,7 @@ func WindowGatedOriginVocabulary() []string {
 // WindowCarryOutcomeVocabulary is the closed set of window carry outcomes a line records; a carry never attempted writes no line.
 func WindowCarryOutcomeVocabulary() []string {
 	return []string{
-		string(WindowCarryHit), string(WindowCarryMissNoReference), string(WindowCarryMissUnloadable), string(WindowCarryMissStaleGraphEpoch),
+		string(WindowCarryHit), string(WindowCarryMissNoReference), string(WindowCarryMissUnloadable),
 		string(WindowCarryMissNoConfirmedWindow), string(WindowCarryMissDepthExceeded), string(WindowCarryMissConflictingWindows),
 		string(WindowCarryMissQuestionDrift), string(WindowCarryMissQuestionIndeterminate),
 	}
@@ -105,7 +105,7 @@ func WindowCarryOutcomeVocabulary() []string {
 // KindCarryOutcomeVocabulary is the closed set of kind carry outcomes a line records; a carry never attempted writes no line.
 func KindCarryOutcomeVocabulary() []string {
 	return []string{
-		string(KindCarryHit), string(KindCarryMissNoReference), string(KindCarryMissUnloadable), string(KindCarryMissStaleGraphEpoch),
+		string(KindCarryHit), string(KindCarryMissNoReference), string(KindCarryMissUnloadable),
 		string(KindCarryMissNoConfirmedKind), string(KindCarryMissDepthExceeded), string(KindCarryMissVetoedCarrier),
 		string(KindCarryDroppedRedeemedKindDiffers), string(KindCarryMissConflictingKinds), string(KindCarryMissQuestionDrift),
 		string(KindCarryMissQuestionIndeterminate),

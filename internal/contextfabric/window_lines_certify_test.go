@@ -19,8 +19,8 @@ var (
 	statedWindowKeys    = []string{"time", "level", "msg", "org_id", "surface", "origin", "interpreted_axis", "executed_axis", "outcome", "request_id"}
 	windowGatedKeys     = []string{"time", "level", "msg", "org_id", "surface", "origin", "relative_id", "provenance", "window_class", "request_id"}
 	windowCanonKeys     = []string{"time", "level", "msg", "org_id", "outcome", "request_id"}
-	windowCarryKeys     = []string{"time", "level", "msg", "org_id", "outcome", "chain_depth", "seed_source", "via_stored_ancestry", "visited", "walk_ms", "request_id"}
-	kindCarryKeys       = []string{"time", "level", "msg", "org_id", "outcome", "chain_depth", "carried_kind", "redeemed_kind", "seed_source", "via_stored_ancestry", "visited", "walk_ms", "request_id"}
+	windowCarryKeys     = []string{"time", "level", "msg", "org_id", "outcome", "chain_depth", "seed_source", "via_stored_ancestry", "visited", "other_epoch_visited", "walk_ms", "request_id"}
+	kindCarryKeys       = []string{"time", "level", "msg", "org_id", "outcome", "chain_depth", "carried_kind", "redeemed_kind", "seed_source", "via_stored_ancestry", "visited", "other_epoch_visited", "walk_ms", "request_id"}
 	ledgerWindowKeys    = []string{"time", "level", "msg", "org_id", "decision", "source_result_id", "applied_window", "request_id"}
 	windowBinderSurface = "mcp"
 )
@@ -143,17 +143,17 @@ func TestCarryAndLedgerWindowLinesCertifyEveryProducerValue(t *testing.T) {
 		for _, outcome := range contextfabric.WindowCarryOutcomeVocabulary() {
 			var buf bytes.Buffer
 			sink, ctx := answerLineSink(&buf, slog.LevelInfo)
-			sink.RecordWindowCarry(ctx, principalOrg1, contextfabric.WindowCarryOutcome(outcome), 2, contextfabric.CarrySeedSource(seed), true, contextfabric.CarryWalkStats{Visited: 3, Duration: 7 * time.Millisecond})
+			sink.RecordWindowCarry(ctx, principalOrg1, contextfabric.WindowCarryOutcome(outcome), 2, contextfabric.CarrySeedSource(seed), true, contextfabric.CarryWalkStats{Visited: 3, OtherEpochVisited: 2, Duration: 7 * time.Millisecond})
 			pinKeys(t, bytes.NewBuffer(buf.Bytes()), windowCarryKeys, 1)
-			certifyRequestLine(t, buf.Bytes(), eventspec.WindowCarry, map[string]any{"outcome": outcome, "seed_source": seed, "chain_depth": 2, "via_stored_ancestry": true, "visited": 3, "walk_ms": 7})
+			certifyRequestLine(t, buf.Bytes(), eventspec.WindowCarry, map[string]any{"outcome": outcome, "seed_source": seed, "chain_depth": 2, "via_stored_ancestry": true, "visited": 3, "other_epoch_visited": 2, "walk_ms": 7})
 		}
 		for _, outcome := range contextfabric.KindCarryOutcomeVocabulary() {
 			for _, kind := range append([]contractsv1.ContextFabricSubjectKind{""}, kindsOf()...) {
 				var buf bytes.Buffer
 				sink, ctx := answerLineSink(&buf, slog.LevelInfo)
-				sink.RecordKindCarry(ctx, principalOrg1, contextfabric.KindCarryOutcome(outcome), 1, kind, kind, contextfabric.CarrySeedSource(seed), false, contextfabric.CarryWalkStats{Visited: 3, Duration: 7 * time.Millisecond})
+				sink.RecordKindCarry(ctx, principalOrg1, contextfabric.KindCarryOutcome(outcome), 1, kind, kind, contextfabric.CarrySeedSource(seed), false, contextfabric.CarryWalkStats{Visited: 3, OtherEpochVisited: 2, Duration: 7 * time.Millisecond})
 				pinKeys(t, bytes.NewBuffer(buf.Bytes()), kindCarryKeys, 1)
-				certifyRequestLine(t, buf.Bytes(), eventspec.KindCarry, map[string]any{"outcome": outcome, "seed_source": seed, "carried_kind": string(kind), "redeemed_kind": string(kind), "visited": 3, "walk_ms": 7})
+				certifyRequestLine(t, buf.Bytes(), eventspec.KindCarry, map[string]any{"outcome": outcome, "seed_source": seed, "carried_kind": string(kind), "redeemed_kind": string(kind), "visited": 3, "other_epoch_visited": 2, "walk_ms": 7})
 			}
 		}
 	}

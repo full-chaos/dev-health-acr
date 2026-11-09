@@ -98,14 +98,8 @@ const (
 	// load (InvestigationResultStore.Get error) or named an empty
 	// ResultID/ReceiptID pair.
 	WindowCarryMissUnloadable WindowCarryOutcome = "miss_unloadable"
-	// WindowCarryMissStaleGraphEpoch: a candidate loaded but failed the
-	// CHAOS-3898 §2.2 ingress taint gate (its own GraphEpoch is absent or
-	// differs from this investigation's ResolvedGraphBinding) -- the SAME
-	// fail-closed check resolvePriorSubjectHints already applies, reused
-	// here rather than re-implemented, never partially trusted.
-	WindowCarryMissStaleGraphEpoch WindowCarryOutcome = "miss_stale_graph_epoch"
-	// WindowCarryMissNoConfirmedWindow: every reachable, taint-gate-passing
-	// result in the chain carried either no window at all or one that was
+	// WindowCarryMissNoConfirmedWindow: every reachable, loadable result in
+	// the chain carried either no window at all or one that was
 	// ITSELF inferred_default -- nothing to carry.
 	WindowCarryMissNoConfirmedWindow WindowCarryOutcome = "miss_no_confirmed_window"
 	// WindowCarryMissDepthExceeded: the chain walk still had unvisited
@@ -608,7 +602,7 @@ func ancestryRoot(request InvestigationRequest, validation receiptValidation, re
 // and the defect it closes. Called ONLY when this turn's own window
 // canonicalization would otherwise be inferred_default (engine.go's call
 // site) -- fails closed on every ambiguity (no reference, an unloadable
-// candidate, a stale graph epoch, or a chain exhausted before a hit): "no
+// candidate, or a chain exhausted before a hit): "no
 // carry" is always a safe, disclosed answer, never a guess.
 //
 // THIS IS THE WINDOW AXIS'S CHOKE POINT (CHAOS-5003). Every windowCarryResult
@@ -708,12 +702,13 @@ func (e *Engine) walkCarriedWindow(ctx context.Context, principal storage.Princi
 		return windowCarryResult{Outcome: WindowCarryMissNoReference}
 	}
 	visited := make(map[string]struct{}, carryChainMaxVisited)
+	otherEpochVisited := 0
 	finishWalk := carryWalkRecorderFrom(ctx).begin()
-	defer func() { finishWalk(len(visited)) }()
+	defer func() { finishWalk(len(visited), otherEpochVisited) }()
 	// reachedViaAncestry records which frontier ids were reachable ONLY
 	// because a stored parent pointed at them -- see ViaStoredAncestry.
 	reachedViaAncestry := make(map[string]struct{}, carryChainMaxVisited)
-	var sawUnloadable, sawStaleEpoch, capExceeded bool
+	var sawUnloadable, capExceeded bool
 	for depth := 0; depth < carryChainMaxDepth && len(frontier) > 0; depth++ {
 		var next []string
 		// hits (codex R3 P1, fixed) collects EVERY carriable window found at
@@ -749,14 +744,14 @@ func (e *Engine) walkCarriedWindow(ctx context.Context, principal storage.Princi
 				sawUnloadable = true
 				continue
 			}
-			// CHAOS-3898 §2.2 ingress taint gate -- IDENTICAL check to
-			// resolvePriorSubjectHints' own (engine.go): a carrier whose
-			// GraphEpoch is absent or names a different epoch than this
-			// investigation's own binding is never trusted, partially or
-			// otherwise.
-			if fetched.GraphEpoch == nil || *fetched.GraphEpoch != binding.Epoch {
-				sawStaleEpoch = true
-				continue
+			// NO GRAPH EPOCH GATE on this axis. A carried window is a closed
+			// relative id or clock-derived bounds (relativeWindowBounds,
+			// calendarWindowBounds in window.go), never a graph id, so a
+			// lifecycle rebuild between turns does not change it. Candidate
+			// hints, which ARE graph ids, keep the CHAOS-3898 §2.2 gate in
+			// resolvePriorSubjectHints (engine.go).
+			if carrierFromOtherEpoch(fetched, binding) {
+				otherEpochVisited++
 			}
 			prior := fetched.Result
 			if window := carriableWindow(prior.EffectiveEvidenceWindow); window != nil {
@@ -825,8 +820,6 @@ func (e *Engine) walkCarriedWindow(ctx context.Context, principal storage.Princi
 		return windowCarryResult{Outcome: WindowCarryMissDepthExceeded}
 	}
 	switch {
-	case sawStaleEpoch:
-		return windowCarryResult{Outcome: WindowCarryMissStaleGraphEpoch}
 	case sawUnloadable:
 		return windowCarryResult{Outcome: WindowCarryMissUnloadable}
 	default:
