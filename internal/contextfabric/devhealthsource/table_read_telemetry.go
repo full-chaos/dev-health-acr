@@ -137,9 +137,9 @@ func logTableReadPages(ctx context.Context, logger *slog.Logger, orgID string, l
 		return
 	}
 	type tableReport struct {
-		name                            string
-		pages                           []*tablePage
-		total, pagesWithRows, statement int
+		name                                   string
+		pages                                  []*tablePage
+		total, final, pagesWithRows, statement int
 	}
 	ledger.mu.Lock()
 	t := &ledger.tables
@@ -149,7 +149,7 @@ func logTableReadPages(ctx context.Context, logger *slog.Logger, orgID string, l
 	hasPages := false
 	for _, name := range t.order {
 		st := t.byTable[name]
-		report := tableReport{name: name, pages: st.pages, total: len(st.seen), pagesWithRows: st.pagesWithRows, statement: st.statements}
+		report := tableReport{name: name, pages: st.pages, total: len(st.seen), final: len(st.seen), pagesWithRows: st.pagesWithRows, statement: st.statements}
 		for _, page := range st.pages {
 			report.total -= page.consumedNew
 		}
@@ -196,6 +196,6 @@ func logTableReadPages(ctx context.Context, logger *slog.Logger, orgID string, l
 	for _, report := range reports {
 		logger.InfoContext(ctx, "devhealthsource table read drained",
 			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName, "table", contextfabric.SanitizeLogAttr(report.name), "run", run,
-			"rows_total", report.total, "pages", report.pagesWithRows, "statements", report.statement)
+			"rows_total", report.final, "pages", report.pagesWithRows, "statements", report.statement)
 	}
 }

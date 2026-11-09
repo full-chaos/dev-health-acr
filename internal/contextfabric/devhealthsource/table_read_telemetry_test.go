@@ -133,3 +133,33 @@ func TestTableReadLedgerIsNilSafe(t *testing.T) {
 		t.Fatal("nil ledger counted a row")
 	}
 }
+
+// The paged walk reports each table's statement and the page the cursor moves
+// past through the hooks the source wires, and says when the read drains.
+func TestPagedWalkReportsEachTablesStatementAndConsumption(t *testing.T) {
+	rows := numbered(pageCutStamp, "a", 0, 3)
+	ledger := &presenceTelemetryLedger{}
+	var logs bytes.Buffer
+	plan := sourcePlan{
+		client: keysetRows{}, source: "page_cut_test", version: "v1",
+		tables:      []entityTable{keysetTable("teams", rows), keysetTable("projects", numbered(pageCutStamp, "b", 0, 2))},
+		logger:      slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		observeRead: ledger.recordTableStatement,
+		observePage: ledger.recordTableConsumed,
+	}
+	if _, available, err := plan.pagedBatch(context.Background(), "org", "", cursorState{}, false); err != nil || available {
+		t.Fatalf("pagedBatch available=%v err=%v", available, err)
+	}
+	logTableReadPages(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)), "org", ledger)
+	out := logs.String()
+	for _, want := range []string{
+		"table=teams run=0 page_n=1 statement_rows=3 statement_more=false consumed_rows=3 consumed_new=3 consumed_total=3 replay=false",
+		"table=projects run=0 page_n=1 statement_rows=2 statement_more=false consumed_rows=2 consumed_new=2 consumed_total=2 replay=false",
+		"table=teams run=0 rows_total=3 pages=1 statements=2",
+		"table=projects run=0 rows_total=2 pages=1 statements=2",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log lacks %q:\n%s", want, out)
+		}
+	}
+}
