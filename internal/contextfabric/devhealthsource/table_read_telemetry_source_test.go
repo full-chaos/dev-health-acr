@@ -57,10 +57,10 @@ func TestEveryNonMembershipTableLogsItsReadPerPage(t *testing.T) {
 }
 
 // A large organization reads teams and projects whole in the dimension phase,
-// before the fact walk. Every dimension page states the rows its statement
-// returned and the rows the cursor moved past on the same line, and the pages
-// add up to every row of each table (a later fact-walk page may read rows
-// again and cut its page, so only the first page and the new rows are fixed).
+// before the fact walk. Every statement of the walk states its rows on a line
+// of its own: the from-scratch snapshot first (more rows beyond, none
+// consumed), then each dimension page, and the pages add up to every row of
+// each table (a later fact-walk page may read rows again and cut its page).
 func TestDimensionPhasePagesLogTheirReadAndConsumption(t *testing.T) {
 	at := time.Date(2026, 10, 10, 3, 55, 0, 0, time.UTC)
 	var teams, projects [][]any
@@ -77,8 +77,7 @@ func TestDimensionPhasePagesLogTheirReadAndConsumption(t *testing.T) {
 		{match: "FROM projects FINAL\nWHERE", rows: projects, cursorOf: stampOf(7)},
 	}}
 	var logs bytes.Buffer
-	source := enabledTeamsProjectsSource(t, client)
-	source.WithLogger(slog.New(slog.NewJSONHandler(&logs, nil)))
+	source, counter := countingTeamsProjectsSource(t, client, &logs)
 	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName}
 	for call := 1; call <= 10; call++ {
 		batch, available, err := source.NextProjectionBatch(context.Background(), checkpoint)
@@ -90,17 +89,18 @@ func TestDimensionPhasePagesLogTheirReadAndConsumption(t *testing.T) {
 			break
 		}
 	}
-	lines := tableReadLines(t, &logs, tableReadPageMessage)
 	for _, name := range []string{"teams", "projects"} {
+		lines := requireOneLinePerStatement(t, &logs, counter, name)
+		requireSnapshotStatement(t, name, lines[0])
+		if lines[1]["statement_rows"].(float64) != lines[1]["consumed_rows"].(float64) {
+			t.Fatalf("table %s first dimension page states %v statement rows and %v consumed: %v", name, lines[1]["statement_rows"], lines[1]["consumed_rows"], lines[1])
+		}
 		newRows := 0
-		for _, line := range lines[name] {
-			if line["page_n"] == float64(1) && line["statement_rows"].(float64) != line["consumed_rows"].(float64) {
-				t.Fatalf("table %s first page states %v statement rows and %v consumed: %v", name, line["statement_rows"], line["consumed_rows"], line)
-			}
+		for _, line := range lines {
 			newRows += int(line["consumed_new"].(float64))
 		}
 		if newRows != 200 {
-			t.Fatalf("table %s pages consumed %d new rows, want 200: %v", name, newRows, lines[name])
+			t.Fatalf("table %s pages consumed %d new rows, want 200: %v", name, newRows, lines)
 		}
 	}
 }
