@@ -98,6 +98,10 @@ func TestTableReadLedgerSummarisesAnEmptyFromScratchRead(t *testing.T) {
 		t.Fatalf("a continued run logged an empty read:\n%s", logs.String())
 	}
 	fromScratch := source.presenceLedgerFor("org", true)
+	logTableReadPages(context.Background(), logger, "org", fromScratch)
+	if logs.Len() != 0 {
+		t.Fatalf("a call that ran no statement wrote a summary:\n%s", logs.String())
+	}
 	fromScratch.recordTableStatement("teams", nil, false)
 	logTableReadPages(context.Background(), logger, "org", fromScratch)
 	if !strings.Contains(logs.String(), "table=teams run=2 rows_total=0 pages=0 statements=1") {
@@ -185,9 +189,49 @@ func TestTableReadLedgerKeepsStatementAndConsumedRowsApartAndNeedsNoMoreRowsToDr
 	if strings.Contains(logs.String(), "read drained") {
 		t.Fatalf("an empty statement that reports rows beyond its limit drained the read:\n%s", logs.String())
 	}
+	if !strings.Contains(logs.String(), "table=teams run=0 page_n=2 statement_rows=0 statement_more=true consumed_rows=0 consumed_new=0 consumed_total=2") {
+		t.Fatalf("an empty statement that reports rows beyond its limit wrote no page line:\n%s", logs.String())
+	}
 	ledger.recordTableStatement("teams", nil, false)
 	logTableReadPages(context.Background(), logger, "org", ledger)
 	if !strings.Contains(logs.String(), "table=teams run=0 rows_total=2 pages=1 statements=3") {
 		t.Fatalf("the read did not drain once the statement ended:\n%s", logs.String())
+	}
+}
+
+// The drain reads the statements of this call only: a table that ran no
+// statement in the call (a dimension call reads only the dimension tables)
+// neither blocks nor makes the drain, whatever its last statement of an
+// earlier call found.
+func TestTableReadDrainReadsOnlyTheStatementsOfThisCall(t *testing.T) {
+	at := time.Date(2026, 10, 1, 4, 37, 41, 0, time.UTC)
+	ledger := &presenceTelemetryLedger{}
+	consumeTablePage(ledger, true, tableRow("teams", "a", at), tableRow("projects", "p", at))
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	logTableReadPages(context.Background(), logger, "org", ledger)
+	if strings.Contains(logs.String(), "read drained") {
+		t.Fatalf("a call whose statements found more drained the read:\n%s", logs.String())
+	}
+	logs.Reset()
+	ledger.recordTableStatement("teams", nil, false)
+	logTableReadPages(context.Background(), logger, "org", ledger)
+	if !strings.Contains(logs.String(), "table=teams run=0 rows_total=1 pages=1 statements=2") || !strings.Contains(logs.String(), "table=projects run=0 rows_total=1 pages=1 statements=1") {
+		t.Fatalf("a call whose only statement drained its table did not drain the read:\n%s", logs.String())
+	}
+}
+
+// Rows the cursor moves past with no statement of their table recorded in the
+// call still write their page line, as a page that found nothing more.
+func TestTableReadConsumptionWithoutAStatementIsAPage(t *testing.T) {
+	at := time.Date(2026, 10, 1, 4, 37, 41, 0, time.UTC)
+	ledger := &presenceTelemetryLedger{}
+	ledger.recordTableConsumed([]candidate{tableRow("teams", "a", at)})
+	var logs bytes.Buffer
+	logTableReadPages(context.Background(), slog.New(slog.NewTextHandler(&logs, nil)), "org", ledger)
+	out := logs.String()
+	if !strings.Contains(out, "table=teams run=0 page_n=1 statement_rows=0 statement_more=false consumed_rows=1 consumed_new=1 consumed_total=1") ||
+		!strings.Contains(out, "table=teams run=0 rows_total=1 pages=1 statements=1") {
+		t.Fatalf("consumption with no statement is not a page that found nothing more:\n%s", out)
 	}
 }

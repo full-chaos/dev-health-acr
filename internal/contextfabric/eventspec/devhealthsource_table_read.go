@@ -30,19 +30,23 @@ func devhealthsourceTableReadSourceVocabulary() []string {
 
 const devhealthsourceTableReadUnbounded = "one line per page of the cursor walk for each table that has a row in the page, so the count follows the rows the organization holds in these tables divided by the page size."
 
-// DevhealthsourceTableReadPage is the Info line per table and page: the rows
-// the table's statement returned inside its limit, whether rows lay beyond
-// it, and the rows the shared cursor moved past (the page cut can leave
-// statement rows past the cursor). consumed_new counts rows this run had not
-// moved past before; replay is a page that consumed rows and no new one.
+const devhealthsourceTableReadPageUnbounded = "one line per statement of a table that returned a row or found rows beyond its limit, so the count follows the rows the organization holds in these tables divided by the page size."
+
+// DevhealthsourceTableReadPage is the Info line per table and statement: the
+// rows the statement returned inside its limit, whether rows lay beyond it,
+// and the rows the shared cursor moved past (the page cut can leave statement
+// rows past the cursor). consumed_new counts rows this run had not moved past
+// before; replay is a page that consumed rows and no new one. A statement that
+// returned no row and found nothing beyond its limit writes no line; the
+// drained line's statements counts it, and page_n skips it.
 var DevhealthsourceTableReadPage = Event{
 	ID:                 "devhealthsource.table_read_page",
 	Msg:                DevhealthsourceTableReadPageLogMessage,
 	Level:              LevelInfo,
 	Multiplicity:       MultiplicityZeroOrManyPerRequest,
-	UnboundedReason:    devhealthsourceTableReadUnbounded,
+	UnboundedReason:    devhealthsourceTableReadPageUnbounded,
 	Attribution:        []string{"org_id", "table", "run", "page_n"},
-	BoundedAggregation: "at most one line per table per page, and only for a table with a statement row or a consumed row in the page; at most five tables. No row id: the last key is a digest.",
+	BoundedAggregation: "at most one line per statement of a table that returned a row or found rows beyond its limit, and one per page that moved the cursor past rows of a table with no such statement; at most five tables. No row id: the last key is a digest.",
 	Fields: []Field{
 		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
 		{Key: "source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: devhealthsourceTableReadSourceVocabulary()},
