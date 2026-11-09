@@ -322,15 +322,43 @@ SELECT ?, 'github', 'TEAM-GITHUB', concat(?, leftPad(toString(number), 4, '0')),
 		f.orgID, prefix, prefix, ownershipFirstSeen, ownershipLaterAssertion, uint64(n))
 }
 
-// ownershipPageReadBound is four index granules (8192 rows each): a page
-// reads the log granules that hold its keyset range and the current granules
-// that hold its row keys, at most two of each for a contiguous run of keys.
-const ownershipPageReadBound = 4 * 8192
+// ownershipPageReadBound is four index granules: a page reads the log
+// granules that hold its keyset range and the current granules that hold its
+// row keys, at most two of each for a contiguous run of keys. The granularity
+// is read from both tables, not assumed; the bound is stated for 8192 only.
+func ownershipPageReadBound(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) uint64 {
+	t.Helper()
+	rows, err := direct.Query(ctx, `SELECT name, toUInt64OrZero(extract(engine_full, 'index_granularity = ([0-9]+)')) FROM system.tables WHERE database = currentDatabase() AND name IN (?, ?)`,
+		"project_team_ownership_groups_log", "project_team_ownership_groups_current")
+	if err != nil {
+		t.Fatalf("read the stored group tables' index_granularity: %v", err)
+	}
+	defer rows.Close()
+	seen := map[string]uint64{}
+	for rows.Next() {
+		var name string
+		var granularity uint64
+		if err := rows.Scan(&name, &granularity); err != nil {
+			t.Fatal(err)
+		}
+		seen[name] = granularity
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"project_team_ownership_groups_log", "project_team_ownership_groups_current"} {
+		if seen[table] != 8192 {
+			t.Fatalf("%s index_granularity = %d (read from system.tables), the page bound 4 x granularity is stated for 8192 only: restate the bound", table, seen[table])
+		}
+	}
+	return 4 * seen["project_team_ownership_groups_log"]
+}
 
 // C1: a page's cost is bounded and does not grow with the organization. The
 // read rows of each page statement are read back from system.query_log by a
 // per-page log_comment, on an organization of 5,200 groups and one of 10,400.
 func subOwnershipPageCostIsBoundedAndFlat(t *testing.T, ctx context.Context, f *ownershipFixture) {
+	bound := ownershipPageReadBound(t, ctx, f.direct)
 	big := newOwnershipFixture(t, ctx, f.query, f.direct, "30000000-0000-4000-8000-0000000063ff")
 	seedBoundBlock(t, ctx, f, 2600)
 	seedBoundBlock(t, ctx, big, 5200)
@@ -368,8 +396,8 @@ func subOwnershipPageCostIsBoundedAndFlat(t *testing.T, ctx context.Context, f *
 				t.Fatalf("%s: no finished statement carries log_comment %s", label, tag)
 			}
 			t.Logf("C1 %s %s read_rows=%d statements=%d", label, tag, read, statements)
-			if read > ownershipPageReadBound {
-				t.Errorf("%s: a page read %d rows, bound %d", label, read, ownershipPageReadBound)
+			if read > bound {
+				t.Errorf("%s: a page read %d rows, bound %d", label, read, bound)
 			}
 			out = append(out, read)
 		}
@@ -810,5 +838,56 @@ func subOwnershipReconcileWalksEveryPageAndRetriesAnUnappliedPage(t *testing.T, 
 			t.Fatalf("call %d: a finished ownership reconcile pass served %d more groups", call, len(ids))
 		}
 		cursor = batch.NextCursor
+	}
+}
+
+// C6: the source-row citation of a project-team edge carries the STORED
+// group's observed_at, the edge's own ObservedAt. A newer project elsewhere in
+// the provider does not move it: the per-organization group statement put the
+// provider-wide max(provider_updated_at) into observed_at, the stored group
+// does not (an accepted answer change of the citation).
+func subOwnershipSourceRowCitesTheStoredGroupObservedAt(t *testing.T, ctx context.Context, f *ownershipFixture) {
+	newer := ownershipLaterAssertion.Add(30 * 24 * time.Hour)
+	mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES ('PROJ-C6-NEWER', ?, 'github', 'C6-NEWER-KEY', 'newer', 1, 'started', '', ?)`,
+		f.orgID, newer)
+	f.syncStoredGroups(t, ctx)
+	edgeID := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-OPEN", "TEAM-GITHUB", "native")
+	var edge *contractsv1.ContextFabricRelationshipProjection
+	_, batches := ownershipTicks(t, ctx, f, "")
+	for _, b := range batches {
+		for _, r := range projectTeamEdges(b) {
+			if r.RelationshipID == edgeID {
+				r := r
+				edge = &r
+			}
+		}
+	}
+	if edge == nil || len(edge.EvidenceRefIDs) != 1 {
+		t.Fatalf("fixture: edge %s with one evidence ref was not projected (%+v)", edgeID, edge)
+	}
+	var stored time.Time
+	if err := f.direct.QueryRow(ctx, `SELECT observed_at FROM project_team_ownership_groups_current FINAL WHERE org_id = ? AND project_id = 'PROJ-OPEN' AND team_id = 'TEAM-GITHUB' AND source_name = 'native' AND provider = 'github' AND is_deleted = 0`, f.orgID).Scan(&stored); err != nil {
+		t.Fatalf("read the stored group's observed_at: %v", err)
+	}
+	if !stored.Before(newer) {
+		t.Fatalf("fixture: the stored observed_at %s must be older than the newer project %s", stored, newer)
+	}
+	rows, err := contextpacket.NewCatalogClickHouseRows(f.client).WithOrganizationRowQuery(devhealthsource.ProjectTeamSourceRowQuery())
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs, err := rows.ResolveOrganizationRow(ctx, f.orgID, contextpacket.SourceRowRead{QueryID: contextpacket.ProjectTeamSourceRowQueryID, Locator: edge.EvidenceRefIDs[0]})
+	if err != nil {
+		t.Fatalf("resolve the edge's source row: %v", err)
+	}
+	if len(refs) != 1 {
+		t.Fatalf("the edge's source row resolved to %d rows, want 1", len(refs))
+	}
+	cited := refs[0].Reference.Evidence.ObservedAt
+	if !cited.Equal(stored.UTC()) {
+		t.Errorf("the source-row citation's observed_at is %s, want the stored group's %s (the provider-wide newest project is %s)", cited, stored.UTC(), newer)
+	}
+	if !edge.ObservedAt.Equal(stored.UTC()) {
+		t.Errorf("the projected edge's ObservedAt is %s, want the stored group's %s", edge.ObservedAt, stored.UTC())
 	}
 }

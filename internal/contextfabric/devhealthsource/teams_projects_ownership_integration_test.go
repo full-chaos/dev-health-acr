@@ -504,6 +504,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"ownership late-committed group is read through the overlap", "30000000-0000-4000-8000-0000000063a4", subOwnershipLateCommittedGroupIsReadThroughTheOverlap},
 		{"ownership reconcile re-emits every live group with no log change", "30000000-0000-4000-8000-0000000063a5", subOwnershipReconcileReemitsEveryLiveGroupWithNoLogChange},
 		{"ownership reconcile walks every page and retries an unapplied page", "30000000-0000-4000-8000-0000000063a6", subOwnershipReconcileWalksEveryPageAndRetriesAnUnappliedPage},
+		{"ownership source-row citation carries the stored group observed_at", "30000000-0000-4000-8000-0000000063a7", subOwnershipSourceRowCitesTheStoredGroupObservedAt},
 	}
 	// The subtests run in parallel on one shared schema; the organization id
 	// is the only thing keeping their rows apart, so two cases sharing one
