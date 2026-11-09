@@ -174,3 +174,44 @@ func TestSnapshotStatementsLogTheirRead(t *testing.T) {
 		}
 	})
 }
+
+// The drain summary says every table's last statement found nothing more. A
+// call that fails before every table answered says nothing of the tables it
+// did not reach, so it writes no drain summary, from scratch or mid-run.
+func TestAReadThatFailsDoesNotDrain(t *testing.T) {
+	checkpoint := contextfabric.ProjectionCheckpoint{OrgID: liveOrgID, Source: devhealthsource.TeamsProjectsSourceName}
+	failingAfterEmptyTeams := []fakeTable{
+		{match: statementMatches["teams"], cursorOf: stampCursor},
+		{match: statementMatches["projects"], err: errors.New("projects read failed")},
+	}
+
+	t.Run("from_scratch", func(t *testing.T) {
+		var logs bytes.Buffer
+		source, _ := countingTeamsProjectsSource(t, &fakeClient{tables: failingAfterEmptyTeams}, &logs)
+		if _, ok, err := source.NextProjectionBatch(context.Background(), checkpoint); err == nil || ok {
+			t.Fatalf("NextProjectionBatch ok=%v err=%v, want the projects read error", ok, err)
+		}
+		if drained := tableReadLines(t, &logs, tableReadDrainedMessage); len(drained) != 0 {
+			t.Fatalf("a failed from-scratch read drained %v\n%s", drained, logs.String())
+		}
+	})
+
+	t.Run("after_rows_were_consumed", func(t *testing.T) {
+		var logs bytes.Buffer
+		base := liveShapedEdgeClient()
+		source, _ := countingTeamsProjectsSource(t, base, &logs)
+		batch, ok, err := source.NextProjectionBatch(context.Background(), checkpoint)
+		if err != nil || !ok {
+			t.Fatalf("first call ok=%v err=%v", ok, err)
+		}
+		base.tables = failingAfterEmptyTeams
+		next := checkpoint
+		next.Cursor = batch.NextCursor
+		if _, ok, err := source.NextProjectionBatch(context.Background(), next); err == nil || ok {
+			t.Fatalf("second call ok=%v err=%v, want the projects read error", ok, err)
+		}
+		if drained := tableReadLines(t, &logs, tableReadDrainedMessage); len(drained) != 0 {
+			t.Fatalf("a failed read drained %v\n%s", drained, logs.String())
+		}
+	})
+}
