@@ -183,18 +183,17 @@ func workItemTeamAttributionDerivation(source string) (contractsv1.ContextFabric
 // runtimeclickhouse's validateReadOnlyStatement requires a read-only
 // statement's FIRST TOKEN to be literally "SELECT" (ErrUnsafeStatement
 // otherwise), which a top-level WITH clause is not, however deeply nested
-// the SELECT beneath it. Embedded twice (once per UNION arm) rather than
-// named once, matching this package's own established convention for
-// SQL text that must be identical in two call sites (chaos4099_scope_
-// expander.go's projectRepositories doc comment: "mirrors that
-// computation exactly", inline, not shared via a function).
+// the SELECT beneath it.
+//
+// ONE read of projects: each row fans out to its id row and, when it has a
+// project_key, its key row (arrayJoin), the rows an id-arm/key-arm UNION
+// gave with two reads.
 const resolvedProjectsSubquery = `(
   SELECT provider, id, join_key, count() OVER (PARTITION BY provider, join_key) AS key_resolution_count
   FROM (
     SELECT DISTINCT provider, id, join_key FROM (
-      SELECT provider, id, id AS join_key FROM projects FINAL WHERE org_id = {org_id:String}
-      UNION ALL
-      SELECT provider, id, ifNull(project_key, '') AS join_key FROM projects FINAL WHERE org_id = {org_id:String} AND ifNull(project_key, '') != ''
+      SELECT provider, id, arrayJoin(if(ifNull(project_key, '') != '', [id, ifNull(project_key, '')], [id])) AS join_key
+      FROM projects FINAL WHERE org_id = {org_id:String}
     )
   )
   LIMIT 1 BY provider, join_key
@@ -476,7 +475,14 @@ func membershipStatement(cursor cursorState, ingest, pruned bool) string {
 		cursorColumn = "ingest_at"
 	}
 	rowKey := membershipRowKey()
-	return membershipRows(cursor, ingest, pruned) + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColumn, rowKey) + incrementalSettings
+	// The page is chosen from the arm rows BEFORE any project is resolved: the
+	// keyset, order and limit read membership columns only, so the projects
+	// lookup runs once, for at most row_limit rows, instead of once per arm
+	// for every row of the organization. The LEFT JOIN keeps one row per page
+	// row (resolvedProjectsSubquery is LIMIT 1 BY its join key), and the outer
+	// ORDER BY restores the page order the join does not keep.
+	page := membershipArmRows(cursor, ingest, pruned) + sincePredicate(cursor, cursorColumn, rowKey) + orderBy(cursorColumn, rowKey)
+	return "SELECT * FROM (" + membershipResolvedSQL(page, ingest) + ")" + orderBy(cursorColumn, rowKey) + incrementalSettings
 }
 
 // membershipRowKey is the keyset tiebreaker of the membership statement.
@@ -491,11 +497,30 @@ func membershipRowKey() string {
 	return rowKeySQL("subject_kind", "repo_id_str", "subject_id", "provider", "project_id", "event_id")
 }
 
-// membershipRows is the membership statement up to and including its
-// WHERE 1 = 1: every row of the three arms, before the keyset predicate,
-// ordering and page limit. The edge count reads it through
-// membershipEdgeCountSQL, so the count and the producer share one row source.
+// membershipRows is every row of the three arms with its project resolved.
+// The edge count reads it through membershipEdgeCountSQL; the producer reads
+// the same arm rows and the same resolution (membershipStatement), so the
+// count and the producer share one row source.
 func membershipRows(cursor cursorState, ingest, pruned bool) string {
+	return membershipResolvedSQL(membershipArmRows(cursor, ingest, pruned), ingest)
+}
+
+// membershipResolvedSQL resolves each row of rows -- membershipArmRows,
+// whole or paged -- to its project with ONE join of resolvedProjectsSubquery.
+func membershipResolvedSQL(rows string, ingest bool) string {
+	ingestSelect := ""
+	if ingest {
+		ingestSelect = ", pg.ingest_at AS ingest_at"
+	}
+	return `SELECT pg.subject_kind AS subject_kind, pg.repo_id_str AS repo_id_str, pg.subject_id AS subject_id, pg.repo_slug AS repo_slug, pg.observed_at AS observed_at, pg.event_id AS event_id, pg.source AS source, pg.provider AS provider, pg.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count, pg.valid_to_present AS valid_to_present, pg.valid_to_value AS valid_to_value, pg.is_malformed AS is_malformed, pg.is_duplicate_add AS is_duplicate_add` + ingestSelect + `
+FROM (` + rows + `) AS pg
+LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = pg.provider AND p.join_key = pg.project_id`
+}
+
+// membershipArmRows is the membership row source up to and including its
+// WHERE 1 = 1: every row of the three arms, before project resolution, the
+// keyset predicate, ordering and page limit.
+func membershipArmRows(cursor cursorState, ingest, pruned bool) string {
 	var changedTouches, changedSuperseded, changedPresence string
 	if pruned {
 		changedTouches, changedSuperseded, changedPresence = changedMembershipFilters(cursor, ingest)
@@ -513,28 +538,25 @@ func membershipRows(cursor cursorState, ingest, pruned bool) string {
 		ingestSelect = ", ingest_at"
 		transitionIngest, columnIngest, supersededIngest = ", m.ingest_at AS ingest_at", ", m.last_synced AS ingest_at", ", m.ingest_at AS ingest_at"
 	}
-	return `SELECT subject_kind, repo_id_str, subject_id, repo_slug, observed_at, event_id, source, provider, project_id, resolved_project_id, key_resolution_count, valid_to_present, valid_to_value, is_malformed, is_duplicate_add` + ingestSelect + `
+	return `SELECT subject_kind, repo_id_str, subject_id, repo_slug, observed_at, event_id, source, provider, project_id, valid_to_present, valid_to_value, is_malformed, is_duplicate_add` + ingestSelect + `
 FROM (
   SELECT m.subject_kind AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
-    m.observed_at AS observed_at, m.event_id AS event_id, m.source AS source, m.provider AS provider, m.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count,
+    m.observed_at AS observed_at, m.event_id AS event_id, m.source AS source, m.provider AS provider, m.project_id AS project_id,
     isNotNull(m.valid_to) AS valid_to_present, ifNull(m.valid_to, toDateTime64(0, 3, 'UTC')) AS valid_to_value, m.is_malformed AS is_malformed, m.is_duplicate_add AS is_duplicate_add` + transitionIngest + `
   FROM ` + membershipIntervalsSubquery(ingest, changedTouches) + ` AS m
-  LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
   UNION ALL
   SELECT m.subject_kind AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
-    m.observed_at AS observed_at, '' AS event_id, m.source AS source, m.provider AS provider, m.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count,
+    m.observed_at AS observed_at, '' AS event_id, m.source AS source, m.provider AS provider, m.project_id AS project_id,
     0 AS valid_to_present, toDateTime64(0, 3, 'UTC') AS valid_to_value, 0 AS is_malformed, 0 AS is_duplicate_add` + columnIngest + `
   FROM project_membership_presence AS m
-  LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
   WHERE m.org_id = {org_id:String} AND m.source = 'work_item_column'` + changedPresence + `
   UNION ALL
   SELECT 'work_item' AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
-    m.observed_at AS observed_at, '' AS event_id, 'column_superseded' AS source, m.provider AS provider, m.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count,
+    m.observed_at AS observed_at, '' AS event_id, 'column_superseded' AS source, m.provider AS provider, m.project_id AS project_id,
     0 AS valid_to_present, toDateTime64(0, 3, 'UTC') AS valid_to_value, 0 AS is_malformed, 0 AS is_duplicate_add` + supersededIngest + `
   FROM ` + supersededColumnsSubquery(ingest, changedSuperseded) + ` AS m
-  LEFT JOIN ` + resolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
 )
 WHERE 1 = 1`
