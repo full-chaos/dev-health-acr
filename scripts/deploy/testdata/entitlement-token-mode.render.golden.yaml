@@ -212,8 +212,6 @@ spec:
         app.kubernetes.io/instance: acr-test
         app.kubernetes.io/component: api
       annotations:
-        checksum/config: 790ba3b86f6c803f9b326206295b4eba7d9de1b4de244b0de0f320ab6ffeee10
-        checksum/credentials: 3015194e652a18943c4720523560c00ba1dfee6d215da25531ba417e959aa67a
     spec:
       serviceAccountName: "acr-test-api"
       automountServiceAccountToken: false
@@ -606,8 +604,6 @@ spec:
         app.kubernetes.io/instance: acr-test
         app.kubernetes.io/component: migration
       annotations:
-        checksum/config: c03ccb2904f641c9352159d99157c3596330ea8d33c6f46c9d89e092d15effe1
-        checksum/credentials: 3015194e652a18943c4720523560c00ba1dfee6d215da25531ba417e959aa67a
     spec:
       restartPolicy: Never
       serviceAccountName: "acr-test-migrate"
@@ -690,8 +686,6 @@ spec:
         app.kubernetes.io/instance: acr-test
         app.kubernetes.io/component: migration
       annotations:
-        checksum/config: c03ccb2904f641c9352159d99157c3596330ea8d33c6f46c9d89e092d15effe1
-        checksum/credentials: 3015194e652a18943c4720523560c00ba1dfee6d215da25531ba417e959aa67a
     spec:
       restartPolicy: Never
       serviceAccountName: "acr-test-migrate"

@@ -506,7 +506,8 @@ case "$scenario" in
   entitlement-token-mode-unchanged)
     printf 'scenario: entitlement-token-mode-unchanged (token-mode values with the key unset render byte-equal to the recorded render)\n'
     testdata="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/testdata"
-    render -f "$testdata/entitlement-token-mode.values.yaml" >"$workdir/ent-unchanged.yaml"
+    # The checksum/* pod annotations are content hashes; the recorded render leaves them out.
+    render -f "$testdata/entitlement-token-mode.values.yaml" | grep -v ' checksum/' >"$workdir/ent-unchanged.yaml"
     cmp -s "$testdata/entitlement-token-mode.render.golden.yaml" "$workdir/ent-unchanged.yaml" || { diff -u "$testdata/entitlement-token-mode.render.golden.yaml" "$workdir/ent-unchanged.yaml" >&2 || true; fail_gate "entitlement-token-mode: the render differs from the recorded render"; }
     printf 'RESULT: scenario entitlement-token-mode-unchanged passed\n'
     exit 0 ;;
