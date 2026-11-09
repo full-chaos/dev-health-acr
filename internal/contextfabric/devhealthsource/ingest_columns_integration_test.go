@@ -68,9 +68,11 @@ func newIngestColumnsFixture(t *testing.T, orgID string, client contextpacket.Cl
 	ctx := context.Background()
 	query, direct := orgIsolationClickHouseFixture(t)
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	if client == nil {
 		client = query
 	}
+	client = newStoredGroupsClient(client, direct)
 	src, err := devhealthsource.NewTeamsProjectsSource(client, true)
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +229,7 @@ func TestIngestColumnsSwitchResetsTheCursorOnce(t *testing.T) {
 		t.Fatalf("legacy cursor space = %q", got)
 	}
 
-	upgraded, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	upgraded, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, f.h.direct), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,7 +348,7 @@ SELECT concat('WI-', toString(number)), ?, ?, 'issue', 'open', '', '', 'linear',
 	}
 
 	counting := &countingQueryClient{inner: query}
-	upgraded, err := devhealthsource.NewTeamsProjectsSource(counting, true)
+	upgraded, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(counting, f.h.direct), true)
 	if err != nil {
 		t.Fatal(err)
 	}

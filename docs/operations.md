@@ -880,10 +880,15 @@ smaller than one page costs one extra statement per table. After a full pass the
 so a row that lands more than about 2 x overlap after its own ingest stamp is
 not re-read (a rebuild recovers it), and a quiet organization's window closes
 by itself. After a projector restart the first caught-up ticks re-emit the
-window once (idempotent). Two tables still key on their old column until ops
-adds an ingest stamp: `team_project_ownership` and the
-`project_membership_presence` view (cursor-unsound for late-stamped rows, the
-same hazard as before).
+window once (idempotent). The `project_membership_presence` view still keys
+on its old column until ops adds an ingest stamp (cursor-unsound for
+late-stamped rows, the same hazard as before). Project -> team ownership edges
+page the stored groups (ops migration 147): a seek on
+`project_team_ownership_groups_log` by `stored_at`, checked against
+`project_team_ownership_groups_current`, so they lag the source rows by at most
+one refresh of the groups view (60 seconds). The `OWNED_BY_TEAM` project edge
+count and the project -> team source row read `project_team_ownership_groups_current`
+too, so the cited `observed_at` is the stored group's.
 
 **Team ownership reconcile pass.** A max-watermark cannot see a hard delete: when
 the newest row a derived team value was built from disappears, the watermark
@@ -895,6 +900,13 @@ persists only after the backend applied it, so an unapplied page is read again.
 Pass state lives in the process, so a restart starts one pass on the next
 caught-up call. Each page logs `team ownership reconcile` at Info
 (`teams_re_derived`, `pass_complete`, `period`).
+
+**Project team ownership reconcile pass.** The same pass, with its own state,
+re-emits the current stored project -> team groups
+(`project_team_ownership_groups_current`) in key order at most once per hour per
+scope, so an edge the backend lost is written again without a change in the
+groups log. Each page logs `project team ownership reconcile` at Info
+(`groups_re_derived`, `pass_complete`, `period`).
 
 **Column-arm project edge retraction.** A work item has at most one open
 column-arm `BELONGS_TO_PROJECT` edge: the sink keeps only the edge the current

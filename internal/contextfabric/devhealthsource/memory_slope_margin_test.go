@@ -18,6 +18,12 @@ const (
 	slopeNoiseCap   = 0.5
 )
 
+type fragmentPeak struct {
+	mib       float64
+	maxMiB    float64
+	medianMiB float64
+}
+
 type slopeMargin struct {
 	limit, margin, spread float64
 }

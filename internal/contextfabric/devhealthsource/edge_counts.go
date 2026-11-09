@@ -89,7 +89,7 @@ func (s *TeamsProjectsSource) ProjectionSourceEdgeCounts(ctx context.Context, or
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("devhealthsource: count %s edges: %w", contractsv1.ContextFabricRelationshipBelongsToProject, err)
 	}
-	owned, err := runEdgePopulations(ctx, s.client, orgID, ownedByTeamPopulations(ingest))
+	owned, err := runEdgePopulations(ctx, s.client, orgID, ownedByTeamPopulations())
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func (s *TeamsProjectsSource) EdgeCountKeys() []contextfabric.EdgeCountKey {
 		return nil
 	}
 	keys := append([]contextfabric.EdgeCountKey(nil), membershipEdgeKeys...)
-	for _, population := range ownedByTeamPopulations(false) {
+	for _, population := range ownedByTeamPopulations() {
 		keys = append(keys, population.keys()...)
 	}
 	return keys

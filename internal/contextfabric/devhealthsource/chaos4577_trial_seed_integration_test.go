@@ -34,6 +34,7 @@ func TestTrialDataSeedTeamRepoOwnershipSatisfiesCurrentPredicate(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 
 	const orgID = "40000000-0000-4000-8000-000000000001"
 	seedTeam := func(id string) {
@@ -82,7 +83,7 @@ FROM (SELECT DISTINCT org_id, provider, repo_full_name FROM team_repo_ownership 
 		t.Fatalf("seed repos rows for the seeded ownership names: %v", err)
 	}
 
-	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	source, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 	if err != nil {
 		t.Fatalf("new teams/projects source: %v", err)
 	}

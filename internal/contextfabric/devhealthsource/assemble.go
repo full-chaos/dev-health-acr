@@ -92,10 +92,9 @@ type sourcePlan struct {
 	// then, so the ignored line is not flushed (CHAOS-8290).
 	yielded *bool
 
-	// reconcile, when set, re-reads the source's CURRENT derived rows in key
-	// order after `after` (reconcile.go). Optional.
-	reconcile       func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, after string, limit int) ([]candidate, bool, error)
-	reconcilePeriod time.Duration
+	// reconciles are the source's reconcile passes, in order: each re-reads
+	// one kind of CURRENT derived rows in key order (reconcile.go). Optional.
+	reconciles []reconcilePlan
 
 	// overlap and window (CHAOS-7263) bound the caught-up trailing re-read
 	// (overlap.go). overlap <= 0 or a nil window disables it. windowScope is
@@ -242,11 +241,9 @@ func (p sourcePlan) nextBatchPage(ctx context.Context, checkpoint contextfabric.
 		// this process emitted before describes a graph that is gone.
 		p.window.reset(p.windowScope)
 		p.ignored.flush(ctx, p.logger, p.source, orgID, "abandoned")
-		if p.reconcile != nil {
-			// A from-scratch projection derives every row just now: the first
-			// reconcile pass is due one period from it, not at once.
-			p.window.setReconcileState(p.windowScope, reconcilePass{lastDone: p.clock()})
-		}
+		// A from-scratch projection derives every row just now: the first
+		// reconcile pass is due one period from it, not at once.
+		p.startReconcilePasses()
 		return p.fullSnapshot(ctx, orgID)
 	}
 	state, err := decodeCursor(checkpoint.Cursor)

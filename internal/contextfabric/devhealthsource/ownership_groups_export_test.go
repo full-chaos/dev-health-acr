@@ -28,7 +28,7 @@ func ownershipCandidatesForTest(rows []candidate) []OwnershipCandidateForTest {
 // OwnershipPageForTest reads one page of the project -> team ownership
 // producer, on the ingest cursor, after (since, after).
 func OwnershipPageForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, since time.Time, after string, limit int) ([]OwnershipCandidateForTest, bool, error) {
-	rows, more, err := queryProjectTeams(ctx, client, orgID, cursorState{Since: since, After: after}, limit, &ambiguityLedger{}, true)
+	rows, more, err := queryProjectTeams(ctx, client, orgID, cursorState{Since: since, After: after}, limit, &ambiguityLedger{})
 	if err != nil {
 		return nil, false, err
 	}
@@ -39,7 +39,7 @@ func OwnershipPageForTest(ctx context.Context, client contextpacket.ClickHouseQu
 // bindings at a cursor.
 func OwnershipPageStatementForTest(orgID string, since time.Time, after string, limit int) (string, []contextpacket.ClickHouseBinding) {
 	cursor := cursorState{Since: since, After: after}
-	return projectTeamsStatementFor(cursor, true), rowLimitBindings(orgID, cursor, limit)
+	return ownershipGroupsPageStatement(cursor), rowLimitBindings(orgID, cursor, limit)
 }
 
 // LegacyOwnershipCandidatesForTest walks every group of the organization
@@ -48,7 +48,7 @@ func LegacyOwnershipCandidatesForTest(ctx context.Context, client contextpacket.
 	var out []OwnershipCandidateForTest
 	cursor := cursorState{}
 	for {
-		rows, more, err := queryProjectTeams(ctx, client, orgID, cursor, 997, &ambiguityLedger{}, true)
+		rows, more, err := fetchIngest(ctx, client, legacyOwnershipPageStatement(cursor), rowLimitBindings(orgID, cursor, 997), 997, scanProjectTeamGroup(&ambiguityLedger{}))
 		if err != nil {
 			return nil, err
 		}
@@ -59,6 +59,13 @@ func LegacyOwnershipCandidatesForTest(ctx context.Context, client contextpacket.
 		last := rows[len(rows)-1]
 		cursor = cursorState{Since: last.position(), After: last.sortKey}
 	}
+}
+
+// legacyOwnershipPageStatement is the per-organization group statement on the
+// ingest cursor, with the row key and live columns the stored-group scan reads.
+func legacyOwnershipPageStatement(cursor cursorState) string {
+	return `SELECT g.project_id, g.team_id, g.source_name, g.first_valid_from, g.latest_is_open, g.latest_valid_to, g.observed_at, g.provider, g.edge_suppressed, g.conflict_identities, g.conflicting_identity_present, ` +
+		projectTeamsRowKeyOf("g") + ` AS row_key, toUInt8(1) AS live, g.ingest_at FROM (` + projectTeamsStatementFor(cursor, true) + `) AS g ORDER BY g.ingest_at ASC, row_key ASC`
 }
 
 // OwnershipGroupsOracleSQLForTest selects every group of {org_id} from the

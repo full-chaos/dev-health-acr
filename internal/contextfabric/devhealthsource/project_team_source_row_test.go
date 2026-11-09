@@ -1,26 +1,31 @@
 package devhealthsource
 
 import (
-	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/evidenceref"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
-// The project-team source-row read and the projector select groups from ONE
-// statement: both embed projectTeamsGroupSQL, and no second copy of the group
-// (its arm list) is spelled anywhere in this package.
-func TestProjectTeamSourceRowReadsTheProjectorsGroup(t *testing.T) {
-	group := projectTeamsGroupSQL(false)
+// The project-team source-row read and the projector read ONE store: the
+// stored group the projector pages, looked up by its sort key with the row
+// key the ref carries, so the cited row is the projected edge's own group.
+func TestProjectTeamSourceRowReadsTheProjectorsStoredGroup(t *testing.T) {
 	read := ProjectTeamSourceRowQuery()
-	if read.ID != contextpacket.ProjectTeamSourceRowQueryID || !strings.Contains(read.Statement, group) {
-		t.Fatalf("the source-row statement does not embed the projector's group:\n%s", read.Statement)
+	if read.ID != contextpacket.ProjectTeamSourceRowQueryID {
+		t.Fatalf("id %q", read.ID)
 	}
-	for _, cursor := range []cursorState{{}, {After: "k"}} {
-		if !strings.HasPrefix(projectTeamsStatement(cursor), group) {
-			t.Fatalf("the projector's statement does not start with the shared group (cursor %+v)", cursor)
+	for _, want := range []string{
+		"FROM project_team_ownership_groups_current AS g FINAL WHERE g.org_id = {org_id:String} AND g.row_key = substring({evidence_locator:String}, " + projectTeamSourceRowIDOffset + ")",
+		"g.is_deleted = 0",
+		"g.observed_at observed_at",
+	} {
+		if !strings.Contains(read.Statement, want) {
+			t.Fatalf("the source-row statement lacks %q:\n%s", want, read.Statement)
 		}
 	}
 	if !strings.Contains(read.Statement, "if(g.source_name = 'native', 'native', 'heuristic') provenance") {
@@ -31,23 +36,22 @@ func TestProjectTeamSourceRowReadsTheProjectorsGroup(t *testing.T) {
 	}
 }
 
-func TestProjectTeamGroupIsSpelledOnce(t *testing.T) {
-	files, err := filepath.Glob("*.go")
-	if err != nil || len(files) == 0 {
-		t.Fatalf("glob: %v %d", err, len(files))
-	}
-	uses := 0
-	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
+// The row key the read looks up is the text of the ref after its kind prefix:
+// the ref's id segment and the stored row key are the same four segments in
+// the same order under the same escape, for any segment text.
+func TestProjectTeamRefCarriesTheStoredRowKey(t *testing.T) {
+	for _, values := range [][]string{
+		{"github", "P-1", "TEAM-1", "native"},
+		{"jira", "a:b", "%3A", "manual"},
+		{"linear", "%", ":", ""},
+	} {
+		ref, _ := evidenceref.Mint(contractsv1.ContextFabricEvidenceEntityProjectTeamV2, values...)
+		offset := len(contractsv1.ContextFabricEvidenceRefPrefix+string(contractsv1.ContextFabricEvidenceEntityProjectTeamV2)+":") + 1
+		if projectTeamSourceRowIDOffset != strconv.Itoa(offset) {
+			t.Fatalf("offset %s, want %d", projectTeamSourceRowIDOffset, offset)
 		}
-		body, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
+		if got, want := ref[offset-1:], identity.JoinSegments(values...); got != want {
+			t.Errorf("%v: ref id segment %q, stored row key %q", values, got, want)
 		}
-		uses += strings.Count(string(body), "strings.Join(projectTeamsArmsFor(")
-	}
-	if uses != 1 {
-		t.Fatalf("project-team arm composition found %d times, want exactly 1 (inside projectTeamsGroupSQL); a second statement copy has appeared", uses)
 	}
 }

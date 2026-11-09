@@ -83,6 +83,7 @@ func TestLiveMembershipStatementPrunedEqualsFull(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	seed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -181,6 +182,7 @@ func TestLiveMembershipStatementRunsPerTick(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	seed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -188,7 +190,7 @@ func TestLiveMembershipStatementRunsPerTick(t *testing.T) {
 		}
 	}
 	seedChangedSubjectsStore(t, seed, 4000)
-	counting := &countingMembershipClient{ClickHouseQueryClient: query}
+	counting := &countingMembershipClient{ClickHouseQueryClient: newStoredGroupsClient(query, direct)}
 	source, err := devhealthsource.NewTeamsProjectsSource(counting, true)
 	if err != nil {
 		t.Fatal(err)

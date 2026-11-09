@@ -24,6 +24,7 @@ func TestLiveNodeCountsEqualTheEntitiesTheProducerEmits(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	seed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -50,7 +51,7 @@ func TestLiveNodeCountsEqualTheEntitiesTheProducerEmits(t *testing.T) {
 		seed("project", `INSERT INTO projects (id, org_id, name, project_key, provider, state, url, is_active, updated_at) VALUES (?, ?, 'p', '', 'github', 'backlog', '', 1, ?)`, id, edgeParityOrg, base)
 	}
 
-	teams, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	teams, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 	if err != nil {
 		t.Fatal(err)
 	}

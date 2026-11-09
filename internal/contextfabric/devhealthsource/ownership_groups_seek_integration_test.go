@@ -37,7 +37,9 @@ const ownershipGroupsRefreshView = "project_team_ownership_groups_refresh"
 
 // createOwnershipGroupsStore creates the two stored-group tables from their
 // declaration and the copy and refresh views (migration 147).
-func createOwnershipGroupsStore(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
+func createOwnershipGroupsStore(t *testing.T, ctx context.Context, direct interface {
+	Exec(ctx context.Context, query string, args ...any) error
+}) {
 	t.Helper()
 	for _, statement := range append(devhealthschema.DDL(devhealthschema.OwnershipGroupsTables...), devhealthschema.OwnershipGroupsViewsDDL()...) {
 		if err := direct.Exec(ctx, statement); err != nil {
