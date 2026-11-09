@@ -69,8 +69,9 @@ type sourcePlan struct {
 	// published or skipped. Optional.
 	observePage func(all []candidate)
 
-	// observeRead is handed each table's statement of a page: the rows it
-	// returned inside its limit and whether rows lay beyond. Optional.
+	// observeRead is handed every table statement that returned, on every
+	// path that runs one: the rows it returned inside its limit and whether
+	// rows lay beyond. Optional.
 	observeRead func(table string, rows []candidate, more bool)
 
 	// logger receives the sanitized cause of a table read failure. Optional.
@@ -341,7 +342,6 @@ func (p sourcePlan) fullSnapshot(ctx context.Context, orgID string) (contextfabr
 	if cutRows > 0 {
 		quarantineOversizeCursorKeyRows(snapshot[len(all):], p.quarantineObserver(orgID))
 	}
-	p.noteSnapshotRead(snapshot)
 	p.notePage(all)
 	// Normalize BEFORE quarantine: an item repaired to a contract bound is
 	// never offered to quarantine at all, which is what makes the quarantine
@@ -385,6 +385,7 @@ func (p sourcePlan) snapshotRead(ctx context.Context, orgID string) (all []candi
 			logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
 			return nil, nil, nil, &tableReadError{table: table.name, cause: err}
 		}
+		p.noteRead(table.name, rows, truncated)
 		if truncated {
 			truncatedTables = append(truncatedTables, table.name)
 		} else if len(rows) > 0 {
@@ -418,14 +419,12 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 			rows, truncated, err := readTable(ctx, table, p.client, orgID, state, incrementalBatchCap)
 			ahead = ahead || truncated
 			if err == nil {
+				p.noteRead(table.name, rows, truncated)
 				err = p.boundRead(ctx, orgID, table.name, state, &bound, rows, truncated)
 			}
 			if err != nil {
 				logTableReadFailure(ctx, p.logger, p.source, orgID, table.name, err)
 				return contextfabric.ProjectionBatch{}, false, &tableReadError{table: table.name, cause: err}
-			}
-			if p.observeRead != nil {
-				p.observeRead(table.name, rows, truncated)
 			}
 			all = append(all, rows...)
 		}
@@ -667,21 +666,12 @@ func (p sourcePlan) logBoundedPage(ctx context.Context, orgID string, bound page
 		"last_stamp", contextfabric.SanitizeLogAttr(bound.at.UTC().Format(time.RFC3339Nano)), "last_key_digest", contextfabric.SanitizeLogAttr(keyDigest(bound.key)))
 }
 
-// noteSnapshotRead reports the one statement each table answered for a
-// snapshot that is published whole: a snapshot is read at a cap above its
-// page, so a truncated table never reaches here.
-func (p sourcePlan) noteSnapshotRead(snapshot []candidate) {
-	if p.observeRead == nil {
-		return
-	}
-	for _, table := range p.tables {
-		var rows []candidate
-		for _, c := range snapshot {
-			if c.table == table.name {
-				rows = append(rows, c)
-			}
-		}
-		p.observeRead(table.name, rows, false)
+// noteRead reports a statement that returned, at the site that ran it, before
+// any check of what it returned: a read the caller then refuses or leaves for
+// a later batch was still a statement.
+func (p sourcePlan) noteRead(table string, rows []candidate, more bool) {
+	if p.observeRead != nil {
+		p.observeRead(table, rows, more)
 	}
 }
 
