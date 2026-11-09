@@ -108,7 +108,7 @@ cleanup() {
   fi
   note "cleanup receipt before: $(owned_receipt)"
   if [[ "$status" -ne 0 ]]; then
-    compose logs --no-color clickhouse migrate go-api-roles go-api acr-migrate acr-api acr-tls-proxy 2>&1 | redact_log || true
+    compose logs --no-color clickhouse migrate go-api-roles go-api auth-provision auth-owner-grants auth-migrate auth-grants auth-fence-init auth-workload-seed auth-workload-subject auth-service auth-issuer acr-migrate acr-api acr-tls-proxy 2>&1 | redact_log || true
     for service in postgres pgbouncer clickhouse valkey; do
       health_container="$(compose ps -q "$service" 2>/dev/null || true)"
       if [[ -n "$health_container" ]]; then
@@ -259,6 +259,14 @@ render_override() {
   clickhouse_http_port="$(free_port)"
   clickhouse_native_port="$(free_port)"
   redis_port="$(free_port)"
+  # The issuer auth-service signs under and go-api verifies against (ops compose.yml default). Users stay owned by
+  # go-api in this slice (go-api's own default), so the auth stack runs with users not owned.
+  export AUTH_TOKEN_ISSUER_URL=https://auth.dev-health.internal:8443 AUTH_USERS_OWNED=false
+  # The auth one-shots read POSTGRES_DB (ops default postgres); this slice's database is devhealth.
+  export POSTGRES_DB=devhealth
+  # The auth services are extended from the ops checkout's compose.yml, and Compose interpolates that whole file:
+  # its bugsink requires BUGSINK_SECRET_KEY (a per-run throwaway; this slice's own bugsink reads the same name).
+  export BUGSINK_SECRET_KEY="${BUGSINK_SECRET_KEY:-$(random_secret)}"
   cat > "$STATE/override.yml" <<EOF
 services:
   postgres:
@@ -306,7 +314,13 @@ services:
       ACR_DEV_HEALTH_ENTITLEMENT_URL: http://go-api:8091
       ACR_DATA_QUERY_URL: http://query-api:8091
       ACR_DATA_QUERY_PATH: /query/run-operation
-      ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /run/secrets/acr_ops_token
+      # The ops internal acr routes accept only the acr-api workload token (ops CHAOS-12977): acr-api exchanges its
+      # bootstrap credential at auth-service for it (deploy/compose/acr-auth-workload.compose.yml form).
+      ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL: workload
+      ACR_AUTH_WORKLOAD_BOOTSTRAP_FILE: /run/workload/acr-api.bootstrap
+      ACR_AUTH_WORKLOAD_EXCHANGE_URL: http://auth-service:8095
+      ACR_AUTH_WORKLOAD_ALLOW_PLAIN_HTTP: "true"
+      ACR_AUTH_WORKLOAD_ISSUER: "${AUTH_TOKEN_ISSUER_URL}"
       ACR_DEVICE_VERIFICATION_URL: "${ACR_E2E_DEVICE_VERIFICATION_URL:-https://device.invalid/acr/device}"
       ACR_EVIDENCE_ID_ACTIVE_KID_FILE: /run/secrets/acr_evidence_active_kid
       ACR_EVIDENCE_ID_KEYS_FILE: /run/secrets/acr_evidence_keys
@@ -314,8 +328,10 @@ services:
       # A suite that legitimately issues more reads than a production client would raises it
       # explicitly rather than being throttled into an unrelated-looking failure.
       ACR_REQUESTS_PER_MINUTE: "${ACR_E2E_REQUESTS_PER_MINUTE:-60}"
-    volumes: !override []
-    secrets: !override [acr_runtime_dsn, acr_clickhouse_dsn, acr_ops_token, acr_evidence_active_kid, acr_evidence_keys]
+    volumes: !override
+      - { type: volume, source: acr_workload_bootstrap, target: /run/workload, read_only: true }
+    secrets: !override [acr_runtime_dsn, acr_clickhouse_dsn, acr_evidence_active_kid, acr_evidence_keys]
+    networks: [dev-health, acr_auth_workload]
     depends_on: !override
       postgres: { condition: service_healthy }
       clickhouse: { condition: service_healthy }
@@ -341,8 +357,35 @@ services:
     volumes: ["${STATE}/pki:/run/pki:ro", "${STATE}/nginx-api.conf:/etc/nginx/nginx.conf:ro"]
     depends_on: { acr-api: { condition: service_started } }
     networks: [dev-health]
-secrets:
-  acr_ops_token: { file: "${STATE}/secrets/ops-token" }
+  # The acr-api workload credential, in the form of deploy/compose/acr-auth-workload.compose.yml (extended from it).
+  acr-workload-volume:
+    extends: { file: "${REPO_ROOT}/deploy/compose/acr-auth-workload.compose.yml", service: acr-workload-volume }
+    profiles: !reset []
+  acr-workload-bootstrap:
+    extends: { file: "${REPO_ROOT}/deploy/compose/acr-auth-workload.compose.yml", service: acr-workload-bootstrap }
+    profiles: !reset []
+    depends_on:
+      acr-workload-volume: { condition: service_completed_successfully }
+      auth-workload-seed: { condition: service_completed_successfully }
+  auth-service:
+    networks: [acr_auth_workload]
+  # Harness only: exchanges the acr-api bootstrap credential at auth-service and calls a go-api internal acr route
+  # with the workload token (wait_go_api, workload_probe). Never started by \`up\` (its own profile).
+  acr-workload-probe:
+    image: "${NGINX_IMAGE}"
+    profiles: [acr-workload-probe]
+    restart: "no"
+    read_only: true
+    user: "65532:65532"
+    tmpfs: [/tmp]
+    entrypoint: ["sh", "-c"]
+    volumes:
+      - { type: volume, source: acr_workload_bootstrap, target: /run/workload, read_only: true }
+    networks: [dev-health, acr_auth_workload]
+volumes:
+  acr_workload_bootstrap: {}
+networks:
+  acr_auth_workload: {}
 EOF
   # CLICKHOUSE_DB is load-bearing and was missing: every ops service's CLICKHOUSE_URI in the
   # product compose file resolves ${CLICKHOUSE_DB:-default}, so without it the long-running
@@ -368,11 +411,14 @@ assert_safe_render() {
     || die 'ACR API inherited an unexpected local-dev dependency'
   jq -e '(.services["acr-api"].volumes // []) | all(.[]; ((.source // "") | contains("/.acr-dev/") | not))' "$STATE/rendered.json" >/dev/null \
     || die 'ACR API inherited a local-dev bind mount'
+  # The one mount every acr-api render carries: its workload bootstrap credential, read-only, from its named volume.
+  jq -e '[.services["acr-api"].volumes[]? | select(.target == "/run/workload")] | length == 1 and .[0].type == "volume" and .[0].source == "acr_workload_bootstrap" and .[0].read_only == true' "$STATE/rendered.json" >/dev/null \
+    || die 'ACR API is missing its read-only workload credential volume'
   if [[ -f "$STATE/svs.override.yml" ]]; then
-    jq -e '[.services["acr-api"].volumes[]?.target] | sort == ["/run/acr-e2e/web-assertions.jwks.json"]' "$STATE/rendered.json" >/dev/null \
+    jq -e '[.services["acr-api"].volumes[]?.target] | sort == ["/run/acr-e2e/web-assertions.jwks.json","/run/workload"]' "$STATE/rendered.json" >/dev/null \
       || die 'web agreement added an unexpected ACR API bind mount'
   else
-    jq -e '(.services["acr-api"].volumes // []) | length == 0' "$STATE/rendered.json" >/dev/null \
+    jq -e '[.services["acr-api"].volumes[]?.target] == ["/run/workload"]' "$STATE/rendered.json" >/dev/null \
       || die 'baseline ACR API retained a bind mount'
   fi
   jq -e '.services["acr-migrate"].environment | keys == ["ACR_ENVIRONMENT","ACR_POSTGRES_CONNECTION_KIND","ACR_POSTGRES_MIGRATION_DSN_FILE"]' "$STATE/rendered.json" >/dev/null \
@@ -445,29 +491,87 @@ mint_ops_service_token() {
   done
 }
 
-# wait_go_api polls the Go api internal listener from the compose network with the svc_acr_ bearer, so
-# readiness also proves the auth path: the internal listener answers 401 to a request without it. The
-# go-api image is distroless (no shell, no wget), so the probe runs in the nginx image already pinned
-# here. The token reaches the probe through the environment by NAME only, never on a command line.
-# The failure names the last HTTP status seen, so a rejected credential (401) reads differently
-# from a listener that is not accepting connections.
+# workload_probe_script is the probe container's own script (acr-workload-probe, run by sh -c): it exchanges the
+# acr-api bootstrap credential at auth-service for a workload token (the same form workloadtoken's client sends:
+# token exchange, audience dev-health-api) and calls $ACR_PROBE_URL with it. The bootstrap is read from the
+# read-only volume and posted from a tmpfs file, never placed on a command line. It prints the response headers,
+# then the body after a BODY marker (probe_body), and exits with the call's status; an exchange the auth-service
+# refuses prints EXCHANGE-REFUSED and exits 3.
+# shellcheck disable=SC2016 # expanded by the probe container's sh, not here.
+workload_probe_script='set -eu
+enc() { sed -e "s/%/%25/g" -e "s/+/%2B/g" -e "s#/#%2F#g" -e "s/=/%3D/g" -e "s/&/%26/g" -e "s/:/%3A/g"; }
+b="$(enc < /run/workload/acr-api.bootstrap)"
+printf "grant_type=%s&subject_token=%s&subject_token_type=%s&audience=dev-health-api" \
+  "urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange" "$b" \
+  "urn%3Adev-health%3Aparams%3Aoauth%3Atoken-type%3Aworkload-bootstrap" > /tmp/form
+if ! answer="$(wget -q -O - --header "Content-Type: application/x-www-form-urlencoded" --header "Accept: application/json" --post-file /tmp/form http://auth-service:8095/internal/v1/token/exchange 2>/dev/null)"; then
+  echo EXCHANGE-REFUSED; exit 3
+fi
+t="$(printf "%s" "$answer" | sed -nE "s/.*\"access_token\"[[:space:]]*:[[:space:]]*\"([^\"]+)\".*/\1/p")"
+[ -n "$t" ] || { echo EXCHANGE-REFUSED; exit 3; }
+set +e
+wget -S -O /tmp/body --header "Authorization: Bearer $t" "$ACR_PROBE_URL" 2>&1
+rc=$?
+printf "\nBODY "; cat /tmp/body 2>/dev/null
+exit "$rc"'
+
+# The go-api internal listener and its acr health route, kept apart (host and path) on purpose: one literal URL of
+# this shape reads as a generic API key to gitleaks.
+go_api_internal=http://go-api:8091
+acr_health_path=/api/v1/internal/acr/health
+
+# workload_probe runs workload_probe_script against one go-api internal acr URL; its output is the probe's.
+workload_probe() {
+  ACR_PROBE_URL="$1" compose run --rm --no-deps -T -e ACR_PROBE_URL acr-workload-probe "$workload_probe_script" 2>&1
+}
+
+http_status_of() { sed -nE 's#.*HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' <<<"$1" | tail -n 1; }
+probe_body() { sed -n '/^BODY /,$p' <<<"$1" | sed '1s/^BODY //'; }
+
+# wait_go_api polls the Go api internal listener from the compose network with the acr-api workload token, so
+# readiness also proves the auth path: the internal acr routes accept no other credential (ops CHAOS-12977). The
+# go-api image is distroless (no shell, no wget), so the probe runs in the nginx image already pinned here. The
+# failure names the last HTTP status seen, so a refused token (401) reads differently from a listener that is not
+# accepting connections or an exchange auth-service refused.
 wait_go_api() {
-  local token="$1" attempt output status=''
+  local attempt output status=''
   for attempt in $(seq 1 90); do
-    # shellcheck disable=SC2016 # $ACR_PROBE_TOKEN is expanded by the probe container's sh, not here.
-    if output="$(ACR_PROBE_TOKEN="$token" compose run --rm --no-deps -T -e ACR_PROBE_TOKEN --entrypoint sh acr-tls-proxy -c 'wget -S -O /dev/null --header "Authorization: Bearer $ACR_PROBE_TOKEN" http://go-api:8091/api/v1/internal/acr/health' 2>&1)"; then
+    if output="$(workload_probe "${go_api_internal}${acr_health_path}")"; then
+      note "Go ops api internal listener accepted the acr-api workload token (probe ${attempt}/90, HTTP $(http_status_of "$output"))"
       return 0
     fi
-    status="$(sed -nE 's#.*HTTP/[0-9.]+ ([0-9]{3}).*#\1#p' <<<"$output" | tail -n 1)"
+    status="$(http_status_of "$output")"
+    grep -q EXCHANGE-REFUSED <<<"$output" && status="${status:-exchange refused}"
     if (( attempt % 10 == 0 )); then
       note "Go ops api internal listener not ready (probe ${attempt}/90, last HTTP status: ${status:-none})"
     fi
     sleep 2
   done
   if [[ "$status" == 401 || "$status" == 403 ]]; then
-    die "Go ops api internal listener rejected the svc_acr_ credential (last HTTP status ${status})"
+    die "Go ops api internal listener rejected the acr-api workload token (last HTTP status ${status})"
   fi
   die "Go ops api internal listener did not become ready (last HTTP status: ${status:-none, not accepting connections})"
+}
+
+# assert_service_credential_refused measures the auth path the other way: the svc_acr_ service credential, the
+# harness's credential before ops CHAOS-12977, must get the uniform 401 on the same internal acr route.
+assert_service_credential_refused() {
+  local output status
+  # shellcheck disable=SC2016 # $ACR_PROBE_TOKEN and $ACR_PROBE_URL are expanded by the probe container's sh, not here.
+  output="$(ACR_PROBE_TOKEN="$(<"$STATE/ops-probe-token")" ACR_PROBE_URL="${go_api_internal}${acr_health_path}" compose run --rm --no-deps -T -e ACR_PROBE_TOKEN -e ACR_PROBE_URL --entrypoint sh acr-tls-proxy -c 'wget -S -O /dev/null --header "Authorization: Bearer $ACR_PROBE_TOKEN" "$ACR_PROBE_URL"' 2>&1)" || true
+  status="$(http_status_of "$output")"
+  [[ "$status" == 401 ]] || die "a svc_acr_ service credential on the go-api internal acr route answered ${status:-no status}, want 401"
+  note "CONTROL svc_acr_ service credential on the go-api internal acr route: HTTP ${status} (refused)"
+}
+
+# provision_acr_workload writes the acr-api bootstrap credential into its volume once (bootstrap-create refuses a
+# workload with a live credential, so a later bring-up of the same volume never runs it again).
+provision_acr_workload() {
+  compose run --rm acr-workload-bootstrap >/dev/null 2>"$STATE/acr-workload-bootstrap.stderr" || {
+    redact_log < "$STATE/acr-workload-bootstrap.stderr" >&2 || true
+    die 'the acr-api workload bootstrap credential was not created'
+  }
+  note 'acr-api workload bootstrap credential created'
 }
 
 ops_clickhouse_database() { printf 'acr_%s_e2e' "${PROJECT//-/}"; }
@@ -485,9 +589,11 @@ provision_ops_control_plane() {
   compose up -d postgres valkey pgbouncer mailpit migrate go-api-roles go-api query-api >/dev/null
   token="$(mint_ops_service_token)" || die 'Ops credential provisioning failed'
   write_secret "$STATE/secrets/ops-token" "$token"
-  # Host-readable copy for ensure_go_api_ready: secrets/ops-token is chowned to the acr-api UID.
+  # Host-readable copy for assert_service_credential_refused: secrets/ops-token is chowned to the acr-api UID.
   write_secret "$STATE/ops-probe-token" "$token"
-  wait_go_api "$token"
+  provision_acr_workload
+  wait_go_api
+  assert_service_credential_refused
   if ! output="$(dho admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
     printf '%s\n' "$output" >&2
     die 'Ops organization provisioning failed'
@@ -538,7 +644,9 @@ seed_synthetic_evidence() {
   local db org_id
   db="$(ops_clickhouse_database)"
   org_id="$(<"$STATE/org-id")"
-  DHO_CLICKHOUSE_URI="clickhouse://default:ch@clickhouse:9000/${db}" dho fixtures generate --sink "clickhouse://default:ch@clickhouse:9000/${db}" --db-type clickhouse --repo-name acme/live-e2e --provider synthetic --days 14 --commits-per-day 6 --pr-count 24 --seed 20260219 --with-metrics --with-work-graph >/dev/null
+  # The generator refuses a POSTGRES_URI (it writes analytics rows only, ops ff8d2ab3 auth_seeding_not_ported), so
+  # it runs with the ClickHouse DSN alone, as fixture-graph.sh's dho_analytics does; dho() also sets POSTGRES_URI.
+  compose run --rm --no-deps -T -e "CLICKHOUSE_URI=clickhouse://default:ch@clickhouse:9000/${db}" query-api fixtures generate --sink "clickhouse://default:ch@clickhouse:9000/${db}" --db-type clickhouse --repo-name acme/live-e2e --provider synthetic --days 14 --commits-per-day 6 --pr-count 24 --seed 20260219 --with-metrics --with-work-graph >/dev/null
   clickhouse_query "INSERT INTO ${db}.repos (id, repo, ref, created_at, settings, tags, last_synced, org_id, provider) SELECT generateUUIDv4(), 'acme/live-e2e', 'main', now64(3), NULL, NULL, now64(3), '${org_id}', 'synthetic'" >/dev/null
   assert_scoped_repository 'acme/live-e2e'
 }
@@ -552,13 +660,11 @@ probe_ops_principal_access() {
   local org_id user_id output body
   org_id="$(<"$STATE/org-id")"
   user_id="00000000-0000-4000-8000-000000000000"
-  # shellcheck disable=SC2016 # $ACR_PROBE_TOKEN and $ACR_PROBE_URL are expanded by the probe container's sh.
-  if ! output="$(ACR_PROBE_TOKEN="$(<"$STATE/ops-probe-token")" ACR_PROBE_URL="http://go-api:8091/api/v1/internal/acr/orgs/${org_id}/principals/${user_id}/access" \
-    compose run --rm --no-deps -T -e ACR_PROBE_TOKEN -e ACR_PROBE_URL --entrypoint sh acr-tls-proxy -c 'wget -q -O - --header "Authorization: Bearer $ACR_PROBE_TOKEN" "$ACR_PROBE_URL"' 2>&1)"; then
+  if ! output="$(workload_probe "${go_api_internal}/api/v1/internal/acr/orgs/${org_id}/principals/${user_id}/access")"; then
     printf '%s\n' "$output" | redact_log >&2
     die 'the Go ops api principal access read failed (is its ClickHouse login configured?)'
   fi
-  body="$(printf '%s\n' "$output" | tail -n 1)"
+  body="$(probe_body "$output")"
   if ! jq -e '.schema_version == "acr_principal_access.v1" and .repository_scope.kind == "repos" and (.repository_scope.repos | length) > 0' <<<"$body" >/dev/null; then
     printf '%s\n' "$body" | redact_log >&2
     die 'the Go ops api principal access read did not serve the seeded repository inventory'
@@ -693,7 +799,7 @@ build_host_mcp() {
 # "host not found in upstream acr-api" (CHAOS-11890).
 ensure_go_api_ready() {
   compose up -d go-api >/dev/null
-  wait_go_api "$(<"$STATE/ops-probe-token")"
+  wait_go_api
 }
 
 # up_acr_services is the ONLY way a harness script starts acr-api (CHAOS-11890). It proves the ops
@@ -725,7 +831,7 @@ assert_acr_api_survives_boot() {
     fi
     sleep 2
   done
-  wait_go_api "$(<"$STATE/ops-probe-token")"
+  wait_go_api
 }
 
 start_acr_after_go_api() {
@@ -821,15 +927,40 @@ prepare_acr_database() {
   run_oneshot acr-db-acl 'ACR runtime ACL reconciliation failed'
 }
 
+# expect_workload_binding_disabled_refused disables the acr-api workload in the registry (auth-migrate workloads
+# disable) and requires the go-api internal acr route to refuse it: auth-service refuses the exchange, or go-api
+# answers 401 once its 30 s registry cache turns over (ops acr_workload_source.go acrSubjectTTL).
+expect_workload_binding_disabled_refused() {
+  local attempt output status
+  compose run --rm --no-deps auth-workload-seed workloads disable -workload acr-api -apply >/dev/null 2>"$STATE/workload-disable.stderr" || {
+    redact_log < "$STATE/workload-disable.stderr" >&2 || true
+    die 'the acr-api workload could not be disabled'
+  }
+  for attempt in $(seq 1 30); do
+    output="$(workload_probe "${go_api_internal}${acr_health_path}")" || true
+    status="$(http_status_of "$output")"
+    if grep -q EXCHANGE-REFUSED <<<"$output"; then
+      note "CONTROL disabled acr-api workload: auth-service refused the exchange (probe ${attempt})"
+      return 0
+    fi
+    if [[ "$status" == 401 ]]; then
+      note "CONTROL disabled acr-api workload: go-api internal acr route HTTP 401 (probe ${attempt})"
+      return 0
+    fi
+    sleep 2
+  done
+  die "the disabled acr-api workload was still accepted (last HTTP status ${status:-none})"
+}
+
 run_failure() {
   local active_credential_id partial_version migration_one_checksum
   case "$SCENARIO" in
     missing-ops-token)
-      bootstrap_ops; prepare_acr_database; : > "$STATE/secrets/ops-token"; expect_failure 1 'Dev Health entitlement token file is invalid' compose run --rm --no-deps acr-api; SAFE_BOUNDARY='ACR API rejected the empty Ops token file with its safe entitlement-token classification' ;;
+      bootstrap_ops; prepare_acr_database; expect_failure 1 'initial entitlement readiness check' compose run --rm --no-deps -e ACR_AUTH_WORKLOAD_BOOTSTRAP_FILE=/run/workload/absent.bootstrap acr-api; note 'CONTROL missing-ops-token: acr-api with no workload bootstrap credential refused to start'; SAFE_BOUNDARY='ACR API with no workload bootstrap credential refused to start at its entitlement readiness check' ;;
     invalid-ca)
       start_happy; openssl req -x509 -newkey rsa:2048 -nodes -keyout "$STATE/pki/invalid-ca.key" -out "$STATE/pki/invalid-ca.crt" -subj '/CN=acr-e2e-untrusted-ca' -days 1 >/dev/null 2>&1; expect_failure 60 'SSL certificate problem' curl --fail --silent --show-error --cacert "$STATE/pki/invalid-ca.crt" --noproxy '*' "https://localhost:${PORT}/readyz"; SAFE_BOUNDARY='TLS verification rejected the valid unrelated CA with curl certificate exit 60; no insecure option was used' ;;
     revoked-acr-token)
-      start_happy; active_credential_id="$(compose run --rm --no-deps acr-credentials credentials list --org-id "$(<"$STATE/org-id")" --json | jq -er '[.[] | select(.revoked_at == null)][0].credential_id')"; compose run --rm --no-deps acr-credentials credentials revoke --org-id "$(<"$STATE/org-id")" --credential-id "$active_credential_id" --actor compose-e2e >/dev/null; expect_typed_http_error 401 invalid_token curl --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer $(<"$STATE/secrets/acr-rotated-token")" "https://localhost:${PORT}/api/v1/agent-context/capabilities"; SAFE_BOUNDARY='revoked active ACR credential returned exact HTTP 401 typed invalid_token error before protected reads' ;;
+      start_happy; active_credential_id="$(compose run --rm --no-deps acr-credentials credentials list --org-id "$(<"$STATE/org-id")" --json | jq -er '[.[] | select(.revoked_at == null)][0].credential_id')"; compose run --rm --no-deps acr-credentials credentials revoke --org-id "$(<"$STATE/org-id")" --credential-id "$active_credential_id" --actor compose-e2e >/dev/null; expect_typed_http_error 401 invalid_token curl --silent --show-error --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "$ACR_CLIENT_VERSION_HEADER" -H "Authorization: Bearer $(<"$STATE/secrets/acr-rotated-token")" "https://localhost:${PORT}/api/v1/agent-context/capabilities"; expect_workload_binding_disabled_refused; SAFE_BOUNDARY='revoked active ACR credential returned exact HTTP 401 typed invalid_token error before protected reads; the disabled acr-api workload was refused on the go-api internal acr route' ;;
     clickhouse-read-denied)
       start_happy; expect_clickhouse_readonly_denial; SAFE_BOUNDARY='read-only ClickHouse user rejected an E2E-only granted insert with exact code 164 before it could mutate evidence' ;;
     migration-failure)

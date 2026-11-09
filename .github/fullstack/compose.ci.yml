@@ -39,10 +39,17 @@ name: dev-health
 
 networks:
   dev-health: {}
+  # auth-service's own plane (ops compose.yml): the auth one-shots and auth-service join it, go-api does not.
+  auth_plane: {}
 
 volumes:
   postgres_data: {}
   clickhouse_data: {}
+  # The ops auth stack's volumes (ops compose.yml): signing key, workload subject/bootstrap, issuer TLS pair.
+  auth_signing_keys: {}
+  workload_bootstrap: {}
+  workload_subject: {}
+  auth_issuer_tls: {}
 
 services:
   postgres:
@@ -68,7 +75,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-    networks: [dev-health]
+    # The store the auth services reach over auth_plane, as in ops compose.yml.
+    networks: [dev-health, auth_plane]
 
   pgbouncer:
     image: edoburu/pgbouncer:latest
@@ -124,7 +132,8 @@ services:
       timeout: 5s
       retries: 3
       start_period: 5s
-    networks: [dev-health]
+    # The store the auth services reach over auth_plane, as in ops compose.yml.
+    networks: [dev-health, auth_plane]
 
   migrate:
     build:
@@ -249,6 +258,9 @@ services:
       # it (its only access-token verifier). Keys are fetched on the first user token only;
       # this slice reaches go-api with the svc_acr_ credential, so no issuer service runs here.
       AUTH_ACCESS_TOKEN_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}
+      # The issuer's CA (the ca/ subpath of auth_issuer_tls), as in ops compose.yml: go-api fetches the discovery
+      # document and JWKS over https from auth-issuer.
+      SSL_CERT_DIR: /run/auth-issuer-ca
       SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
       STRIPE_SECRET_KEY: ""
       STRIPE_WEBHOOK_SECRET: ""
@@ -264,6 +276,19 @@ services:
         condition: service_healthy
       go-api-grants:
         condition: service_completed_successfully
+      # The internal acr routes accept only the acr-api workload token (ops CHAOS-12977): go-api reads the acr-api
+      # row of the workload registry (auth schema) and verifies the token against the issuer's keys.
+      auth-workload-seed:
+        condition: service_completed_successfully
+      auth-issuer:
+        condition: service_started
+    volumes:
+      - type: volume
+        source: auth_issuer_tls
+        target: /run/auth-issuer-ca
+        read_only: true
+        volume:
+          subpath: ca
     networks: [dev-health]
 
   # Go query-api: serves the Go-owned GraphQL operations the ops `api` dispatches
@@ -342,6 +367,117 @@ services:
   traefik:
     image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
     networks: [dev-health]
+
+  # The ops auth stack, extended from the pinned ops checkout's own compose.yml (same image targets, commands,
+  # hardening and environment). Only what each service needs here is re-stated: depends_on (replaced: the ops
+  # one-shots it names are not in this slice), the networks of this file, and no host ports (a CI runner or a
+  # shared host may run several stacks). Users stay owned by go-api in this slice (AUTH_USERS_OWNED is exported
+  # false by scripts/e2e/compose.sh), so no users backfill runs.
+  auth-keys-init:
+    extends: { file: ./ops/compose.yml, service: auth-keys-init }
+
+  auth-provision:
+    extends: { file: ./ops/compose.yml, service: auth-provision }
+    depends_on: !override
+      postgres:
+        condition: service_healthy
+
+  auth-owner-grants:
+    extends: { file: ./ops/compose.yml, service: auth-owner-grants }
+    depends_on: !override
+      auth-provision:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+
+  auth-migrate:
+    extends: { file: ./ops/compose.yml, service: auth-migrate }
+    # go-api is this slice's only plane login (query-api reads Postgres as the database owner): it reads the
+    # acr-api row of the workload registry, so it is the one session reader role.
+    environment:
+      AUTH_SESSION_READER_ROLES: ${API_DATABASE_ROLE:-devhealth_api}
+      # As the chart's auth Jobs set it (ops deploy/helm/dev-health/templates/auth-migrate-job.yaml:79,
+      # auth-grants-job.yaml:88): the api login also reads the acr-api row of the workload registry.
+      AUTH_WORKLOAD_READER_ROLES: ${API_DATABASE_ROLE:-devhealth_api}
+    depends_on: !override
+      auth-provision:
+        condition: service_completed_successfully
+      auth-owner-grants:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+      go-api-grants:
+        condition: service_completed_successfully
+
+  auth-grants:
+    extends: { file: ./ops/compose.yml, service: auth-grants }
+    # go-api is this slice's only plane login (query-api reads Postgres as the database owner): it reads the
+    # acr-api row of the workload registry, so it is the one session reader role.
+    environment:
+      AUTH_SESSION_READER_ROLES: ${API_DATABASE_ROLE:-devhealth_api}
+      # As the chart's auth Jobs set it (ops deploy/helm/dev-health/templates/auth-migrate-job.yaml:79,
+      # auth-grants-job.yaml:88): the api login also reads the acr-api row of the workload registry.
+      AUTH_WORKLOAD_READER_ROLES: ${API_DATABASE_ROLE:-devhealth_api}
+    depends_on: !override
+      migrate:
+        condition: service_completed_successfully
+      auth-migrate:
+        condition: service_completed_successfully
+
+  auth-fence-init:
+    extends: { file: ./ops/compose.yml, service: auth-fence-init }
+    depends_on: !override
+      auth-grants:
+        condition: service_completed_successfully
+
+  auth-workload-volume:
+    extends: { file: ./ops/compose.yml, service: auth-workload-volume }
+
+  auth-workload-seed:
+    extends: { file: ./ops/compose.yml, service: auth-workload-seed }
+    depends_on: !override
+      auth-grants:
+        condition: service_completed_successfully
+
+  auth-workload-subject:
+    extends: { file: ./ops/compose.yml, service: auth-workload-subject }
+    depends_on: !override
+      auth-workload-volume:
+        condition: service_completed_successfully
+      auth-workload-seed:
+        condition: service_completed_successfully
+
+  auth-service:
+    extends: { file: ./ops/compose.yml, service: auth-service }
+    ports: !reset []
+    depends_on: !override
+      auth-keys-init:
+        condition: service_completed_successfully
+      auth-grants:
+        condition: service_completed_successfully
+      auth-fence-init:
+        condition: service_completed_successfully
+      auth-workload-subject:
+        condition: service_completed_successfully
+      valkey:
+        condition: service_healthy
+
+  auth-issuer-tls-init:
+    extends: { file: ./ops/compose.yml, service: auth-issuer-tls-init }
+
+  # The https issuer go-api and query-api fetch the discovery document and JWKS from, under the issuer's host name.
+  auth-issuer:
+    extends: { file: ./ops/compose.yml, service: auth-issuer }
+    ports: !reset []
+    depends_on: !override
+      auth-service:
+        condition: service_healthy
+      auth-issuer-tls-init:
+        condition: service_completed_successfully
+    networks: !override
+      auth_plane: {}
+      dev-health:
+        aliases: [auth.dev-health.internal]
 
   # Only started when the web agreement check is enabled (E2E_WEB=on): fullstack-opencode.sh's
   # render_web_override() adds `web-fullstack` as a depends_on for the Explorer's Sentry-compatible
