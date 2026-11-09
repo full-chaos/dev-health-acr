@@ -178,14 +178,16 @@ func logTableReadPages(ctx context.Context, logger *slog.Logger, orgID string, l
 				lastStamp = page.lastStamp.UTC().Format(time.RFC3339Nano)
 			}
 			org := redactOrg(orgID)
-			logger.InfoContext(ctx, eventspec.DevhealthsourceTableReadPageLogMessage, eventspec.NewDevhealthsourceTableReadPageFields(
+			pageFields := eventspec.NewDevhealthsourceTableReadPageFields(
 				org, TeamsProjectsSourceName, report.name, run, page.n,
 				page.statementRows, page.more, page.consumedRows, page.consumedNew, report.total, page.replay(),
-				lastStamp, keyDigest(page.lastKey)).SlogArgs()...)
+				lastStamp, keyDigest(page.lastKey))
+			logger.InfoContext(ctx, eventspec.DevhealthsourceTableReadPageLogMessage, pageFields.SlogArgs()...)
 			if page.consumedRows != page.consumedNew && !page.replay() {
-				logger.ErrorContext(ctx, eventspec.DevhealthsourceTableReadNotNewLogMessage, eventspec.NewDevhealthsourceTableReadNotNewFields(
+				notNewFields := eventspec.NewDevhealthsourceTableReadNotNewFields(
 					org, TeamsProjectsSourceName, report.name, run, page.n,
-					page.consumedRows, page.consumedNew, page.sharedRows, lastStamp, keyDigest(page.lastKey)).SlogArgs()...)
+					page.consumedRows, page.consumedNew, page.sharedRows, lastStamp, keyDigest(page.lastKey))
+				logger.ErrorContext(ctx, eventspec.DevhealthsourceTableReadNotNewLogMessage, notNewFields.SlogArgs()...)
 			}
 		}
 	}
@@ -193,8 +195,9 @@ func logTableReadPages(ctx context.Context, logger *slog.Logger, orgID string, l
 		return
 	}
 	for _, report := range reports {
-		logger.InfoContext(ctx, eventspec.DevhealthsourceTableReadDrainedLogMessage, eventspec.NewDevhealthsourceTableReadDrainedFields(
+		drainedFields := eventspec.NewDevhealthsourceTableReadDrainedFields(
 			redactOrg(orgID), TeamsProjectsSourceName, report.name, run,
-			report.final, report.pagesWithRows, report.statement).SlogArgs()...)
+			report.final, report.pagesWithRows, report.statement)
+		logger.InfoContext(ctx, eventspec.DevhealthsourceTableReadDrainedLogMessage, drainedFields.SlogArgs()...)
 	}
 }
