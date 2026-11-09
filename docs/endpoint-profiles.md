@@ -408,3 +408,70 @@ gate):
 - A mint call in an `issued_credential` anchor is bound to its function, but
   whether that function is reached, or whether control flow reaches the call
   inside it, is not judged either (see the lexical-check paragraph above).
+
+## Wave 11 diff against Wave 0 (CHAOS-11251)
+
+Wave 0 is acr #370, merge `52aff32dac9b`: 16 rows. This inventory, regenerated against
+`60dc9861746a`, has 38 rows: 25 added, 3 removed,
+13 changed, 0 unchanged. Each line names the commit that made the change; the
+commit's pull request and ticket are the reason. The regeneration itself changed only the
+header (`generated_at`, `source_commit`) and the advisory `line` / `line_end` hints (row
+addressing is by symbol, see above); no row's claim changed.
+
+### Added
+
+| Row | Classification | Commit |
+| --- | --- | --- |
+| `GET /.well-known/oauth-authorization-server` | public | 6b8ce29d #634 CHAOS-6184 |
+| `GET /authorize` | public | 6b8ce29d #634 CHAOS-6184 |
+| `POST /authorize/consent` | protected | 6b8ce29d #634 CHAOS-6184 |
+| `POST /register` | public | 6b8ce29d #634 CHAOS-6184 |
+| `POST /token` | public | 6b8ce29d #634 CHAOS-6184 |
+| `POST /device_authorization` | public | 71798c68 #643 CHAOS-6233 |
+| `GET /api/v1/context-fabric/data/catalog` | protected | 30a797c9 #689 CHAOS-7100 |
+| `POST /api/v1/context-fabric/data/facts` | protected | 30a797c9 #689 CHAOS-7100 |
+| `POST /api/v1/context-fabric/data/operations` | protected | 30a797c9 #689 CHAOS-7100 |
+| `POST /api/v1/context-fabric/data/subjects` | protected | 30a797c9 #689 CHAOS-7100 |
+| `POST /api/v1/context-fabric/data/relationships` | protected | 409fab51 #696 CHAOS-7074 |
+| `POST /api/v1/context-fabric/data/graphql` | protected | 6fc07dbe #729 CHAOS-7075 |
+| `POST /api/v1/auth/credentials/self/ack` | protected | 42555114 #936 CHAOS-3198 |
+| `GET /api/v1/context-fabric/investigations/submissions/{submission_id}` | protected | fe596b77 #1754 CHAOS-11913 |
+| `DELETE /api/v1/context-fabric/threads/{thread_id}` | protected | 771aef3e #1777 CHAOS-11948 |
+| `GET /api/v1/context-fabric/threads` | protected | 771aef3e #1777 CHAOS-11948 |
+| `GET /api/v1/context-fabric/threads/{thread_id}` | protected | 771aef3e #1777 CHAOS-11948 |
+| `POST /revoke` | public | de732556 #1786 CHAOS-12124 |
+| `GET /api/v1/context-fabric/investigations/submissions/{submission_id}/events` | protected | c82dfab9 #1793 CHAOS-11949 |
+| `POST /api/v1/context-fabric/investigations/submissions/{submission_id}/cancel` | protected | c82dfab9 #1793 CHAOS-11949 |
+| `GET /api/v1/context-fabric/investigations/feedback/{result_id}` | protected | 1818784e #1792 CHAOS-11950 |
+| `POST /api/v1/context-fabric/investigations/feedback/{result_id}` | protected | 1818784e #1792 CHAOS-11950 |
+| `GET /internal/v1/credentials/lifecycle` | protected | d10929aa #1923 CHAOS-11200 |
+| `POST /authorize/first-party` | protected | 8b285c9c #1927 CHAOS-12568 |
+| `POST /internal/v1/credentials/{credential_id}/revoke` | protected | e14ecd26 #2028 CHAOS-12971 |
+
+### Removed
+
+| Row | Commit |
+| --- | --- |
+| `DELETE /api/v1/context-fabric/model-config` | d99cc97a #1471 no ticket (the org model-config store moved to the ops settings store) |
+| `GET /api/v1/context-fabric/model-config` | d99cc97a #1471 no ticket (the org model-config store moved to the ops settings store) |
+| `PUT /api/v1/context-fabric/model-config` | d99cc97a #1471 no ticket (the org model-config store moved to the ops settings store) |
+
+### Changed
+
+Fields whose content changed, line hints (`source.line`, anchor `line` / `line_end`) left out:
+
+| Row | Fields changed since Wave 0 | Commits |
+| --- | --- | --- |
+| `GET /healthz` | `primary_validator` | 494e0893 #525 CHAOS-5652; fb5d020e #1529 CHAOS-10126 |
+| `GET /readyz` | `primary_validator` | 494e0893 #525 CHAOS-5652; fb5d020e #1529 CHAOS-10126 |
+| `GET /api/v1/agent-context/capabilities` | `accepted_credential_classes`, `class_disambiguator`, `gaps`, `primary_validator`, `reachable_validators` | 494e0893 #525 CHAOS-5652; 1d4fe7af #741 CHAOS-7245; 6462f016 #1086 CHAOS-9292; fb5d020e #1529 CHAOS-10126; 5f7a91b3 #1607 CHAOS-10561 |
+| `POST /api/v1/agent-context/context-packets` | `accepted_credential_classes`, `class_disambiguator`, `gaps`, `primary_validator`, `reachable_validators` | 494e0893 #525 CHAOS-5652; 1d4fe7af #741 CHAOS-7245; fb5d020e #1529 CHAOS-10126; 5f7a91b3 #1607 CHAOS-10561 |
+| `GET /api/v1/agent-context/evidence/{evidence_ref_id}` | `accepted_credential_classes`, `class_disambiguator`, `gaps`, `primary_validator`, `reachable_validators` | 494e0893 #525 CHAOS-5652; 1d4fe7af #741 CHAOS-7245; fb5d020e #1529 CHAOS-10126; 5f7a91b3 #1607 CHAOS-10561 |
+| `POST /api/v1/agent-context/episodes` | `accepted_credential_classes`, `gaps`, `primary_validator` | 494e0893 #525 CHAOS-5652; fb5d020e #1529 CHAOS-10126; 5f7a91b3 #1607 CHAOS-10561 |
+| `POST /api/v1/context-fabric/investigations` | `accepted_credential_classes`, `primary_validator`, `reachable_validators`, `token_shape` | 494e0893 #525 CHAOS-5652; 1d4fe7af #741 CHAOS-7245; 5f7a91b3 #1607 CHAOS-10561; 479a986a #2029 CHAOS-12109 |
+| `GET /api/v1/context-fabric/investigations/{result_id}` | `accepted_credential_classes`, `primary_validator`, `reachable_validators`, `token_shape` | 494e0893 #525 CHAOS-5652; 1d4fe7af #741 CHAOS-7245; 5f7a91b3 #1607 CHAOS-10561; 479a986a #2029 CHAOS-12109 |
+| `POST /api/v1/oauth/device_authorization` | `gaps`, `issued_credential`, `primary_validator` | 494e0893 #525 CHAOS-5652; 1d4fe7af #741 CHAOS-7245; fb5d020e #1529 CHAOS-10126 |
+| `POST /api/v1/oauth/token` | `class_disambiguator`, `gaps`, `issued_credential`, `primary_validator` | 494e0893 #525 CHAOS-5652; 71798c68 #643 CHAOS-6233; 1d4fe7af #741 CHAOS-7245; fb5d020e #1529 CHAOS-10126; 5f7a91b3 #1607 CHAOS-10561 |
+| `POST /api/v1/oauth/device_approval` | `gaps`, `primary_validator`, `reachable_validators` | 494e0893 #525 CHAOS-5652; 1d4fe7af #741 CHAOS-7245; fb5d020e #1529 CHAOS-10126 |
+| `POST /api/v1/auth/credentials/self/rotate` | `accepted_credential_classes`, `gaps`, `primary_validator` | 494e0893 #525 CHAOS-5652; fb5d020e #1529 CHAOS-10126; 5f7a91b3 #1607 CHAOS-10561 |
+| `POST /api/v1/auth/credentials/self/revoke` | `accepted_credential_classes`, `gaps`, `primary_validator` | 494e0893 #525 CHAOS-5652; fb5d020e #1529 CHAOS-10126; 5f7a91b3 #1607 CHAOS-10561 |
