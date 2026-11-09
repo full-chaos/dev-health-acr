@@ -13,8 +13,10 @@ package devhealthsource_test
 // refreshes are a separate cell (the late-commit overlap cell).
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"reflect"
 	"sort"
@@ -891,5 +893,135 @@ func subOwnershipSourceRowCitesTheStoredGroupObservedAt(t *testing.T, ctx contex
 	}
 	if !edge.ObservedAt.Equal(stored.UTC()) {
 		t.Errorf("the projected edge's ObservedAt is %s, want the stored group's %s", edge.ObservedAt, stored.UTC())
+	}
+}
+
+// C7: a group changed twice after the cursor has two log rows; only the
+// newer is its current row. The page writes the group once, from that row:
+// the older row is a progress row, so the walk neither writes the group twice
+// nor drops a duplicate of it from a batch.
+func subOwnershipSupersededLogRowWritesNothing(t *testing.T, ctx context.Context, f *ownershipFixture) {
+	if _, err := f.source.WithWindowPassInterval(1000 * time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	seedOwned := func(validTo any, updated time.Time) {
+		mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', 'PROJ-C7', 'PROJ-C7-KEY', 'native', ?, ?, ?)`,
+			f.orgID, ownershipFirstSeen, validTo, updated)
+	}
+	mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES ('PROJ-C7', ?, 'github', 'PROJ-C7-KEY', 'PROJ-C7', 1, 'started', '', ?)`,
+		f.orgID, ownershipLaterAssertion)
+	seedOwned(nil, ownershipLaterAssertion)
+	f.syncStoredGroups(t, ctx)
+	c0, _ := ownershipTicks(t, ctx, f, "")
+
+	seedOwned(ownershipLatestClose, ownershipLaterAssertion.Add(time.Hour))
+	f.syncStoredGroups(t, ctx)
+	seedOwned(ownershipStaleFarFutureClose, ownershipLaterAssertion.Add(2*time.Hour))
+	f.syncStoredGroups(t, ctx)
+	rowKey := identity.JoinSegments("github", "PROJ-C7", "TEAM-GITHUB", "native")
+	var after uint64
+	if err := f.direct.QueryRow(ctx, `SELECT count() FROM project_team_ownership_groups_log WHERE org_id = ? AND row_key = ? AND stored_at > fromUnixTimestamp64Micro(toInt64(?), 'UTC')`,
+		f.orgID, rowKey, decodeCursorPosition(t, c0).Since.UnixMicro()).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after < 2 {
+		t.Fatalf("premise: the group must have two log rows after the cursor, has %d", after)
+	}
+
+	var logs bytes.Buffer
+	f.source.WithLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	_, changed := ownershipTicks(t, ctx, f, c0)
+	id := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-C7", "TEAM-GITHUB", "native")
+	var writes []contractsv1.ContextFabricRelationshipProjection
+	for _, b := range changed {
+		for _, r := range projectTeamEdges(b) {
+			if r.RelationshipID == id {
+				writes = append(writes, r)
+			}
+		}
+	}
+	if len(writes) != 1 {
+		t.Errorf("a group with two log rows after the cursor was written %d times, want once (its current row only)", len(writes))
+	}
+	for _, r := range writes {
+		if r.ValidTo == nil || !r.ValidTo.Equal(ownershipStaleFarFutureClose) {
+			t.Errorf("the group was written with valid_to %v, want its latest %v", r.ValidTo, ownershipStaleFarFutureClose)
+		}
+	}
+	if strings.Contains(logs.String(), "duplicate_within_batch") {
+		t.Errorf("a batch dropped a duplicate item: the superseded log row was read as live\n%s", logs.String())
+	}
+}
+
+// C8: a log row whose group has no current row (its copy is not visible yet,
+// or was removed) is a progress row: the walk moves past it. More such rows
+// than a page holds must not stop the walk before a later group.
+func subOwnershipLogRowsWithoutACurrentRowAreProgressRows(t *testing.T, ctx context.Context, f *ownershipFixture) {
+	if _, err := f.source.WithWindowPassInterval(1000 * time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	f.syncStoredGroups(t, ctx)
+	c0, _ := ownershipTicks(t, ctx, f, "")
+	frontier := decodeCursorPosition(t, c0).Since
+	const orphans = 401 // two full pages and one row
+	mustExec(t, ctx, f.direct, `INSERT INTO project_team_ownership_groups_log (org_id, row_key, project_id, team_id, source_name, provider, first_valid_from, latest_is_open, latest_valid_to, observed_at, edge_suppressed, conflict_identities, conflicting_identity_present, content_hash, stored_at, is_deleted)
+SELECT ?, concat('github:PROJ-C8-ORPHAN-', leftPad(toString(number), 4, '0'), ':TEAM-GITHUB:native'), concat('PROJ-C8-ORPHAN-', leftPad(toString(number), 4, '0')), 'TEAM-GITHUB', 'native', 'github', ?, 1, ?, ?, 0, [], 0, number, fromUnixTimestamp64Micro(toInt64(?) + toInt64(number), 'UTC'), 0 FROM numbers(?)`,
+		f.orgID, ownershipFirstSeen, ownershipFirstSeen, ownershipLaterAssertion, frontier.UnixMicro()+1, uint64(orphans))
+	// The copy view wrote each orphan's current row; remove them. A refresh of
+	// another subtest that ran in between saw them live with no source group
+	// and stored a deletion row for each (its copy lands in current again), so
+	// delete until no refresh is running and none is left.
+	for attempt := 0; ; attempt++ {
+		mustExec(t, ctx, f.direct, "SYSTEM WAIT VIEW "+ownershipGroupsRefreshView)
+		mustExec(t, ctx, f.direct, `ALTER TABLE project_team_ownership_groups_current DELETE WHERE org_id = ? AND startsWith(row_key, 'github:PROJ-C8-ORPHAN-') SETTINGS mutations_sync = 2`, f.orgID)
+		mustExec(t, ctx, f.direct, "SYSTEM WAIT VIEW "+ownershipGroupsRefreshView)
+		var left uint64
+		if err := f.direct.QueryRow(ctx, `SELECT count() FROM project_team_ownership_groups_current WHERE org_id = ? AND startsWith(row_key, 'github:PROJ-C8-ORPHAN-')`, f.orgID).Scan(&left); err != nil {
+			t.Fatal(err)
+		}
+		if left == 0 {
+			break
+		}
+		if attempt == 4 {
+			t.Fatalf("%d orphan current rows are still there after 5 deletes", left)
+		}
+	}
+
+	mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES ('PROJ-C8-LATER', ?, 'github', 'PROJ-C8-LATER-KEY', 'PROJ-C8-LATER', 1, 'started', '', ?)`,
+		f.orgID, ownershipLaterAssertion)
+	mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?, 'github', 'TEAM-GITHUB', 'PROJ-C8-LATER', 'PROJ-C8-LATER-KEY', 'native', ?, NULL, ?)`,
+		f.orgID, ownershipFirstSeen, ownershipLaterAssertion)
+	f.syncStoredGroups(t, ctx)
+	laterKey := identity.JoinSegments("github", "PROJ-C8-LATER", "TEAM-GITHUB", "native")
+	var logged, current uint64
+	var lastOrphan, later int64
+	if err := f.direct.QueryRow(ctx, `SELECT
+  (SELECT count() FROM project_team_ownership_groups_log WHERE org_id = ? AND startsWith(row_key, 'github:PROJ-C8-ORPHAN-')),
+  (SELECT count() FROM project_team_ownership_groups_current FINAL WHERE org_id = ? AND startsWith(row_key, 'github:PROJ-C8-ORPHAN-')),
+  (SELECT toUnixTimestamp64Micro(max(stored_at)) FROM project_team_ownership_groups_log WHERE org_id = ? AND startsWith(row_key, 'github:PROJ-C8-ORPHAN-')),
+  (SELECT toUnixTimestamp64Micro(max(stored_at)) FROM project_team_ownership_groups_log WHERE org_id = ? AND row_key = ?)`,
+		f.orgID, f.orgID, f.orgID, f.orgID, laterKey).Scan(&logged, &current, &lastOrphan, &later); err != nil {
+		t.Fatal(err)
+	}
+	if logged < orphans || current != 0 || later <= lastOrphan {
+		t.Fatalf("premise: %d orphan log rows (want >= %d), %d with a current row (want 0), later group stored at %d after the last orphan %d", logged, orphans, current, later, lastOrphan)
+	}
+
+	cursor, batches := ownershipTicks(t, ctx, f, c0)
+	id := devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "PROJ-C8-LATER", "TEAM-GITHUB", "native")
+	found := false
+	for _, b := range batches {
+		found = found || hasRelationship(b, id)
+		for _, r := range projectTeamEdges(b) {
+			if strings.Contains(r.From.CanonicalID, "PROJ-C8-ORPHAN-") {
+				t.Errorf("a log row without a current row was written: %s", r.RelationshipID)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("the group stored after %d log rows without a current row was never written: the walk stopped at them", orphans)
+	}
+	if at := decodeCursorPosition(t, cursor).Since; at.UnixMicro() < later {
+		t.Errorf("the walk's cursor %s stands before the later group (%d µs)", at, later)
 	}
 }

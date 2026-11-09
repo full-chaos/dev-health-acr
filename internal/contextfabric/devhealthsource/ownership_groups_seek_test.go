@@ -47,3 +47,21 @@ func TestOwnershipPageSeeksTheGroupLogOnAMicrosecondBound(t *testing.T) {
 		t.Errorf("since_us = %#v, want int64 %d", sinceUS, since.UnixMicro())
 	}
 }
+
+// The seek's ORDER BY is its whole keyset, (stored_at, row_key). One refresh
+// stamps all its rows with one stored_at; ordered on stored_at alone, a LIMIT
+// over more rows than a page takes an arbitrary subset of them, and the next
+// seek (row_key > the page's last key) skips the rest. ClickHouse returns them
+// in row-key order only while they sit in one part, so a live cell cannot show
+// the loss reliably; the statement is pinned here.
+func TestOwnershipSeekOrdersByItsWholeKeyset(t *testing.T) {
+	statement, _ := devhealthsource.OwnershipPageStatementForTest("org-1", time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC), "github:P:T:native", 200)
+	const order = "ORDER BY stored_at ASC, row_key ASC LIMIT {row_limit:UInt32}"
+	// The seek appears twice: the page and the row keys its current lookup reads.
+	if got := strings.Count(statement, order); got != 2 {
+		t.Errorf("the seek orders by %q %d times, want 2 (the page and its current lookup):\n%s", order, got, statement)
+	}
+	if got := strings.Count(statement, "ORDER BY stored_at ASC LIMIT"); got != 0 {
+		t.Errorf("a seek orders on stored_at alone:\n%s", statement)
+	}
+}

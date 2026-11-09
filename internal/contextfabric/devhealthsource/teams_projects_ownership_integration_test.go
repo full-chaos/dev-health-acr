@@ -505,6 +505,8 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"ownership reconcile re-emits every live group with no log change", "30000000-0000-4000-8000-0000000063a5", subOwnershipReconcileReemitsEveryLiveGroupWithNoLogChange},
 		{"ownership reconcile walks every page and retries an unapplied page", "30000000-0000-4000-8000-0000000063a6", subOwnershipReconcileWalksEveryPageAndRetriesAnUnappliedPage},
 		{"ownership source-row citation carries the stored group observed_at", "30000000-0000-4000-8000-0000000063a7", subOwnershipSourceRowCitesTheStoredGroupObservedAt},
+		{"ownership superseded log row writes nothing", "30000000-0000-4000-8000-0000000063a8", subOwnershipSupersededLogRowWritesNothing},
+		{"ownership log rows without a current row are progress rows", "30000000-0000-4000-8000-0000000063a9", subOwnershipLogRowsWithoutACurrentRowAreProgressRows},
 	}
 	// The subtests run in parallel on one shared schema; the organization id
 	// is the only thing keeping their rows apart, so two cases sharing one
