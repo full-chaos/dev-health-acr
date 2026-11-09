@@ -99,8 +99,12 @@ func TestEveryExecutorOfAChunkedProjectMixStatementBindsTheChunkRange(t *testing
 			t.Errorf("named site %s uses no chunked statement", key)
 		}
 	}
-	if !strings.Contains(projectMixChunkRangeFilter, "{chunk_lo:String}") || !strings.Contains(projectMixChunkRangeFilter, "{chunk_hi:String}") {
-		t.Fatal("the chunk key range names no chunk_lo/chunk_hi parameter")
+	// The range is on the sort key, inclusive at both ends: chunk_lo and
+	// chunk_hi are the chunk's first and last pinned ids.
+	for _, bound := range []string{"work_unit_id >= {chunk_lo:String}", "work_unit_id <= {chunk_hi:String}"} {
+		if !strings.Contains(projectMixChunkRangeFilter, bound) {
+			t.Errorf("the chunk key range %q lacks %q", projectMixChunkRangeFilter, bound)
+		}
 	}
 	names := map[string]bool{}
 	for _, b := range (projectMixChunk{lo: "a", hi: "b", pins: projectMixScope{unitIDs: []string{"a"}, versionsMs: []int64{1}}}).bindings() {
