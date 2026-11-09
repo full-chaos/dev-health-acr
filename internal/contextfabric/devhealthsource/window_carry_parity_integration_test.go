@@ -88,7 +88,11 @@ func TestWindowCarryMatchesTheStatementOnTheRealSQL(t *testing.T) {
 	f.workItem("linear:CARRY-TIE-SUP", projects[0], tie, tie)
 	f.transition("linear:CARRY-TIE-SUP", projects[1], "K1", "linear:ev-tie-sup", tie, tie)
 
-	query, _ := orgIsolationClickHouseFixture(t)
+	// The ownership producer pages the stored groups: bring them up to the
+	// seed before a statement reads them, as the refresh view does in
+	// production.
+	raw, _ := orgIsolationClickHouseFixture(t)
+	query := newStoredGroupsClient(raw, f.h.direct)
 	limits := []int{7, 50, 200, 200}
 	for _, ingest := range []bool{true, false} {
 		mode := map[bool]string{true: "ingest_columns", false: "legacy"}[ingest]
