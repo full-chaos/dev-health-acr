@@ -52,6 +52,7 @@ func TestTableReadLinesAreCertifiedFromTheConfiguredJSONLogger(t *testing.T) {
 		t.Fatalf("certify.Parse: %v", err)
 	}
 	org := redactOrg("org")
+	// devhealthschema:not-a-production-replica these table names are fixture rows and expected log values; no column, type or engine is declared here.
 	for _, a := range []certify.Assertion{
 		{Event: eventspec.DevhealthsourceTableReadPage, Want: map[string]any{
 			"org_id": org, "source": TeamsProjectsSourceName, "table": "teams", "run": 0, "page_n": 1,

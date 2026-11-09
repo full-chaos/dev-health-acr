@@ -19,6 +19,7 @@ const (
 // DevhealthsourceTableReadTables lists the tables that state their read this
 // way: every table of the teams and projects cursor except the membership
 // producer. A test holds it equal to the producer registry.
+// devhealthschema:not-a-production-replica closed vocabulary of a log field; it spells table names and declares no column, type or engine
 func DevhealthsourceTableReadTables() []string {
 	return []string{"teams", "projects", "work_item_team_attributions", "team_project_ownership", "team_repo_ownership"}
 }
