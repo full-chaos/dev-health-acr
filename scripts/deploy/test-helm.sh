@@ -44,6 +44,7 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               entitlement-service-token-extraenv-value, entitlement-service-token-extraenv-valuefrom,
               entitlement-workload-extraenv-valuefrom, entitlement-empty-extraenv-value, entitlement-empty-extraenv-valuefrom,
               entitlement-credential-null, entitlement-credential-bad-value-no-schema,
+              entitlement-credential-non-string-no-schema,
               pgbouncer-missing-pooler, extra-container, direct-with-pooler,
               unsupported-entitlement-scheme, userinfo-url, query-url, fragment-url, unknown-root-key,
               unknown-config-key, alternate-port, mutable-token-copy-image,
@@ -537,6 +538,9 @@ case "$scenario" in
       --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
       --skip-schema-validation \
       --set-string "config.entitlement.credential=bogus"
+    exit 0 ;;
+  entitlement-credential-non-string-no-schema)
+    negative entitlement-credential-non-string-no-schema "config.entitlement.credential"       "${ent_prod_args[@]}"       --set-string "config.entitlement.url=http://ops.example:8091"       --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token"       --skip-schema-validation       --set-json "config.entitlement.credential=false"
     exit 0 ;;
   entitlement-token-required)
     negative entitlement-token-required "credentials.entitlementToken.existingSecret" \
