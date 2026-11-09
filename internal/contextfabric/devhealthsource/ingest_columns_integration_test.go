@@ -68,7 +68,6 @@ func newIngestColumnsFixture(t *testing.T, orgID string, client contextpacket.Cl
 	ctx := context.Background()
 	query, direct := orgIsolationClickHouseFixture(t)
 	createProjectMembershipPresenceView(t, ctx, direct)
-	createOwnershipGroupsStore(t, ctx, direct)
 	if client == nil {
 		client = query
 	}

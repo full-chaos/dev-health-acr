@@ -361,6 +361,14 @@ func ownershipPageReadBound(t *testing.T, ctx context.Context, direct clickhouse
 // C1: a page's cost is bounded and does not grow with the organization. The
 // read rows of each page statement are read back from system.query_log by a
 // per-page log_comment, on an organization of 5,200 groups and one of 10,400.
+//
+// The bound is per data part: a page reads its granules in every active part
+// that holds the organization's rows in its range, and the first page (no
+// keyset yet) touches every such part. A refresh can write its rows as several
+// parts, and parallel subtests keep appending, so under load the first page
+// can read an extra granule per unmerged part. Both tables are merged before the
+// measure, as background merges do in time, and each page logs the parts and
+// marks it selected.
 func subOwnershipPageCostIsBoundedAndFlat(t *testing.T, ctx context.Context, f *ownershipFixture) {
 	bound := ownershipPageReadBound(t, ctx, f.direct)
 	big := newOwnershipFixture(t, ctx, f.query, f.direct, "30000000-0000-4000-8000-0000000063ff")
@@ -369,6 +377,9 @@ func subOwnershipPageCostIsBoundedAndFlat(t *testing.T, ctx context.Context, f *
 	run := fmt.Sprintf("%d", time.Now().UnixNano())
 	measure := func(fx *ownershipFixture, label string) []uint64 {
 		fx.syncStoredGroups(t, ctx)
+		for _, table := range []string{"project_team_ownership_groups_log", "project_team_ownership_groups_current"} {
+			mustExec(t, ctx, f.direct, "OPTIMIZE TABLE "+table+" FINAL")
+		}
 		var tags []string
 		var since time.Time
 		after := ""
@@ -392,14 +403,14 @@ func subOwnershipPageCostIsBoundedAndFlat(t *testing.T, ctx context.Context, f *
 		mustExec(t, ctx, f.direct, "SYSTEM FLUSH LOGS")
 		out := make([]uint64, 0, len(tags))
 		for _, tag := range tags {
-			var read, statements uint64
-			if err := f.direct.QueryRow(ctx, `SELECT sum(read_rows), count() FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = ?`, tag).Scan(&read, &statements); err != nil {
+			var read, statements, parts, marks uint64
+			if err := f.direct.QueryRow(ctx, `SELECT sum(read_rows), count(), sum(ProfileEvents['SelectedParts']), sum(ProfileEvents['SelectedMarks']) FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = ?`, tag).Scan(&read, &statements, &parts, &marks); err != nil {
 				t.Fatal(err)
 			}
 			if statements == 0 {
 				t.Fatalf("%s: no finished statement carries log_comment %s", label, tag)
 			}
-			t.Logf("C1 %s %s read_rows=%d statements=%d", label, tag, read, statements)
+			t.Logf("C1 %s %s read_rows=%d statements=%d selected_parts=%d selected_marks=%d", label, tag, read, statements, parts, marks)
 			if read > bound {
 				t.Errorf("%s: a page read %d rows, bound %d", label, read, bound)
 			}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 )
 
 // A key shared by two projects suppresses the ownership edge; once the
@@ -54,10 +55,15 @@ func TestOwnershipEdgeReturnsWhenAnAmbiguousKeyResolves(t *testing.T) {
 	}
 }
 
-// The wider cursor re-reads an ownership group when any project of its
-// provider changes, but the edge's own ObservedAt stays what it was: the later
-// of the ownership row's and its reachable projects' stamps. An unrelated
-// project's write must not restamp every edge of the provider.
+// An unrelated project's write must not restamp the edges of its provider.
+// The ownership edges page the stored groups: the refresh rebuilds every group
+// and stores only a group whose content changed, and a write that changes no
+// group's resolution changes no group. So the edge is not read again, and its
+// ObservedAt stays the later of the ownership row's and its reachable projects'
+// stamps. (The group statement the stored groups replaced keyed the group on
+// the provider-wide newest project, so every write of the provider re-read
+// it.) A write that does change a group's resolution is stored and read: see
+// TestOwnershipEdgeReturnsWhenAnAmbiguousKeyResolves.
 func TestOwnershipEdgeObservedAtIgnoresAnUnrelatedProjectWrite(t *testing.T) {
 	ctx := context.Background()
 	query, direct := orgIsolationClickHouseFixture(t)
@@ -86,13 +92,34 @@ func TestOwnershipEdgeObservedAtIgnoresAnUnrelatedProjectWrite(t *testing.T) {
 	}
 
 	project("OBS-UNRELATED", "OBS-OTHER", t0.Add(3*time.Hour))
-	drainUntil(t, ctx, fixture, cursor, collect)
-	if len(observed) < 2 {
-		t.Fatal("the edge was not re-read after a project of its provider changed; the wider cursor is not doing its job")
+	unrelatedID, _, err := identity.Derive(identity.KindProject, []string{"github", "OBS-UNRELATED"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelated := false
+	drainUntil(t, ctx, fixture, cursor, func(b contextfabric.ProjectionBatch) bool {
+		for _, e := range b.Entities {
+			unrelated = unrelated || e.Subject.CanonicalID == unrelatedID
+		}
+		return collect(b)
+	})
+	if !unrelated {
+		t.Fatal("premise: the unrelated project was never projected, so the walk did not pass its write")
+	}
+	var stored uint64
+	if err := fixture.direct.QueryRow(ctx, `SELECT count() FROM project_team_ownership_groups_log WHERE org_id = ? AND row_key = ?`,
+		fixture.orgID, identity.JoinSegments("github", "OBS-P", "TEAM-GITHUB", "native")).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 1 {
+		t.Errorf("the unrelated write stored the group again: %d log rows, want 1", stored)
 	}
 	for _, at := range observed {
 		if !at.Equal(t0) {
 			t.Fatalf("an unrelated project write moved the edge's ObservedAt to %v, want %v", at, t0)
 		}
+	}
+	if len(observed) != 1 {
+		t.Errorf("the edge was read again after an unrelated project write (%d times); its stored group did not change", len(observed))
 	}
 }

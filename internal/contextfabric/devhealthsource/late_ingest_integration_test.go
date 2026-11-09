@@ -182,7 +182,6 @@ func TestLateIngestedRowsAreProjected(t *testing.T) {
 	// case below uses its own organization.
 	query, direct := orgIsolationClickHouseFixture(t)
 	createProjectMembershipPresenceView(t, ctx, direct)
-	createOwnershipGroupsStore(t, ctx, direct)
 	now := time.Now().UTC().Truncate(time.Second)
 	hourAgo := now.Add(-time.Hour)
 	old := now.Add(-45 * 24 * time.Hour)
