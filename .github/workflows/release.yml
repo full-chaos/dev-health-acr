@@ -510,6 +510,7 @@ jobs:
         env:
           SYFT_VERSION: v1.46.0
           SYFT_SHA256: d654f678b709eb53c393d38519d5ed7d2e57205529404018614cfefa0fb2b5ca
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # CHAOS-6403: was `go run .../syft@v1.46.0`, which compiled Syft and its
@@ -517,9 +518,9 @@ jobs:
           # upstream linux/amd64 release tarball with a pinned sha256 (taken from
           # syft_1.46.0_checksums.txt); a mismatch fails the job.
           mkdir -p "$RUNNER_TEMP/syft-bin"
-          scripts/ci/retry.sh curl --fail --location --proto '=https' --tlsv1.2 \
-            "https://github.com/anchore/syft/releases/download/${SYFT_VERSION}/syft_${SYFT_VERSION#v}_linux_amd64.tar.gz" \
-            --output "$RUNNER_TEMP/syft.tar.gz"
+          scripts/ci/fetch-pinned-release.sh anchore/syft "$SYFT_VERSION" \
+            "syft_${SYFT_VERSION#v}_linux_amd64.tar.gz" "$SYFT_SHA256" \
+            "$RUNNER_TEMP/syft.tar.gz"
           printf '%s  %s\n' "$SYFT_SHA256" "$RUNNER_TEMP/syft.tar.gz" | sha256sum --check -
           tar -xzf "$RUNNER_TEMP/syft.tar.gz" -C "$RUNNER_TEMP/syft-bin" syft
           "$RUNNER_TEMP/syft-bin/syft" version | grep -F "${SYFT_VERSION#v}"
@@ -593,14 +594,13 @@ jobs:
           BUILDX_VERSION: v0.35.0
           BUILDX_SHA256: >-
             d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda
-          BUILDX_URL: >-
-            https://github.com/docker/buildx/releases/download/v0.35.0/buildx-v0.35.0.linux-amd64
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/buildx" "$HOME/.docker/cli-plugins"
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            "$BUILDX_URL" \
-            --output "$RUNNER_TEMP/buildx/docker-buildx"
+          scripts/ci/fetch-pinned-release.sh docker/buildx "$BUILDX_VERSION" \
+            "buildx-$BUILDX_VERSION.linux-amd64" "$BUILDX_SHA256" \
+            "$RUNNER_TEMP/buildx/docker-buildx"
           printf '%s  %s\n' \
             "$BUILDX_SHA256" "$RUNNER_TEMP/buildx/docker-buildx" \
             | sha256sum --check -
