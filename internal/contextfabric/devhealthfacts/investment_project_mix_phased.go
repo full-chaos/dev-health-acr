@@ -76,40 +76,43 @@ const projectMixChunkRangeFilter = `
 // the native placement and the two bugfix phases) run once per chunk of the
 // pins. A chunk is cut by the org's RAW rows in key order, never by the pins: a
 // window holding a few units spread over the key range would otherwise give
-// each chunk a range that covers most of the table. So one chunk's statement
-// reads at most projectMix*ChunkRows rows of the org (and the earlier versions
-// of its first id), plus at most the two granules its range straddles, whatever
-// the table's size and the window.
+// each chunk a range that covers most of the table.
+//
+// An org of at most projectMixSingleStatementRows raw rows is one chunk: one
+// statement then reads under 60% of half the byte cap (47.7% at 20,000 rows
+// on the prod-shaped fixture). A larger org is cut into chunks of at most
+// projectMixChunkRows rows, under one granule (adaptive granules hold ~6,700 of
+// these rows, the 10 MiB granule byte limit), so a chunk's range touches at most
+// two granules of the table, whatever the table's size and the window. The side
+// tables a phase joins (attributions, repositories, project presence) are read
+// whole by every chunk and grow with the org.
 const (
-	projectMixEvidenceChunkRows = 16384
-	projectMixBugfixChunkRows   = 24576
+	projectMixSingleStatementRows = 24576
+	projectMixChunkRows           = 6144
 )
 
-type projectMixChunkRowsKey struct{}
+type projectMixChunkingKey struct{}
 
-type projectMixChunkRows struct{ evidence, bugfix uint64 }
+type projectMixChunking struct{ singleStatementRows, chunkRows uint64 }
 
-func projectMixChunkRowsOf(ctx context.Context) projectMixChunkRows {
-	if rows, ok := ctx.Value(projectMixChunkRowsKey{}).(projectMixChunkRows); ok {
-		return rows
+func projectMixChunkingOf(ctx context.Context) projectMixChunking {
+	if c, ok := ctx.Value(projectMixChunkingKey{}).(projectMixChunking); ok {
+		return c
 	}
-	return projectMixChunkRows{evidence: projectMixEvidenceChunkRows, bugfix: projectMixBugfixChunkRows}
+	return projectMixChunking{singleStatementRows: projectMixSingleStatementRows, chunkRows: projectMixChunkRows}
 }
 
-// projectMixChunkBoundsStatement returns ONE row: for each chunk size, the ids
-// at which a new chunk starts, every ceil(rows / chunks) raw rows of the org in
-// key order, chunks = ceil(rows / chunk size). It reads work_unit_id only.
+// projectMixChunkBoundsStatement returns ONE row: the ids at which a new chunk
+// starts, every ceil(rows / chunks) raw rows of the org in key order. It reads
+// work_unit_id only.
 const projectMixChunkBoundsStatement = `SELECT
-    arrayFilter((id, i) -> i > 1 AND toUInt64(i - 1) % evidence_step = 0, ids, arrayEnumerate(ids)) AS evidence_bounds,
-    arrayFilter((id, i) -> i > 1 AND toUInt64(i - 1) % bugfix_step = 0, ids, arrayEnumerate(ids)) AS bugfix_bounds
+    arrayFilter((id, i) -> i > 1 AND toUInt64(i - 1) % step = 0, ids, arrayEnumerate(ids)) AS chunk_bounds
 FROM (
-    SELECT ids,
-        greatest(1, intDiv(length(ids) + evidence_chunks - 1, evidence_chunks)) AS evidence_step,
-        greatest(1, intDiv(length(ids) + bugfix_chunks - 1, bugfix_chunks)) AS bugfix_step
+    SELECT ids, greatest(1, intDiv(length(ids) + chunks - 1, chunks)) AS step
     FROM (
         SELECT ids,
-            greatest(1, intDiv(length(ids) + {evidence_chunk_rows:UInt64} - 1, {evidence_chunk_rows:UInt64})) AS evidence_chunks,
-            greatest(1, intDiv(length(ids) + {bugfix_chunk_rows:UInt64} - 1, {bugfix_chunk_rows:UInt64})) AS bugfix_chunks
+            if(length(ids) <= {single_statement_rows:UInt64}, 1,
+               greatest(1, intDiv(length(ids) + {chunk_rows:UInt64} - 1, {chunk_rows:UInt64}))) AS chunks
         FROM (
             SELECT arraySort(groupArray(work_unit_id)) AS ids
             FROM work_unit_investments
@@ -118,14 +121,12 @@ FROM (
     )
 )`
 
-type projectMixChunkBounds struct{ evidence, bugfix []string }
-
-func readProjectMixChunkBounds(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string) (projectMixChunkBounds, error) {
-	var bounds projectMixChunkBounds
-	rows := projectMixChunkRowsOf(ctx)
+func readProjectMixChunkBounds(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string) ([]string, error) {
+	var bounds []string
+	c := projectMixChunkingOf(ctx)
 	err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectMixChunkBounds", projectMixChunkBoundsStatement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		return row.Scan(&bounds.evidence, &bounds.bugfix)
-	}, readers.Binding{Name: "evidence_chunk_rows", Value: rows.evidence}, readers.Binding{Name: "bugfix_chunk_rows", Value: rows.bugfix})
+		return row.Scan(&bounds)
+	}, readers.Binding{Name: "single_statement_rows", Value: c.singleStatementRows}, readers.Binding{Name: "chunk_rows", Value: c.chunkRows})
 	return bounds, err
 }
 
@@ -583,6 +584,7 @@ func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	if err != nil {
 		return nil, false, err
 	}
+	chunks := splitProjectMixScope(scope, bounds)
 	projectMixBetweenPhases(ctx)
 	link := readers.Binding{Name: "link_json", Value: linkJSON}
 	extra := append(scope.bindings(), link)
@@ -598,7 +600,7 @@ func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.Clic
 		return nil, false, err
 	}
 	bugfix := map[string]float64{}
-	if err := queryProjectMixChunks(ctx, client, "ReadProjectThemeMixBugfix", projectRollupRepoBugfixStatement(), orgID, ids, splitProjectMixScope(scope, bounds.bugfix), func(row contextpacket.ClickHouseRowScanner) error {
+	if err := queryProjectMixChunks(ctx, client, "ReadProjectThemeMixBugfix", projectRollupRepoBugfixStatement(), orgID, ids, chunks, func(row contextpacket.ClickHouseRowScanner) error {
 		var key string
 		var weighted float64
 		if scanErr := row.Scan(&key, &weighted); scanErr != nil {
@@ -611,7 +613,7 @@ func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	}
 	bugfix = firstProjectKeys(bugfix)
 	excluded := map[string]uint64{}
-	if err := queryProjectMixChunks(ctx, client, "ReadProjectThemeMixEvidenceArm", projectRollupEvidenceArmStatement(), orgID, ids, splitProjectMixScope(scope, bounds.evidence), func(row contextpacket.ClickHouseRowScanner) error {
+	if err := queryProjectMixChunks(ctx, client, "ReadProjectThemeMixEvidenceArm", projectRollupEvidenceArmStatement(), orgID, ids, chunks, func(row contextpacket.ClickHouseRowScanner) error {
 		var key string
 		var n uint64
 		if scanErr := row.Scan(&key, &n); scanErr != nil {
@@ -778,12 +780,13 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	if err != nil {
 		return nil, nil, nil, nil, false, err
 	}
+	chunks := splitProjectMixScope(scope, bounds)
 	projectMixBetweenPhases(ctx)
 	extra := scope.bindings()
 
 	var pUnit, pProvider, pProject []string
 	var pMulti []uint8
-	if err := queryProjectMixChunks(ctx, client, "ReadProjectThemeMixPlacement", projectNativePlacementStatement(), orgID, ids, splitProjectMixScope(scope, bounds.evidence), func(row contextpacket.ClickHouseRowScanner) error {
+	if err := queryProjectMixChunks(ctx, client, "ReadProjectThemeMixPlacement", projectNativePlacementStatement(), orgID, ids, chunks, func(row contextpacket.ClickHouseRowScanner) error {
 		var unit, provider, project []string
 		var multi []uint8
 		if scanErr := row.Scan(&unit, &provider, &project, &multi); scanErr != nil {
@@ -809,7 +812,7 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 		return nil, nil, nil, nil, false, err
 	}
 	bugfix := make(map[string]float64, len(scope.unitIDs))
-	if err := queryProjectMixChunks(ctx, client, "ReadProjectThemeMixBugfixValues", projectNativeBugfixValuesStatement(), orgID, ids, splitProjectMixScope(scope, bounds.bugfix), func(row contextpacket.ClickHouseRowScanner) error {
+	if err := queryProjectMixChunks(ctx, client, "ReadProjectThemeMixBugfixValues", projectNativeBugfixValuesStatement(), orgID, ids, chunks, func(row contextpacket.ClickHouseRowScanner) error {
 		var bUnit []string
 		var bShare []float64
 		if scanErr := row.Scan(&bUnit, &bShare); scanErr != nil {

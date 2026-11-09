@@ -55,8 +55,8 @@ func (c *chunkedRollupClient) Query(_ context.Context, statement string, binding
 		return &fakeScanner{rows: [][]any{{ids, versions, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}}}, nil
 	case strings.Contains(statement, "groupArray(link_teams)"):
 		return &fakeScanner{rows: [][]any{{[]string{}, []string{}, []string{}, []string{}, [][]string{}}}}, nil
-	case strings.Contains(statement, "AS evidence_bounds"):
-		return &fakeScanner{rows: [][]any{{[]string{"u300"}, []string{"u300"}}}}, nil
+	case strings.Contains(statement, "AS chunk_bounds"):
+		return &fakeScanner{rows: [][]any{{[]string{"u300"}}}}, nil
 	case strings.Contains(statement, "AS pinned_present"):
 		return &fakeScanner{rows: [][]any{{uint64(600)}}}, nil
 	case strings.Contains(statement, "AS feature_delivery"):

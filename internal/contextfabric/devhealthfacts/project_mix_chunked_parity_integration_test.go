@@ -15,8 +15,8 @@ import (
 	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
-// projectMixOneChunk is a chunk size no fixture reaches: every wide-column phase
-// runs as one chunk.
+// projectMixOneChunk is a raw row count no fixture reaches: every wide-column
+// phase runs as one statement.
 const projectMixOneChunk = uint64(1) << 40
 
 // Chunking changes which rows one statement reads, never the answer: on the
@@ -60,8 +60,8 @@ WHERE org_id = ? AND cityHash64(work_unit_id) % 4 != 0`, orgID); err != nil {
 				ids = append(ids, "linear:"+project)
 			}
 			var between atomic.Int64
-			chunked := devhealthfacts.WithProjectMixBetweenChunks(devhealthfacts.WithProjectMixChunkRows(ctx, 997, 997), func() { between.Add(1) })
-			whole := devhealthfacts.WithProjectMixBetweenChunks(devhealthfacts.WithProjectMixChunkRows(ctx, projectMixOneChunk, projectMixOneChunk), func() {
+			chunked := devhealthfacts.WithProjectMixBetweenChunks(devhealthfacts.WithProjectMixChunking(ctx, 0, 997), func() { between.Add(1) })
+			whole := devhealthfacts.WithProjectMixBetweenChunks(devhealthfacts.WithProjectMixChunking(ctx, projectMixOneChunk, projectMixOneChunk), func() {
 				t.Errorf("a one-chunk read ran a second chunk")
 			})
 
@@ -116,7 +116,7 @@ func TestProjectMixChunksNeverBlendTwoInputStatesAgainstRealClickHouse(t *testin
 		before := runRollupStatement(t, ctx, query, "SingleRollupBefore", devhealthfacts.ProjectRollupStatement(window), orgID, ids, window)
 		var once sync.Once
 		fired := false
-		hooked, err := devhealthfacts.RunProjectRollupMix(devhealthfacts.WithProjectMixBetweenChunks(devhealthfacts.WithProjectMixChunkRows(ctx, 1, 1), func() {
+		hooked, err := devhealthfacts.RunProjectRollupMix(devhealthfacts.WithProjectMixBetweenChunks(devhealthfacts.WithProjectMixChunking(ctx, 0, 1), func() {
 			once.Do(func() {
 				fired = true
 				insertVersionAtMilli(t, ctx, direct, orgID, "wu-pin", repoUUID("r1a"), `{"issues":[],"prs":[]}`, "risk", at.Add(-30*time.Minute))
@@ -154,7 +154,7 @@ SELECT org_id, repo_id, work_item_id, 'team-2', 'team-2', source, is_primary, co
 		before := runNativeStatement(t, ctx, query, "SingleNativeBefore", devhealthfacts.ProjectNativeStatement(window, 201), orgID, ids, window)
 		var once sync.Once
 		fired := false
-		hooked, err := devhealthfacts.RunProjectNativeMix(devhealthfacts.WithProjectMixBetweenChunks(devhealthfacts.WithProjectMixChunkRows(ctx, 1, 1), func() {
+		hooked, err := devhealthfacts.RunProjectNativeMix(devhealthfacts.WithProjectMixBetweenChunks(devhealthfacts.WithProjectMixChunking(ctx, 0, 1), func() {
 			once.Do(func() {
 				fired = true
 				insertNativeVersion(t, ctx, direct, orgID, "nu-pin", "risk", at.Add(-30*time.Minute))

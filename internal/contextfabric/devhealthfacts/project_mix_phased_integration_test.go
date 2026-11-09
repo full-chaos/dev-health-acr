@@ -149,7 +149,7 @@ func TestProjectMixPhasedReadMatchesTheSingleStatementOnTheProdShapedTableAgains
 			}
 			// The production chunk sizes, and chunks of 997 raw rows: about 21
 			// chunks per wide-column phase on this table.
-			for name, phasedCtx := range map[string]context.Context{"production chunks": ctx, "chunks of 997 rows": devhealthfacts.WithProjectMixChunkRows(ctx, 997, 997)} {
+			for name, phasedCtx := range map[string]context.Context{"production chunks": ctx, "chunks of 997 rows": devhealthfacts.WithProjectMixChunking(ctx, 0, 997)} {
 				if err := rollupRowsDiffer(single, runRollupPhased(t, phasedCtx, query, orgID, ids, w.window)); err != nil {
 					t.Fatalf("roll-up, %s: %v", name, err)
 				}
