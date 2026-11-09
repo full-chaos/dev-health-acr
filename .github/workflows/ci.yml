@@ -2578,13 +2578,12 @@ jobs:
           BUILDX_VERSION: v0.35.0
           BUILDX_SHA256: >-
             d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda
-          BUILDX_URL: >-
-            https://github.com/docker/buildx/releases/download/v0.35.0/buildx-v0.35.0.linux-amd64
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "$RUNNER_TEMP/buildx" "$HOME/.docker/cli-plugins"
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            "$BUILDX_URL" \
-            --output "$RUNNER_TEMP/buildx/docker-buildx"
+          scripts/ci/fetch-pinned-release.sh docker/buildx "$BUILDX_VERSION" \
+            "buildx-$BUILDX_VERSION.linux-amd64" "$BUILDX_SHA256" \
+            "$RUNNER_TEMP/buildx/docker-buildx"
           printf '%s  %s\n' \
             "$BUILDX_SHA256" "$RUNNER_TEMP/buildx/docker-buildx" \
             | sha256sum --check -
@@ -2662,13 +2661,12 @@ jobs:
           BUILDX_VERSION: v0.35.0
           BUILDX_SHA256: >-
             d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda
-          BUILDX_URL: >-
-            https://github.com/docker/buildx/releases/download/v0.35.0/buildx-v0.35.0.linux-amd64
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "$RUNNER_TEMP/buildx" "$HOME/.docker/cli-plugins"
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            "$BUILDX_URL" \
-            --output "$RUNNER_TEMP/buildx/docker-buildx"
+          scripts/ci/fetch-pinned-release.sh docker/buildx "$BUILDX_VERSION" \
+            "buildx-$BUILDX_VERSION.linux-amd64" "$BUILDX_SHA256" \
+            "$RUNNER_TEMP/buildx/docker-buildx"
           printf '%s  %s\n' \
             "$BUILDX_SHA256" "$RUNNER_TEMP/buildx/docker-buildx" \
             | sha256sum --check -
@@ -2736,13 +2734,12 @@ jobs:
           BUILDX_VERSION: v0.35.0
           BUILDX_SHA256: >-
             d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda
-          BUILDX_URL: >-
-            https://github.com/docker/buildx/releases/download/v0.35.0/buildx-v0.35.0.linux-amd64
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "$RUNNER_TEMP/buildx" "$HOME/.docker/cli-plugins"
-          curl --fail --location --proto '=https' --tlsv1.2 \
-            "$BUILDX_URL" \
-            --output "$RUNNER_TEMP/buildx/docker-buildx"
+          scripts/ci/fetch-pinned-release.sh docker/buildx "$BUILDX_VERSION" \
+            "buildx-$BUILDX_VERSION.linux-amd64" "$BUILDX_SHA256" \
+            "$RUNNER_TEMP/buildx/docker-buildx"
           printf '%s  %s\n' \
             "$BUILDX_SHA256" "$RUNNER_TEMP/buildx/docker-buildx" \
             | sha256sum --check -
