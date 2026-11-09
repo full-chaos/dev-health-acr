@@ -611,19 +611,21 @@ func TestChainIdentity_ContainmentGuardsApplyToTheCallerSuppliedRoot(t *testing.
 			"naming a result id belonging to another organization must never inherit that result's confirmed axes")
 	})
 
-	t.Run("a parent from a retired graph epoch is not trusted", func(t *testing.T) {
+	t.Run("a parent from a retired graph epoch still carries its confirmed kind", func(t *testing.T) {
 		t.Parallel()
 		request, seed := chainIdentityFixture()
-		stale := int64(41)
-		seed.graphEpoch = &stale // this investigation binds epoch 0
+		retired := int64(41)
+		seed.graphEpoch = &retired // this investigation binds epoch 0
 		telemetry := &recordingTelemetry{}
 
-		result, err := build(t, seed, telemetry).Investigate(context.Background(), reusePrincipal(), request)
-		if err != nil {
+		if _, err := build(t, seed, telemetry).Investigate(context.Background(), reusePrincipal(), request); err != nil {
 			t.Fatalf("Investigate() error = %v", err)
 		}
-		assertMiss(t, telemetry, result, KindCarryMissStaleGraphEpoch,
-			"a parent generated under a different graph epoch describes a graph this turn is not reading, and must not be carried from")
+		// An expected_kind is a contract vocabulary member, not a graph id:
+		// the epoch does not gate it. The org and same-question guards do.
+		if len(telemetry.kindCarries) != 1 || telemetry.kindCarries[0].outcome != KindCarryHit {
+			t.Fatalf("kind carries = %#v, want exactly one hit", telemetry.kindCarries)
+		}
 	})
 }
 

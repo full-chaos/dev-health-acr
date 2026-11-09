@@ -157,22 +157,21 @@ func TestResolveCarriedKind_SiblingChainInTheSameOrgIsNotAChainLink(t *testing.T
 	}
 }
 
-// TestResolveCarriedKind_RefusesACarrierFromADifferentGraphEpoch is this
-// lane's test 4. A rebuild between turns can legitimately change what a kind
-// even denotes, so the CHAOS-3898 §2.2 ingress taint gate refuses a carrier
-// from another epoch outright rather than trusting it partially -- the same
-// fail-closed check resolveCarriedWindow and resolvePriorSubjectHints apply.
-func TestResolveCarriedKind_RefusesACarrierFromADifferentGraphEpoch(t *testing.T) {
+// TestResolveCarriedKind_CarriesAcrossADifferentGraphEpoch: an expected_kind
+// is a closed contract vocabulary member, not a graph id, so a lifecycle
+// rebuild between turns does not change what it denotes. The carrier's epoch
+// does not gate the kind axis; candidate ids and anchors keep their own gates.
+func TestResolveCarriedKind_CarriesAcrossADifferentGraphEpoch(t *testing.T) {
 	t.Parallel()
 	priorResult := validInvestigationResult()
 	priorResult.ResultID = "result_turn_a"
 	priorResult.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
 		confirmedKindEntry(contractsv1.ContextFabricSubjectTeam, "result_turn_zero", "kindr_turn_zero_01"),
 	}
-	staleEpoch := int64(7)
+	otherEpoch := int64(7)
 	store := &staticResultStore{
 		results:    map[string]InvestigationResult{"result_turn_a": priorResult},
-		graphEpoch: &staleEpoch,
+		graphEpoch: &otherEpoch,
 	}
 	engine := buildCarryTestEngine(t, store)
 
@@ -180,11 +179,8 @@ func TestResolveCarriedKind_RefusesACarrierFromADifferentGraphEpoch(t *testing.T
 	request.PriorCandidateReceipts = []BoundSubjectReceipt{{ResultID: "result_turn_a", ReceiptID: "candr_turn_a_01"}}
 
 	got := engine.resolveCarriedKind(context.Background(), acceptancePrincipal(), request, nil, ResolvedGraphBinding{Epoch: 0}, nil, "")
-	if got.Outcome != KindCarryMissStaleGraphEpoch {
-		t.Fatalf("resolveCarriedKind().Outcome = %q, want %q", got.Outcome, KindCarryMissStaleGraphEpoch)
-	}
-	if got.Kind != "" {
-		t.Fatalf("resolveCarriedKind().Kind = %q, want empty: a carrier from another epoch is never partially trusted", got.Kind)
+	if got.Outcome != KindCarryHit || got.Kind != contractsv1.ContextFabricSubjectTeam {
+		t.Fatalf("resolveCarriedKind() = %#v, want a hit carrying team across the epoch change", got)
 	}
 }
 
@@ -527,21 +523,11 @@ func TestResolveCarriedKind_FailsClosedWhenADepthCouldNotBeFullyScanned(t *testi
 	good.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
 		confirmedKindEntry(contractsv1.ContextFabricSubjectTeam, "result_turn_zero", "kindr_turn_zero_01"),
 	}
-	// The sibling at the SAME depth is refused by the epoch taint gate, so its
-	// kind is never read. It is deliberately given a DIFFERENT kind to make
-	// the stakes concrete: if this test ever goes green while returning a hit,
-	// the engine answered under `team` while an unread sibling said `project`.
-	stale := validInvestigationResult()
-	stale.ResultID = "result_stale_sibling"
-	stale.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
-		confirmedKindEntry(contractsv1.ContextFabricSubjectProject, "result_turn_zero", "kindr_turn_zero_02"),
-	}
-	store := &perResultEpochStore{
-		staticResultStore: staticResultStore{results: map[string]InvestigationResult{
-			"result_readable": good, "result_stale_sibling": stale,
-		}},
-		epochs: map[string]int64{"result_readable": 0, "result_stale_sibling": 7},
-	}
+	// The sibling at the SAME depth cannot be loaded (it is not in the store),
+	// so its kind is never read and may disagree: if this test ever goes
+	// green while returning a hit, the engine answered under `team` while an
+	// unread sibling might have said something else.
+	store := &staticResultStore{results: map[string]InvestigationResult{"result_readable": good}}
 	engine := buildCarryTestEngine(t, store)
 
 	request := validInvestigationRequest()
@@ -552,8 +538,8 @@ func TestResolveCarriedKind_FailsClosedWhenADepthCouldNotBeFullyScanned(t *testi
 	if got.Outcome == KindCarryHit {
 		t.Fatalf("resolveCarriedKind() = %#v, want a miss: a depth with an unreadable sibling cannot prove the hit is unique", got)
 	}
-	if got.Outcome != KindCarryMissStaleGraphEpoch {
-		t.Fatalf("resolveCarriedKind().Outcome = %q, want %q (what truncated the scan)", got.Outcome, KindCarryMissStaleGraphEpoch)
+	if got.Outcome != KindCarryMissUnloadable {
+		t.Fatalf("resolveCarriedKind().Outcome = %q, want %q (what truncated the scan)", got.Outcome, KindCarryMissUnloadable)
 	}
 	if got.Kind != "" {
 		t.Fatalf("resolveCarriedKind().Kind = %q, want empty", got.Kind)
@@ -681,31 +667,18 @@ func TestResolveCarriedKind_DoesNotDescendPastATruncatedDepth(t *testing.T) {
 		ReceiptID: "winr_depth1_01", Provenance: contractsv1.ContextFabricStructureClarificationConfirmed,
 		Disposition: contractsv1.ContextFabricStructureDispositionApplied,
 	}}
-	// Depth 0, UNREADABLE (refused by the epoch taint gate), and it holds a
+	// Depth 0, UNREADABLE (not in the store): it may hold a nearer or a
 	// conflicting kind that the walk must never get to ignore.
-	unreadable := validInvestigationResult()
-	unreadable.ResultID = "result_depth0_unreadable"
-	unreadable.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
-		confirmedKindEntry(contractsv1.ContextFabricSubjectProject, "result_older", "kindr_older_01"),
-	}
 	// Depth 1, readable, confirms a DIFFERENT kind.
 	deeper := validInvestigationResult()
 	deeper.ResultID = "result_depth1"
 	deeper.ConfirmedStructure = []contractsv1.ContextFabricConfirmedStructureEntry{
 		confirmedKindEntry(contractsv1.ContextFabricSubjectTeam, "result_older", "kindr_older_02"),
 	}
-	store := &perResultEpochStore{
-		staticResultStore: staticResultStore{results: map[string]InvestigationResult{
-			"result_depth0_breadcrumb": breadcrumb,
-			"result_depth0_unreadable": unreadable,
-			"result_depth1":            deeper,
-		}},
-		epochs: map[string]int64{
-			"result_depth0_breadcrumb": 0,
-			"result_depth0_unreadable": 7, // refused
-			"result_depth1":            0,
-		},
-	}
+	store := &staticResultStore{results: map[string]InvestigationResult{
+		"result_depth0_breadcrumb": breadcrumb,
+		"result_depth1":            deeper,
+	}}
 	engine := buildCarryTestEngine(t, store)
 
 	request := validInvestigationRequest()
@@ -719,8 +692,8 @@ func TestResolveCarriedKind_DoesNotDescendPastATruncatedDepth(t *testing.T) {
 	if got.Kind != "" {
 		t.Fatalf("resolveCarriedKind().Kind = %q, want empty", got.Kind)
 	}
-	if got.Outcome != KindCarryMissStaleGraphEpoch {
-		t.Fatalf("resolveCarriedKind().Outcome = %q, want %q -- the reason the depth was truncated, reported at that depth", got.Outcome, KindCarryMissStaleGraphEpoch)
+	if got.Outcome != KindCarryMissUnloadable {
+		t.Fatalf("resolveCarriedKind().Outcome = %q, want %q -- the reason the depth was truncated, reported at that depth", got.Outcome, KindCarryMissUnloadable)
 	}
 }
 
