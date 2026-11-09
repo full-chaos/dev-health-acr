@@ -9,9 +9,11 @@ import (
 )
 
 // Every table on the teams and projects cursor but the membership producer
-// (membership_read_telemetry.go) states its read the same way: per page, the
-// rows its statement returned and the rows the shared cursor moved past, one
-// line per table per page, and one summary per table when the read drains.
+// (membership_read_telemetry.go) states its read the same way: per statement,
+// the rows it returned and the rows the shared cursor moved past, one line per
+// table per statement, and one summary per table when the read drains. A
+// statement that returned no row and found nothing beyond its limit is a
+// drain probe: it is counted in the summary's statements and writes no line.
 // A row the cursor moved past twice outside a replayed page is an error line.
 // No line carries a row id: the last key is logged as a digest.
 
@@ -33,6 +35,9 @@ type tableReadState struct {
 	pages         []*tablePage // not logged yet
 	seen          map[uint64]struct{}
 	pagesWithRows int
+	// read: the table ran a statement or the cursor moved past its rows since
+	// the last log. lastDrained: the last of those found nothing more.
+	read, lastDrained bool
 }
 
 // tableReadLedger lives as long as its presenceTelemetryLedger: one run.
@@ -57,6 +62,9 @@ func (l *tableReadLedger) state(table string) *tableReadState {
 
 // recordTableStatement notes one statement of a non-membership table: rows are
 // the rows it returned inside its limit, more is whether rows lay beyond it.
+// It decides what the statement shows: a statement that returned a row or
+// found more is a page and writes one line; one that returned no row and found
+// nothing more is a drain probe, counted and not a page.
 func (l *presenceTelemetryLedger) recordTableStatement(table string, rows []candidate, more bool) {
 	if l == nil || table == membershipTable {
 		return
@@ -65,6 +73,10 @@ func (l *presenceTelemetryLedger) recordTableStatement(table string, rows []cand
 	defer l.mu.Unlock()
 	st := l.tables.state(table)
 	st.statements++
+	st.read, st.lastDrained = true, len(rows) == 0 && !more
+	if st.lastDrained {
+		return
+	}
 	page := &tablePage{n: st.statements, more: more, statementRows: len(rows)}
 	if len(rows) > 0 {
 		last := rows[len(rows)-1]
@@ -93,6 +105,7 @@ func (l *presenceTelemetryLedger) recordTableConsumed(all []candidate) {
 			if len(st.pages) == 0 {
 				st.statements++
 				st.pages = append(st.pages, &tablePage{n: st.statements})
+				st.read, st.lastDrained = true, true
 			}
 			page = st.pages[len(st.pages)-1]
 			pages[c.table], inPage[c.table] = page, map[uint64]struct{}{}
@@ -141,11 +154,11 @@ func (l *presenceTelemetryLedger) tableConsumedTotal(table string) int {
 	return 0
 }
 
-// logTableReadPages writes one line per table for every statement that
-// returned or consumed a row, and one summary per table when the last
-// statements find every table drained: after rows were consumed, or at the
-// first empty read of a run that started from an empty cursor. A call that
-// failed writes no summary; it stays owed.
+// logTableReadPages writes one line for every page the statements recorded,
+// and one summary per table when the last statements find every table
+// drained: after rows were consumed, or at the first empty read of a run that
+// started from an empty cursor. A call that failed writes no summary; it stays
+// owed.
 func logTableReadPages(ctx context.Context, logger *slog.Logger, orgID string, ledger *presenceTelemetryLedger) {
 	if logger == nil || ledger == nil {
 		return
@@ -160,22 +173,21 @@ func logTableReadPages(ctx context.Context, logger *slog.Logger, orgID string, l
 	run := ledger.membership.run
 	var reports []tableReport
 	drained := t.summaryOwed
-	hasPages := false
+	read := false
 	for _, name := range t.order {
 		st := t.byTable[name]
 		report := tableReport{name: name, pages: st.pages, total: len(st.seen), final: len(st.seen), pagesWithRows: st.pagesWithRows, statement: st.statements}
 		for _, page := range st.pages {
 			report.total -= page.consumedNew
 		}
-		if len(st.pages) > 0 {
-			hasPages = true
-			last := st.pages[len(st.pages)-1]
-			drained = drained && !last.more && last.statementRows == 0
+		if st.read {
+			read = true
+			drained = drained && st.lastDrained
 		}
-		st.pages = nil
+		st.pages, st.read, st.lastDrained = nil, false, false
 		reports = append(reports, report)
 	}
-	drained = drained && hasPages && !t.failed
+	drained = drained && read && !t.failed
 	t.failed = false
 	if drained {
 		t.summaryOwed = false
@@ -185,9 +197,6 @@ func logTableReadPages(ctx context.Context, logger *slog.Logger, orgID string, l
 	for _, report := range reports {
 		for _, page := range report.pages {
 			report.total += page.consumedNew
-			if page.statementRows+page.consumedRows == 0 {
-				continue
-			}
 			lastStamp := ""
 			if !page.lastStamp.IsZero() {
 				lastStamp = page.lastStamp.UTC().Format(time.RFC3339Nano)

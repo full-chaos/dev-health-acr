@@ -15895,8 +15895,8 @@
       "run",
       "page_n"
     ],
-    "bounded_aggregation": "at most one line per table per page, and only for a table with a statement row or a consumed row in the page; at most five tables. No row id: the last key is a digest.",
-    "unbounded_reason": "one line per page of the cursor walk for each table that has a row in the page, so the count follows the rows the organization holds in these tables divided by the page size.",
+    "bounded_aggregation": "at most one line per statement of a table that returned a row or found rows beyond its limit, and one per page that moved the cursor past rows of a table with no such statement; at most five tables. No row id: the last key is a digest.",
+    "unbounded_reason": "one line per statement of a table that returned a row or found rows beyond its limit, so the count follows the rows the organization holds in these tables divided by the page size.",
     "fields": [
       {
         "key": "org_id",
