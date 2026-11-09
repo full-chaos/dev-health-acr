@@ -335,7 +335,7 @@ func TestComposeCarriedWindowEntry_NilOnEveryMissOutcome(t *testing.T) {
 	t.Parallel()
 	for _, outcome := range []WindowCarryOutcome{
 		WindowCarryNotAttempted, WindowCarryMissNoReference, WindowCarryMissUnloadable,
-		WindowCarryMissStaleGraphEpoch, WindowCarryMissNoConfirmedWindow, WindowCarryMissDepthExceeded,
+		WindowCarryMissNoConfirmedWindow, WindowCarryMissDepthExceeded,
 	} {
 		if got := composeCarriedWindowEntry(windowCarryResult{Outcome: outcome}); got != nil {
 			t.Fatalf("composeCarriedWindowEntry(%q) = %#v, want nil", outcome, got)

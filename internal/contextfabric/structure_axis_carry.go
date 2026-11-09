@@ -73,10 +73,6 @@ const (
 	// KindCarryMissUnloadable: every reachable candidate failed to load or
 	// named an empty result id.
 	KindCarryMissUnloadable KindCarryOutcome = "miss_unloadable"
-	// KindCarryMissStaleGraphEpoch has no producer: the kind walk does not
-	// gate on the graph epoch (a kind is not a graph id). A carry across a
-	// rebuild is reported by the line's other_epoch_visited count instead.
-	KindCarryMissStaleGraphEpoch KindCarryOutcome = "miss_stale_graph_epoch"
 	// KindCarryMissNoConfirmedKind: every reachable, loadable result carried
 	// no receipt-confirmed expected_kind entry.
 	KindCarryMissNoConfirmedKind KindCarryOutcome = "miss_no_confirmed_kind"

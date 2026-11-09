@@ -98,10 +98,6 @@ const (
 	// load (InvestigationResultStore.Get error) or named an empty
 	// ResultID/ReceiptID pair.
 	WindowCarryMissUnloadable WindowCarryOutcome = "miss_unloadable"
-	// WindowCarryMissStaleGraphEpoch has no producer: the window walk does
-	// not gate on the graph epoch (a window is not a graph id). A carry
-	// across a rebuild is reported by the line's other_epoch_visited count.
-	WindowCarryMissStaleGraphEpoch WindowCarryOutcome = "miss_stale_graph_epoch"
 	// WindowCarryMissNoConfirmedWindow: every reachable, loadable result in
 	// the chain carried either no window at all or one that was
 	// ITSELF inferred_default -- nothing to carry.
