@@ -37,8 +37,10 @@ grep -Fq 'JWT_SECRET_KEY: "${jwt}"' "$driver" \
   || fail 'the ACR migration and runtime environments must replace inherited local-dev variables'
 [[ "$(grep -Fc 'ports: !override []' "$driver")" -eq 4 ]] \
   || fail 'the acceptance overlay must remove inherited infrastructure and ACR API ports'
-grep -Fq 'volumes: !override []' "$driver" \
+grep -Fq 'volumes: !override' "$driver" \
   || fail 'the ACR API must remove inherited local-dev bind mounts'
+grep -Fq -- '- { type: volume, source: acr_workload_bootstrap, target: /run/workload, read_only: true }' "$driver" \
+  || fail 'the ACR API must mount only the read-only workload bootstrap volume'
 grep -Fq 'depends_on: !override' "$driver" \
   || fail 'the ACR API must replace inherited local-dev dependencies'
 if grep -Eq 'ACR_(POSTGRES_MIGRATION_DSN|POSTGRES_DSN|CLICKHOUSE_DSN|ALLOW_INSECURE_POSTGRES): !reset' "$driver"; then
@@ -310,8 +312,8 @@ grep -Fq 'the ops api service reads ClickHouse database' "$script" \
 
 grep -Fq 'ACR_DEVICE_VERIFICATION_URL' "$driver" \
   || fail 'the isolated ACR runtime must receive the concrete web device verification URL'
-grep -Fq 'compose logs --no-color clickhouse migrate go-api-roles go-api acr-migrate acr-api acr-tls-proxy' "$driver" \
-  || fail 'failed isolated runs must retain the TLS proxy diagnostics for device-login transport failures'
+grep -Fq 'compose logs --no-color clickhouse migrate go-api-roles go-api auth-provision auth-owner-grants auth-migrate auth-grants auth-fence-init auth-workload-seed auth-workload-subject auth-service auth-issuer acr-migrate acr-api acr-tls-proxy' "$driver" \
+  || fail 'failed isolated runs must retain the TLS proxy diagnostics for device-login transport failures (and the auth stack the workload token comes from)'
 grep -Fq 'run_device_login_lifecycle' "$script" \
   || fail 'the live gate must exercise CLI login through web approval and lifecycle commands'
 grep -Fq 'REDIS_URL: redis://valkey:6379/0' "$script" \
