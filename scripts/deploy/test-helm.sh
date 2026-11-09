@@ -527,7 +527,7 @@ case "$scenario" in
   entitlement-credential-null)
     printf 'scenario: entitlement-credential-null (null credential renders byte-equal to the recorded token-mode render)\n'
     testdata="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/testdata"
-    render -f "$testdata/entitlement-token-mode.values.yaml" --set-json 'config.entitlement.credential=null' | grep -v ' checksum/' >"$workdir/ent-null.yaml"
+    render -f "$testdata/entitlement-token-mode.values.yaml" --set-json 'config.entitlement.credential=null' | grep -v -e ' checksum/' -e '^$' >"$workdir/ent-null.yaml"
     cmp -s "$testdata/entitlement-token-mode.render.golden.yaml" "$workdir/ent-null.yaml" || { diff -u "$testdata/entitlement-token-mode.render.golden.yaml" "$workdir/ent-null.yaml" >&2 || true; fail_gate "entitlement-credential-null: the render differs from the recorded token-mode render"; }
     printf 'RESULT: scenario entitlement-credential-null passed\n'
     exit 0 ;;
@@ -573,7 +573,8 @@ case "$scenario" in
     printf 'scenario: entitlement-token-mode-unchanged (token-mode values with the key unset render byte-equal to the recorded render)\n'
     testdata="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/testdata"
     # The checksum/* pod annotations are content hashes; the recorded render leaves them out.
-    render -f "$testdata/entitlement-token-mode.values.yaml" | grep -v ' checksum/' >"$workdir/ent-unchanged.yaml"
+    # Empty lines differ between helm versions, so the recorded render leaves them out too.
+    render -f "$testdata/entitlement-token-mode.values.yaml" | grep -v -e ' checksum/' -e '^$' >"$workdir/ent-unchanged.yaml"
     cmp -s "$testdata/entitlement-token-mode.render.golden.yaml" "$workdir/ent-unchanged.yaml" || { diff -u "$testdata/entitlement-token-mode.render.golden.yaml" "$workdir/ent-unchanged.yaml" >&2 || true; fail_gate "entitlement-token-mode: the render differs from the recorded render"; }
     printf 'RESULT: scenario entitlement-token-mode-unchanged passed\n'
     exit 0 ;;

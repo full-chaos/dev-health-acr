@@ -48,7 +48,6 @@ spec:
     - ports:
         - protocol: TCP
           port: 8091
-
 ---
 # Source: acr/templates/pdb.yaml
 apiVersion: policy/v1
@@ -71,7 +70,6 @@ spec:
       app.kubernetes.io/name: acr
       app.kubernetes.io/instance: acr-test
       app.kubernetes.io/component: api
-
 ---
 # Source: acr/templates/serviceaccount-api.yaml
 apiVersion: v1
@@ -88,7 +86,6 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: dev-health-acr
 automountServiceAccountToken: false
-
 ---
 # Source: acr/templates/serviceaccount.yaml
 apiVersion: v1
@@ -105,7 +102,6 @@ metadata:
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: dev-health-acr
 automountServiceAccountToken: false
-
 ---
 # Source: acr/templates/configmap.yaml
 apiVersion: v1
@@ -150,7 +146,6 @@ data:
   ACR_DEV_HEALTH_ENTITLEMENT_URL: "http://ops.example:8091"
   ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT: "5s"
   ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: "/var/run/acr/entitlement/token"
-
 ---
 # Source: acr/templates/service.yaml
 apiVersion: v1
@@ -177,7 +172,6 @@ spec:
       port: 8080
       targetPort: http
       protocol: TCP
-
 ---
 # Source: acr/templates/deployment.yaml
 apiVersion: apps/v1
@@ -423,7 +417,6 @@ spec:
                   path: token
                   audience: "dev-health-workload-exchange"
                   expirationSeconds: 600
-
 ---
 # Source: acr/templates/hpa.yaml
 apiVersion: autoscaling/v2
@@ -459,7 +452,6 @@ spec:
         target:
           type: Utilization
           averageUtilization: 80
-
 ---
 # Source: acr/templates/httproute.yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -529,7 +521,6 @@ spec:
     - ports:
         - protocol: TCP
           port: 5432
-
 ---
 # Source: acr/templates/migration-prereqs.yaml
 apiVersion: v1
@@ -550,7 +541,6 @@ metadata:
     "helm.sh/hook-weight": "-10"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 automountServiceAccountToken: false
-
 ---
 # Source: acr/templates/migration-prereqs.yaml
 apiVersion: v1
@@ -574,7 +564,6 @@ data:
   ACR_ENVIRONMENT: "production"
   ACR_LOG_LEVEL: "debug"
   ACR_POSTGRES_CONNECTION_KIND: "direct"
-
 ---
 # Source: acr/templates/migration-job.yaml
 apiVersion: batch/v1
@@ -656,7 +645,6 @@ spec:
         - name: tmp
           emptyDir:
             medium: Memory
-
 ---
 # Source: acr/templates/runtime-acl-job.yaml
 apiVersion: batch/v1
@@ -752,4 +740,3 @@ spec:
         - name: tmp
           emptyDir:
             medium: Memory
-
