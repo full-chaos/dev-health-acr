@@ -11,6 +11,8 @@ least-privilege runtime credentials; acr-mcp is a separate workload.
 {{- include "acr.validateShutdownBudget" . -}}
 {{- $image := include "acr.image" . -}}
 {{- $remoteEntitlement := include "acr.remoteEntitlement" . -}}
+{{- $tokenMounted := include "acr.entitlementTokenMounted" . -}}
+{{- $caMounted := and $remoteEntitlement .Values.config.entitlementCaBundle.existingSecret -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -80,19 +82,21 @@ spec:
           {{- end }}
         {{- end }}
       {{- end }}
-      {{- if $remoteEntitlement }}
+      {{- if or $tokenMounted $caMounted }}
       initContainers:
         - name: prepare-entitlement-token
           image: {{ include "acr.tokenCopyImage" . | quote }}
-          command: ["sh", "-c", 'umask 077 && cp /source/{{ .Values.config.entitlement.tokenFileName }} /target/{{ .Values.config.entitlement.tokenFileName }} && if [ -f /source-ca/ca.crt ]; then cp /source-ca/ca.crt /target-ca/ca.crt; fi']
+          command: ["sh", "-c", 'umask 077{{ if $tokenMounted }} && cp /source/{{ .Values.config.entitlement.tokenFileName }} /target/{{ .Values.config.entitlement.tokenFileName }}{{ end }} && if [ -f /source-ca/ca.crt ]; then cp /source-ca/ca.crt /target-ca/ca.crt; fi']
           securityContext:
             {{- include "acr.containerSecurityContext" . | nindent 12 }}
           volumeMounts:
+            {{- if $tokenMounted }}
             - name: entitlement-token-source
               mountPath: /source
               readOnly: true
             - name: entitlement-token
               mountPath: /target
+            {{- end }}
             {{- if .Values.config.entitlementCaBundle.existingSecret }}
             - name: entitlement-ca-source
               mountPath: /source-ca
@@ -321,7 +325,7 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            {{- if $remoteEntitlement }}
+            {{- if $tokenMounted }}
             - name: entitlement-token
               mountPath: {{ .Values.config.entitlement.tokenMountPath | quote }}
               readOnly: true
@@ -360,7 +364,7 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-        {{- if $remoteEntitlement }}
+        {{- if $tokenMounted }}
         - name: entitlement-token
           emptyDir:
             medium: Memory
@@ -370,6 +374,8 @@ spec:
             items:
               - key: {{ .Values.credentials.entitlementToken.key | default "token" | quote }}
                 path: {{ .Values.config.entitlement.tokenFileName | quote }}
+        {{- end }}
+        {{- if $remoteEntitlement }}
         - name: entitlement-ca
           emptyDir:
             medium: Memory

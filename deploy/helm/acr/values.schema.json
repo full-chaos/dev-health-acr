@@ -277,7 +277,8 @@
             "url": { "type": "string" },
             "timeout": { "type": "string" },
             "tokenMountPath": { "type": "string" },
-            "tokenFileName": { "type": "string" }
+            "tokenFileName": { "type": "string" },
+            "credential": { "type": "string", "enum": ["", "service_token", "workload"] }
           }
         },
         "postgresCaBundle": {

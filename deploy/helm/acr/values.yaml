@@ -98,6 +98,12 @@ config:
     # Secret (see credentials.entitlementToken).
     tokenMountPath: /var/run/acr/entitlement
     tokenFileName: token
+    # ""/service_token: acr-api sends the service token read from the file and
+    # credentials.entitlementToken.existingSecret is required. workload: acr-api
+    # sends its auth workload token (needs authWorkloadClient.enabled), never
+    # reads the file, and the token Secret is optional (when set it is still
+    # mounted, for a rollback). Set it here, not in deployment.extraEnv.
+    credential: ""
   # Optional PEM CA bundles mounted from existing Secrets (references only).
   postgresCaBundle:
     existingSecret: ""
@@ -183,7 +189,8 @@ credentials:
   purge:
     existingSecret: ""
     postgresDsnKey: ACR_POSTGRES_PURGE_DSN
-  # Bearer token used to authenticate to the Dev Health Ops entitlement service.
+  # Bearer token used to authenticate to the Dev Health Ops entitlement service. Optional when
+  # config.entitlement.credential=workload.
   entitlementToken:
     existingSecret: ""
     key: token
