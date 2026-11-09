@@ -156,6 +156,7 @@ for wf in ci.yml:3 release.yml:2; do
     n=$((n + 1))
     name="$(printf '%s' "${blk}" | tr '\037' '\n' | sed -n '1s/.*Install checksum-verified //p')"
     body="$(printf '%s' "${blk}" | tr '\037' '\n')"
+    # shellcheck disable=SC2016
     if printf '%s\n' "${body}" | grep -q 'scripts/ci/fetch-pinned-release.sh ' \
       && printf '%s\n' "${body}" | grep -qF 'GH_TOKEN: ${{ github.token }}' \
       && printf '%s\n' "${body}" | grep -q 'sha256sum --check -'; then
