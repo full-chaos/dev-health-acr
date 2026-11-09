@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
@@ -51,7 +52,52 @@ func TestOwnershipEdgeReturnsWhenAnAmbiguousKeyResolves(t *testing.T) {
 
 	project("REASSERT-Q", "REASSERT-OTHER", t0.Add(2*time.Hour))
 	if _, back := drainUntil(t, ctx, fixture, cursor, func(b contextfabric.ProjectionBatch) bool { return hasRelationship(b, edge) }); !back {
+		logStoredGroup(t, ctx, fixture, identity.JoinSegments("github", "REASSERT-P", "TEAM-GITHUB", "native"), cursor)
 		t.Fatalf("%q did not come back after the ambiguity resolved", edge)
+	}
+}
+
+// logStoredGroup logs what the store holds for one group, beside the cursor
+// the walk read from: every log row, the current row, and the oracle's row.
+func logStoredGroup(t *testing.T, ctx context.Context, fixture *ownershipFixture, rowKey, cursor string) {
+	t.Helper()
+	t.Logf("cursor position %+v", decodeCursorPosition(t, cursor))
+	for _, q := range []string{
+		`SELECT 'log', toString(stored_at), edge_suppressed, is_deleted, content_hash FROM project_team_ownership_groups_log WHERE org_id = ? AND row_key = ? ORDER BY stored_at`,
+		`SELECT 'current', toString(stored_at), edge_suppressed, is_deleted, content_hash FROM project_team_ownership_groups_current FINAL WHERE org_id = ? AND row_key = ?`,
+	} {
+		rows, err := fixture.direct.Query(ctx, q, fixture.orgID, rowKey)
+		if err != nil {
+			t.Logf("diagnostic read failed: %v", err)
+			continue
+		}
+		for rows.Next() {
+			var kind, storedAt string
+			var suppressed, deleted uint8
+			var hash uint64
+			if err := rows.Scan(&kind, &storedAt, &suppressed, &deleted, &hash); err != nil {
+				t.Logf("diagnostic scan failed: %v", err)
+				break
+			}
+			t.Logf("%s %s stored_at=%s edge_suppressed=%d is_deleted=%d content_hash=%d", kind, rowKey, storedAt, suppressed, deleted, hash)
+		}
+		rows.Close()
+	}
+	oracle, err := fixture.direct.Query(clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{"org_id": fixture.orgID})), devhealthsource.OwnershipGroupsOracleSQLForTest())
+	if err != nil {
+		t.Logf("oracle read failed: %v", err)
+		return
+	}
+	defer oracle.Close()
+	for oracle.Next() {
+		var key, content string
+		if err := oracle.Scan(&key, &content); err != nil {
+			t.Logf("oracle scan failed: %v", err)
+			return
+		}
+		if key == rowKey {
+			t.Logf("oracle %s %s", key, content)
+		}
 	}
 }
 
@@ -91,7 +137,11 @@ func TestOwnershipEdgeObservedAtIgnoresAnUnrelatedProjectWrite(t *testing.T) {
 		t.Fatalf("first projection ObservedAt = %v, want exactly the seeded stamp %v", observed, t0)
 	}
 
-	project("OBS-UNRELATED", "OBS-OTHER", t0.Add(3*time.Hour))
+	// Written now, as an ingest writer stamps last_synced: the walk's cursor
+	// stands at the stored groups' refresh stamp (about now), so a row stamped
+	// with the fixture's past clock would be behind it.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced) VALUES ('OBS-UNRELATED', ?, 'github', 'OBS-OTHER', 'OBS-UNRELATED', 1, 'started', '', ?, ?)`,
+		fixture.orgID, t0.Add(3*time.Hour), time.Now().UTC().Add(time.Second))
 	unrelatedID, _, err := identity.Derive(identity.KindProject, []string{"github", "OBS-UNRELATED"}, nil)
 	if err != nil {
 		t.Fatal(err)
