@@ -4909,6 +4909,7 @@ type KindCarryFields struct {
 	SeedSource        string
 	ViaStoredAncestry bool
 	Visited           int
+	OtherEpochVisited int
 	WalkMs            int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every KindCarryFields uniformly, set ONLY by NewKindCarryFields below. A caller
@@ -4923,7 +4924,7 @@ type KindCarryFields struct {
 
 // NewKindCarryFields is the generated constructor for KindCarryFields -- every
 // field KindCarry.Fields declares is a required parameter.
-func NewKindCarryFields(orgID string, outcome string, chainDepth int, carriedKind string, redeemedKind string, seedSource string, viaStoredAncestry bool, visited int, walkMs int) KindCarryFields {
+func NewKindCarryFields(orgID string, outcome string, chainDepth int, carriedKind string, redeemedKind string, seedSource string, viaStoredAncestry bool, visited int, otherEpochVisited int, walkMs int) KindCarryFields {
 	return KindCarryFields{
 		OrgID:             orgID,
 		Outcome:           outcome,
@@ -4933,6 +4934,7 @@ func NewKindCarryFields(orgID string, outcome string, chainDepth int, carriedKin
 		SeedSource:        seedSource,
 		ViaStoredAncestry: viaStoredAncestry,
 		Visited:           visited,
+		OtherEpochVisited: otherEpochVisited,
 		WalkMs:            walkMs,
 		constructed:       true,
 	}
@@ -4959,6 +4961,7 @@ func (f KindCarryFields) SlogArgs() []any {
 		"seed_source", contextfabric.SanitizeLogAttr(f.SeedSource),
 		"via_stored_ancestry", f.ViaStoredAncestry,
 		"visited", f.Visited,
+		"other_epoch_visited", f.OtherEpochVisited,
 		"walk_ms", f.WalkMs,
 	}
 }
@@ -8904,6 +8907,7 @@ type WindowCarryFields struct {
 	SeedSource        string
 	ViaStoredAncestry bool
 	Visited           int
+	OtherEpochVisited int
 	WalkMs            int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every WindowCarryFields uniformly, set ONLY by NewWindowCarryFields below. A caller
@@ -8918,7 +8922,7 @@ type WindowCarryFields struct {
 
 // NewWindowCarryFields is the generated constructor for WindowCarryFields -- every
 // field WindowCarry.Fields declares is a required parameter.
-func NewWindowCarryFields(orgID string, outcome string, chainDepth int, seedSource string, viaStoredAncestry bool, visited int, walkMs int) WindowCarryFields {
+func NewWindowCarryFields(orgID string, outcome string, chainDepth int, seedSource string, viaStoredAncestry bool, visited int, otherEpochVisited int, walkMs int) WindowCarryFields {
 	return WindowCarryFields{
 		OrgID:             orgID,
 		Outcome:           outcome,
@@ -8926,6 +8930,7 @@ func NewWindowCarryFields(orgID string, outcome string, chainDepth int, seedSour
 		SeedSource:        seedSource,
 		ViaStoredAncestry: viaStoredAncestry,
 		Visited:           visited,
+		OtherEpochVisited: otherEpochVisited,
 		WalkMs:            walkMs,
 		constructed:       true,
 	}
@@ -8950,6 +8955,7 @@ func (f WindowCarryFields) SlogArgs() []any {
 		"seed_source", contextfabric.SanitizeLogAttr(f.SeedSource),
 		"via_stored_ancestry", f.ViaStoredAncestry,
 		"visited", f.Visited,
+		"other_epoch_visited", f.OtherEpochVisited,
 		"walk_ms", f.WalkMs,
 	}
 }

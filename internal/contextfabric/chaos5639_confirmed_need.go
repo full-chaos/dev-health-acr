@@ -137,12 +137,12 @@ const (
 	ConfirmedNeedLedgerDroppedIdentityChanged ConfirmedNeedLedgerOutcome = "dropped_identity_changed"
 	// ConfirmedNeedLedgerDroppedStaleGraphEpoch: the parent loaded and its
 	// ledger is non-empty, but the parent carries a DIFFERENT graph epoch (or
-	// none at all) than THIS turn's own binding -- the SAME CHAOS-3898 §2.2
-	// ingress taint gate walkCarriedKind applies to the legacy chain walk,
-	// reused here rather than re-implemented: a rebuild between turns can
-	// change what a remembered kind or anchor even denotes, so a carrier from
-	// another epoch is refused outright, exactly like every other carry axis
-	// in this package.
+	// none at all) than THIS turn's own binding -- the CHAOS-3898 §2.2
+	// ingress taint gate. The ledger is admitted as ONE unit and can hold
+	// graph ids (anchor, candidate, handle), so a carrier from another epoch
+	// is refused whole. Its kind and window are not lost: with the ledger
+	// dropped, the legacy kind and window walks (which apply no epoch gate,
+	// since neither value is a graph id) still read the parent.
 	ConfirmedNeedLedgerDroppedStaleGraphEpoch ConfirmedNeedLedgerOutcome = "dropped_stale_graph_epoch"
 	// ConfirmedNeedLedgerHit: the same question, with a comparable and equal
 	// identity, at the SAME graph epoch. The ledger's entries are available
@@ -302,11 +302,10 @@ func (e *Engine) resolveConfirmedNeedLedger(ctx context.Context, principal stora
 	if stored.SemanticState == nil || len(stored.SemanticState.ConfirmedNeeds) == 0 {
 		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerMissEmpty, Parent: evidence}
 	}
-	// CHAOS-3898 §2.2 ingress taint gate -- IDENTICAL check walkCarriedKind
-	// applies to the legacy chain walk (structure_axis_carry.go). A rebuild
-	// between turns can change what a remembered kind or anchor even
-	// denotes, so a carrier from another epoch is refused outright rather
-	// than trusted partially.
+	// CHAOS-3898 §2.2 ingress taint gate, applied to the whole ledger: it can
+	// hold anchor, candidate and handle entries, which are graph ids a
+	// rebuild can change. Kind and window still reach this turn through the
+	// legacy walks (structure_axis_carry.go, chaos4360_carry.go).
 	if stored.GraphEpoch == nil || *stored.GraphEpoch != binding.Epoch {
 		return confirmedNeedLedgerResult{Outcome: ConfirmedNeedLedgerDroppedStaleGraphEpoch, Parent: evidence}
 	}

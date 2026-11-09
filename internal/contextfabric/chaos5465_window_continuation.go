@@ -1062,8 +1062,9 @@ func (e *Engine) admitWindowContinuation(
 		return decision
 	}
 	decision.CarrierRead = ContinuationCarrierReadOK
-	// The SAME CHAOS-3898 ingress taint gate every other carrier check
-	// applies, and it is applied here even for a preloaded entry's id,
+	// The SAME CHAOS-3898 ingress taint gate the candidate-hint and plan
+	// carriers apply (the kind and window walks do not: their values are not
+	// graph ids), and it is applied here even for a preloaded entry's id,
 	// because this decision is about semantic authority rather than about a
 	// hint: a rebuild between turns can legitimately change what the prior
 	// reading meant.

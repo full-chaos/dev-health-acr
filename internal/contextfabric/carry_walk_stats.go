@@ -7,9 +7,15 @@ import (
 
 // CarryWalkStats is what one carry walk cost: how many prior results it
 // visited and how long it ran. Plain numbers, content-safe by construction.
+//
+// OtherEpochVisited counts the visited results saved under a graph epoch other
+// than this turn's binding, or with no epoch at all. The kind and window walks
+// read such a result like any other (neither value names a graph id), so this
+// is the only place a carry across a lifecycle rebuild shows on the trace.
 type CarryWalkStats struct {
-	Visited  int
-	Duration time.Duration
+	Visited           int
+	OtherEpochVisited int
+	Duration          time.Duration
 }
 
 // WalkMillis is Duration in whole milliseconds.
@@ -33,16 +39,23 @@ func carryWalkRecorderFrom(ctx context.Context) *carryWalkRecorder {
 	return rec
 }
 
-// begin returns the function a walk defers with its final visited count.
-func (r *carryWalkRecorder) begin() func(visited int) {
+// begin returns the function a walk defers with its final counts.
+func (r *carryWalkRecorder) begin() func(visited, otherEpochVisited int) {
 	if r == nil {
-		return func(int) {}
+		return func(int, int) {}
 	}
 	start := r.now()
-	return func(visited int) {
+	return func(visited, otherEpochVisited int) {
 		r.stats.Visited += visited
+		r.stats.OtherEpochVisited += otherEpochVisited
 		r.stats.Duration += r.now().Sub(start)
 	}
+}
+
+// carrierFromOtherEpoch reports whether a loaded carrier was saved under a
+// graph epoch other than binding's, or under none.
+func carrierFromOtherEpoch(stored StoredInvestigationResult, binding ResolvedGraphBinding) bool {
+	return stored.GraphEpoch == nil || *stored.GraphEpoch != binding.Epoch
 }
 
 func (r *carryWalkRecorder) snapshot() CarryWalkStats {

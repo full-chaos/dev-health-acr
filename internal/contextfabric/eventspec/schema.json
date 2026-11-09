@@ -7376,6 +7376,11 @@
         "presence": "required"
       },
       {
+        "key": "other_epoch_visited",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "walk_ms",
         "type": "int",
         "presence": "required"
@@ -13460,6 +13465,11 @@
       },
       {
         "key": "visited",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "other_epoch_visited",
         "type": "int",
         "presence": "required"
       },
