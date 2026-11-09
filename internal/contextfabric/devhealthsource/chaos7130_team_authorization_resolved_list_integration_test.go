@@ -149,10 +149,16 @@ func subCHAOS7130TeamListUsesResolvedOwnership(t *testing.T, ctx context.Context
 
 // A repos row arriving AFTER the ownership row (ownership row untouched)
 // re-projects the team with the resolved slug: the watermark folds in the
-// repos row's last_synced. The row arrives after the first walk, so its stamp
-// is above that walk's cursor, which the stored ownership groups' refresh
-// stamp (server time) can have moved to about now.
+// repos row's last_synced.
+//
+// The row is stamped a minute ago, behind the first walk's cursor, which the
+// stored ownership groups' refresh stamp (server time) moves to about now. The
+// paged read cannot see it; the trailing overlap pass reads it, and a new pass
+// starts one window-pass interval after the last one ended. So the team is not
+// re-projected before that interval and is re-projected after it.
 func subCHAOS7130LateReposRowReprojectsTheTeam(t *testing.T, ctx context.Context, f *ownershipFixture) {
+	clock := time.Now().UTC()
+	f.source.SetClockForTest(func() time.Time { return clock })
 	ownedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	chaos7119Team(t, ctx, f, "team-late", ownedAt)
 	chaos7119Own(t, ctx, f, "team-late", "github", "Acme/Late", nil, ownedAt)
@@ -160,11 +166,20 @@ func subCHAOS7130LateReposRowReprojectsTheTeam(t *testing.T, ctx context.Context
 	if got := chaos7130List(first, "team-late"); !reflect.DeepEqual(got, []string{devhealthsource.NoTeamOwnershipSentinelForTest()}) {
 		t.Fatalf("before the repos row exists the team must be denied by the sentinel, got %v", got)
 	}
-	arrived := decodeCursorPosition(t, first.cursor).Since.Add(time.Second).Truncate(time.Second)
-	chaos7130Repo(t, ctx, f, "71300000-0000-4000-8000-0000000000aa", "acme/late", "github", arrived)
-	second := chaos7139RunFrom(t, ctx, f, first.cursor)
+	synced := time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+	if frontier := decodeCursorPosition(t, first.cursor).Since; !frontier.After(synced) {
+		t.Fatalf("premise: the first walk's cursor %s must stand past the repos row's stamp %s (the refresh stamp moves it to about now)", frontier, synced)
+	}
+	chaos7130Repo(t, ctx, f, "71300000-0000-4000-8000-0000000000aa", "acme/late", "github", synced)
+	clock = clock.Add(devhealthsource.DefaultWindowPassInterval - time.Second)
+	early := chaos7139RunFrom(t, ctx, f, first.cursor)
+	if _, ok := early.entities["team-late"]; ok {
+		t.Fatalf("team-late was re-projected before the window-pass interval: the paged read reached a row behind its cursor")
+	}
+	clock = clock.Add(2 * time.Second)
+	second := chaos7139RunFrom(t, ctx, f, early.cursor)
 	if _, ok := second.entities["team-late"]; !ok {
-		t.Fatalf("team-late was not re-projected after its repos row arrived (watermark misses repos.last_synced)")
+		t.Fatalf("team-late was not re-projected by the overlap pass after its repos row arrived (watermark misses repos.last_synced)")
 	}
 	if got := chaos7130List(second, "team-late"); !reflect.DeepEqual(got, []string{"acme/late"}) {
 		t.Errorf("after the repos row: %v, want [acme/late]", got)
