@@ -1285,7 +1285,7 @@ func (s *TeamsProjectsSource) Enabled() bool {
 	return s != nil && s.enabled
 }
 
-func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
+func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (_ contextfabric.ProjectionBatch, _ bool, err error) {
 	if s == nil {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: teams/projects source is not configured")
 	}
@@ -1346,7 +1346,12 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	presence := s.presenceLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logPresenceTelemetry(ctx, s.logger, checkpoint.OrgID, presence)
 	defer logMembershipPages(ctx, s.logger, checkpoint.OrgID, presence)
-	defer logTableReadPages(ctx, s.logger, checkpoint.OrgID, presence)
+	defer func() {
+		if err != nil {
+			presence.recordTableCallFailed()
+		}
+		logTableReadPages(ctx, s.logger, checkpoint.OrgID, presence)
+	}()
 	teamAuth := s.teamAuthLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logTeamAuthorizationTelemetry(ctx, s.logger, checkpoint.OrgID, teamAuth)
 	repoOwnership := s.repositoryOwnershipLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)

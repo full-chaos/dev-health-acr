@@ -40,6 +40,8 @@ type tableReadLedger struct {
 	order       []string
 	byTable     map[string]*tableReadState
 	summaryOwed bool
+	// failed: the call returned an error, so not every table answered.
+	failed bool
 }
 
 func (l *tableReadLedger) state(table string) *tableReadState {
@@ -114,6 +116,17 @@ func (l *presenceTelemetryLedger) recordTableConsumed(all []candidate) {
 	}
 }
 
+// recordTableCallFailed notes that the call ended in an error: its statements
+// do not show that every table drained.
+func (l *presenceTelemetryLedger) recordTableCallFailed() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.tables.failed = true
+}
+
 // tableConsumedTotal is the distinct rows of one table the cursor moved past
 // in this run.
 func (l *presenceTelemetryLedger) tableConsumedTotal(table string) int {
@@ -131,7 +144,8 @@ func (l *presenceTelemetryLedger) tableConsumedTotal(table string) int {
 // logTableReadPages writes one line per table for every statement that
 // returned or consumed a row, and one summary per table when the last
 // statements find every table drained: after rows were consumed, or at the
-// first empty read of a run that started from an empty cursor.
+// first empty read of a run that started from an empty cursor. A call that
+// failed writes no summary; it stays owed.
 func logTableReadPages(ctx context.Context, logger *slog.Logger, orgID string, ledger *presenceTelemetryLedger) {
 	if logger == nil || ledger == nil {
 		return
@@ -161,7 +175,8 @@ func logTableReadPages(ctx context.Context, logger *slog.Logger, orgID string, l
 		st.pages = nil
 		reports = append(reports, report)
 	}
-	drained = drained && hasPages
+	drained = drained && hasPages && !t.failed
+	t.failed = false
 	if drained {
 		t.summaryOwed = false
 	}
