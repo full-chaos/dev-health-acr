@@ -163,3 +163,31 @@ func TestPagedWalkReportsEachTablesStatementAndConsumption(t *testing.T) {
 		}
 	}
 }
+
+// statement_rows and consumed_rows differ when the page cut leaves rows of a
+// statement past the cursor, and a statement that says rows lie beyond its
+// limit is not a drained read even when it returned none.
+func TestTableReadLedgerKeepsStatementAndConsumedRowsApartAndNeedsNoMoreRowsToDrain(t *testing.T) {
+	at := time.Date(2026, 10, 1, 4, 37, 41, 0, time.UTC)
+	team := func(key string) candidate { return tableRow("teams", key, at) }
+	ledger := &presenceTelemetryLedger{}
+	ledger.recordTableStatement("teams", []candidate{team("a"), team("b"), team("c")}, true)
+	ledger.recordTableConsumed([]candidate{team("a"), team("b")})
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	logTableReadPages(context.Background(), logger, "org", ledger)
+	if !strings.Contains(logs.String(), "table=teams run=0 page_n=1 statement_rows=3 statement_more=true consumed_rows=2 consumed_new=2 consumed_total=2") {
+		t.Fatalf("statement and consumed rows are not kept apart:\n%s", logs.String())
+	}
+	logs.Reset()
+	ledger.recordTableStatement("teams", nil, true)
+	logTableReadPages(context.Background(), logger, "org", ledger)
+	if strings.Contains(logs.String(), "read drained") {
+		t.Fatalf("an empty statement that reports rows beyond its limit drained the read:\n%s", logs.String())
+	}
+	ledger.recordTableStatement("teams", nil, false)
+	logTableReadPages(context.Background(), logger, "org", ledger)
+	if !strings.Contains(logs.String(), "table=teams run=0 rows_total=2 pages=1 statements=3") {
+		t.Fatalf("the read did not drain once the statement ended:\n%s", logs.String())
+	}
+}
