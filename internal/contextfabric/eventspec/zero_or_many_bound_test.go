@@ -27,6 +27,9 @@ var unboundedEvents = []string{
 	"devhealthfacts.team_linked_mix_native_first",
 	"devhealthfacts.team_linked_mix_set",
 	"devhealthfacts.team_pr_link_state_native_first",
+	"devhealthsource.table_read_drained",
+	"devhealthsource.table_read_not_new",
+	"devhealthsource.table_read_page",
 }
 
 // TestEveryZeroOrManyEventIsBoundedExceptTheListedOnes requires every
