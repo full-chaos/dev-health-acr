@@ -98,6 +98,10 @@ func TestTableReadLedgerSummarisesAnEmptyFromScratchRead(t *testing.T) {
 		t.Fatalf("a continued run logged an empty read:\n%s", logs.String())
 	}
 	fromScratch := source.presenceLedgerFor("org", true)
+	logTableReadPages(context.Background(), logger, "org", fromScratch)
+	if logs.Len() != 0 {
+		t.Fatalf("a call that ran no statement wrote a summary:\n%s", logs.String())
+	}
 	fromScratch.recordTableStatement("teams", nil, false)
 	logTableReadPages(context.Background(), logger, "org", fromScratch)
 	if !strings.Contains(logs.String(), "table=teams run=2 rows_total=0 pages=0 statements=1") {
