@@ -708,6 +708,8 @@ func (e *Engine) walkCarriedWindow(ctx context.Context, principal storage.Princi
 		return windowCarryResult{Outcome: WindowCarryMissNoReference}
 	}
 	visited := make(map[string]struct{}, carryChainMaxVisited)
+	finishWalk := carryWalkRecorderFrom(ctx).begin()
+	defer func() { finishWalk(len(visited)) }()
 	// reachedViaAncestry records which frontier ids were reachable ONLY
 	// because a stored parent pointed at them -- see ViaStoredAncestry.
 	reachedViaAncestry := make(map[string]struct{}, carryChainMaxVisited)
@@ -961,9 +963,9 @@ func appendCarriedStructureEntry(entries []contractsv1.ContextFabricConfirmedStr
 // telemetry is unconfigured or carry was never attempted (WindowCarryNotAttempted),
 // mirroring every other "once per non-zero signal" telemetry call in this
 // package.
-func (e *Engine) recordWindowCarry(ctx context.Context, principal storage.Principal, carry windowCarryResult, seedSource CarrySeedSource) {
+func (e *Engine) recordWindowCarry(ctx context.Context, principal storage.Principal, carry windowCarryResult, seedSource CarrySeedSource, walk CarryWalkStats) {
 	if e.telemetry == nil || carry.Outcome == WindowCarryNotAttempted {
 		return
 	}
-	e.telemetry.RecordWindowCarry(ctx, principal, carry.Outcome, carry.ChainDepth, seedSource, carry.ViaStoredAncestry)
+	e.telemetry.RecordWindowCarry(ctx, principal, carry.Outcome, carry.ChainDepth, seedSource, carry.ViaStoredAncestry, walk)
 }

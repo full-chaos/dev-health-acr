@@ -4908,6 +4908,8 @@ type KindCarryFields struct {
 	RedeemedKind      string
 	SeedSource        string
 	ViaStoredAncestry bool
+	Visited           int
+	WalkMs            int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every KindCarryFields uniformly, set ONLY by NewKindCarryFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -4921,7 +4923,7 @@ type KindCarryFields struct {
 
 // NewKindCarryFields is the generated constructor for KindCarryFields -- every
 // field KindCarry.Fields declares is a required parameter.
-func NewKindCarryFields(orgID string, outcome string, chainDepth int, carriedKind string, redeemedKind string, seedSource string, viaStoredAncestry bool) KindCarryFields {
+func NewKindCarryFields(orgID string, outcome string, chainDepth int, carriedKind string, redeemedKind string, seedSource string, viaStoredAncestry bool, visited int, walkMs int) KindCarryFields {
 	return KindCarryFields{
 		OrgID:             orgID,
 		Outcome:           outcome,
@@ -4930,6 +4932,8 @@ func NewKindCarryFields(orgID string, outcome string, chainDepth int, carriedKin
 		RedeemedKind:      redeemedKind,
 		SeedSource:        seedSource,
 		ViaStoredAncestry: viaStoredAncestry,
+		Visited:           visited,
+		WalkMs:            walkMs,
 		constructed:       true,
 	}
 }
@@ -4954,6 +4958,8 @@ func (f KindCarryFields) SlogArgs() []any {
 		"redeemed_kind", contextfabric.SanitizeLogAttr(f.RedeemedKind),
 		"seed_source", contextfabric.SanitizeLogAttr(f.SeedSource),
 		"via_stored_ancestry", f.ViaStoredAncestry,
+		"visited", f.Visited,
+		"walk_ms", f.WalkMs,
 	}
 }
 
@@ -8897,6 +8903,8 @@ type WindowCarryFields struct {
 	ChainDepth        int
 	SeedSource        string
 	ViaStoredAncestry bool
+	Visited           int
+	WalkMs            int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every WindowCarryFields uniformly, set ONLY by NewWindowCarryFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -8910,13 +8918,15 @@ type WindowCarryFields struct {
 
 // NewWindowCarryFields is the generated constructor for WindowCarryFields -- every
 // field WindowCarry.Fields declares is a required parameter.
-func NewWindowCarryFields(orgID string, outcome string, chainDepth int, seedSource string, viaStoredAncestry bool) WindowCarryFields {
+func NewWindowCarryFields(orgID string, outcome string, chainDepth int, seedSource string, viaStoredAncestry bool, visited int, walkMs int) WindowCarryFields {
 	return WindowCarryFields{
 		OrgID:             orgID,
 		Outcome:           outcome,
 		ChainDepth:        chainDepth,
 		SeedSource:        seedSource,
 		ViaStoredAncestry: viaStoredAncestry,
+		Visited:           visited,
+		WalkMs:            walkMs,
 		constructed:       true,
 	}
 }
@@ -8939,6 +8949,8 @@ func (f WindowCarryFields) SlogArgs() []any {
 		"chain_depth", f.ChainDepth,
 		"seed_source", contextfabric.SanitizeLogAttr(f.SeedSource),
 		"via_stored_ancestry", f.ViaStoredAncestry,
+		"visited", f.Visited,
+		"walk_ms", f.WalkMs,
 	}
 }
 

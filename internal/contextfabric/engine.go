@@ -758,7 +758,7 @@ type EngineTelemetry interface {
 	// a carry hit rate can be ATTRIBUTED rather than merely observed -- see
 	// CarrySeedSource. Reported on every outcome, hit or miss, so both share
 	// a denominator per source.
-	RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource, viaStoredAncestry bool)
+	RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource, viaStoredAncestry bool, walk CarryWalkStats)
 	// RecordKindCarry reports the outcome of ONE same-conversation
 	// expected_kind carry attempt -- see KindCarryOutcome's own doc comment
 	// for the closed vocabulary (structure_axis_carry.go). Called at most
@@ -776,7 +776,7 @@ type EngineTelemetry interface {
 	// disagreed. They are in the signature rather than a side channel because
 	// a drop reported without both sides is a decision an operator cannot
 	// check.
-	RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource, viaStoredAncestry bool)
+	RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource, viaStoredAncestry bool, walk CarryWalkStats)
 	// RecordConfirmedNeedLedger (CHAOS-5639) reports the per-need
 	// confirmation ledger's own gate decision -- called at most once per
 	// Investigate call, from resolveConfirmedNeedLedger's own outcome
@@ -3013,8 +3013,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// request.PriorSubjectReceipts -- see carryReferencedResultIDs' own
 		// doc comment (chaos4360_carry.go) for why an unmatched
 		// PriorSubjectReceipts entry must not be able to seed the walk.
-		windowCarry = e.resolveCarriedWindow(carryCtx, principal, request, priorValidatedReceipts, binding)
-		e.recordWindowCarry(ctx, principal, windowCarry, carrySeedSource(request, priorValidatedReceipts))
+		windowWalkCtx, windowWalk := withCarryWalkRecorder(carryCtx, e.now)
+		windowCarry = e.resolveCarriedWindow(windowWalkCtx, principal, request, priorValidatedReceipts, binding)
+		e.recordWindowCarry(ctx, principal, windowCarry, carrySeedSource(request, priorValidatedReceipts), windowWalk.snapshot())
 		if windowCarry.Outcome == WindowCarryHit {
 			effectiveWindow = windowCarry.Window
 		}
@@ -3036,6 +3037,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// axes are independent (each fails closed on its own), and a window
 	// carry miss must not suppress a kind carry hit.
 	var kindCarry kindCarryResult
+	var kindWalk *carryWalkRecorder
 	if !statedExpectedKindThisTurn(request, structureCanon) {
 		// CHAOS-5639: appliedNeeds/confirmedNeedLedger.SourceResultID thread
 		// the per-need confirmation ledger into the SAME gated producer the
@@ -3043,7 +3045,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// inside itself, never in a separate helper, so the value it returns
 		// always passes through statedExpectedKindThisTurn and applyCarryDrop
 		// (resolveCarriedKind's own doc comment).
-		kindCarry = e.resolveCarriedKind(carryCtx, principal, request, priorValidatedReceipts, binding, appliedNeeds, confirmedNeedLedger.SourceResultID)
+		kindWalkCtx, kindWalkRec := withCarryWalkRecorder(carryCtx, e.now)
+		kindWalk = kindWalkRec
+		kindCarry = e.resolveCarriedKind(kindWalkCtx, principal, request, priorValidatedReceipts, binding, appliedNeeds, confirmedNeedLedger.SourceResultID)
 		// Compare and drop BEFORE the disclosure is composed and before the
 		// outcome is recorded, so all three views agree.
 		// CHAOS-5734: a remembered subject_candidate/subject_handle joins the
@@ -3064,7 +3068,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if windowCarry.Outcome == WindowCarryMissQuestionDrift || kindCarry.Outcome == KindCarryMissQuestionDrift {
 		driftRefusedParent = carryParentSeed(request)
 	}
-	e.recordKindCarry(ctx, principal, kindCarry, carrySeedSource(request, priorValidatedReceipts))
+	e.recordKindCarry(ctx, principal, kindCarry, carrySeedSource(request, priorValidatedReceipts), kindWalk.snapshot())
 	carriedStructureEntries := []*contractsv1.ContextFabricConfirmedStructureEntry{
 		composeCarriedWindowEntry(windowCarry),
 		composeCarriedKindEntry(kindCarry),

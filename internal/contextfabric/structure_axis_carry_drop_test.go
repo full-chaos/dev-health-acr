@@ -186,7 +186,7 @@ func TestCarryDrop_TelemetryCarriesBothKinds(t *testing.T) {
 		RedeemedKind: contractsv1.ContextFabricSubjectTeam,
 		Outcome:      KindCarryDroppedRedeemedKindDiffers,
 	}
-	engine.recordKindCarry(context.Background(), acceptancePrincipal(), dropped, CarrySeedReceipt)
+	engine.recordKindCarry(context.Background(), acceptancePrincipal(), dropped, CarrySeedReceipt, CarryWalkStats{})
 
 	if len(telemetry.kindCarries) != 1 {
 		t.Fatalf("kindCarries = %#v, want exactly one record", telemetry.kindCarries)
