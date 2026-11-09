@@ -499,6 +499,9 @@ remote token or CA inputs.
 {{- end -}}
 
 {{- define "acr.validateEntitlementOrigin" -}}
+{{- if not (has (.Values.config.entitlement.credential | default "") (list "" "service_token" "workload")) -}}
+{{- fail (printf "entitlement-credential: config.entitlement.credential %q must be one of \"\", service_token or workload" .Values.config.entitlement.credential) -}}
+{{- end -}}
 {{- $url := .Values.config.entitlement.url | default "" -}}
 {{- $environment := .Values.config.environment -}}
 {{- $tokenSecret := .Values.credentials.entitlementToken.existingSecret | default "" -}}
@@ -746,7 +749,7 @@ env entry beats the ConfigMap (envFrom) silently, so the two together would
 leave the value unread. extraEnv alone (no value set) still renders.
 */}}
 {{- define "acr.validateEnvValueSources" -}}
-{{- $fromValues := dict "ACR_TRUSTED_PROXY_CIDRS" (and .Values.config.trustedProxyCidrs "config.trustedProxyCidrs") "ACR_CORS_ALLOWED_ORIGINS" (and (default dict .Values.config.cors).allowedOrigins "config.cors.allowedOrigins") "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL" (and (include "acr.entitlementWorkload" .) "config.entitlement.credential") -}}
+{{- $fromValues := dict "ACR_TRUSTED_PROXY_CIDRS" (and .Values.config.trustedProxyCidrs "config.trustedProxyCidrs") "ACR_CORS_ALLOWED_ORIGINS" (and (default dict .Values.config.cors).allowedOrigins "config.cors.allowedOrigins") "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL" (and (.Values.config.entitlement.credential | default "") "config.entitlement.credential") -}}
 {{- range $env := .Values.deployment.extraEnv -}}
 {{- $name := toString $env.name -}}
 {{- with (get $fromValues $name) -}}
