@@ -40,6 +40,10 @@ grep -Fq 'JWT_SECRET_KEY: "${jwt}"' "$driver" \
 grep -Fq 'volumes: !override' "$driver" \
   || fail 'the ACR API must remove inherited local-dev bind mounts'
 grep -Fq -- '- { type: volume, source: acr_workload_bootstrap, target: /run/workload, read_only: true }' "$driver" \
+  || fail 'the ACR API must mount the read-only workload bootstrap volume'
+[[ "$(grep -c '^    volumes: !override$' "$driver")" -eq 1 ]] \
+  || fail 'exactly one service list must replace the inherited volumes: the ACR API'
+[[ "$(awk '/^    volumes: !override$/ { inside = 1; next } inside && /^      - / { entries++; next } inside { exit } END { print entries + 0 }' "$driver")" -eq 1 ]] \
   || fail 'the ACR API must mount only the read-only workload bootstrap volume'
 grep -Fq 'depends_on: !override' "$driver" \
   || fail 'the ACR API must replace inherited local-dev dependencies'
