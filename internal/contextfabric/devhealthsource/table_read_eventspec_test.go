@@ -27,6 +27,7 @@ func TestTableReadEventVocabularyIsTheProducerRegistry(t *testing.T) {
 // against their declarations: the page line of every table, the drain summary
 // of every table, and the error line of a page that consumes rows not new.
 func TestTableReadLinesAreCertifiedFromTheConfiguredJSONLogger(t *testing.T) {
+	// devhealthschema:not-a-production-replica the table names below name in-memory fixture tables and ledger rows; no column, type or engine is declared here.
 	ledger := &presenceTelemetryLedger{}
 	plan := sourcePlan{
 		client: keysetRows{}, source: "page_cut_test", version: "v1",
