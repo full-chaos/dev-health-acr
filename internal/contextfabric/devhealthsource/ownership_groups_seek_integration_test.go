@@ -346,10 +346,13 @@ SELECT ?, 'github', 'TEAM-GITHUB', concat(?, leftPad(toString(number), 4, '0')),
 		f.orgID, prefix, prefix, ownershipFirstSeen, ownershipLaterAssertion, uint64(n))
 }
 
-// ownershipPageReadBound is four index granules: a page reads the log
-// granules that hold its keyset range and the current granules that hold its
-// row keys, at most two of each for a contiguous run of keys. The granularity
-// is read from both tables, not assumed; the bound is stated for 8192 only.
+// ownershipPageReadBound is six index granules: the page statement reads the
+// log seek twice (the page itself and the row-key set of the current lookup,
+// ownershipGroupsPageStatement), each at most two granules for a contiguous
+// keyset range, and the current granules that hold the page's row keys, at
+// most two. A page whose range crosses a granule boundary reads all six. The
+// granularity is read from both tables, not assumed; the bound is stated for
+// 8192 only.
 func ownershipPageReadBound(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) uint64 {
 	t.Helper()
 	rows, err := direct.Query(ctx, `SELECT name, toUInt64OrZero(extract(engine_full, 'index_granularity = ([0-9]+)')) FROM system.tables WHERE database = currentDatabase() AND name IN (?, ?)`,
@@ -372,10 +375,10 @@ func ownershipPageReadBound(t *testing.T, ctx context.Context, direct clickhouse
 	}
 	for _, table := range []string{"project_team_ownership_groups_log", "project_team_ownership_groups_current"} {
 		if seen[table] != 8192 {
-			t.Fatalf("%s index_granularity = %d (read from system.tables), the page bound 4 x granularity is stated for 8192 only: restate the bound", table, seen[table])
+			t.Fatalf("%s index_granularity = %d (read from system.tables), the page bound 6 x granularity is stated for 8192 only: restate the bound", table, seen[table])
 		}
 	}
-	return 4 * seen["project_team_ownership_groups_log"]
+	return 6 * seen["project_team_ownership_groups_log"]
 }
 
 // C1: a page's cost is bounded and does not grow with the organization. The
