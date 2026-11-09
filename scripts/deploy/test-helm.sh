@@ -41,6 +41,9 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               entitlement-workload-no-client, entitlement-workload-no-url, entitlement-credential-both-sources,
               entitlement-credential-bad-value, entitlement-token-required, entitlement-remote-required,
               entitlement-service-token-required, entitlement-extraenv-only, entitlement-token-mode-unchanged,
+              entitlement-service-token-extraenv-value, entitlement-service-token-extraenv-valuefrom,
+              entitlement-workload-extraenv-valuefrom, entitlement-empty-extraenv-value, entitlement-empty-extraenv-valuefrom,
+              entitlement-credential-null, entitlement-credential-bad-value-no-schema,
               pgbouncer-missing-pooler, extra-container, direct-with-pooler,
               unsupported-entitlement-scheme, userinfo-url, query-url, fragment-url, unknown-root-key,
               unknown-config-key, alternate-port, mutable-token-copy-image,
@@ -479,6 +482,60 @@ case "$scenario" in
     exit 0 ;;
   entitlement-credential-bad-value)
     negative entitlement-credential-bad-value "credential" \
+      --set-string "config.entitlement.credential=bogus"
+    exit 0 ;;
+  entitlement-service-token-extraenv-value)
+    negative entitlement-service-token-extraenv-value "env-source" \
+      "${ent_prod_args[@]}" \
+      --set-string "config.entitlement.url=http://ops.example:8091" \
+      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
+      --set-string "config.entitlement.credential=service_token" \
+      --set-json 'deployment.extraEnv=[{"name":"ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL","value":"workload"}]'
+    exit 0 ;;
+  entitlement-service-token-extraenv-valuefrom)
+    negative entitlement-service-token-extraenv-valuefrom "env-source" \
+      "${ent_prod_args[@]}" \
+      --set-string "config.entitlement.url=http://ops.example:8091" \
+      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
+      --set-string "config.entitlement.credential=service_token" \
+      --set-json 'deployment.extraEnv=[{"name":"ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL","valueFrom":{"configMapKeyRef":{"name":"x","key":"y"}}}]'
+    exit 0 ;;
+  entitlement-workload-extraenv-valuefrom)
+    negative entitlement-workload-extraenv-valuefrom "env-source" \
+      "${ent_prod_args[@]}" \
+      --set-string "config.entitlement.url=http://ops.example:8091" \
+      "${ent_workload_args[@]}" \
+      --set-json 'deployment.extraEnv=[{"name":"ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL","valueFrom":{"configMapKeyRef":{"name":"x","key":"y"}}}]'
+    exit 0 ;;
+  entitlement-empty-extraenv-value)
+    printf 'scenario: entitlement-empty-extraenv-value (credential "" with an extraEnv value entry renders)\n'
+    ent_render --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
+      --set-string "config.entitlement.credential=" \
+      --set-json 'deployment.extraEnv=[{"name":"ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL","value":"workload"}]' >"$workdir/ent-empty-value.yaml"
+    grep -q 'name: ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL' "$workdir/ent-empty-value.yaml" || fail_gate "entitlement-empty-extraenv-value: the extraEnv entry is missing"
+    printf 'RESULT: scenario entitlement-empty-extraenv-value passed\n'
+    exit 0 ;;
+  entitlement-empty-extraenv-valuefrom)
+    printf 'scenario: entitlement-empty-extraenv-valuefrom (credential "" with an extraEnv valueFrom entry renders)\n'
+    ent_render --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
+      --set-string "config.entitlement.credential=" \
+      --set-json 'deployment.extraEnv=[{"name":"ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL","valueFrom":{"configMapKeyRef":{"name":"x","key":"y"}}}]' >"$workdir/ent-empty-valuefrom.yaml"
+    grep -q 'name: ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL' "$workdir/ent-empty-valuefrom.yaml" || fail_gate "entitlement-empty-extraenv-valuefrom: the extraEnv entry is missing"
+    printf 'RESULT: scenario entitlement-empty-extraenv-valuefrom passed\n'
+    exit 0 ;;
+  entitlement-credential-null)
+    printf 'scenario: entitlement-credential-null (null credential equals unset: token mode)\n'
+    ent_render --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
+      --set-json 'config.entitlement.credential=null' >"$workdir/ent-null.yaml"
+    ent_assert "$workdir/ent-null.yaml" 0 1 1
+    printf 'RESULT: scenario entitlement-credential-null passed\n'
+    exit 0 ;;
+  entitlement-credential-bad-value-no-schema)
+    negative entitlement-credential-bad-value-no-schema "config.entitlement.credential" \
+      "${ent_prod_args[@]}" \
+      --set-string "config.entitlement.url=http://ops.example:8091" \
+      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
+      --skip-schema-validation \
       --set-string "config.entitlement.credential=bogus"
     exit 0 ;;
   entitlement-token-required)
