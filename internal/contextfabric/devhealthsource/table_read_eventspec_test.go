@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
 // The declared vocabulary is the producer registry, not a second list.
@@ -43,9 +44,27 @@ func TestTableReadLinesAreCertifiedFromTheConfiguredJSONLogger(t *testing.T) {
 	// A first read that consumes the same row twice on one page.
 	at := time.Date(2026, 10, 1, 4, 37, 41, 0, time.UTC)
 	dup := &presenceTelemetryLedger{}
-	dup.recordTableStatement("team_repo_ownership", nil, false)
-	dup.recordTableConsumed([]candidate{tableRow("team_repo_ownership", "d", at), tableRow("team_repo_ownership", "d", at)})
+	twice := []candidate{tableRow("team_repo_ownership", "d", at), tableRow("team_repo_ownership", "d", at)}
+	dup.recordTableStatement("team_repo_ownership", twice, false)
+	dup.recordTableConsumed(twice)
 	logTableReadPages(context.Background(), slog.New(slog.NewJSONHandler(&logs, nil)), "org", dup)
+
+	// A statement that returned no row but says rows lie beyond its limit,
+	// refused by the page bound of the real paged read.
+	refusedLedger := &presenceTelemetryLedger{}
+	refused := sourcePlan{
+		client: keysetRows{}, source: "page_cut_test", version: "v1",
+		tables: []entityTable{{name: "team_project_ownership", query: func(context.Context, contextpacket.ClickHouseQueryClient, string, cursorState, int) ([]candidate, bool, error) {
+			return nil, true, nil
+		}}},
+		logger:      slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+		observeRead: refusedLedger.recordTableStatement,
+		observePage: refusedLedger.recordTableConsumed,
+	}
+	if _, _, err := refused.pagedBatch(context.Background(), "org", "", cursorState{}, false); err == nil {
+		t.Fatalf("the page bound did not refuse the read")
+	}
+	logTableReadPages(context.Background(), slog.New(slog.NewJSONHandler(&logs, nil)), "org", refusedLedger)
 
 	parsed, err := certify.Parse(logs.Bytes())
 	if err != nil {
@@ -66,6 +85,10 @@ func TestTableReadLinesAreCertifiedFromTheConfiguredJSONLogger(t *testing.T) {
 			"org_id": org, "source": TeamsProjectsSourceName, "table": "teams", "run": 0, "rows_total": 3, "pages": 1, "statements": 2}},
 		{Event: eventspec.DevhealthsourceTableReadDrained, Want: map[string]any{
 			"org_id": org, "source": TeamsProjectsSourceName, "table": "projects", "run": 0, "rows_total": 2, "pages": 1, "statements": 2}},
+		{Event: eventspec.DevhealthsourceTableReadPage, Want: map[string]any{
+			"org_id": org, "source": TeamsProjectsSourceName, "table": "team_project_ownership", "run": 0, "page_n": 1,
+			"statement_rows": 0, "statement_more": true, "consumed_rows": 0, "consumed_new": 0, "consumed_total": 0, "replay": false,
+			"last_stamp": "", "last_key_digest": ""}},
 		{Event: eventspec.DevhealthsourceTableReadNotNew, Want: map[string]any{
 			"org_id": org, "source": TeamsProjectsSourceName, "table": "team_repo_ownership", "run": 0, "page_n": 1,
 			"consumed_rows": 2, "consumed_new": 1, "shared_position_rows": 1,

@@ -185,6 +185,9 @@ func TestTableReadLedgerKeepsStatementAndConsumedRowsApartAndNeedsNoMoreRowsToDr
 	if strings.Contains(logs.String(), "read drained") {
 		t.Fatalf("an empty statement that reports rows beyond its limit drained the read:\n%s", logs.String())
 	}
+	if !strings.Contains(logs.String(), "table=teams run=0 page_n=2 statement_rows=0 statement_more=true consumed_rows=0 consumed_new=0 consumed_total=2") {
+		t.Fatalf("an empty statement that reports rows beyond its limit wrote no page line:\n%s", logs.String())
+	}
 	ledger.recordTableStatement("teams", nil, false)
 	logTableReadPages(context.Background(), logger, "org", ledger)
 	if !strings.Contains(logs.String(), "table=teams run=0 rows_total=2 pages=1 statements=3") {
