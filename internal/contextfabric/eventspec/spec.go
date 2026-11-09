@@ -6192,6 +6192,9 @@ var All = []Event{
 	SuppliedInterpretationDecision,
 	ClientSynthesisDecision,
 	SuppliedSynthesisDecision,
+	DevhealthsourceTableReadPage,
+	DevhealthsourceTableReadDrained,
+	DevhealthsourceTableReadNotNew,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served

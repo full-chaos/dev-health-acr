@@ -456,6 +456,12 @@ func goVarName(e Event) string {
 		return "ClientSynthesisDecision"
 	case SuppliedSynthesisDecision.ID:
 		return "SuppliedSynthesisDecision"
+	case DevhealthsourceTableReadPage.ID:
+		return "DevhealthsourceTableReadPage"
+	case DevhealthsourceTableReadDrained.ID:
+		return "DevhealthsourceTableReadDrained"
+	case DevhealthsourceTableReadNotNew.ID:
+		return "DevhealthsourceTableReadNotNew"
 	case GraphCountCheckFinished.ID:
 		return "GraphCountCheckFinished"
 	case PlanOperandReads.ID:

@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 )
 
 // Every table on the teams and projects cursor but the membership producer
@@ -177,16 +177,15 @@ func logTableReadPages(ctx context.Context, logger *slog.Logger, orgID string, l
 			if !page.lastStamp.IsZero() {
 				lastStamp = page.lastStamp.UTC().Format(time.RFC3339Nano)
 			}
-			logger.InfoContext(ctx, "devhealthsource table read page",
-				"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName, "table", contextfabric.SanitizeLogAttr(report.name), "run", run, "page_n", page.n,
-				"statement_rows", page.statementRows, "statement_more", page.more,
-				"consumed_rows", page.consumedRows, "consumed_new", page.consumedNew, "consumed_total", report.total, "replay", page.replay(),
-				"last_stamp", contextfabric.SanitizeLogAttr(lastStamp), "last_key_digest", contextfabric.SanitizeLogAttr(keyDigest(page.lastKey)))
+			org := redactOrg(orgID)
+			logger.InfoContext(ctx, eventspec.DevhealthsourceTableReadPageLogMessage, eventspec.NewDevhealthsourceTableReadPageFields(
+				org, TeamsProjectsSourceName, report.name, run, page.n,
+				page.statementRows, page.more, page.consumedRows, page.consumedNew, report.total, page.replay(),
+				lastStamp, keyDigest(page.lastKey)).SlogArgs()...)
 			if page.consumedRows != page.consumedNew && !page.replay() {
-				logger.ErrorContext(ctx, "devhealthsource table read page consumed rows that are not new and is not a replay",
-					"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName, "table", contextfabric.SanitizeLogAttr(report.name), "run", run, "page_n", page.n,
-					"consumed_rows", page.consumedRows, "consumed_new", page.consumedNew, "shared_position_rows", page.sharedRows,
-					"last_stamp", contextfabric.SanitizeLogAttr(lastStamp), "last_key_digest", contextfabric.SanitizeLogAttr(keyDigest(page.lastKey)))
+				logger.ErrorContext(ctx, eventspec.DevhealthsourceTableReadNotNewLogMessage, eventspec.NewDevhealthsourceTableReadNotNewFields(
+					org, TeamsProjectsSourceName, report.name, run, page.n,
+					page.consumedRows, page.consumedNew, page.sharedRows, lastStamp, keyDigest(page.lastKey)).SlogArgs()...)
 			}
 		}
 	}
@@ -194,8 +193,8 @@ func logTableReadPages(ctx context.Context, logger *slog.Logger, orgID string, l
 		return
 	}
 	for _, report := range reports {
-		logger.InfoContext(ctx, "devhealthsource table read drained",
-			"org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)), "source", TeamsProjectsSourceName, "table", contextfabric.SanitizeLogAttr(report.name), "run", run,
-			"rows_total", report.final, "pages", report.pagesWithRows, "statements", report.statement)
+		logger.InfoContext(ctx, eventspec.DevhealthsourceTableReadDrainedLogMessage, eventspec.NewDevhealthsourceTableReadDrainedFields(
+			redactOrg(orgID), TeamsProjectsSourceName, report.name, run,
+			report.final, report.pagesWithRows, report.statement).SlogArgs()...)
 	}
 }
