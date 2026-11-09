@@ -57,6 +57,15 @@ type storedGroupsClient struct {
 	direct clickhousedriver.Conn
 	mu     sync.Mutex
 	synced map[string]string // organization -> source fingerprint at its last sync
+	events []string          // DIAG: sync decisions, newest last
+}
+
+// DIAG note records one sync decision with its server-independent wall time.
+func (c *storedGroupsClient) note(format string, args ...any) {
+	c.events = append(c.events, time.Now().UTC().Format("15:04:05.000000")+" "+fmt.Sprintf(format, args...))
+	if len(c.events) > 60 {
+		c.events = c.events[len(c.events)-60:]
+	}
 }
 
 func newStoredGroupsClient(inner contextpacket.ClickHouseQueryClient, direct clickhousedriver.Conn) *storedGroupsClient {
@@ -83,16 +92,25 @@ func (c *storedGroupsClient) sync(ctx context.Context, orgID string) error {
 	ctx = clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{}))
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Each row is hashed through its text: cityHash64 of a row with a NULL
+	// column is NULL, and sum skips it, so a table with a Nullable column
+	// fingerprinted by row count alone, and a background merge that replaced
+	// a row kept the count and skipped the sync.
 	var fingerprint string
 	if err := c.direct.QueryRow(ctx, `SELECT toString(tuple(
-  (SELECT tuple(count(), sum(cityHash64(*))) FROM projects WHERE org_id = ?),
-  (SELECT tuple(count(), sum(cityHash64(*))) FROM team_project_ownership WHERE org_id = ?),
-  (SELECT tuple(count(), sum(cityHash64(*))) FROM teams WHERE org_id = ?)))`, orgID, orgID, orgID).Scan(&fingerprint); err != nil {
+  (SELECT tuple(count(), sum(cityHash64(toString(tuple(*))))) FROM projects WHERE org_id = ?),
+  (SELECT tuple(count(), sum(cityHash64(toString(tuple(*))))) FROM team_project_ownership WHERE org_id = ?),
+  (SELECT tuple(count(), sum(cityHash64(toString(tuple(*))))) FROM teams WHERE org_id = ?)))`, orgID, orgID, orgID).Scan(&fingerprint); err != nil {
 		return fmt.Errorf("stored groups fingerprint: %w", err)
 	}
+	if strings.Contains(fingerprint, "NULL") {
+		return fmt.Errorf("stored groups fingerprint of %s has a NULL part, so it cannot see a change: %s", orgID, fingerprint)
+	}
 	if c.synced[orgID] == fingerprint {
+		c.note("skip fp=%s", fingerprint)
 		return nil
 	}
+	c.note("sync fp=%s last=%s", fingerprint, c.synced[orgID])
 	deadline := time.Now().Add(3 * time.Minute)
 	for {
 		diff, err := c.storedDiff(ctx, orgID)
@@ -100,9 +118,11 @@ func (c *storedGroupsClient) sync(ctx context.Context, orgID string) error {
 			return err
 		}
 		if diff == "" {
+			c.note("match")
 			c.synced[orgID] = fingerprint
 			return nil
 		}
+		c.note("diff %s", diff)
 		if time.Now().After(deadline) {
 			return fmt.Errorf("the stored groups of %s never matched the oracle: %s", orgID, diff)
 		}

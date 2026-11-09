@@ -62,6 +62,9 @@ func TestOwnershipEdgeReturnsWhenAnAmbiguousKeyResolves(t *testing.T) {
 func logStoredGroup(t *testing.T, ctx context.Context, fixture *ownershipFixture, rowKey, cursor string) {
 	t.Helper()
 	t.Logf("cursor position %+v", decodeCursorPosition(t, cursor))
+	for _, e := range fixture.client.events {
+		t.Logf("DIAG sync %s", e)
+	}
 	for _, q := range []string{
 		`SELECT 'log', toString(stored_at), edge_suppressed, is_deleted, content_hash FROM project_team_ownership_groups_log WHERE org_id = ? AND row_key = ? ORDER BY stored_at`,
 		`SELECT 'current', toString(stored_at), edge_suppressed, is_deleted, content_hash FROM project_team_ownership_groups_current FINAL WHERE org_id = ? AND row_key = ?`,
