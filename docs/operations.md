@@ -2473,6 +2473,7 @@ auth-service in this change. CHAOS-11203 is the first caller (next section).
 llm-config and principal access, in acr-api and in `acr-projector purge`): `service_token` (the default and the rollback value) reads the
 `svc_acr_` token from `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE` as before; `workload` asks the auth workload client for a token for the audience
 `dev-health-api` (no scope: go-api's internal acr routes carry no action) and sends it. Any other value stops the start; the error never echoes it.
+The chart key is `config.entitlement.credential` (`service_token` or `workload`; unset keeps the token Secret). With `workload` the token Secret is optional and, when unset, no token volume or init container is rendered. Set it there, not in `deployment.extraEnv` (the render fails if both are set).
 
 - `workload` needs `ACR_DEV_HEALTH_ENTITLEMENT_URL` and the `ACR_AUTH_WORKLOAD_*` client. A token file that stays set is not an error and is
   never opened in this mode, so a rollback only needs the flag back to `service_token` with the file still mounted.

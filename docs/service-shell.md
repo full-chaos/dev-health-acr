@@ -57,7 +57,7 @@ The default listen address is `127.0.0.1:8080` (dictation 811: loopback-only, so
 | `ACR_EVIDENCE_ID_KEYS` / `ACR_EVIDENCE_ID_KEYS_FILE` | empty | Comma-separated evidence-ID key material |
 | `ACR_DEV_HEALTH_ENTITLEMENT_URL` | empty | Dev Health entitlement/health service HTTP(S) origin |
 | `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE` | empty | Path to the bearer token file used to authenticate to the entitlement service |
-| `ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL` | `service_token` | `service_token` sends the token file; `workload` sends a workload token from the `ACR_AUTH_WORKLOAD_*` client (the token file is then never opened). Another value stops the start |
+| `ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL` | `service_token` | `service_token` sends the token file; `workload` sends a workload token from the `ACR_AUTH_WORKLOAD_*` client (the token file is then never opened). Another value stops the start. Chart key: `config.entitlement.credential` |
 | `ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT` | `5s` | Per-request timeout for entitlement and health checks |
 | `ACR_DEV_HEALTH_ENTITLEMENT_MAX_RESPONSE_BYTES` | `16384` | Maximum bytes read from an entitlement response body |
 | `ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL` | empty | Optional explicit HTTP(S) proxy for entitlement requests; no credentials permitted |
