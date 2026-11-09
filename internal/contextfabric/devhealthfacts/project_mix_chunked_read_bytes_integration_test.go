@@ -49,6 +49,7 @@ func projectMixPhaseOf(query string) string {
 		{"groupArray(theme_feature_delivery)", "native_theme_values"},
 		{"AS feature_delivery", "rollup_repo_themes"},
 		{"groupArrayIf(work_unit_id, in_window)", "scope"},
+		{"AS evidence_bounds", "chunk_bounds"},
 	} {
 		if strings.Contains(query, c.marker) {
 			return c.phase

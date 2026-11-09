@@ -65,6 +65,161 @@ const projectMixPinnedFilter = `
                                   FROM (SELECT arrayJoin(JSONExtract({pin_json:String}, 'Array(Tuple(String, Int64))')) AS pin)
                               )`
 
+// projectMixChunkRangeFilter restricts a chunked phase to its chunk's key range:
+// (org_id, work_unit_id) is the table's ORDER BY key, so the server reads only
+// the granules of that range. The chunk's own pins decide the rows; the range
+// only bounds what is read.
+const projectMixChunkRangeFilter = `
+                              AND work_unit_id >= {chunk_lo:String} AND work_unit_id <= {chunk_hi:String}`
+
+// The phases that read a wide column for every pinned unit (the evidence arm,
+// the native placement and the two bugfix phases) run once per chunk of the
+// pins. A chunk is cut by the org's RAW rows in key order, never by the pins: a
+// window holding a few units spread over the key range would otherwise give
+// each chunk a range that covers most of the table. So one chunk's statement
+// reads at most projectMix*ChunkRows rows of the org (and the earlier versions
+// of its first id), plus at most the two granules its range straddles, whatever
+// the table's size and the window.
+const (
+	projectMixEvidenceChunkRows = 16384
+	projectMixBugfixChunkRows   = 24576
+)
+
+type projectMixChunkRowsKey struct{}
+
+type projectMixChunkRows struct{ evidence, bugfix uint64 }
+
+func projectMixChunkRowsOf(ctx context.Context) projectMixChunkRows {
+	if rows, ok := ctx.Value(projectMixChunkRowsKey{}).(projectMixChunkRows); ok {
+		return rows
+	}
+	return projectMixChunkRows{evidence: projectMixEvidenceChunkRows, bugfix: projectMixBugfixChunkRows}
+}
+
+// projectMixChunkBoundsStatement returns ONE row: for each chunk size, the ids
+// at which a new chunk starts, every ceil(rows / chunks) raw rows of the org in
+// key order, chunks = ceil(rows / chunk size). It reads work_unit_id only.
+const projectMixChunkBoundsStatement = `SELECT
+    arrayFilter((id, i) -> i > 1 AND toUInt64(i - 1) % evidence_step = 0, ids, arrayEnumerate(ids)) AS evidence_bounds,
+    arrayFilter((id, i) -> i > 1 AND toUInt64(i - 1) % bugfix_step = 0, ids, arrayEnumerate(ids)) AS bugfix_bounds
+FROM (
+    SELECT ids,
+        greatest(1, intDiv(length(ids) + evidence_chunks - 1, evidence_chunks)) AS evidence_step,
+        greatest(1, intDiv(length(ids) + bugfix_chunks - 1, bugfix_chunks)) AS bugfix_step
+    FROM (
+        SELECT ids,
+            greatest(1, intDiv(length(ids) + {evidence_chunk_rows:UInt64} - 1, {evidence_chunk_rows:UInt64})) AS evidence_chunks,
+            greatest(1, intDiv(length(ids) + {bugfix_chunk_rows:UInt64} - 1, {bugfix_chunk_rows:UInt64})) AS bugfix_chunks
+        FROM (
+            SELECT arraySort(groupArray(work_unit_id)) AS ids
+            FROM work_unit_investments
+            WHERE org_id = {org_id:String}
+        )
+    )
+)`
+
+type projectMixChunkBounds struct{ evidence, bugfix []string }
+
+func readProjectMixChunkBounds(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string) (projectMixChunkBounds, error) {
+	var bounds projectMixChunkBounds
+	rows := projectMixChunkRowsOf(ctx)
+	err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectMixChunkBounds", projectMixChunkBoundsStatement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+		return row.Scan(&bounds.evidence, &bounds.bugfix)
+	}, readers.Binding{Name: "evidence_chunk_rows", Value: rows.evidence}, readers.Binding{Name: "bugfix_chunk_rows", Value: rows.bugfix})
+	return bounds, err
+}
+
+// projectMixChunk is one chunk of the pins: its pins and the key range from its
+// first to its last pinned id.
+type projectMixChunk struct {
+	lo, hi string
+	pins   projectMixScope
+}
+
+func (c projectMixChunk) bindings() []readers.Binding {
+	return append(c.pins.bindings(), readers.Binding{Name: "chunk_lo", Value: c.lo}, readers.Binding{Name: "chunk_hi", Value: c.hi})
+}
+
+// splitProjectMixScope partitions the pins by the chunk start ids: a pin goes to
+// the chunk of the last start id at or below it (byte order, the server's String
+// order), so one unit id lands in exactly one chunk. A chunk without a pin is
+// left out.
+func splitProjectMixScope(scope projectMixScope, starts []string) []projectMixChunk {
+	order := make([]int, len(scope.unitIDs))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool { return scope.unitIDs[order[a]] < scope.unitIDs[order[b]] })
+	bounds := slices.Clone(starts)
+	slices.Sort(bounds)
+	bounds = slices.Compact(bounds)
+	var chunks []projectMixChunk
+	var cur projectMixChunk
+	next := 0
+	for _, i := range order {
+		id := scope.unitIDs[i]
+		crossed := false
+		for next < len(bounds) && id >= bounds[next] {
+			next++
+			crossed = true
+		}
+		if crossed && len(cur.pins.unitIDs) > 0 {
+			chunks = append(chunks, cur)
+			cur = projectMixChunk{}
+		}
+		if len(cur.pins.unitIDs) == 0 {
+			cur.lo = id
+		}
+		cur.hi = id
+		cur.pins.unitIDs = append(cur.pins.unitIDs, id)
+		cur.pins.versionsMs = append(cur.pins.versionsMs, scope.versionsMs[i])
+	}
+	if len(cur.pins.unitIDs) > 0 {
+		chunks = append(chunks, cur)
+	}
+	return chunks
+}
+
+// projectMixBetweenChunksKey carries a test hook run between two chunks of a
+// chunked phase.
+type projectMixBetweenChunksKey struct{}
+
+// queryProjectMixChunks runs one chunked phase: the statement once per chunk.
+func queryProjectMixChunks(ctx context.Context, client contextpacket.ClickHouseQueryClient, reader, statement, orgID string, ids []string, chunks []projectMixChunk, scan func(contextpacket.ClickHouseRowScanner) error, extra ...readers.Binding) error {
+	for i, chunk := range chunks {
+		if i > 0 {
+			if hook, ok := ctx.Value(projectMixBetweenChunksKey{}).(func()); ok {
+				hook()
+			}
+		}
+		if err := readers.QueryOrgScopedNamed(ctx, client, reader, statement, orgID, ids, scan, append(chunk.bindings(), extra...)...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// firstProjectKeys keeps the first maxProjectPopulationProbe keys in key order:
+// what the population LIMIT of one unchunked statement kept. Every key the
+// unchunked statement kept is among the first keys of each chunk that holds it,
+// so it survives that chunk's LIMIT with its whole value, and the first keys of
+// the union are exactly the keys the unchunked statement kept.
+func firstProjectKeys[V any](byKey map[string]V) map[string]V {
+	if len(byKey) <= maxProjectPopulationProbe {
+		return byKey
+	}
+	keys := make([]string, 0, len(byKey))
+	for key := range byKey {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	kept := make(map[string]V, maxProjectPopulationProbe)
+	for _, key := range keys[:maxProjectPopulationProbe] {
+		kept[key] = byKey[key]
+	}
+	return kept
+}
+
 // projectMixPinnedPresenceStatement counts the pinned (work unit, version) pairs
 // that are still stored. work_unit_investments is ReplacingMergeTree(computed_at):
 // a newer version and a merge delete the pinned one, and every phase that reads
@@ -311,7 +466,7 @@ FROM (
 			argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
 			`+latestUnitGatedSQL+` AS gated
 		FROM work_unit_investments
-		WHERE org_id = {org_id:String}`+projectMixPinnedFilter+`
+		WHERE org_id = {org_id:String}`+projectMixPinnedFilter+projectMixChunkRangeFilter+`
 		GROUP BY work_unit_id, org_id`) + `
 	)
 	WHERE repo_id IS NOT NULL
@@ -380,7 +535,7 @@ FROM (
 							argMax(structural_evidence_json, computed_at) AS structural_evidence_json,
 							` + latestUnitGatedSQL + ` AS gated
 						FROM work_unit_investments
-						WHERE org_id = {org_id:String}` + projectMixPinnedFilter + `
+						WHERE org_id = {org_id:String}` + projectMixPinnedFilter + projectMixChunkRangeFilter + `
 						GROUP BY work_unit_id
 					)
 					WHERE repo_id IS NULL AND NOT gated
@@ -424,8 +579,13 @@ func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	if err != nil {
 		return nil, false, err
 	}
+	bounds, err := readProjectMixChunkBounds(ctx, client, orgID, ids)
+	if err != nil {
+		return nil, false, err
+	}
 	projectMixBetweenPhases(ctx)
-	extra := append(scope.bindings(), readers.Binding{Name: "link_json", Value: linkJSON})
+	link := readers.Binding{Name: "link_json", Value: linkJSON}
+	extra := append(scope.bindings(), link)
 	var rows []projectRollupMixRow
 	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMix", projectRollupRepoThemesStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r projectRollupMixRow
@@ -438,29 +598,31 @@ func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.Clic
 		return nil, false, err
 	}
 	bugfix := map[string]float64{}
-	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixBugfix", projectRollupRepoBugfixStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+	if err := queryProjectMixChunks(ctx, client, "ReadProjectThemeMixBugfix", projectRollupRepoBugfixStatement(), orgID, ids, splitProjectMixScope(scope, bounds.bugfix), func(row contextpacket.ClickHouseRowScanner) error {
 		var key string
 		var weighted float64
 		if scanErr := row.Scan(&key, &weighted); scanErr != nil {
 			return scanErr
 		}
-		bugfix[key] = weighted
+		bugfix[key] += weighted
 		return nil
-	}, extra...); err != nil {
+	}, link); err != nil {
 		return nil, false, err
 	}
+	bugfix = firstProjectKeys(bugfix)
 	excluded := map[string]uint64{}
-	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixEvidenceArm", projectRollupEvidenceArmStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
+	if err := queryProjectMixChunks(ctx, client, "ReadProjectThemeMixEvidenceArm", projectRollupEvidenceArmStatement(), orgID, ids, splitProjectMixScope(scope, bounds.evidence), func(row contextpacket.ClickHouseRowScanner) error {
 		var key string
 		var n uint64
 		if scanErr := row.Scan(&key, &n); scanErr != nil {
 			return scanErr
 		}
-		excluded[key] = n
+		excluded[key] += n
 		return nil
-	}, extra...); err != nil {
+	}, link); err != nil {
 		return nil, false, err
 	}
+	excluded = firstProjectKeys(excluded)
 	after, err := readProjectMixInputs(ctx, client, orgID, ids, projectRollupInputSources)
 	if err != nil {
 		return nil, false, err
@@ -500,7 +662,7 @@ func projectNativePlacementStatement() string {
                     SELECT work_unit_id,
                         argMax(structural_evidence_json, computed_at) AS structural_evidence_json
                     FROM work_unit_investments
-                    WHERE org_id = {org_id:String}` + projectMixPinnedFilter + `
+                    WHERE org_id = {org_id:String}` + projectMixPinnedFilter + projectMixChunkRangeFilter + `
                     GROUP BY work_unit_id
                 )
             )
@@ -557,10 +719,33 @@ FROM (
         SELECT work_unit_id,
             argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json
         FROM work_unit_investments
-        WHERE org_id = {org_id:String}` + projectMixPinnedFilter + `
+        WHERE org_id = {org_id:String}` + projectMixPinnedFilter + projectMixChunkRangeFilter + `
         GROUP BY work_unit_id
     )
 )`
+}
+
+// sortProjectNativePlacement orders the placements by (provider, project, unit)
+// in place, so the per-project sums do not depend on how the chunks split them.
+func sortProjectNativePlacement(unit, provider, project []string, multi []uint8) {
+	order := make([]int, len(unit))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		x, y := order[a], order[b]
+		if provider[x] != provider[y] {
+			return provider[x] < provider[y]
+		}
+		if project[x] != project[y] {
+			return project[x] < project[y]
+		}
+		return unit[x] < unit[y]
+	})
+	u, pv, pj, m := slices.Clone(unit), slices.Clone(provider), slices.Clone(project), slices.Clone(multi)
+	for to, from := range order {
+		unit[to], provider[to], project[to], multi[to] = u[from], pv[from], pj[from], m[from]
+	}
 }
 
 type projectNativeUnitValues struct {
@@ -589,19 +774,30 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	if len(scope.unitIDs) == 0 {
 		return nil, nil, nil, nil, false, nil
 	}
+	bounds, err := readProjectMixChunkBounds(ctx, client, orgID, ids)
+	if err != nil {
+		return nil, nil, nil, nil, false, err
+	}
 	projectMixBetweenPhases(ctx)
 	extra := scope.bindings()
 
 	var pUnit, pProvider, pProject []string
 	var pMulti []uint8
-	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixPlacement", projectNativePlacementStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		return row.Scan(&pUnit, &pProvider, &pProject, &pMulti)
-	}, extra...); err != nil {
+	if err := queryProjectMixChunks(ctx, client, "ReadProjectThemeMixPlacement", projectNativePlacementStatement(), orgID, ids, splitProjectMixScope(scope, bounds.evidence), func(row contextpacket.ClickHouseRowScanner) error {
+		var unit, provider, project []string
+		var multi []uint8
+		if scanErr := row.Scan(&unit, &provider, &project, &multi); scanErr != nil {
+			return scanErr
+		}
+		if len(provider) != len(unit) || len(project) != len(unit) || len(multi) != len(unit) {
+			return fmt.Errorf("project native mix placement arrays disagree: %d/%d/%d/%d", len(unit), len(provider), len(project), len(multi))
+		}
+		pUnit, pProvider, pProject, pMulti = append(pUnit, unit...), append(pProvider, provider...), append(pProject, project...), append(pMulti, multi...)
+		return nil
+	}); err != nil {
 		return nil, nil, nil, nil, false, err
 	}
-	if len(pProvider) != len(pUnit) || len(pProject) != len(pUnit) || len(pMulti) != len(pUnit) {
-		return nil, nil, nil, nil, false, fmt.Errorf("project native mix placement arrays disagree: %d/%d/%d/%d", len(pUnit), len(pProvider), len(pProject), len(pMulti))
-	}
+	sortProjectNativePlacement(pUnit, pProvider, pProject, pMulti)
 
 	var vUnit []string
 	var vEffort, vFeature, vOperational, vMaintenance, vQuality, vRisk []float64
@@ -612,16 +808,22 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	}, extra...); err != nil {
 		return nil, nil, nil, nil, false, err
 	}
-	var bUnit []string
-	var bShare []float64
-	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectThemeMixBugfixValues", projectNativeBugfixValuesStatement(), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		return row.Scan(&bUnit, &bShare)
-	}, append(append([]readers.Binding{}, extra...), readers.Binding{Name: "bugfix_key", Value: readers.BugfixSubcategoryKey})...); err != nil {
+	bugfix := make(map[string]float64, len(scope.unitIDs))
+	if err := queryProjectMixChunks(ctx, client, "ReadProjectThemeMixBugfixValues", projectNativeBugfixValuesStatement(), orgID, ids, splitProjectMixScope(scope, bounds.bugfix), func(row contextpacket.ClickHouseRowScanner) error {
+		var bUnit []string
+		var bShare []float64
+		if scanErr := row.Scan(&bUnit, &bShare); scanErr != nil {
+			return scanErr
+		}
+		if len(bShare) != len(bUnit) {
+			return fmt.Errorf("project native mix bugfix arrays disagree: %d/%d", len(bUnit), len(bShare))
+		}
+		for i, unit := range bUnit {
+			bugfix[unit] = bShare[i]
+		}
+		return nil
+	}, readers.Binding{Name: "bugfix_key", Value: readers.BugfixSubcategoryKey}); err != nil {
 		return nil, nil, nil, nil, false, err
-	}
-	bugfix := make(map[string]float64, len(bUnit))
-	for i, unit := range bUnit {
-		bugfix[unit] = bShare[i]
 	}
 	values := make(map[string]projectNativeUnitValues, len(vUnit))
 	for i, unit := range vUnit {

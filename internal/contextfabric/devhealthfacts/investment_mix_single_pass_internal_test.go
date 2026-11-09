@@ -121,6 +121,23 @@ func TestPhasedProjectMixStatementsReadOneWideColumnGroupEach(t *testing.T) {
 			if strings.HasPrefix(name, "roll-up") && (strings.Contains(c.statement, "team_project_ownership") || !strings.Contains(c.statement, "{link_json:String}")) {
 				t.Errorf("%s / %s: phase re-derives ownership instead of reading the link table the scope captured", name, boundName)
 			}
+			chunked := c.wide == "structural_evidence_json" || c.wide == "subcategory_distribution_json"
+			if got := strings.Count(c.statement, projectMixChunkRangeFilter); got != map[bool]int{true: 1, false: 0}[chunked] {
+				t.Errorf("%s / %s: carries the chunk key range %d times, want it exactly when the phase reads a wide column per unit (%v)", name, boundName, got, chunked)
+			}
+		}
+	}
+}
+
+// The chunk bounds read work_unit_investments once and only its key column.
+func TestProjectMixChunkBoundsReadOnlyTheKeyColumn(t *testing.T) {
+	t.Parallel()
+	if got := strings.Count(projectMixChunkBoundsStatement, "FROM work_unit_investments"); got != 1 {
+		t.Errorf("chunk bounds read work_unit_investments %d times, want 1", got)
+	}
+	for _, column := range []string{"structural_evidence_json", "theme_distribution_json", "subcategory_distribution_json", "computed_at", "repo_id"} {
+		if strings.Contains(projectMixChunkBoundsStatement, column) {
+			t.Errorf("chunk bounds read %s", column)
 		}
 	}
 }

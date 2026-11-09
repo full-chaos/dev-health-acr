@@ -143,15 +143,19 @@ func TestProjectMixPhasedReadMatchesTheSingleStatementOnTheProdShapedTableAgains
 			if len(single) == 0 {
 				t.Fatal("the single roll-up statement returned no rows: the fixture proves nothing")
 			}
-			if err := rollupRowsDiffer(single, runRollupPhased(t, ctx, query, orgID, ids, w.window)); err != nil {
-				t.Fatalf("roll-up: %v", err)
-			}
 			nativeSingle := runNativeStatement(t, ctx, query, "SingleNative", devhealthfacts.ProjectNativeStatement(w.window, rowLimit), orgID, ids, w.window)
 			if len(nativeSingle) == 0 {
 				t.Fatal("the single native statement returned no rows: the fixture proves nothing")
 			}
-			if err := nativeRowsDiffer(nativeSingle, runNativePhased(t, ctx, query, orgID, ids, w.window, rowLimit)); err != nil {
-				t.Fatalf("native: %v", err)
+			// The production chunk sizes, and chunks of 997 raw rows: about 21
+			// chunks per wide-column phase on this table.
+			for name, phasedCtx := range map[string]context.Context{"production chunks": ctx, "chunks of 997 rows": devhealthfacts.WithProjectMixChunkRows(ctx, 997, 997)} {
+				if err := rollupRowsDiffer(single, runRollupPhased(t, phasedCtx, query, orgID, ids, w.window)); err != nil {
+					t.Fatalf("roll-up, %s: %v", name, err)
+				}
+				if err := nativeRowsDiffer(nativeSingle, runNativePhased(t, phasedCtx, query, orgID, ids, w.window, rowLimit)); err != nil {
+					t.Fatalf("native, %s: %v", name, err)
+				}
 			}
 		})
 	}

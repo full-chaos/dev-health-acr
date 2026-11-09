@@ -27,6 +27,7 @@ var workUnitInvestmentsReadExceptions = map[string]string{
 	"investment_project_mix_phased.go|projectNativePlacementStatement":    "placement only; the native mix drops gated units in Go by the flag of the theme values statement",
 	"investment_project_mix_phased.go|projectNativeBugfixValuesStatement": "joined in Go to the theme values, whose flag drops gated units",
 	"investment_project_mix_phased.go|projectMixPinnedPresenceStatement":  "presence probe: counts the pinned (unit, version) pairs still stored, gated or not; reads no mix",
+	"investment_project_mix_phased.go|projectMixChunkBoundsStatement":     "chunk bounds: the unit ids of every raw row, gated or not, cut the wide-column phases into key ranges; reads no mix",
 	"investment_project_rollup_mix.go|projectRollupMixStatement":          "parity oracle of the phased roll-up, never served",
 	"investment_project_native_mix.go|projectNativeMixStatement":          "parity oracle of the phased native mix, never served",
 }

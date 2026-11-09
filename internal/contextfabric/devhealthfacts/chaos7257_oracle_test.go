@@ -316,3 +316,16 @@ func WithProjectMixAfterBaseline(ctx context.Context, hook func()) context.Conte
 func WithProjectMixAfterScope(ctx context.Context, hook func()) context.Context {
 	return context.WithValue(ctx, projectMixAfterScopeKey{}, hook)
 }
+
+// WithProjectMixChunkRows returns a context whose project mix reads cut the
+// wide-column phases into chunks of the given raw row counts instead of the
+// production sizes.
+func WithProjectMixChunkRows(ctx context.Context, evidence, bugfix uint64) context.Context {
+	return context.WithValue(ctx, projectMixChunkRowsKey{}, projectMixChunkRows{evidence: evidence, bugfix: bugfix})
+}
+
+// WithProjectMixBetweenChunks returns a context whose hook runs between two
+// chunks of a chunked phase.
+func WithProjectMixBetweenChunks(ctx context.Context, hook func()) context.Context {
+	return context.WithValue(ctx, projectMixBetweenChunksKey{}, hook)
+}
