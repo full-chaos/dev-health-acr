@@ -913,6 +913,9 @@ type presenceTelemetryLedger struct {
 	// membership is the page-level record of the read
 	// (membership_read_telemetry.go).
 	membership membershipReadLedger
+	// tables is the same record for every other table of the cursor
+	// (table_read_telemetry.go).
+	tables tableReadLedger
 }
 
 func (l *presenceTelemetryLedger) recordRead(source, subjectKind string) {
@@ -1123,7 +1126,7 @@ func (s *TeamsProjectsSource) presenceLedgerFor(orgID string, fromScratch bool) 
 		if previous := s.presence[orgID]; previous != nil {
 			run = previous.membership.run + 1
 		}
-		s.presence[orgID] = &presenceTelemetryLedger{membership: membershipReadLedger{run: run, summaryOwed: fromScratch}}
+		s.presence[orgID] = &presenceTelemetryLedger{membership: membershipReadLedger{run: run, summaryOwed: fromScratch}, tables: tableReadLedger{summaryOwed: fromScratch}}
 	}
 	return s.presence[orgID]
 }
@@ -1343,6 +1346,7 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	presence := s.presenceLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logPresenceTelemetry(ctx, s.logger, checkpoint.OrgID, presence)
 	defer logMembershipPages(ctx, s.logger, checkpoint.OrgID, presence)
+	defer logTableReadPages(ctx, s.logger, checkpoint.OrgID, presence)
 	teamAuth := s.teamAuthLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logTeamAuthorizationTelemetry(ctx, s.logger, checkpoint.OrgID, teamAuth)
 	repoOwnership := s.repositoryOwnershipLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
@@ -1371,7 +1375,11 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		reconcilePeriod: teamOwnershipReconcilePeriod,
 		recordConsumed:  s.recordConsumed(checkpoint.Cursor),
 		dropConsumed:    s.forgetConsumed,
-		observePage:     presence.recordConsumed,
+		observePage: func(all []candidate) {
+			presence.recordConsumed(all)
+			presence.recordTableConsumed(all)
+		},
+		observeRead: presence.recordTableStatement,
 		// Without this the shared engine's per-item quarantine drops items
 		// on THIS source with no signal at all -- a silent loss, which the
 		// standing ruling forbids outright. The ClickHouse source got the

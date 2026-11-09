@@ -136,6 +136,10 @@ func (p sourcePlan) dimensionBatch(ctx context.Context, orgID, cursor string, at
 			break
 		}
 		normalizeCandidates(page, p.observeNormalization)
+		if p.observeRead != nil {
+			p.observeRead(table.name, page, truncated)
+		}
+		p.notePage(page)
 		all = append(all, page...)
 		rows += sourceRows(page)
 		pages++
