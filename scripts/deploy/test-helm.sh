@@ -524,10 +524,10 @@ case "$scenario" in
     printf 'RESULT: scenario entitlement-empty-extraenv-valuefrom passed\n'
     exit 0 ;;
   entitlement-credential-null)
-    printf 'scenario: entitlement-credential-null (null credential equals unset: token mode)\n'
-    ent_render --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
-      --set-json 'config.entitlement.credential=null' >"$workdir/ent-null.yaml"
-    ent_assert "$workdir/ent-null.yaml" 0 1 1
+    printf 'scenario: entitlement-credential-null (null credential renders byte-equal to the recorded token-mode render)\n'
+    testdata="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/testdata"
+    render -f "$testdata/entitlement-token-mode.values.yaml" --set-json 'config.entitlement.credential=null' | grep -v ' checksum/' >"$workdir/ent-null.yaml"
+    cmp -s "$testdata/entitlement-token-mode.render.golden.yaml" "$workdir/ent-null.yaml" || { diff -u "$testdata/entitlement-token-mode.render.golden.yaml" "$workdir/ent-null.yaml" >&2 || true; fail_gate "entitlement-credential-null: the render differs from the recorded token-mode render"; }
     printf 'RESULT: scenario entitlement-credential-null passed\n'
     exit 0 ;;
   entitlement-credential-bad-value-no-schema)
