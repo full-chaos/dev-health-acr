@@ -489,8 +489,17 @@ remote token or CA inputs.
 {{- if (.Values.config.entitlement.url | default "") -}}true{{- end -}}
 {{- end -}}
 
+{{/* The validated credential string: null equals unset; any other non-string fails. */}}
+{{- define "acr.entitlementCredential" -}}
+{{- $v := .Values.config.entitlement.credential -}}
+{{- if kindIs "string" $v -}}{{- $v -}}
+{{- else if not (kindIs "invalid" $v) -}}
+{{- fail (printf "entitlement-credential: config.entitlement.credential must be a string (\"\", service_token or workload), got %s" (kindOf $v)) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "acr.entitlementWorkload" -}}
-{{- if eq (.Values.config.entitlement.credential | default "") "workload" -}}true{{- end -}}
+{{- if eq (include "acr.entitlementCredential" .) "workload" -}}true{{- end -}}
 {{- end -}}
 
 {{/* The token Secret is mounted unless workload mode runs with no token Secret. */}}
@@ -499,8 +508,9 @@ remote token or CA inputs.
 {{- end -}}
 
 {{- define "acr.validateEntitlementOrigin" -}}
-{{- if not (has (.Values.config.entitlement.credential | default "") (list "" "service_token" "workload")) -}}
-{{- fail (printf "entitlement-credential: config.entitlement.credential %q must be one of \"\", service_token or workload" .Values.config.entitlement.credential) -}}
+{{- $credential := include "acr.entitlementCredential" . -}}
+{{- if not (has $credential (list "" "service_token" "workload")) -}}
+{{- fail (printf "entitlement-credential: config.entitlement.credential %q must be one of \"\", service_token or workload" $credential) -}}
 {{- end -}}
 {{- $url := .Values.config.entitlement.url | default "" -}}
 {{- $environment := .Values.config.environment -}}
@@ -749,7 +759,7 @@ env entry beats the ConfigMap (envFrom) silently, so the two together would
 leave the value unread. extraEnv alone (no value set) still renders.
 */}}
 {{- define "acr.validateEnvValueSources" -}}
-{{- $fromValues := dict "ACR_TRUSTED_PROXY_CIDRS" (and .Values.config.trustedProxyCidrs "config.trustedProxyCidrs") "ACR_CORS_ALLOWED_ORIGINS" (and (default dict .Values.config.cors).allowedOrigins "config.cors.allowedOrigins") "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL" (and (.Values.config.entitlement.credential | default "") "config.entitlement.credential") -}}
+{{- $fromValues := dict "ACR_TRUSTED_PROXY_CIDRS" (and .Values.config.trustedProxyCidrs "config.trustedProxyCidrs") "ACR_CORS_ALLOWED_ORIGINS" (and (default dict .Values.config.cors).allowedOrigins "config.cors.allowedOrigins") "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL" (and (include "acr.entitlementCredential" .) "config.entitlement.credential") -}}
 {{- range $env := .Values.deployment.extraEnv -}}
 {{- $name := toString $env.name -}}
 {{- with (get $fromValues $name) -}}
