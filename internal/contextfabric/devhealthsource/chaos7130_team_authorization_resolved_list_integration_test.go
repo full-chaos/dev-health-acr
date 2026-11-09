@@ -149,7 +149,9 @@ func subCHAOS7130TeamListUsesResolvedOwnership(t *testing.T, ctx context.Context
 
 // A repos row arriving AFTER the ownership row (ownership row untouched)
 // re-projects the team with the resolved slug: the watermark folds in the
-// repos row's last_synced.
+// repos row's last_synced. The row arrives after the first walk, so its stamp
+// is above that walk's cursor, which the stored ownership groups' refresh
+// stamp (server time) can have moved to about now.
 func subCHAOS7130LateReposRowReprojectsTheTeam(t *testing.T, ctx context.Context, f *ownershipFixture) {
 	ownedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
 	chaos7119Team(t, ctx, f, "team-late", ownedAt)
@@ -158,7 +160,8 @@ func subCHAOS7130LateReposRowReprojectsTheTeam(t *testing.T, ctx context.Context
 	if got := chaos7130List(first, "team-late"); !reflect.DeepEqual(got, []string{devhealthsource.NoTeamOwnershipSentinelForTest()}) {
 		t.Fatalf("before the repos row exists the team must be denied by the sentinel, got %v", got)
 	}
-	chaos7130Repo(t, ctx, f, "71300000-0000-4000-8000-0000000000aa", "acme/late", "github", time.Now().UTC().Add(-time.Minute).Truncate(time.Second))
+	arrived := decodeCursorPosition(t, first.cursor).Since.Add(time.Second).Truncate(time.Second)
+	chaos7130Repo(t, ctx, f, "71300000-0000-4000-8000-0000000000aa", "acme/late", "github", arrived)
 	second := chaos7139RunFrom(t, ctx, f, first.cursor)
 	if _, ok := second.entities["team-late"]; !ok {
 		t.Fatalf("team-late was not re-projected after its repos row arrived (watermark misses repos.last_synced)")
