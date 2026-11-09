@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/full-chaos/dev-health-go/readers"
 
@@ -57,21 +58,32 @@ func ScopeLiteralCasesForTest(ctx context.Context, provider contextfabric.FactPr
 		return nil, fmt.Errorf("project mix links: %w", err)
 	}
 	pin := projectScope.bindings()
+	// A chunked phase binds one chunk's pins and key range. One chunk over every
+	// pin is the widest literal a read sends (a table under one chunk size).
+	whole := splitProjectMixScope(projectScope, nil)[0].bindings()
 	link := readers.Binding{Name: "link_json", Value: linkJSON}
 	bugfixKey := readers.Binding{Name: "bugfix_key", Value: readers.BugfixSubcategoryKey}
 	for _, c := range []struct {
-		name string
-		sql  string
-		with []readers.Binding
+		name    string
+		sql     string
+		chunked bool
+		with    []readers.Binding
 	}{
-		{"project_rollup_repo_themes", projectRollupRepoThemesStatement(), []readers.Binding{link}},
-		{"project_rollup_repo_bugfix", projectRollupRepoBugfixStatement(), []readers.Binding{link}},
-		{"project_rollup_evidence_arm", projectRollupEvidenceArmStatement(), []readers.Binding{link}},
-		{"project_native_placement", projectNativePlacementStatement(), nil},
-		{"project_native_theme_values", projectNativeThemeValuesStatement(), nil},
-		{"project_native_bugfix_values", projectNativeBugfixValuesStatement(), []readers.Binding{bugfixKey}},
+		{"project_rollup_repo_themes", projectRollupRepoThemesStatement(), false, []readers.Binding{link}},
+		{"project_rollup_repo_bugfix", projectRollupRepoBugfixStatement(), true, []readers.Binding{link}},
+		{"project_rollup_evidence_arm", projectRollupEvidenceArmStatement(), true, []readers.Binding{link}},
+		{"project_native_placement", projectNativePlacementStatement(), true, nil},
+		{"project_native_theme_values", projectNativeThemeValuesStatement(), false, nil},
+		{"project_native_bugfix_values", projectNativeBugfixValuesStatement(), true, []readers.Binding{bugfixKey}},
 	} {
-		cases = append(cases, ScopeLiteralCase{Name: c.name, SQL: c.sql, IDs: projectIDs, Bindings: append(append([]readers.Binding{}, pin...), c.with...)})
+		if strings.Contains(c.sql, projectMixChunkRangeFilter) != c.chunked {
+			return nil, fmt.Errorf("%s: chunk key range in the statement = %v, bound as chunked = %v", c.name, !c.chunked, c.chunked)
+		}
+		bindings := pin
+		if c.chunked {
+			bindings = whole
+		}
+		cases = append(cases, ScopeLiteralCase{Name: c.name, SQL: c.sql, IDs: projectIDs, Bindings: append(append([]readers.Binding{}, bindings...), c.with...)})
 	}
 	return cases, nil
 }
