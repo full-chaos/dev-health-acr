@@ -64,9 +64,11 @@ type membershipReadLedger struct {
 	seen          map[string]map[uint64]struct{}
 	consumedPages map[string]int
 	summaryOwed   bool
-	// read: a statement ran since the last log. lastDrained: the last one
-	// returned no row on any arm and found nothing more.
-	read, lastDrained bool
+	// lastDrained: the last statement returned no row on any arm and found
+	// nothing more. A summary becomes owed only at a run's start (before any
+	// statement) or when a page consumes rows (after a page statement), so a
+	// call that runs no membership statement never drains on an older one.
+	lastDrained bool
 }
 
 func (p *membershipPage) arm(name string) *membershipArmPage {
@@ -105,7 +107,7 @@ func (l *presenceTelemetryLedger) recordStatement(rows []candidate, more bool) {
 		armRows++
 		arm.lastStamp, arm.lastKey = c.position(), c.sortKey
 	}
-	l.membership.read, l.membership.lastDrained = true, armRows == 0 && !more
+	l.membership.lastDrained = armRows == 0 && !more
 	if l.membership.lastDrained {
 		return
 	}
@@ -205,8 +207,7 @@ func logMembershipPages(ctx context.Context, logger *slog.Logger, orgID string, 
 		}
 	}
 	// Drained: the last statement returned no membership row at all.
-	drained := m.read && m.summaryOwed && m.lastDrained
-	m.read, m.lastDrained = false, false
+	drained := m.summaryOwed && m.lastDrained
 	if drained {
 		m.summaryOwed = false
 	}

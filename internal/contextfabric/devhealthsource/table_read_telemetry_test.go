@@ -194,3 +194,25 @@ func TestTableReadLedgerKeepsStatementAndConsumedRowsApartAndNeedsNoMoreRowsToDr
 		t.Fatalf("the read did not drain once the statement ended:\n%s", logs.String())
 	}
 }
+
+// The drain reads the statements of this call only: a table that ran no
+// statement in the call (a dimension call reads only the dimension tables)
+// neither blocks nor makes the drain, whatever its last statement of an
+// earlier call found.
+func TestTableReadDrainReadsOnlyTheStatementsOfThisCall(t *testing.T) {
+	at := time.Date(2026, 10, 1, 4, 37, 41, 0, time.UTC)
+	ledger := &presenceTelemetryLedger{}
+	consumeTablePage(ledger, true, tableRow("teams", "a", at), tableRow("projects", "p", at))
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	logTableReadPages(context.Background(), logger, "org", ledger)
+	if strings.Contains(logs.String(), "read drained") {
+		t.Fatalf("a call whose statements found more drained the read:\n%s", logs.String())
+	}
+	logs.Reset()
+	ledger.recordTableStatement("teams", nil, false)
+	logTableReadPages(context.Background(), logger, "org", ledger)
+	if !strings.Contains(logs.String(), "table=teams run=0 rows_total=1 pages=1 statements=2") || !strings.Contains(logs.String(), "table=projects run=0 rows_total=1 pages=1 statements=1") {
+		t.Fatalf("a call whose only statement drained its table did not drain the read:\n%s", logs.String())
+	}
+}
