@@ -233,6 +233,8 @@ func (e *Engine) walkCarriedKind(ctx context.Context, principal storage.Principa
 		return kindCarryResult{Outcome: KindCarryMissNoReference}
 	}
 	visited := make(map[string]struct{}, carryChainMaxVisited)
+	finishWalk := carryWalkRecorderFrom(ctx).begin()
+	defer func() { finishWalk(len(visited)) }()
 	// reachedViaAncestry records which frontier ids were reachable ONLY
 	// because a stored parent pointed at them -- see ViaStoredAncestry.
 	reachedViaAncestry := make(map[string]struct{}, carryChainMaxVisited)
@@ -634,7 +636,7 @@ func composeCarriedKindEntry(carry kindCarryResult) *contractsv1.ContextFabricCo
 // recordKindCarry reports carry.Outcome to telemetry -- a no-op when
 // telemetry is unconfigured or carry was never attempted, mirroring
 // recordWindowCarry's own "once per non-zero signal" shape.
-func (e *Engine) recordKindCarry(ctx context.Context, principal storage.Principal, carry kindCarryResult, seedSource CarrySeedSource) {
+func (e *Engine) recordKindCarry(ctx context.Context, principal storage.Principal, carry kindCarryResult, seedSource CarrySeedSource, walk CarryWalkStats) {
 	if e.telemetry == nil || carry.Outcome == KindCarryNotAttempted {
 		return
 	}
@@ -649,7 +651,7 @@ func (e *Engine) recordKindCarry(ctx context.Context, principal storage.Principa
 	// operator reading "hit" alone cannot tell a chain carrying `repository`
 	// from one carrying `team`. redeemedKind is empty except on a drop, where
 	// it is the only place the disagreement is recorded.
-	e.telemetry.RecordKindCarry(ctx, principal, carry.Outcome, carry.ChainDepth, carry.Kind, carry.RedeemedKind, seedSource, carry.ViaStoredAncestry)
+	e.telemetry.RecordKindCarry(ctx, principal, carry.Outcome, carry.ChainDepth, carry.Kind, carry.RedeemedKind, seedSource, carry.ViaStoredAncestry, walk)
 }
 
 // carryResultCacheKey scopes the per-request carry load cache below.

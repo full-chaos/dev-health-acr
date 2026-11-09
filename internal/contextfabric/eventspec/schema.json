@@ -7371,6 +7371,16 @@
         "presence": "required"
       },
       {
+        "key": "visited",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "walk_ms",
+        "type": "int",
+        "presence": "required"
+      },
+      {
         "key": "request_id",
         "type": "string",
         "presence": "conditional",
@@ -13446,6 +13456,16 @@
       {
         "key": "via_stored_ancestry",
         "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "visited",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "walk_ms",
+        "type": "int",
         "presence": "required"
       },
       {
