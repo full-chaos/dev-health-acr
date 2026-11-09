@@ -1,0 +1,761 @@
+---
+# Source: acr/templates/networkpolicy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: acr-test
+  namespace: acr-test
+  labels:
+    helm.sh/chart: acr-0.2.0
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: api
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: dev-health-acr
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: acr
+      app.kubernetes.io/instance: acr-test
+      app.kubernetes.io/component: api
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: gateway-system
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 5432
+    - ports:
+        - protocol: TCP
+          port: 9000
+    - ports:
+        - protocol: TCP
+          port: 8095
+    - ports:
+        - protocol: TCP
+          port: 8091
+
+---
+# Source: acr/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: acr-test
+  namespace: acr-test
+  labels:
+    helm.sh/chart: acr-0.2.0
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: api
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: dev-health-acr
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: acr
+      app.kubernetes.io/instance: acr-test
+      app.kubernetes.io/component: api
+
+---
+# Source: acr/templates/serviceaccount-api.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: "acr-test-api"
+  namespace: acr-test
+  labels:
+    helm.sh/chart: acr-0.2.0
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: api
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: dev-health-acr
+automountServiceAccountToken: false
+
+---
+# Source: acr/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: "acr-test"
+  namespace: acr-test
+  labels:
+    helm.sh/chart: acr-0.2.0
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: api
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: dev-health-acr
+automountServiceAccountToken: false
+
+---
+# Source: acr/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: acr-test-config
+  namespace: acr-test
+  labels:
+    helm.sh/chart: acr-0.2.0
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: api
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: dev-health-acr
+data:
+  ACR_ENVIRONMENT: "production"
+  # Fixed to the container/probe port; not operator-tunable so the listen
+  # address can never diverge from containerPort 8080.
+  ACR_ADDR: ":8080"
+  ACR_LOG_LEVEL: "debug"
+  ACR_REQUEST_TIMEOUT: "15s"
+  ACR_READ_HEADER_TIMEOUT: "5s"
+  ACR_READ_TIMEOUT: "20s"
+  ACR_WRITE_TIMEOUT: "20s"
+  ACR_IDLE_TIMEOUT: "60s"
+  ACR_SHUTDOWN_TIMEOUT: "10s"
+  ACR_REQUIRE_BACKING_STORES: "true"
+  ACR_LOCAL_COMPOSITION_READY: "false"
+  ACR_POSTGRES_CONNECTION_KIND: "direct"
+  ACR_MAX_ITEMS: "30"
+  ACR_MAX_OUTPUT_TOKENS: "4000"
+  ACR_MAX_SERIALIZED_BYTES: "262144"
+  ACR_REQUESTS_PER_MINUTE: "60"
+  ACR_ENABLE_EPISODE_WRITEBACK: "false"
+  ACR_ASK_DEV_RETENTION_ENABLED: "false"
+  ACR_DEVICE_VERIFICATION_URL: "https://dev-health.internal/acr/device"
+  ACR_AUTH_WORKLOAD_EXCHANGE_URL: "http://auth-service.acr-test.svc:8080"
+  ACR_AUTH_WORKLOAD_ALLOW_PLAIN_HTTP: "true"
+  ACR_AUTH_WORKLOAD_ISSUER: "https://auth.example.test"
+  ACR_AUTH_WORKLOAD_SUBJECT_FILE: "/var/run/secrets/dev-health/auth-workload/token"
+  ACR_DEV_HEALTH_ENTITLEMENT_URL: "http://ops.example:8091"
+  ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT: "5s"
+  ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: "/var/run/acr/entitlement/token"
+
+---
+# Source: acr/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: acr-test
+  namespace: acr-test
+  labels:
+    helm.sh/chart: acr-0.2.0
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: api
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: dev-health-acr
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+
+---
+# Source: acr/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: acr-test
+  namespace: acr-test
+  labels:
+    helm.sh/chart: acr-0.2.0
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: api
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: dev-health-acr
+spec:
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: acr
+      app.kubernetes.io/instance: acr-test
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: acr
+        app.kubernetes.io/instance: acr-test
+        app.kubernetes.io/component: api
+      annotations:
+        checksum/config: 790ba3b86f6c803f9b326206295b4eba7d9de1b4de244b0de0f320ab6ffeee10
+        checksum/credentials: 3015194e652a18943c4720523560c00ba1dfee6d215da25531ba417e959aa67a
+    spec:
+      serviceAccountName: "acr-test-api"
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: acr-registry-pull
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: acr
+              app.kubernetes.io/instance: acr-test
+              app.kubernetes.io/component: api
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: acr
+              app.kubernetes.io/instance: acr-test
+              app.kubernetes.io/component: api
+      initContainers:
+        - name: prepare-entitlement-token
+          image: "docker.io/library/busybox@sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028"
+          command: ["sh", "-c", 'umask 077 && cp /source/token /target/token && if [ -f /source-ca/ca.crt ]; then cp /source-ca/ca.crt /target-ca/ca.crt; fi']
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          volumeMounts:
+            - name: entitlement-token-source
+              mountPath: /source
+              readOnly: true
+            - name: entitlement-token
+              mountPath: /target
+            - name: entitlement-ca
+              mountPath: /target-ca
+      containers:
+        - name: acr-api
+          image: "registry.example/acr-api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/acr-api", "serve"]
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          envFrom:
+            - configMapRef:
+                name: acr-test-config
+          env:
+            - name: ACR_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: "acr-runtime"
+                  key: "ACR_POSTGRES_DSN"
+            - name: ACR_CLICKHOUSE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: "acr-runtime"
+                  key: "ACR_CLICKHOUSE_DSN"
+            - name: ACR_EVIDENCE_ID_ACTIVE_KID
+              valueFrom:
+                secretKeyRef:
+                  name: "acr-runtime"
+                  key: "ACR_EVIDENCE_ID_ACTIVE_KID"
+            - name: ACR_EVIDENCE_ID_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: "acr-runtime"
+                  key: "ACR_EVIDENCE_ID_KEYS"
+            # CHAOS-3916: always rendered (never conditional) so an unset
+            # deployment explicitly declares itself off, matching how
+            # contextFabric.projector.projectionEnabled is always rendered
+            # in projector-configmap.yaml. See values.yaml's own comment:
+            # lifecycleEnabled MUST be set the same way on acr-projector
+            # (templates/projector-deployment.yaml reads the SAME value).
+            - name: ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED
+              value: "false"
+            - name: ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED
+              value: "false"
+            # CHAOS-12416: always rendered, so an unset deployment explicitly
+            # declares itself off. See values.yaml's own comment.
+            - name: ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED
+              value: "false"
+            # CHAOS-12521: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_INVESTMENT_TREEMAP_ENABLED
+              value: "false"
+            # CHAOS-12554: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED
+              value: "false"
+            # CHAOS-12690: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_INVESTMENT_REPOSITORY_FROM_OPS_ENABLED
+              value: "false"
+            # CHAOS-12690 I2: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_INVESTMENT_TEAM_FROM_OPS_ENABLED
+              value: "false"
+            # CHAOS-12582: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED
+              value: "false"
+            # CHAOS-12513: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_COMPARISON_TABLE_ENABLED
+              value: "false"
+            # CHAOS-12626: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_LANDSCAPE_QUADRANT_ENABLED
+              value: "false"
+            # CHAOS-13002: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_READ_FALLBACK_ENABLED
+              value: "false"
+            # CHAOS-12472: always rendered, like the flag above. Ask Dev's Stop
+            # needs it; see values.yaml's own comment.
+            - name: ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED
+              value: "false"
+            - name: ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL
+              value: workload
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: 10
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+            requests:
+              cpu: 25m
+              memory: 128Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: entitlement-token
+              mountPath: "/var/run/acr/entitlement"
+              readOnly: true
+            - name: auth-workload-subject
+              mountPath: "/var/run/secrets/dev-health/auth-workload"
+              readOnly: true
+      # deployment.extraContainers is intentionally never rendered; the
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: entitlement-token
+          emptyDir:
+            medium: Memory
+        - name: entitlement-token-source
+          secret:
+            secretName: "acr-entitlement-token"
+            items:
+              - key: "token"
+                path: "token"
+        - name: entitlement-ca
+          emptyDir:
+            medium: Memory
+        # CHAOS-11195: the subject token of acr-api's workload-token exchange client. Audience and lifetime are
+        # fixed: auth-service reviews every subject against the one audience dev-health-workload-exchange, and 600 s
+        # is the Kubernetes minimum. 0400 (defaultMode 256); kubelet adds group read for the pod's fsGroup. The
+        # client reads the file again for every exchange, so the mount has no subPath (it would never rotate).
+        - name: auth-workload-subject
+          projected:
+            defaultMode: 256
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: "dev-health-workload-exchange"
+                  expirationSeconds: 600
+
+---
+# Source: acr/templates/hpa.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: acr-test
+  namespace: acr-test
+  labels:
+    helm.sh/chart: acr-0.2.0
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: api
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: dev-health-acr
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: acr-test
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 75
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+---
+# Source: acr/templates/httproute.yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: acr-test
+  namespace: acr-test
+  labels:
+    helm.sh/chart: acr-0.2.0
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: api
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: dev-health-acr
+spec:
+  parentRefs:
+    - name: "acr-gateway"
+      namespace: "gateway-system"
+      sectionName: "https"
+  hostnames:
+    - acr.dev-health.internal
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/agent-context
+      backendRefs:
+        - name: acr-test
+          port: 8080
+---
+# Source: acr/templates/migration-prereqs.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: acr-test-migrate
+  namespace: acr-test
+  labels:
+    helm.sh/chart: acr-0.2.0
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: dev-health-acr
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: acr
+      app.kubernetes.io/instance: acr-test
+      app.kubernetes.io/component: migration
+  policyTypes:
+    - Ingress
+    - Egress
+  # The migration Job accepts no ingress.
+  ingress: []
+  egress:
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - ports:
+        - protocol: TCP
+          port: 5432
+
+---
+# Source: acr/templates/migration-prereqs.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: "acr-test-migrate"
+  namespace: acr-test
+  labels:
+    helm.sh/chart: acr-0.2.0
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: dev-health-acr
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+automountServiceAccountToken: false
+
+---
+# Source: acr/templates/migration-prereqs.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: acr-test-migrate-config
+  namespace: acr-test
+  labels:
+    helm.sh/chart: acr-0.2.0
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: dev-health-acr
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+data:
+  ACR_ENVIRONMENT: "production"
+  ACR_LOG_LEVEL: "debug"
+  ACR_POSTGRES_CONNECTION_KIND: "direct"
+
+---
+# Source: acr/templates/migration-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: acr-test-migrate
+  namespace: acr-test
+  labels:
+    helm.sh/chart: acr-0.2.0
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: dev-health-acr
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: acr
+        app.kubernetes.io/instance: acr-test
+        app.kubernetes.io/component: migration
+      annotations:
+        checksum/config: c03ccb2904f641c9352159d99157c3596330ea8d33c6f46c9d89e092d15effe1
+        checksum/credentials: 3015194e652a18943c4720523560c00ba1dfee6d215da25531ba417e959aa67a
+    spec:
+      restartPolicy: Never
+      serviceAccountName: "acr-test-migrate"
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: acr-registry-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: acr-migrate
+          image: "registry.example/acr-api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/acr-migrate", "up"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          envFrom:
+            - configMapRef:
+                name: acr-test-migrate-config
+          env:
+            - name: ACR_POSTGRES_MIGRATION_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: "acr-migration"
+                  key: "ACR_POSTGRES_MIGRATION_DSN"
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+
+---
+# Source: acr/templates/runtime-acl-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: acr-test-grant-runtime-acl
+  namespace: acr-test
+  labels:
+    helm.sh/chart: acr-0.2.0
+    app.kubernetes.io/name: acr
+    app.kubernetes.io/instance: acr-test
+    app.kubernetes.io/component: migration
+    app.kubernetes.io/version: "0.1.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: dev-health-acr
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-4"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: acr
+        app.kubernetes.io/instance: acr-test
+        app.kubernetes.io/component: migration
+      annotations:
+        checksum/config: c03ccb2904f641c9352159d99157c3596330ea8d33c6f46c9d89e092d15effe1
+        checksum/credentials: 3015194e652a18943c4720523560c00ba1dfee6d215da25531ba417e959aa67a
+    spec:
+      restartPolicy: Never
+      serviceAccountName: "acr-test-migrate"
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: acr-registry-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: acr-grant-runtime-acl
+          image: "registry.example/acr-api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          imagePullPolicy: IfNotPresent
+          command: ["/usr/local/bin/acr-migrate", "grant-runtime-acl"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          envFrom:
+            - configMapRef:
+                name: acr-test-migrate-config
+          env:
+            - name: ACR_POSTGRES_MIGRATION_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: "acr-migration"
+                  key: "ACR_POSTGRES_MIGRATION_DSN"
+            # Read-only: acr-migrate grant-runtime-acl parses just the
+            # embedded username out of this DSN (the runtime role it grants
+            # to) and never dials it. Already a required Secret reference
+            # (acr.validateCredentials) -- the SAME one the hosted runtime
+            # workloads consume, so this adds no new credential surface.
+            - name: ACR_POSTGRES_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: "acr-runtime"
+                  key: "ACR_POSTGRES_DSN"
+            # Which optional runtime features hold their table privileges: the
+            # same settings the workloads read (templates/configmap.yaml).
+            - name: ACR_ENABLE_EPISODE_WRITEBACK
+              value: "false"
+          resources:
+            limits:
+              cpu: "1"
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+

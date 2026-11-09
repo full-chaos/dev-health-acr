@@ -1,0 +1,25 @@
+# Token-mode (credential key unset) entitlement values shaped like a production release that keeps the token Secret
+# and selects the workload credential through deployment.extraEnv. The render must not change for such a release.
+config:
+  environment: production
+  requireBackingStores: true
+  localCompositionReady: false
+  entitlement:
+    url: http://ops.example:8091
+credentials:
+  runtime:
+    existingSecret: acr-runtime
+  migration:
+    existingSecret: acr-migration
+  entitlementToken:
+    existingSecret: acr-entitlement-token
+    key: token
+authWorkloadClient:
+  enabled: true
+  exchangeURL: http://auth-service.acr-test.svc:8080
+  allowPlainHTTP: true
+  issuer: https://auth.example.test
+deployment:
+  extraEnv:
+    - name: ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL
+      value: workload
