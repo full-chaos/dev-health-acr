@@ -540,7 +540,12 @@ case "$scenario" in
       --set-string "config.entitlement.credential=bogus"
     exit 0 ;;
   entitlement-credential-non-string-no-schema)
-    negative entitlement-credential-non-string-no-schema "config.entitlement.credential"       "${ent_prod_args[@]}"       --set-string "config.entitlement.url=http://ops.example:8091"       --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token"       --skip-schema-validation       --set-json "config.entitlement.credential=false"
+    negative entitlement-credential-non-string-no-schema "config.entitlement.credential" \
+      "${ent_prod_args[@]}" \
+      --set-string "config.entitlement.url=http://ops.example:8091" \
+      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
+      --skip-schema-validation \
+      --set-json "config.entitlement.credential=false"
     exit 0 ;;
   entitlement-token-required)
     negative entitlement-token-required "credentials.entitlementToken.existingSecret" \
