@@ -213,5 +213,17 @@ func TestAReadThatFailsDoesNotDrain(t *testing.T) {
 		if drained := tableReadLines(t, &logs, tableReadDrainedMessage); len(drained) != 0 {
 			t.Fatalf("a failed read drained %v\n%s", drained, logs.String())
 		}
+		// The summary stays owed: the next call that reads every table empty
+		// writes it.
+		base.tables = nil
+		if _, _, err := source.NextProjectionBatch(context.Background(), next); err != nil {
+			t.Fatalf("third call err=%v", err)
+		}
+		drained := tableReadLines(t, &logs, tableReadDrainedMessage)
+		for _, name := range devhealthsource.NonMembershipTableNamesForTest() {
+			if len(drained[name]) != 1 {
+				t.Fatalf("table %s: %d drained lines after the read recovered, want 1\n%s", name, len(drained[name]), logs.String())
+			}
+		}
 	})
 }
