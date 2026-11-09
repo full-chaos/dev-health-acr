@@ -1869,7 +1869,7 @@ func logConflictingIdentities(ctx context.Context, logger *slog.Logger, orgID st
 // projectTeamSourceRowIDOffset is the 1-based byte offset of the id segment
 // in a project-team.v2 evidence ref: its text after the kind prefix, which is
 // the stored group's row key (the same four segments, the same escape).
-var projectTeamSourceRowIDOffset = strconv.Itoa(len(contractsv1.ContextFabricEvidenceRefPrefix+string(contractsv1.ContextFabricEvidenceEntityProjectTeamV2)+":") + 1)
+var projectTeamSourceRowIDOffset = strconv.Itoa(len(contractsv1.ContextFabricEvidenceRefPrefix) + len(contractsv1.ContextFabricEvidenceEntityProjectTeamV2) + len(":") + 1)
 
 // ProjectTeamSourceRowQuery is the organization-level row read of one
 // project-team.v2 group: the stored group the projector pages

@@ -311,6 +311,14 @@ var nonMintKindUses = map[string]bool{
 	"internal/contextfabric/evidenceref.Parse": true,
 }
 
+// nonMintOwnerUses are single owners that may take a kind constant in one
+// builtin call without minting a ref, by file, owner and callee: the
+// project-team.v2 source-row read measures the kind's length to find the id
+// segment of a ref it binds.
+var nonMintOwnerUses = map[string]bool{
+	"internal/contextfabric/devhealthsource/teams_projects_edges.go projectTeamSourceRowIDOffset len": true,
+}
+
 // derivedMintSites is the inventory of the repository's production Go.
 func derivedMintSites(t *testing.T) []mintSite {
 	t.Helper()
@@ -412,6 +420,7 @@ func inventory(files []goFile) (sites []mintSite, unclassified []string) {
 						sites = append(sites, site)
 					case name == "string" && compared[call]:
 					case nonMintKindUses[dir+"."+name]:
+					case nonMintOwnerUses[file.rel+" "+owner+" "+name]:
 					default:
 						unclassified = append(unclassified, fmt.Sprintf("%s (%s): %s is passed to %s.%s, which is neither a known mint nor a known non-minting use: classify it in mint_site_inventory_test.go", file.rel, owner, kind, dir, name))
 					}
