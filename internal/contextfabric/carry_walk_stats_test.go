@@ -120,3 +120,19 @@ func TestCarryWalkStats_RecordingDoesNotChangeTheAnswer(t *testing.T) {
 		t.Fatalf("measured carry %#v differs from bare carry %#v: telemetry must not change the answer", measured, bare)
 	}
 }
+
+func TestCarryWalkStats_MissLinesCarryTheStatsToo(t *testing.T) {
+	t.Parallel()
+	telemetry := &recordingTelemetry{}
+	engine := buildCarryTestEngine(t, &staticResultStore{})
+	engine.telemetry = telemetry
+	walk := CarryWalkStats{Visited: 3, Duration: 7 * time.Millisecond}
+	engine.recordWindowCarry(context.Background(), storage.Principal{}, windowCarryResult{Outcome: WindowCarryMissNoConfirmedWindow}, CarrySeedReceipt, walk)
+	engine.recordKindCarry(context.Background(), storage.Principal{}, kindCarryResult{Outcome: KindCarryMissNoConfirmedKind}, CarrySeedReceipt, walk)
+	if len(telemetry.windowCarryWalks) != 1 || telemetry.windowCarryWalks[0] != walk {
+		t.Fatalf("window miss walks = %#v, want %#v", telemetry.windowCarryWalks, walk)
+	}
+	if len(telemetry.kindCarryWalks) != 1 || telemetry.kindCarryWalks[0] != walk {
+		t.Fatalf("kind miss walks = %#v, want %#v", telemetry.kindCarryWalks, walk)
+	}
+}
