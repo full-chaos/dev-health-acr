@@ -2564,12 +2564,18 @@ Run, with the ops stack that carries the `acr-api` workload row in `auth-workloa
 The bootstrap one-shot is not a `depends_on` of acr-api: a later `up` would run it again. `bootstrap-create` refuses while a live credential exists,
 and its `-out` refuses a file that exists. Keep the `credential=<id>` line it prints (it holds no value).
 
-- **Rotation** (before the 720 h expiry): remove the file as its owner,
-  `... --profile auth run --rm --user 65532:65532 --entrypoint sh acr-workload-volume -c 'rm /run/workload/acr-api.bootstrap'`, then
-  `... --profile auth run --rm acr-workload-bootstrap workloads bootstrap-rotate -workload acr-api -out /run/workload/acr-api.bootstrap -overlap 1h -apply`
-  (the previous credential stays valid for the overlap). acr-api reads the file again for every exchange, so it needs no restart.
+- **Rotation** (before the 720 h expiry): rotate into a new file next to the live one,
+  `... --profile auth run --rm acr-workload-bootstrap workloads bootstrap-rotate -workload acr-api -out /run/workload/acr-api.bootstrap.next -overlap 1h -apply`
+  (the live file is not touched, and the previous credential stays valid for the overlap; keep the `previous credential=<id>` line it prints).
+  Then, inside the overlap, deliver the new file over the live one as its owner, in one rename,
+  `... --profile auth run --rm --user 65532:65532 --entrypoint sh acr-workload-volume -c 'mv -f /run/workload/acr-api.bootstrap.next /run/workload/acr-api.bootstrap'`.
+  acr-api reads the file again for every exchange, so it needs no restart: it presents the new credential at its next exchange (a workload
+  token lives at most 300 s). After the overlap, revoke the previous credential (below). If the rotate fails, the live file still holds the
+  previous credential and acr-api keeps running on it.
 - **Revoke** (a leaked or retired credential): `... run --rm acr-workload-bootstrap workloads bootstrap-revoke -credential <id> -reason <reason> -apply`.
-  Revocation is terminal. To issue a new one, remove the file as above and run `bootstrap-create` (step 2) again.
+  Revocation is terminal. To issue a new one, remove the file as its owner,
+  `... --profile auth run --rm --user 65532:65532 --entrypoint sh acr-workload-volume -c 'rm /run/workload/acr-api.bootstrap'`, and run
+  `bootstrap-create` (step 2) again.
   Without a live credential acr-api keeps running: no readiness check depends on the exchange.
 
 `down -v` deletes the volume.
