@@ -538,6 +538,11 @@ revocation.
   one rotation; both answers carry the same pair.
 - **Reuse.** Any other presentation of a consumed token revokes the whole
   family: the family row (`revoked_reason=reuse`) and every member credential.
+- **Organization gone.** A refresh whose family's organization Dev Health
+  reports as deleted mints nothing and revokes the family: the family row
+  (`revoked_reason=org_deprovisioned`) and every member credential
+  (migration 0073 adds the reason to the column's closed set: `reuse`,
+  `sign_out`, `member_revoked`, `org_deprovisioned`).
 - `POST /revoke` (RFC 7009): `token` (a refresh token), optional
   `token_type_hint`, `client_id`. It revokes the token's family
   (`revoked_reason=sign_out`) and answers `200 {}` for any refresh token, known
@@ -578,8 +583,12 @@ revocation.
   revoked; an outage of that check is `unavailable` and consumes nothing);
   `step=revoke` with `ok`, `family_revoked`, `client_mismatch`,
   `invalid_grant`, `unsupported_token_type`. Every successor and every
-  revocation writes a `credential_created` / `credential_revoked` audit row with
-  `family_id` (and `family_revoke_reason`).
+  revocation writes a `credential_created` / `credential_revoked` audit row. A
+  family revocation (`reuse`, `sign_out`, `org_deprovisioned`, or a rotation
+  that finds a revoked member) writes `family_id` and `family_revoke_reason` on
+  every member row. A direct revoke of one credential (`member_revoked`) writes
+  them on its siblings, if any; the credential revoked directly carries the
+  operator's reason text instead.
 
 ### Browser family purge (CHAOS-12140)
 
