@@ -803,6 +803,13 @@ networkPolicy:
     # egress rules above -- NetworkPolicy cannot target the API server by pod
     # label the way it can an in-cluster Service.
     kubernetesAPIPort: 443
+    # Destination-limited apiserver egress: a list of {cidr, port}. When set,
+    # each entry renders one rule (ipBlock cidr + TCP port) and the port-only
+    # kubernetesAPIPort rule above is NOT rendered. cidr is one IPv4 address
+    # as a /32. Use the apiserver ENDPOINT address and port (the `kubernetes`
+    # EndpointSlice), not the ClusterIP: on k3s the policy sees the packet
+    # after the Service DNAT. Empty (the default) renders as before.
+    kubernetesAPIEndpoints: []
 
 # OTLP/gRPC export of each workload's own telemetry (acr-api, acr-mcp,
 # acr-projector): HTTP server spans and metrics, projection-tick spans, and a

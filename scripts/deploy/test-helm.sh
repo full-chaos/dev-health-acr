@@ -62,6 +62,8 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               The acr-api ServiceAccount scenarios: api-service-account-dedicated (positive),
               api-service-account-shared, api-service-account-default, api-service-account-default-exchange-off,
               service-account-name-collision.
+              The acr-api apiserver egress scenarios: kube-api-endpoints-off and kube-api-endpoints-on
+              (positive), kube-api-endpoints-bad (each bad entry fails closed).
               The acr-api auth workload client scenarios (CHAOS-11195): auth-workload-client-on (positive),
               auth-workload-client-off-render, auth-workload-client-bad-inputs,
               auth-workload-client-presence-only.
@@ -226,6 +228,29 @@ embed_api_with_projector() {
     --set contextFabric.readsEnabled=true \
     --set-string "contextFabric.falkor.addr=falkor.acr-test.svc:6379" \
     "$@"
+}
+
+# kube_api_rules <render>: the acr-api NetworkPolicy egress rules that can reach the apiserver, one line each:
+# "portonly <port>" for a rule with no destination on networkPolicy.egress.kubernetesAPIPort (443 here),
+# "ipblock <cidr> <port>" for a destination-limited rule. Other egress rules are not printed.
+kube_api_rules() {
+  python3 -I - "$1" "$RELEASE" <<'PY'
+import sys, yaml
+path, release = sys.argv[1], sys.argv[2]
+for d in yaml.safe_load_all(open(path)):
+    if not d or d.get('kind') != 'NetworkPolicy' or d['metadata']['name'] != release:
+        continue
+    for r in d['spec'].get('egress') or []:
+        ports = [p.get('port') for p in r.get('ports') or []]
+        to = r.get('to') or []
+        if not to and 443 in ports and len(ports) == 1:
+            print('portonly 443')
+        for t in to:
+            cidr = (t.get('ipBlock') or {}).get('cidr')
+            if cidr:
+                for p in ports:
+                    print('ipblock %s %s' % (cidr, p))
+PY
 }
 
 api_sa_render() {
@@ -786,6 +811,42 @@ case "$scenario" in
       pass "embed-api-timeout-$good accepted and rendered"
     done
     printf 'RESULT: scenario embed-api-timeout-bounds passed\n'
+    exit 0 ;;
+  kube-api-endpoints-off)
+    printf 'scenario: kube-api-endpoints-off (empty kubernetesAPIEndpoints: render byte-equal to the render without the key; the port-only apiserver rule as before)\n'
+    exch=(--set workloadTokenExchange.enabled=true --set-string "workloadTokenExchange.trustDomain=test.cluster.local")
+    render "${exch[@]}" >"$workdir/kapi-unset.yaml"
+    render "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[]' >"$workdir/kapi-empty.yaml"
+    cmp -s "$workdir/kapi-unset.yaml" "$workdir/kapi-empty.yaml" || fail_gate "kube-api-endpoints: an empty list must render byte-equal to the render without the key"
+    kube_api_rules "$workdir/kapi-empty.yaml" >"$workdir/kapi-empty.rules"
+    [[ "$(cat "$workdir/kapi-empty.rules")" == "portonly 443" ]] || fail_gate "kube-api-endpoints: empty list must keep exactly the port-only 443 rule, got: $(tr '\n' ';' <"$workdir/kapi-empty.rules")"
+    pass "kube-api-endpoints-off: empty list byte-equal, port-only 443 rule kept"
+    printf 'RESULT: scenario kube-api-endpoints-off passed\n'
+    exit 0 ;;
+  kube-api-endpoints-on)
+    printf 'scenario: kube-api-endpoints-on (each entry renders ipBlock /32 + port; no port-only apiserver rule)\n'
+    exch=(--set workloadTokenExchange.enabled=true --set-string "workloadTokenExchange.trustDomain=test.cluster.local")
+    render "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.151/32","port":6443}]' >"$workdir/kapi-on.yaml"
+    kube_api_rules "$workdir/kapi-on.yaml" >"$workdir/kapi-on.rules"
+    [[ "$(cat "$workdir/kapi-on.rules")" == "ipblock 10.0.0.151/32 6443" ]] || fail_gate "kube-api-endpoints: want exactly one rule ipBlock 10.0.0.151/32 port 6443 and no port-only 443 rule, got: $(tr '\n' ';' <"$workdir/kapi-on.rules")"
+    render "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.151/32","port":6443},{"cidr":"10.0.0.152/32","port":6443}]' >"$workdir/kapi-two.yaml"
+    kube_api_rules "$workdir/kapi-two.yaml" >"$workdir/kapi-two.rules"
+    [[ "$(tr '\n' ';' <"$workdir/kapi-two.rules")" == "ipblock 10.0.0.151/32 6443;ipblock 10.0.0.152/32 6443;" ]] || fail_gate "kube-api-endpoints: two entries must render two ipBlock rules and no port-only rule, got: $(tr '\n' ';' <"$workdir/kapi-two.rules")"
+    render --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.151/32","port":6443}]' >"$workdir/kapi-exch-off.yaml"
+    [[ -z "$(kube_api_rules "$workdir/kapi-exch-off.yaml")" ]] || fail_gate "kube-api-endpoints: exchange off must render no apiserver rule"
+    pass "kube-api-endpoints-on: ipBlock /32 + port per entry, no port-only rule; exchange off renders none"
+    printf 'RESULT: scenario kube-api-endpoints-on passed\n'
+    exit 0 ;;
+  kube-api-endpoints-bad)
+    exch=(--set workloadTokenExchange.enabled=true --set-string "workloadTokenExchange.trustDomain=test.cluster.local")
+    negative kube-api-endpoints-no-cidr "cidr" "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"port":6443}]'
+    negative kube-api-endpoints-no-port "port" "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.151/32"}]'
+    negative kube-api-endpoints-not-32 "cidr" "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.0/24","port":6443}]'
+    negative kube-api-endpoints-any "cidr" "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"0.0.0.0/0","port":6443}]'
+    negative kube-api-endpoints-port-zero "port" "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.151/32","port":0}]'
+    negative kube-api-endpoints-port-high "port" "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.151/32","port":70000}]'
+    negative kube-api-endpoints-extra-key "additional" "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.151/32","port":6443,"host":"x"}]'
+    printf 'RESULT: scenario kube-api-endpoints-bad passed\n'
     exit 0 ;;
   api-service-account-dedicated)
     printf 'scenario: api-service-account-dedicated (acr-api has its own ServiceAccount; projector and TokenReview binding assertions)\n'

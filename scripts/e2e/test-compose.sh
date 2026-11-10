@@ -31,25 +31,49 @@ if grep -Eq 'acr-ops-tls|acr-pki-init|acr_e2e_(postgres|clickhouse)_tls|sslmode=
   exit 1
 fi
 grep -Fq 'Ops organization provisioning failed' "$script"
-# The ops internal listener answers 401 to a request without the svc_acr_ bearer (ops CHAOS-9993): the
-# credential is minted before the readiness probe, the probe sends it, and a rejection is named.
-grep -Fq -- '-e ACR_PROBE_TOKEN --entrypoint sh acr-tls-proxy -c' "$script"
+# The ops internal acr routes accept only the acr-api workload token (ops CHAOS-12977): the harness writes the
+# acr-api bootstrap credential, the readiness probe exchanges it at auth-service and sends the workload token, and
+# the svc_acr_ service credential is then measured to get 401 on the same route.
+grep -Fq 'http://auth-service:8095/internal/v1/token/exchange' "$script"
+grep -Fq 'urn%3Adev-health%3Aparams%3Aoauth%3Atoken-type%3Aworkload-bootstrap' "$script"
+grep -Fq -- '--post-file /tmp/form' "$script"
+# The bootstrap credential never reaches a command line: it is read from the volume into a tmpfs form file.
 # shellcheck disable=SC2016 # the pin is a literal source line.
-grep -Fq -- '--header "Authorization: Bearer $ACR_PROBE_TOKEN" http://go-api:8091/api/v1/internal/acr/health' "$script"
-# No secret on a command line: the readiness probe never expands the bearer value into an argv.
+grep -Fq 'b="$(enc < /run/workload/acr-api.bootstrap)"' "$script"
+if sed -n '/^workload_probe_script=/,/^$/p' "$script" | grep -nE -- '--post-data'; then
+  printf 'the bootstrap credential must be posted from a file, not a command line\n' >&2
+  exit 1
+fi
+# shellcheck disable=SC2016 # the pin is a literal source line.
+sed -n '/^wait_go_api()/,/^}/p' "$script" | grep -Fq 'workload_probe "${go_api_internal}${acr_health_path}"'
+# The svc_acr_ control: the token reaches the probe by environment name, and anything but 401 fails the run.
+grep -Fq -- '-e ACR_PROBE_TOKEN -e ACR_PROBE_URL --entrypoint sh acr-tls-proxy -c' "$script"
+# shellcheck disable=SC2016 # the pin is a literal source line.
+grep -Fq -- '--header "Authorization: Bearer $ACR_PROBE_TOKEN" "$ACR_PROBE_URL"' "$script"
+grep -Fq 'acr_health_path=/api/v1/internal/acr/health' "$script"
+grep -Fq 'want 401' "$script"
 if sed -n '/^wait_go_api()/,/^}/p' "$script" | grep -nE 'Bearer \$\{token\}|Bearer \$token'; then
-  printf 'the svc_acr_ token must reach the probe by environment name, not a command line\n' >&2
+  printf 'the readiness probe must not expand a bearer value on this side\n' >&2
   exit 1
 fi
 grep -Fq 'mint_ops_service_token()' "$script"
 mint_line="$(grep -n 'token="$(mint_ops_service_token)"' "$script" | head -n 1 | cut -d: -f1)"
-wait_line="$(grep -n '^  wait_go_api "$token"' "$script" | head -n 1 | cut -d: -f1)"
-[[ -n "$mint_line" && -n "$wait_line" && "$mint_line" -lt "$wait_line" ]]
+bootstrap_line="$(grep -n '^  provision_acr_workload$' "$script" | head -n 1 | cut -d: -f1)"
+wait_line="$(grep -n '^  wait_go_api$' "$script" | head -n 1 | cut -d: -f1)"
+control_line="$(grep -n '^  assert_service_credential_refused$' "$script" | head -n 1 | cut -d: -f1)"
+[[ -n "$mint_line" && -n "$bootstrap_line" && -n "$wait_line" && -n "$control_line" ]]
+[[ "$mint_line" -lt "$bootstrap_line" && "$bootstrap_line" -lt "$wait_line" && "$wait_line" -lt "$control_line" ]]
 if grep -Fq 'wget -q -O /dev/null http://go-api:8091' "$script"; then
-  printf 'the ops readiness probe must send the svc_acr_ bearer\n' >&2
+  printf 'the ops readiness probe must send a credential\n' >&2
   exit 1
 fi
-grep -Fq 'rejected the svc_acr_ credential (last HTTP status' "$script"
+grep -Fq 'rejected the acr-api workload token (last HTTP status' "$script"
+# acr-api itself sends the workload token: no service-token file reaches it.
+grep -Fq 'ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL: workload' "$script"
+if sed -n '/^  acr-api:$/,/^  acr-credentials:$/p' "$script" | grep -Fq 'acr_ops_token'; then
+  printf 'acr-api must not mount the service token in workload mode\n' >&2
+  exit 1
+fi
 grep -Fq 'actual_status="$?"' "$script"
 grep -Fq 'expected failure diagnostics' "$script"
 grep -Fq 'for tool in docker openssl curl git jq' "$script"

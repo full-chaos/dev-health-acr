@@ -41,10 +41,20 @@ func TestWebAssertion_realBinary(t *testing.T) {
 	environment["ACR_WEB_ASSERTION_ISSUER"] = "https://web.example.test"
 	environment["ACR_WEB_ASSERTION_AUDIENCE"] = "acr-api"
 	environment["ACR_WEB_ASSERTION_JWKS_FILE"] = jwksPath
+	scenario := os.Getenv("ACR_WEB_ASSERTION_SCENARIO")
+	if scenario == "rotation" {
+		// The drill sends more calls and refusals per minute than the default budgets allow.
+		environment["ACR_REQUESTS_PER_MINUTE"] = "6000"
+		environment["ACR_AUTH_FAILURES_PER_WINDOW"] = "1000"
+	}
 	process := startAPIProcess(t, ctx, apiProcessRequest{binary: buildACRAPIBinary(t), environment: environment})
 	defer func() { _ = process.Stop(ctx) }()
 	baseURL := "http://" + environment["ACR_ADDR"]
-	assertWebAssertionScenario(t, baseURL, private, jwksPath, os.Getenv("ACR_WEB_ASSERTION_SCENARIO"))
+	if scenario == "rotation" {
+		runWebAssertionRotationDrill(t, baseURL, private, jwksPath, process)
+		return
+	}
+	assertWebAssertionScenario(t, baseURL, private, jwksPath, scenario)
 }
 
 func assertWebAssertionScenario(t *testing.T, baseURL string, private ed25519.PrivateKey, jwksPath, scenario string) {
