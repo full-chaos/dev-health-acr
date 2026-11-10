@@ -2478,6 +2478,18 @@ jobs:
           # alone closes the class.
           ACR_CONTRACT_GATE: required
         run: go test ./ci/checkendpointprofiles/...
+      # The wrong-credential-class matrix: every class of the pinned ops
+      # credential-classes.json against every endpoint-profile row, through
+      # the real route table. It needs the same pinned inputs, so it runs
+      # here; ACR_CONTRACT_GATE turns a missing input into a failure (the
+      # unit and race jobs skip it with its reason). -v prints the
+      # WRONG_CLASS_GATE_EXECUTED census line.
+      - name: Run the wrong-credential-class matrix against the pinned ops contract
+        env:
+          ACR_ENDPOINT_PROFILE_SCHEMA: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/endpoint-profile.schema.json
+          ACR_CREDENTIAL_CLASSES: ${{ github.workspace }}/.ops-contract/contracts/auth/v1/credential-classes.json
+          ACR_CONTRACT_GATE: required
+        run: go test -count=1 -v -run '^TestWrongClassGate' ./internal/api/
       # The vendored copy under contracts/auth/v1/ops-vendored must equal the
       # pinned ops commit's files: a pin bump and a re-vendor are one change.
       - name: Verify the vendored lifecycle contract against the pinned ops contract
