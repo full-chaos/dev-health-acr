@@ -106,12 +106,18 @@ if grep -Eq -- '--insecure|--accept-invalid-certificate|NODE_TLS_REJECT_UNAUTHOR
   fail 'TLS verification must never be weakened'
 fi
 grep -Fq -- '--cacert "$STATE/pki/ca.crt"' "$script" || fail 'API calls must pin the run CA'
-if grep -Eq 'ACR_API_ORIGIN: https://|NODE_EXTRA_CA_CERTS|/run/acr-e2e/ca\.crt' "$script"; then
+# The web trusts one extra CA only: the auth issuer's (it verifies access tokens against the issuer's discovery and
+# JWKS over https, as the bigboy web does). It never trusts the ACR run CA and never calls ACR over https.
+web_extra_ca_lines() {
+  grep -E 'NODE_EXTRA_CA_CERTS' "$1" | grep -Ev '^[[:space:]]*#' \
+    | grep -vFx '      NODE_EXTRA_CA_CERTS: /run/auth-issuer-ca/issuer.pem' || true
+}
+if grep -Eq 'ACR_API_ORIGIN: https://|/run/acr-e2e/ca\.crt' "$script" || [[ -n "$(web_extra_ca_lines "$script")" ]]; then
   fail 'the Web full-stack service must use private HTTP without an internal CA mount'
 fi
 grep -Fq 'ACR_API_ORIGIN: http://acr-api:8080' "$script" \
   || fail 'the Web full-stack service must call ACR over private HTTP'
-if grep -Eq 'compose up .*acr-ops-tls|ACR_API_ORIGIN: https://|NODE_EXTRA_CA_CERTS|/run/acr-e2e/ca\.crt' "$svs"; then
+if grep -Eq 'compose up .*acr-ops-tls|ACR_API_ORIGIN: https://|/run/acr-e2e/ca\.crt' "$svs" || [[ -n "$(web_extra_ca_lines "$svs")" ]]; then
   fail 'SVS must not depend on an internal TLS service or CA mount'
 fi
 grep -Fq 'ACR_API_ORIGIN: http://acr-tls-proxy:8080' "$svs" \
@@ -357,6 +363,30 @@ for want in 'AUTH_PROXY_URL: http://auth-service:8095' 'AUTH_PROXY_SESSIONS: "tr
 done
 grep -Fq 'extends: { file: ./ops/compose.yml, service: auth-workload-bootstrap }' "$ci_compose" \
   || fail 'the fullstack slice must run the ops auth-workload-bootstrap one-shot that writes the api credential'
+
+# Web verifies each auth-service access token against the pinned issuer, as prod's web Deployment does
+# (dev-health-deploy values.prod.yaml AUTH_ACCESS_TOKEN_CLASS + AUTH_ACCESS_TOKEN_ISSUER): without the pin every
+# sign-in is refused (web src/lib/authServiceWire.ts checkConfig, branch auth_config_invalid). The pin is go-api's issuer.
+for web_pair in "web-fullstack:$script" "web-svs:$svs"; do
+  web_service="${web_pair%%:*}"
+  web_block="$(awk -v s="  ${web_service}:" '$0 == s { inside = 1; print; next } inside && /^EOF$/ { exit } inside { print }' "${web_pair#*:}")"
+  for want in 'AUTH_ACCESS_TOKEN_CLASS: eddsa' \
+    'AUTH_ACCESS_TOKEN_ISSUER: \${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}' \
+    'NODE_EXTRA_CA_CERTS: /run/auth-issuer-ca/issuer.pem' 'source: auth_issuer_tls' 'subpath: ca' \
+    'auth-issuer: { condition: service_started }' 'networks: [dev-health]'; do
+    grep -Fq -- "$want" <<<"$web_block" \
+      || fail "the ${web_service} service must pin the access-token issuer the way prod web does (missing: ${want})"
+  done
+done
+grep -Fq 'AUTH_ACCESS_TOKEN_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}' "$ci_compose" \
+  || fail 'the web issuer pin must be the go-api issuer'
+# query-api refuses to start without the issuer at the pinned ops build (its /query route's only verifier), and
+# api-router then has no upstream: the same issuer, CA and session switch as ops compose.yml query-api and prod.
+query_api_block="$(awk '/^  query-api:$/ { inside = 1; print; next } inside && /^  [a-z]/ { exit } inside { print }' "$ci_compose")"
+for want in 'AUTH_ACCESS_TOKEN_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}' \
+  'AUTH_PROXY_SESSIONS: "true"' 'SSL_CERT_DIR: /run/auth-issuer-ca' 'source: auth_issuer_tls' 'subpath: ca' 'auth-issuer:'; do
+  grep -Fq -- "$want" <<<"$query_api_block" || fail "the fullstack query-api must verify access tokens against the issuer (missing: ${want})"
+done
 # go-api runs with AUTH_PROXY_SESSIONS on, so every one-shot that applies the api role's grants must read the same
 # value (prod migrate-job.yaml carries it); otherwise the api login keeps INSERT/UPDATE on refresh_tokens and
 # go-api's /readyz refuses its role posture.

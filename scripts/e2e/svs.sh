@@ -103,10 +103,25 @@ services:
       ACR_WEB_ASSERTION_KEY_FILE: /run/acr-e2e/web-assertion.key
       ACR_WEB_ASSERTION_KID: acr-svs-web
       NEXT_PUBLIC_DEV_HEALTH_TEST_MODE: "false"
+      # The access-token issuer pin, as prod's web Deployment carries it (dev-health-deploy values.prod.yaml:1622-1626:
+      # AUTH_ACCESS_TOKEN_CLASS eddsa + AUTH_ACCESS_TOKEN_ISSUER). Sessions are issued by auth-service, so web verifies
+      # each access token against the issuer's discovery + JWKS; without the pin every sign-in is refused. The issuer
+      # value is go-api's (compose.ci.yml), and its self-signed CA is trusted the way the bigboy web does it
+      # (NODE_EXTRA_CA_CERTS, deploy docker/bigboy/compose.bigboy.yml:1839-1848).
+      AUTH_ACCESS_TOKEN_CLASS: eddsa
+      AUTH_ACCESS_TOKEN_ISSUER: \${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}
+      NODE_EXTRA_CA_CERTS: /run/auth-issuer-ca/issuer.pem
     volumes:
       - ${STATE}/web/web-assertion.key:/run/acr-e2e/web-assertion.key:ro
+      - type: volume
+        source: auth_issuer_tls
+        target: /run/auth-issuer-ca
+        read_only: true
+        volume:
+          subpath: ca
     depends_on:
       go-api: { condition: service_started }
+      auth-issuer: { condition: service_started }
       bugsink: { condition: service_started }
       valkey: { condition: service_healthy }
     networks: [dev-health]

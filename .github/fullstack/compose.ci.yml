@@ -370,8 +370,21 @@ services:
       GO_API_OPPORTUNITIES_ENABLED: "true"
       GO_API_WORK_UNITS_ENABLED: "true"
       GO_API_WORK_UNIT_EXPLAIN_ENABLED: "true"
+      # The access-token issuer, as ops compose.yml query-api and the prod query-api Deployment carry it: at ops
+      # ff8d2ab3 query-api refuses to start without it ("AUTH_ACCESS_TOKEN_ISSUER is required when the /query route
+      # is configured: it is the only user access-token verifier"), and api-router (nginx) then exits on the missing
+      # upstream, so web's sign-in has no backend. The issuer and its CA are go-api's; AUTH_PROXY_SESSIONS as go-api.
+      AUTH_ACCESS_TOKEN_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}
+      AUTH_PROXY_SESSIONS: "true"
+      SSL_CERT_DIR: /run/auth-issuer-ca
     volumes:
       - ${GO_API_ENVELOPE_JWKS_FILE:?set by scripts/e2e/compose.sh}:/secrets/envelope-jwks.json:ro
+      - type: volume
+        source: auth_issuer_tls
+        target: /run/auth-issuer-ca
+        read_only: true
+        volume:
+          subpath: ca
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -379,6 +392,12 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      auth-service:
+        condition: service_healthy
+      auth-issuer-tls-init:
+        condition: service_completed_successfully
+      auth-issuer:
+        condition: service_started
     networks: [dev-health]
 
   # Structural placeholder only. compose.sh's render_override() unconditionally sets
