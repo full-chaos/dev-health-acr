@@ -412,7 +412,7 @@ gate):
 ## Wave 11 diff against Wave 0 (CHAOS-11251)
 
 Wave 0 is acr #370, merge `52aff32dac9b`: 16 rows. This inventory, regenerated against
-`60dc9861746a`, has 38 rows: 25 added, 3 removed,
+`19b902ce8bd9`, has 38 rows: 25 added, 3 removed,
 13 changed, 0 unchanged. Each line names the commit that made the change; the
 commit's pull request and ticket are the reason. The regeneration itself changed only the
 header (`generated_at`, `source_commit`) and the advisory `line` / `line_end` hints (row
