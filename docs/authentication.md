@@ -7,6 +7,8 @@ ACR product entitlement and ACR API authentication are separate controls.
 - An `fcacr_` credential identifies a machine client and grants explicit repository and operation scopes.
 - A Dev Health self-hosted license key is never accepted as an ACR bearer credential.
 
+See [acr-api workload token](acr-api-workload-token.md) for the server's ops credentials, migration, and rollback.
+
 ## Token form
 
 ```text

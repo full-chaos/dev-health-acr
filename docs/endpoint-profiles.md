@@ -287,7 +287,7 @@ caught. That is the same CHAOS-4780 class as the reachability limits below;
 CHAOS-7280 carries this one too.
 
 Anchors are plain function and method declarations. A generic function
-declaration (`func f[T any](...)`) is not supported as an anchor: its marker
+declaration (`func f[T any]` with its parameter list) is not supported as an anchor: its marker
 does not resolve and the gate refuses it (`ANCHOR MARKER NOT A CODE NODE`), which fails
 closed.
 
