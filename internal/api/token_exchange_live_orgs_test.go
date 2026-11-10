@@ -140,3 +140,63 @@ func TestTokenExchange_organizationCheckUnavailableIsUpstreamUnavailable(t *test
 		t.Fatalf("status = %d body = %s, want 503 upstream_unavailable", response.Code, response.Body.String())
 	}
 }
+
+// A credential minted through a live_orgs row holds exactly the revoke action:
+// the revoke route admits it, and a workload route that needs another action
+// refuses it before its handler runs.
+func TestTokenExchange_liveOrgsCredentialHoldsOnlyTheRevokeAction(t *testing.T) {
+	bindings := memory.NewWorkloadBindingStore()
+	bindings.Put(storage.WorkloadBindingKey{TrustDomain: "cluster.local", Namespace: "dev-health", ServiceAccountName: "go-api", ServiceAccountUID: "uid-1"},
+		storage.WorkloadBinding{BindingID: "wlb_go_api_revoke", OrgScope: storage.WorkloadOrgScopeLiveOrgs, Role: "revoke", RepositoryScopes: []string{"*"}})
+	resolver, err := auth.NewGrantResolver(bindings, OrganizationPresenceFor(liveOrgsEntitlement{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := newTokenExchangeTestApp(t, nil)
+	// The hosted test app's clock.
+	now := func() time.Time { return time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC) }
+	service, err := auth.NewService(app.runtime.Credentials, auth.ServiceOptions{Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuer, err := auth.NewWorkloadAccessTokenIssuer(service, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchange, err := authverify.NewWorkloadTokenExchangeService(liveOrgsValidator{}, resolver, issuer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := exchange.Exchange(auth.WithWorkloadOrgSelector(context.Background(), liveOrgsLive), "subject-token", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := app.runtime.Credentials.FindByTokenHash(context.Background(), auth.HashToken(result.AccessToken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(stored.Scopes, []string{auth.ScopeCredentialLifecycleRevoke}) || !reflect.DeepEqual(result.Scope, []string{auth.ScopeCredentialLifecycleRevoke}) {
+		t.Fatalf("stored scopes = %v issued scope = %v, want exactly %q", stored.Scopes, result.Scope, auth.ScopeCredentialLifecycleRevoke)
+	}
+
+	list := httptest.NewRequest(http.MethodGet, CredentialLifecycleListPath, nil)
+	list.Header.Set("Authorization", "Bearer "+result.AccessToken)
+	refused := httptest.NewRecorder()
+	app.Handler().ServeHTTP(refused, list)
+	if refused.Code != http.StatusForbidden || !strings.Contains(refused.Body.String(), "insufficient_scope") {
+		t.Fatalf("listing (credential_lifecycle:read) with the revoke credential: status = %d body = %s, want 403 insufficient_scope", refused.Code, refused.Body.String())
+	}
+
+	body, err := json.Marshal(onBehalfBody(contractsv1.CredentialRevokeOnBehalfActorAdmin, "usr_admin_9"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoke := httptest.NewRequest(http.MethodPost, strings.Replace(CredentialRevokeOnBehalfPath, "{credential_id}", "cred_doesnotexist0", 1), strings.NewReader(string(body)))
+	revoke.Header.Set("Authorization", "Bearer "+result.AccessToken)
+	revoke.Header.Set("Content-Type", "application/json")
+	admitted := httptest.NewRecorder()
+	app.Handler().ServeHTTP(admitted, revoke)
+	if admitted.Code != http.StatusNotFound || !strings.Contains(admitted.Body.String(), "not_found") {
+		t.Fatalf("revoke with the revoke credential: status = %d body = %s, want the handler's 404 not_found (admitted past the scope check)", admitted.Code, admitted.Body.String())
+	}
+}
