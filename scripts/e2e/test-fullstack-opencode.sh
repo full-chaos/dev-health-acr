@@ -336,6 +336,15 @@ awk '/^bootstrap_web_user\(\)/,/^}/' "$script" | grep -Fq 'seed_web_owner_member
   || fail 'bootstrap_web_user must seed the owner membership'
 grep -Fq "INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)" "$svs" \
   || fail 'the SVS web user must get its owner membership from the raw seed'
+# The seed's psql password reaches the container by name only (compose takes the value from the exported
+# environment): a PGPASSWORD=<value> in an exec argv shows in the process list.
+for seed_block in "$(awk '/^seed_web_owner_membership\(\)/,/^}/' "$script")" "$(awk '/^bootstrap_web_user\(\)/,/^}/' "$svs")"; do
+  grep -Fq 'export PGPASSWORD="${POSTGRES_PASSWORD}"; compose exec -T -e PGPASSWORD postgres' <<<"$seed_block" \
+    || fail 'the web user membership seed must pass PGPASSWORD to psql by name only'
+  if grep -Fq 'PGPASSWORD=' <<<"${seed_block//export PGPASSWORD=/}"; then
+    fail 'the web user membership seed must not put a PGPASSWORD value in an exec argv'
+  fi
+done
 
 # go-api mints no token pair at the pinned ops build: the web user signs in only while go-api sends sessions to
 # auth-service with the api workload credential (ops compose.yml go-api, CHAOS-13107).

@@ -173,7 +173,7 @@ bootstrap_web_user() {
   fi
   # A raw seed, as fullstack-opencode.sh seed_web_owner_membership: the dho membership verbs go through
   # auth-service (ops CHAOS-11799), which writes public.memberships only while it owns users.
-  role="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres \
+  role="$(export PGPASSWORD="${POSTGRES_PASSWORD}"; compose exec -T -e PGPASSWORD postgres \
     psql -h postgres -U "$POSTGRES_USER" -d devhealth -At -q -v ON_ERROR_STOP=1 -c "
     UPDATE memberships SET role = 'owner', updated_at = now()
       WHERE org_id = '$(<"$STATE/org-id")' AND user_id = (SELECT id FROM users WHERE email = '${WEB_EMAIL}');

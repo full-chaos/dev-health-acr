@@ -1514,7 +1514,7 @@ seed_web_owner_membership() {
   local org_id role status=0
   org_id="$(<"$STATE/org-id")"
   set +e
-  role="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres \
+  role="$(export PGPASSWORD="${POSTGRES_PASSWORD}"; compose exec -T -e PGPASSWORD postgres \
     psql -h postgres -U "$POSTGRES_USER" -d "$OPS_POSTGRES_DB" -At -q -v ON_ERROR_STOP=1 -c "
     UPDATE memberships SET role = 'owner', updated_at = now()
       WHERE org_id = '${org_id}' AND user_id = (SELECT id FROM users WHERE email = '${WEB_EMAIL}');
