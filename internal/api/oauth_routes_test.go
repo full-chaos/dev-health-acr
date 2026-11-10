@@ -45,6 +45,13 @@ var oauthTestAuthAttempts auth.AttemptLimiter
 
 func newOAuthTestApp(t *testing.T, oauthRuntime *OAuthRuntime, withWebAssertions bool) (*App, *bytes.Buffer, error) {
 	t.Helper()
+	return newOAuthTestAppWith(t, oauthRuntime, withWebAssertions, nil)
+}
+
+// newOAuthTestAppWith is newOAuthTestApp with configure run on the
+// dependencies before NewApp.
+func newOAuthTestAppWith(t *testing.T, oauthRuntime *OAuthRuntime, withWebAssertions bool, configure func(*Dependencies)) (*App, *bytes.Buffer, error) {
+	t.Helper()
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
 	audit := memory.NewAuditStore()
@@ -85,7 +92,7 @@ func newOAuthTestApp(t *testing.T, oauthRuntime *OAuthRuntime, withWebAssertions
 		t.Fatal(err)
 	}
 	logs := &bytes.Buffer{}
-	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
+	deps := Dependencies{
 		Capabilities: StaticCapabilitiesProvider{Now: clock, Value: hostedCapabilities()}, Limits: manager, Now: clock, WebAssertions: verifier, MCPHop: oauthTestMCPHop, AuthAttempts: oauthTestAuthAttempts,
 		Runtime: &RuntimeDependencies{
 			Credentials: credentials, Audit: audit, Entitlements: EntitlementFunc(func(context.Context, string, string) (bool, error) { return true, nil }),
@@ -96,7 +103,11 @@ func newOAuthTestApp(t *testing.T, oauthRuntime *OAuthRuntime, withWebAssertions
 			DataStoreChecks:            exactDataStoreChecks(),
 			OAuth:                      oauthRuntime,
 		},
-	}, slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	}
+	if configure != nil {
+		configure(&deps)
+	}
+	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, deps, slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	return app, logs, err
 }
 
