@@ -323,11 +323,12 @@ hosted-integration:
 	ACR_CONTAINER_TESTS=1 ACR_HOSTED_INTEGRATION=1 go test ./cmd/acr-api -run '^TestHostedRuntime_real_binary_serves_and_fails_readiness_safely$$' -count=1 -v
 
 # The web assertion on the real acr-api binary with disposable dependencies:
-# the accept path (happy, retiring-key) and the refusals that need no other
-# input (retired-key, removed-key). The other scenarios of
-# scripts/e2e/web-assertion.sh stay a manual run: each starts the whole fixture.
+# the accept path (happy, retiring-key), the refusals that need no other
+# input (retired-key, removed-key) and the planned key-rotation drill
+# (rotation). The other scenarios of scripts/e2e/web-assertion.sh stay a
+# manual run: each starts the whole fixture.
 web-assertion-integration:
-	@for scenario in happy retiring-key retired-key removed-key; do \
+	@for scenario in happy retiring-key retired-key removed-key rotation; do \
 		ACR_CONTAINER_TESTS=1 bash scripts/e2e/web-assertion.sh --scenario "$$scenario" || exit 1; \
 	done
 
