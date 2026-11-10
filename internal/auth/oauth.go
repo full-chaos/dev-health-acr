@@ -199,8 +199,10 @@ type OAuthConfig struct {
 	// required when a browser client is configured, and its refresh grant
 	// serves browser clients only.
 	BrowserRefresh storage.BrowserRefreshStore
-	Now            func() time.Time
-	Random         io.Reader
+	// OrgPresence refuses a refresh of a family whose organization is gone; nil skips the check.
+	OrgPresence OrganizationPresence
+	Now         func() time.Time
+	Random      io.Reader
 }
 
 // DevBrowserClientID is the client id of the development-only static browser
@@ -314,6 +316,9 @@ func (s *OAuthService) configureBrowserClients(cfg OAuthConfig) error {
 	refresh, err := NewBrowserRefreshService(cfg.BrowserRefresh, s.now, s.random)
 	if err != nil {
 		return ErrInvalidOAuthConfig
+	}
+	if !storage.IsNil(cfg.OrgPresence) {
+		refresh.orgs = cfg.OrgPresence
 	}
 	s.refresh = refresh
 	return nil
@@ -1142,12 +1147,15 @@ func (s *OAuthService) Refresh(ctx context.Context, request OAuthRefreshRequest)
 		return OAuthToken{}, oauthError("unauthorized_client", oauthvocab.OutcomeUnauthorizedClient, false)
 	}
 	clientKind := storage.OAuthClientKindMetadataDocument
-	result, err := s.refresh.Refresh(ctx, request.RefreshToken, request.ClientID)
-	if err != nil {
-		return OAuthToken{ClientKind: clientKind}, fmt.Errorf("%w: refresh: %w", ErrOAuthUnavailable, err)
-	}
 	refuse := func(outcome string) (OAuthToken, error) {
 		return OAuthToken{ClientKind: clientKind}, oauthError("invalid_grant", outcome, false)
+	}
+	result, err := s.refresh.Refresh(ctx, request.RefreshToken, request.ClientID)
+	if errors.Is(err, errRefreshOrganizationGone) {
+		return refuse(oauthvocab.OutcomeOrganizationUnknown)
+	}
+	if err != nil {
+		return OAuthToken{ClientKind: clientKind}, fmt.Errorf("%w: refresh: %w", ErrOAuthUnavailable, err)
 	}
 	switch result.Decision {
 	case storage.BrowserRefreshRotated, storage.BrowserRefreshGraceReplay:

@@ -185,6 +185,27 @@ func revokeFamilyCredentials(ctx context.Context, credentials *storage.Credentia
 	return live, nil
 }
 
+// BrowserRefreshFamilyOrg reads the organization of a refresh token's family for its client.
+func (s *BrowserRefreshStore) BrowserRefreshFamilyOrg(ctx context.Context, presentedHash, clientID string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if presentedHash == "" || clientID == "" {
+		return "", storage.ErrInvalidBrowserRefresh
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	token, ok := s.tokens[presentedHash]
+	if !ok {
+		return "", storage.ErrNotFound
+	}
+	family := s.families[token.familyID]
+	if family.clientID != clientID {
+		return "", storage.ErrNotFound
+	}
+	return family.orgID, nil
+}
+
 // RevokeBrowserFamilyByToken revokes the family a refresh token belongs to.
 func (s *BrowserRefreshStore) RevokeBrowserFamilyByToken(ctx context.Context, presentedHash, clientID, actorID string, now time.Time) (storage.BrowserFamilyRevocationOutcome, error) {
 	if err := ctx.Err(); err != nil {

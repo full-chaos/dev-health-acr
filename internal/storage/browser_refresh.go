@@ -119,6 +119,8 @@ type BrowserRefreshStore interface {
 	// RevokeBrowserFamilyByToken revokes the family a refresh token belongs
 	// to (consumed or not), for the client that holds it.
 	RevokeBrowserFamilyByToken(ctx context.Context, presentedHash, clientID, actorID string, now time.Time) (BrowserFamilyRevocationOutcome, error)
+	// BrowserRefreshFamilyOrg reads a token's family organization with no lock or write; ErrNotFound if unknown or another client's.
+	BrowserRefreshFamilyOrg(ctx context.Context, presentedHash, clientID string) (string, error)
 }
 
 // ErrInvalidBrowserRefresh reports a malformed refresh store request.

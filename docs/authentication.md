@@ -327,6 +327,14 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   still serving would be refused), then `config.mcpHop.required` (needs `config.oauth.enabled`, `acrMcp.enabled`,
   `acrMcp.hop.enabled`; it grants acr-api TokenReview access). Compose has no
   Kubernetes, so the hop is off there.
+- With remote entitlements, the authenticator asks Dev Health whether the
+  credential's organization still exists (the entitlement read and its cache).
+  Only the coded 404 (`acr_organization_unknown`) means gone: a 401 like a
+  revoked credential (audit reason `organization_unknown`). An outage (5xx,
+  timeout, a 404 without the code) admits the call (each route keeps its own
+  503), except self rotate and ack, which answer `503 upstream_unavailable`
+  until the organization answers. Self revoke is not checked. Local
+  entitlement mode skips the check.
 - Each OAuth request writes one `acr-api oauth step` line (step, outcome,
   client kind, status). Steps: `register`, `authorize` (ok = sent to the
   consent page), `consent_preview`, `consent` (ok = approved, `access_denied`
@@ -562,7 +570,9 @@ revocation.
   for the refresh grant.
 - Telemetry, on the OAuth step line (closed vocabulary): `step=token` with
   `ok` (rotated), `grace_replay`, `reuse_revoked`, `family_expired`,
-  `family_revoked`, `client_mismatch`, `invalid_grant` (unknown token);
+  `family_revoked`, `client_mismatch`, `invalid_grant` (unknown token),
+  `organization_unknown` (the family's organization is gone; the family is
+  revoked; an outage of that check is `unavailable` and consumes nothing);
   `step=revoke` with `ok`, `family_revoked`, `client_mismatch`,
   `invalid_grant`, `unsupported_token_type`. Every successor and every
   revocation writes a `credential_created` / `credential_revoked` audit row with

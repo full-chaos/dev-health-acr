@@ -201,7 +201,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 			return nil, errors.New("hosted read runtime requires request controls")
 		}
 		var err error
-		authenticator, err = auth.NewAuthenticator(deps.Runtime.Credentials, deps.Runtime.Audit, auth.AuthenticatorOptions{Now: deps.Now, Limiter: deps.AuthAttempts, Logger: logger, ClientIP: deps.ClientIP, WebAssertions: deps.WebAssertions, UsageTelemetry: deps.UsageTelemetry, MCPHop: deps.MCPHop})
+		authenticator, err = auth.NewAuthenticator(deps.Runtime.Credentials, deps.Runtime.Audit, auth.AuthenticatorOptions{Now: deps.Now, Limiter: deps.AuthAttempts, Logger: logger, ClientIP: deps.ClientIP, WebAssertions: deps.WebAssertions, UsageTelemetry: deps.UsageTelemetry, MCPHop: deps.MCPHop, OrgPresence: organizationPresence(deps.Runtime.Entitlements)})
 		if err != nil {
 			return nil, err
 		}
@@ -299,7 +299,11 @@ func (a *App) ProtectedHandler(class limits.RequestClass, next http.Handler) htt
 }
 
 func (a *App) AuthenticatedHandler(credentials storage.CredentialStore, audit storage.AuditStore, class limits.RequestClass, next http.Handler) (http.Handler, error) {
-	authenticator, err := auth.NewAuthenticator(credentials, audit, auth.AuthenticatorOptions{Now: a.now, Limiter: a.authAttempts, Logger: a.logger, ClientIP: a.clientIP, UsageTelemetry: a.usageTelemetry, MCPHop: a.mcpHop})
+	var orgPresence auth.OrganizationPresence
+	if a.runtime != nil {
+		orgPresence = organizationPresence(a.runtime.Entitlements)
+	}
+	authenticator, err := auth.NewAuthenticator(credentials, audit, auth.AuthenticatorOptions{Now: a.now, Limiter: a.authAttempts, Logger: a.logger, ClientIP: a.clientIP, UsageTelemetry: a.usageTelemetry, MCPHop: a.mcpHop, OrgPresence: orgPresence})
 	if err != nil {
 		return nil, err
 	}
