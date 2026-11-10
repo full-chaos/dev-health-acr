@@ -592,6 +592,47 @@ check_endpoint_profile_gate_step() {
   fi
 }
 
+# The wrong-credential-class matrix skips wherever ACR_CONTRACT_GATE is not
+# set, so a deleted, unwired or swallowed step leaves every job green with
+# the matrix never run. This proves the step exists in the contract-gate job
+# with both pinned inputs, the marker and the go test, and cannot swallow it.
+check_wrong_class_gate_step() {
+  local file="$1" block
+  block="$(awk '
+    /Run the wrong-credential-class matrix against the pinned ops contract/ { grab=1 }
+    grab && /^      - / && !/Run the wrong-credential-class matrix/ { grab=0 }
+    grab { print }
+  ' "$file")"
+
+  if [ -z "$block" ]; then
+    printf 'no "Run the wrong-credential-class matrix against the pinned ops contract" step found in %s -- the matrix would skip with every job green\n' "$file" >&2
+    return 1
+  fi
+
+  local key
+  for key in ACR_ENDPOINT_PROFILE_SCHEMA ACR_CREDENTIAL_CLASSES; do
+    if ! grep -q "$key: \${{ github.workspace }}/.ops-contract/" <<<"$block"; then
+      printf 'the wrong-class matrix step does not set %s to the pinned ops checkout\n' "$key" >&2
+      return 1
+    fi
+  done
+
+  if ! grep -q 'ACR_CONTRACT_GATE: required' <<<"$block"; then
+    printf 'the wrong-class matrix step does not set ACR_CONTRACT_GATE: required -- a missing input would SKIP the matrix instead of failing it\n' >&2
+    return 1
+  fi
+
+  if ! grep -qF "run: go test -count=1 -v -run '^TestWrongClassGate' ./internal/api/" <<<"$block"; then
+    printf 'the wrong-class matrix step does not run go test -count=1 -v -run '"'"'^TestWrongClassGate'"'"' ./internal/api/\n' >&2
+    return 1
+  fi
+
+  if printf '%s' "$block" | grep -Eq '\|\|[[:space:]]*true|continue-on-error:[[:space:]]*true|;[[:space:]]*exit[[:space:]]+0|\|\|[[:space:]]*:'; then
+    printf 'the wrong-class matrix step swallows its own failure (|| true, continue-on-error, or an unconditional exit 0)\n' >&2
+    return 1
+  fi
+}
+
 # ops' credential-classes.schema.json $refs jsonschema/endpoint-auth-profile
 # .v1.schema.json. The gate compiles the schema from the files the sparse
 # checkout delivers, so a list that carries the schema but not the file it
@@ -2025,6 +2066,7 @@ run_all_checks() {
   check_container_oci_scan_same_job "$file"
   check_isolated_devhealthschema_job "$file"
   check_endpoint_profile_gate_step "$file"
+  check_wrong_class_gate_step "$file"
   check_pin_requires_full_sha "$file"
   check_pin_binds_checkout_ref "$file"
   check_ops_contract_sparse_list_carries_referenced_schemas "$file"
@@ -3231,6 +3273,50 @@ gate_input_removed="$tmpdir/gate-input-removed.yml"
 awk '/ACR_CREDENTIAL_CLASSES_SCHEMA:/ { next } { print }' "$workflow" > "$gate_input_removed"
 assert_check_fails 'dropped ACR_CREDENTIAL_CLASSES_SCHEMA from the gate step' \
   check_endpoint_profile_gate_step "$gate_input_removed"
+
+# (n1) the wrong-class matrix step: deleted, its marker or an input dropped,
+# its test unwired, or its failure swallowed -- each leaves the matrix unrun
+# with the job green.
+wrong_class_step_removed="$tmpdir/wrong-class-step-removed.yml"
+awk '
+  /Run the wrong-credential-class matrix against the pinned ops contract/ { skip=1 }
+  skip && /^      - / && !/Run the wrong-credential-class matrix/ { skip=0 }
+  !skip { print }
+' "$workflow" > "$wrong_class_step_removed"
+assert_check_fails 'deleted the wrong-class matrix step' \
+  check_wrong_class_gate_step "$wrong_class_step_removed"
+
+wrong_class_marker_removed="$tmpdir/wrong-class-marker-removed.yml"
+awk '
+  /Run the wrong-credential-class matrix against the pinned ops contract/ { grab=1 }
+  grab && /^      - / && !/Run the wrong-credential-class matrix/ { grab=0 }
+  grab && /ACR_CONTRACT_GATE: required/ { next }
+  { print }
+' "$workflow" > "$wrong_class_marker_removed"
+assert_check_fails 'dropped ACR_CONTRACT_GATE: required from the wrong-class matrix step' \
+  check_wrong_class_gate_step "$wrong_class_marker_removed"
+
+wrong_class_input_removed="$tmpdir/wrong-class-input-removed.yml"
+awk '
+  /Run the wrong-credential-class matrix against the pinned ops contract/ { grab=1 }
+  grab && /^      - / && !/Run the wrong-credential-class matrix/ { grab=0 }
+  grab && /ACR_CREDENTIAL_CLASSES:/ { next }
+  { print }
+' "$workflow" > "$wrong_class_input_removed"
+assert_check_fails 'dropped ACR_CREDENTIAL_CLASSES from the wrong-class matrix step' \
+  check_wrong_class_gate_step "$wrong_class_input_removed"
+
+wrong_class_unwired="$tmpdir/wrong-class-unwired.yml"
+sed "s|run: go test -count=1 -v -run '^TestWrongClassGate' ./internal/api/|run: go test -count=1 -v -run '^TestNothing' ./internal/api/|" \
+  "$workflow" > "$wrong_class_unwired"
+assert_check_fails 'pointed the wrong-class matrix step at another test' \
+  check_wrong_class_gate_step "$wrong_class_unwired"
+
+wrong_class_swallowed="$tmpdir/wrong-class-swallowed.yml"
+sed "s|run: go test -count=1 -v -run '^TestWrongClassGate' ./internal/api/|& \|\| true|" \
+  "$workflow" > "$wrong_class_swallowed"
+assert_check_fails 'made the wrong-class matrix step swallow its own failure with || true' \
+  check_wrong_class_gate_step "$wrong_class_swallowed"
 
 # (n2) drop the referenced schema from the sparse list while keeping the
 # schema that references it: the gate then cannot resolve the $ref.
