@@ -37,8 +37,14 @@ grep -Fq 'JWT_SECRET_KEY: "${jwt}"' "$driver" \
   || fail 'the ACR migration and runtime environments must replace inherited local-dev variables'
 [[ "$(grep -Fc 'ports: !override []' "$driver")" -eq 4 ]] \
   || fail 'the acceptance overlay must remove inherited infrastructure and ACR API ports'
-grep -Fq 'volumes: !override []' "$driver" \
+grep -Fq 'volumes: !override' "$driver" \
   || fail 'the ACR API must remove inherited local-dev bind mounts'
+grep -Fq -- '- { type: volume, source: acr_workload_bootstrap, target: /run/workload, read_only: true }' "$driver" \
+  || fail 'the ACR API must mount the read-only workload bootstrap volume'
+[[ "$(grep -c '^    volumes: !override$' "$driver")" -eq 1 ]] \
+  || fail 'exactly one service list must replace the inherited volumes: the ACR API'
+[[ "$(awk '/^    volumes: !override$/ { inside = 1; next } inside && /^      - / { entries++; next } inside { exit } END { print entries + 0 }' "$driver")" -eq 1 ]] \
+  || fail 'the ACR API must mount only the read-only workload bootstrap volume'
 grep -Fq 'depends_on: !override' "$driver" \
   || fail 'the ACR API must replace inherited local-dev dependencies'
 if grep -Eq 'ACR_(POSTGRES_MIGRATION_DSN|POSTGRES_DSN|CLICKHOUSE_DSN|ALLOW_INSECURE_POSTGRES): !reset' "$driver"; then
@@ -100,12 +106,18 @@ if grep -Eq -- '--insecure|--accept-invalid-certificate|NODE_TLS_REJECT_UNAUTHOR
   fail 'TLS verification must never be weakened'
 fi
 grep -Fq -- '--cacert "$STATE/pki/ca.crt"' "$script" || fail 'API calls must pin the run CA'
-if grep -Eq 'ACR_API_ORIGIN: https://|NODE_EXTRA_CA_CERTS|/run/acr-e2e/ca\.crt' "$script"; then
+# The web trusts one extra CA only: the auth issuer's (it verifies access tokens against the issuer's discovery and
+# JWKS over https, as the bigboy web does). It never trusts the ACR run CA and never calls ACR over https.
+web_extra_ca_lines() {
+  grep -E 'NODE_EXTRA_CA_CERTS' "$1" | grep -Ev '^[[:space:]]*#' \
+    | grep -vFx '      NODE_EXTRA_CA_CERTS: /run/auth-issuer-ca/issuer.pem' || true
+}
+if grep -Eq 'ACR_API_ORIGIN: https://|/run/acr-e2e/ca\.crt' "$script" || [[ -n "$(web_extra_ca_lines "$script")" ]]; then
   fail 'the Web full-stack service must use private HTTP without an internal CA mount'
 fi
 grep -Fq 'ACR_API_ORIGIN: http://acr-api:8080' "$script" \
   || fail 'the Web full-stack service must call ACR over private HTTP'
-if grep -Eq 'compose up .*acr-ops-tls|ACR_API_ORIGIN: https://|NODE_EXTRA_CA_CERTS|/run/acr-e2e/ca\.crt' "$svs"; then
+if grep -Eq 'compose up .*acr-ops-tls|ACR_API_ORIGIN: https://|/run/acr-e2e/ca\.crt' "$svs" || [[ -n "$(web_extra_ca_lines "$svs")" ]]; then
   fail 'SVS must not depend on an internal TLS service or CA mount'
 fi
 grep -Fq 'ACR_API_ORIGIN: http://acr-tls-proxy:8080' "$svs" \
@@ -310,10 +322,79 @@ grep -Fq 'the ops api service reads ClickHouse database' "$script" \
 
 grep -Fq 'ACR_DEVICE_VERIFICATION_URL' "$driver" \
   || fail 'the isolated ACR runtime must receive the concrete web device verification URL'
-grep -Fq 'compose logs --no-color clickhouse migrate go-api-roles go-api acr-migrate acr-api acr-tls-proxy' "$driver" \
-  || fail 'failed isolated runs must retain the TLS proxy diagnostics for device-login transport failures'
+grep -Fq 'compose logs --no-color clickhouse migrate go-api-roles go-api auth-provision auth-owner-grants auth-migrate auth-grants auth-fence-init auth-workload-seed auth-workload-bootstrap auth-workload-subject auth-service auth-issuer acr-migrate acr-api acr-tls-proxy' "$driver" \
+  || fail 'failed isolated runs must retain the TLS proxy diagnostics for device-login transport failures (and the auth stack the workload token comes from)'
 grep -Fq 'run_device_login_lifecycle' "$script" \
   || fail 'the live gate must exercise CLI login through web approval and lifecycle commands'
+
+# At the pinned ops build `dho admin users update --org/--role` goes through auth-service and needs --actor (ops
+# CHAOS-11799); its refusal is printed on stdout. The web users get their owner membership from a raw seed, and a
+# users update never discards the refusal text.
+if grep -En 'dho admin users update[^#]*--(org|role|remove-from-org)' "$script" "$svs"; then
+  fail 'the harness must seed the web user membership, not send it through the dho membership verbs'
+fi
+if grep -En 'dho admin users update.*>/dev/null' "$script" "$svs"; then
+  fail 'a dho users update must report its refusal text, never send it to /dev/null'
+fi
+awk '/^seed_web_owner_membership\(\)/,/^}/' "$script" | grep -Fq "INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)" \
+  || fail 'the full-stack web user must get its owner membership from the raw seed'
+awk '/^bootstrap_web_user\(\)/,/^}/' "$script" | grep -Fq 'seed_web_owner_membership' \
+  || fail 'bootstrap_web_user must seed the owner membership'
+grep -Fq "INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)" "$svs" \
+  || fail 'the SVS web user must get its owner membership from the raw seed'
+# The seed's psql password reaches the container by name only (compose takes the value from the exported
+# environment): a PGPASSWORD=<value> in an exec argv shows in the process list.
+for seed_block in "$(awk '/^seed_web_owner_membership\(\)/,/^}/' "$script")" "$(awk '/^bootstrap_web_user\(\)/,/^}/' "$svs")"; do
+  grep -Fq 'export PGPASSWORD="${POSTGRES_PASSWORD}"; compose exec -T -e PGPASSWORD postgres' <<<"$seed_block" \
+    || fail 'the web user membership seed must pass PGPASSWORD to psql by name only'
+  if grep -Fq 'PGPASSWORD=' <<<"${seed_block//export PGPASSWORD=/}"; then
+    fail 'the web user membership seed must not put a PGPASSWORD value in an exec argv'
+  fi
+done
+
+# go-api mints no token pair at the pinned ops build: the web user signs in only while go-api sends sessions to
+# auth-service with the api workload credential (ops compose.yml go-api, CHAOS-13107).
+ci_compose="$root/.github/fullstack/compose.ci.yml"
+go_api_block="$(awk '/^  go-api:$/ { inside = 1; print; next } inside && /^  [a-z]/ { exit } inside { print }' "$ci_compose")"
+for want in 'AUTH_PROXY_URL: http://auth-service:8095' 'AUTH_PROXY_SESSIONS: "true"' 'AUTH_PROXY_LOCAL_LOGIN: "true"' \
+  'AUTH_SESSION_ISSUE_CREDENTIAL: workload' 'AUTH_WORKLOAD_BOOTSTRAP_FILE: /run/workload/api.bootstrap' \
+  'networks: [dev-health, auth_plane]' 'source: workload_bootstrap' 'auth-workload-bootstrap:'; do
+  grep -Fq -- "$want" <<<"$go_api_block" || fail "the fullstack go-api must send sessions to auth-service (missing: ${want})"
+done
+grep -Fq 'extends: { file: ./ops/compose.yml, service: auth-workload-bootstrap }' "$ci_compose" \
+  || fail 'the fullstack slice must run the ops auth-workload-bootstrap one-shot that writes the api credential'
+
+# Web verifies each auth-service access token against the pinned issuer, as prod's web Deployment does
+# (dev-health-deploy values.prod.yaml AUTH_ACCESS_TOKEN_CLASS + AUTH_ACCESS_TOKEN_ISSUER): without the pin every
+# sign-in is refused (web src/lib/authServiceWire.ts checkConfig, branch auth_config_invalid). The pin is go-api's issuer.
+for web_pair in "web-fullstack:$script" "web-svs:$svs"; do
+  web_service="${web_pair%%:*}"
+  web_block="$(awk -v s="  ${web_service}:" '$0 == s { inside = 1; print; next } inside && /^EOF$/ { exit } inside { print }' "${web_pair#*:}")"
+  for want in 'AUTH_ACCESS_TOKEN_CLASS: eddsa' \
+    'AUTH_ACCESS_TOKEN_ISSUER: \${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}' \
+    'NODE_EXTRA_CA_CERTS: /run/auth-issuer-ca/issuer.pem' 'source: auth_issuer_tls' 'subpath: ca' \
+    'auth-issuer: { condition: service_started }' 'networks: [dev-health]'; do
+    grep -Fq -- "$want" <<<"$web_block" \
+      || fail "the ${web_service} service must pin the access-token issuer the way prod web does (missing: ${want})"
+  done
+done
+grep -Fq 'AUTH_ACCESS_TOKEN_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}' "$ci_compose" \
+  || fail 'the web issuer pin must be the go-api issuer'
+# query-api refuses to start without the issuer at the pinned ops build (its /query route's only verifier), and
+# api-router then has no upstream: the same issuer, CA and session switch as ops compose.yml query-api and prod.
+query_api_block="$(awk '/^  query-api:$/ { inside = 1; print; next } inside && /^  [a-z]/ { exit } inside { print }' "$ci_compose")"
+for want in 'AUTH_ACCESS_TOKEN_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}' \
+  'AUTH_PROXY_SESSIONS: "true"' 'SSL_CERT_DIR: /run/auth-issuer-ca' 'source: auth_issuer_tls' 'subpath: ca' 'auth-issuer:'; do
+  grep -Fq -- "$want" <<<"$query_api_block" || fail "the fullstack query-api must verify access tokens against the issuer (missing: ${want})"
+done
+# go-api runs with AUTH_PROXY_SESSIONS on, so every one-shot that applies the api role's grants must read the same
+# value (prod migrate-job.yaml carries it); otherwise the api login keeps INSERT/UPDATE on refresh_tokens and
+# go-api's /readyz refuses its role posture.
+for grant_service in migrate go-api-grants; do
+  awk -v s="  ${grant_service}:" '$0 == s { inside = 1; print; next } inside && /^  [a-z]/ { exit } inside { print }' "$ci_compose" \
+    | grep -Fq 'AUTH_PROXY_SESSIONS: "true"' \
+    || fail "the fullstack ${grant_service} one-shot must apply the api grants with go-api's AUTH_PROXY_SESSIONS"
+done
 grep -Fq 'REDIS_URL: redis://valkey:6379/0' "$script" \
   || fail 'the isolated web fixture must use the isolated Valkey rate-limit backend'
 # Device login is an acceptance precondition, not a postscript after the

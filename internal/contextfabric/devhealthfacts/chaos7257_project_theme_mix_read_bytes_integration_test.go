@@ -40,13 +40,10 @@ import (
 	"github.com/full-chaos/dev-health-go/readers"
 )
 
-// CHAOS-7271: phased project mix reads. chaos7271RollupStatements is the roll-up
-// mix's statement count (scope, repo themes, repo bugfix, evidence arm, and the
-// pinned-version presence check of CHAOS-12179); the native mix adds scope,
-// placement, unit values and its own presence check.
+// CHAOS-7271: phased project mix reads. Each mix logs, over work_unit_investments,
+// one scope, one chunk bounds, one theme phase and one pinned presence statement,
+// and one statement per chunk of each wide-column phase (projectMixWidePhases).
 const (
-	chaos7271RollupStatements  = 5
-	chaos7271PhasedStatements  = 10
 	chaos7271DigestStatements  = 4
 	chaos7271MainRollupBytes1x = 39384274
 	chaos7271MainNativeBytes1x = 39687121
@@ -505,22 +502,42 @@ func checkProjectThemeMixByteBudget(t *testing.T, units int, growth bool) {
 		}
 	}
 	// CHAOS-7271: the read is phased (investment_project_mix_phased.go): per mix
-	// a scope statement, then one statement per column group. No statement
-	// reads every wide column, and the phases of one mix read at most
-	// chaos7271MaxMixGrowth times what the one statement of that mix read on main.
-	if len(statements) != chaos7271PhasedStatements {
-		t.Fatalf("project investment read logged %d statements over work_unit_investments, want %d (roll-up: scope, repo arm, evidence arm, pinned presence; native: scope, placement, theme values, bugfix values, pinned presence)",
-			len(statements), chaos7271PhasedStatements)
+	// a scope statement, then one statement per column group, the wide-column
+	// groups once per chunk. No statement reads every wide column, and the phases
+	// of one mix read at most chaos7271MaxMixGrowth times what the one statement
+	// of that mix read on main. The roll-up runs first; the second scope
+	// statement opens the native mix.
+	phased := projectMixStatementsSince(t, ctx, direct, mark)
+	if len(phased) != len(statements) {
+		t.Fatalf("query_log: %d classified statements, %d statements over work_unit_investments", len(phased), len(statements))
+	}
+	perPhase := map[string]int{}
+	for _, s := range phased {
+		perPhase[s.Phase]++
+	}
+	for phase, want := range map[string]int{"scope": 2, "chunk_bounds": 2, "pinned_presence": 2, "rollup_repo_themes": 1, "native_theme_values": 1, "unclassified": 0} {
+		if perPhase[phase] != want {
+			t.Errorf("project investment read logged %d %s statements, want %d (all: %v)", perPhase[phase], phase, want, perPhase)
+		}
+	}
+	for _, wide := range projectMixWidePhases {
+		if perPhase[wide] == 0 {
+			t.Errorf("project investment read logged no %s statement (all: %v)", wide, perPhase)
+		}
 	}
 	var rollupSum, nativeSum uint64
-	for i, s := range statements {
+	scopes := 0
+	for i, s := range phased {
 		if s.Type != "QueryFinish" {
-			t.Fatalf("statement %d ended %s code %d, want QueryFinish", i, s.Type, s.Code)
+			t.Fatalf("statement %d (%s) ended %s code %d, want QueryFinish", i, s.Phase, s.Type, s.Code)
 		}
 		if s.ReadBytes >= chaos7257ProdMaxBytesToRead/2 {
-			t.Errorf("statement %d read %d bytes = %.1f%% of the %d-byte cap, want under 50%%", i, s.ReadBytes, 100*float64(s.ReadBytes)/float64(chaos7257ProdMaxBytesToRead), chaos7257ProdMaxBytesToRead)
+			t.Errorf("statement %d (%s) read %d bytes = %.1f%% of the %d-byte cap, want under 50%%", i, s.Phase, s.ReadBytes, 100*float64(s.ReadBytes)/float64(chaos7257ProdMaxBytesToRead), chaos7257ProdMaxBytesToRead)
 		}
-		if i < chaos7271RollupStatements {
+		if s.Phase == "scope" {
+			scopes++
+		}
+		if scopes < 2 {
 			rollupSum += s.ReadBytes
 		} else {
 			nativeSum += s.ReadBytes

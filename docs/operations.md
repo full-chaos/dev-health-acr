@@ -2620,6 +2620,21 @@ for it; do not narrow this rule silently, since an environment whose
 apiserver IP does not match a hand-pinned `ipBlock` fails closed with no
 obvious cause.
 
+That chart change is `networkPolicy.egress.kubernetesAPIEndpoints`
+(CHAOS-13481): a list of `{cidr, port}`. When set, each entry renders one
+egress rule (`ipBlock` /32 + TCP port) and the port-only rule is not
+rendered; an empty list (the default) renders exactly as before. Each
+`cidr` must be one IPv4 address as a /32; a missing or wider `cidr`, or a
+port outside 1-65535, fails the render. Name the apiserver **endpoint**
+(`kubectl get endpointslices -n default -l kubernetes.io/service-name=kubernetes`),
+not the `kubernetes` Service ClusterIP: on k3s (kube-router) the policy
+matches the packet after the Service DNAT. A bigboy k3s proof (2026-11-10,
+TokenReview from a pod with only that rule) showed `<ClusterIP>/32` port 443
+opens nothing and `<endpoint>/32` port 6443 opens the call. This also explains
+the CHAOS-4034 timeout above. The pinned address is the residual risk: if the
+apiserver node address changes, the exchange fails closed (TokenReview refused)
+until the value is updated.
+
 **The in-release FalkorDB workload (`contextFabric.falkordb.enabled`)
 requires a `baseline` (or looser) PodSecurity Admission namespace.** The
 vendored image runs `redis-server` as root with no `USER` directive; a

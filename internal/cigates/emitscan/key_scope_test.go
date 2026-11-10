@@ -258,13 +258,14 @@ func TestKeyScopeOversizedPackageIsNeverTypeChecked(t *testing.T) {
 		{"control: nothing oversized, the local key is read", "const small = \"a\" + \"b\"\nfunc f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v); _ = small }", "R1:api_token"},
 		{"control: a long ordinary const is still typed", "const text = \"" + strings.Repeat("x", 400) + "\"\nfunc f(l *slog.Logger, v string) { key := \"api_token\"; l.Info(\"m\", key, v); _ = text }", "R1:api_token"},
 	}...)
+	limit, note := cpuLimit(t, time.Second)
 	for _, c := range cases {
 		start := cpuTime(t)
 		got := keyFindings(scanSource(t, header+c.body+"\n"))
 		used := cpuTime(t) - start
 		t.Logf("%s: %s cpu, findings %q", c.name, used, got)
-		if limit := time.Second * raceSlowdown; used > limit {
-			t.Errorf("%s: used %s cpu, want < %s", c.name, used, limit)
+		if used > limit {
+			t.Errorf("%s: used %s cpu, want < %s (%s)", c.name, used, limit, note)
 		}
 		if got != c.want {
 			t.Errorf("%s: key findings %q want %q", c.name, got, c.want)

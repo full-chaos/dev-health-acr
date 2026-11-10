@@ -593,7 +593,19 @@
             "queryMcpPodSelector": { "type": "object", "additionalProperties": { "type": "string" } },
             "falkorPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
             "embedPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
-            "kubernetesAPIPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            "kubernetesAPIPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "kubernetesAPIEndpoints": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["cidr", "port"],
+                "properties": {
+                  "cidr": { "type": "string", "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/32$" },
+                  "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+                }
+              }
+            }
           }
         }
       }
