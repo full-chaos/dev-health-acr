@@ -22,18 +22,22 @@ func TestBrowserFamilyRevokeReason_postgresStoresEveryReasonOnTheFamilyAndItsCre
 	ctx := context.Background()
 	fixture := newRefreshFixture(t, ctx, newCredentialStoreDatabase(t, ctx))
 	for i, reason := range storage.BrowserFamilyRevokeReasonVocabulary() {
-		familyID, token := fixture.startFamily(t, ctx, "r"+string(rune('a'+i)))
+		familyID, first := fixture.startFamily(t, ctx, "r"+string(rune('a'+i)))
+		rotated, err := fixture.service.Refresh(ctx, first, auth.DevBrowserClientID)
+		require.NoError(t, err)
+		token := rotated.RefreshToken
 
 		out, err := fixture.refresh.RevokeBrowserFamilyByToken(ctx, auth.HashRefreshToken(token), auth.DevBrowserClientID, "oauth_refresh_grant", reason, *fixture.clock)
 
 		require.NoError(t, err, string(reason))
 		require.Equal(t, storage.BrowserFamilyRevokedNow, out.Decision, string(reason))
+		require.Equal(t, 2, out.RevokedCredentials, string(reason))
 		require.Equal(t, string(reason), familyReasonRow(t, ctx, fixture.db, familyID).String)
 		var carried int
 		require.NoError(t, fixture.db.QueryRowContext(ctx, `
 SELECT count(*) FROM acr.audit_events
 WHERE action = 'credential_revoked' AND metadata->>'family_id' = $1 AND metadata->>'family_revoke_reason' = $2`, familyID, string(reason)).Scan(&carried))
-		require.Equal(t, 1, carried, string(reason))
+		require.Equal(t, 2, carried, "every member of the family carries the reason: "+string(reason))
 	}
 }
 

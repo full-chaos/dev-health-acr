@@ -129,3 +129,22 @@ func TestBrowserRefresh_everyReasonOfTheClosedSetRevokesWithItself(t *testing.T)
 		})
 	}
 }
+
+// Parity with postgres (browser_family_revoke_reason_integration_test.go): a
+// family of two credentials, revoked for any reason, has every member carry it.
+func TestBrowserRefresh_everyMemberOfARevokedFamilyCarriesTheReason(t *testing.T) {
+	for _, reason := range storage.BrowserFamilyRevokeReasonVocabulary() {
+		t.Run(string(reason), func(t *testing.T) {
+			h, clientID := browserHarness(t)
+			login := browserLogin(t, h, clientID)
+			rotated := mustRefresh(t, h, login.RefreshToken)
+
+			out, err := h.refresh.RevokeBrowserFamilyByToken(context.Background(), HashRefreshToken(rotated.RefreshToken), clientID, browserRefreshActor, reason, h.now)
+
+			if err != nil || out.Decision != storage.BrowserFamilyRevokedNow || out.RevokedCredentials != 2 {
+				t.Fatalf("reason %q: %+v, %v; want revoked with 2 credentials", reason, out, err)
+			}
+			requireFamilyReasons(t, h, string(reason), 2)
+		})
+	}
+}
