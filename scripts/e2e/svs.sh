@@ -103,10 +103,25 @@ services:
       ACR_WEB_ASSERTION_KEY_FILE: /run/acr-e2e/web-assertion.key
       ACR_WEB_ASSERTION_KID: acr-svs-web
       NEXT_PUBLIC_DEV_HEALTH_TEST_MODE: "false"
+      # The access-token issuer pin, as prod's web Deployment carries it (dev-health-deploy values.prod.yaml:1622-1626:
+      # AUTH_ACCESS_TOKEN_CLASS eddsa + AUTH_ACCESS_TOKEN_ISSUER). Sessions are issued by auth-service, so web verifies
+      # each access token against the issuer's discovery + JWKS; without the pin every sign-in is refused. The issuer
+      # value is go-api's (compose.ci.yml), and its self-signed CA is trusted the way the bigboy web does it
+      # (NODE_EXTRA_CA_CERTS, deploy docker/bigboy/compose.bigboy.yml:1839-1848).
+      AUTH_ACCESS_TOKEN_CLASS: eddsa
+      AUTH_ACCESS_TOKEN_ISSUER: \${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}
+      NODE_EXTRA_CA_CERTS: /run/auth-issuer-ca/issuer.pem
     volumes:
       - ${STATE}/web/web-assertion.key:/run/acr-e2e/web-assertion.key:ro
+      - type: volume
+        source: auth_issuer_tls
+        target: /run/auth-issuer-ca
+        read_only: true
+        volume:
+          subpath: ca
     depends_on:
       go-api: { condition: service_started }
+      auth-issuer: { condition: service_started }
       bugsink: { condition: service_started }
       valkey: { condition: service_healthy }
     networks: [dev-health]
@@ -164,7 +179,26 @@ wait_web_ready() {
 
 bootstrap_web_user() {
   dho admin users create --email "$WEB_EMAIL" --password "$WEB_PASSWORD" --full-name 'ACR SVS Canonical Account' >/dev/null
-  dho admin users update --email "$WEB_EMAIL" --verified --org "$(<"$STATE/org-id")" --role owner >/dev/null
+  local output status=0 role
+  # dho prints a refusal ("Error: ...") on stdout: it is captured and reported, never discarded.
+  output="$(dho admin users update --email "$WEB_EMAIL" --verified 2>&1)" || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    printf '%s\n' "$output" | redact_log >&2
+    svs_die "could not mark the canonical web user verified (dho exited ${status})"
+  fi
+  # A raw seed, as fullstack-opencode.sh seed_web_owner_membership: the dho membership verbs go through
+  # auth-service (ops CHAOS-11799), which writes public.memberships only while it owns users.
+  role="$(export PGPASSWORD="${POSTGRES_PASSWORD}"; compose exec -T -e PGPASSWORD postgres \
+    psql -h postgres -U "$POSTGRES_USER" -d devhealth -At -q -v ON_ERROR_STOP=1 -c "
+    UPDATE memberships SET role = 'owner', updated_at = now()
+      WHERE org_id = '$(<"$STATE/org-id")' AND user_id = (SELECT id FROM users WHERE email = '${WEB_EMAIL}');
+    INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+      SELECT gen_random_uuid(), '$(<"$STATE/org-id")', u.id, 'owner', now(), now(), now() FROM users u
+      WHERE u.email = '${WEB_EMAIL}'
+        AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.org_id = '$(<"$STATE/org-id")' AND m.user_id = u.id);
+    SELECT m.role FROM memberships m JOIN users u ON u.id = m.user_id
+      WHERE u.email = '${WEB_EMAIL}' AND m.org_id = '$(<"$STATE/org-id")'")"
+  [[ "$role" == 'owner' ]] || svs_die 'failed to seed the canonical web user owner membership'
 }
 
 assert_canonical_account_login() {
@@ -332,9 +366,11 @@ bootstrap_failure_ops() {
   compose up -d postgres clickhouse valkey pgbouncer mailpit migrate go-api-roles go-api >/dev/null
   token="$(mint_ops_service_token)" || svs_die 'Ops credential provisioning failed'
   write_secret "$STATE/secrets/ops-token" "$token"
-  # Host-readable copy for ensure_go_api_ready: secrets/ops-token is chowned to the acr-api UID.
+  # Host-readable copy for assert_service_credential_refused: secrets/ops-token is chowned to the acr-api UID.
   write_secret "$STATE/ops-probe-token" "$token"
-  wait_go_api "$token"
+  provision_acr_workload
+  wait_go_api
+  assert_service_credential_refused
   if ! output="$(dho admin orgs create --name "${PROJECT} SVS" --slug "$PROJECT" --description 'isolated SVS control plane' --tier community)"; then
     printf '%s\n' "$output" >&2
     svs_die 'Ops organization provisioning failed'

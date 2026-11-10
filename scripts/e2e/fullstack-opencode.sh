@@ -1211,11 +1211,26 @@ services:
       ACR_WEB_ASSERTION_KEY_FILE: /run/acr-e2e/web-assertion.key
       ACR_WEB_ASSERTION_KID: acr-fullstack-web
       NEXT_PUBLIC_DEV_HEALTH_TEST_MODE: "false"
+      # The access-token issuer pin, as prod's web Deployment carries it (dev-health-deploy values.prod.yaml:1622-1626:
+      # AUTH_ACCESS_TOKEN_CLASS eddsa + AUTH_ACCESS_TOKEN_ISSUER). Sessions are issued by auth-service, so web verifies
+      # each access token against the issuer's discovery + JWKS; without the pin every sign-in is refused. The issuer
+      # value is go-api's (compose.ci.yml), and its self-signed CA is trusted the way the bigboy web does it
+      # (NODE_EXTRA_CA_CERTS, deploy docker/bigboy/compose.bigboy.yml:1839-1848).
+      AUTH_ACCESS_TOKEN_CLASS: eddsa
+      AUTH_ACCESS_TOKEN_ISSUER: \${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}
+      NODE_EXTRA_CA_CERTS: /run/auth-issuer-ca/issuer.pem
     volumes:
       - ${STATE}/web/web-assertion.key:/run/acr-e2e/web-assertion.key:ro
+      - type: volume
+        source: auth_issuer_tls
+        target: /run/auth-issuer-ca
+        read_only: true
+        volume:
+          subpath: ca
     depends_on:
       go-api: { condition: service_started }
       api-router: { condition: service_started }
+      auth-issuer: { condition: service_started }
       bugsink: { condition: service_started }
       valkey: { condition: service_healthy }
     networks: [dev-health]
@@ -1494,8 +1509,44 @@ bootstrap_web_user() {
   # instead, and run_web_agreement_check's wait for the "Context Fabric" heading times out
   # 30s later with no signal of why. This isolated harness user is torn down with the rest of
   # the project at the end of the run, so platform-superuser scope here is not a standing grant.
-  dho admin users update --email "$WEB_EMAIL" --verified --superuser --org "$(<"$STATE/org-id")" --role owner >/dev/null
+  # dho prints a refusal ("Error: ...") on stdout: it is captured and reported, never discarded.
+  set +e
+  create_output="$(dho admin users update --email "$WEB_EMAIL" --verified --superuser 2>&1)"
+  create_status=$?
+  set -e
+  if [[ "$create_status" -ne 0 ]]; then
+    printf '%s\n' "$create_output" | redact_log >&2
+    fs_die "could not mark the isolated web user verified and superuser (dho exited ${create_status})"
+  fi
+  seed_web_owner_membership
   assert_acr_entitlement
+}
+
+# The owner membership is a raw seed, the form of ops ci/lib/e2e_fixture.sh: at the pinned ops build the dho
+# membership verbs go through auth-service's provisioning routes (ops CHAOS-11799), and those write
+# public.memberships only while auth-service owns users; this slice keeps users owned by go-api.
+seed_web_owner_membership() {
+  local org_id role status=0
+  org_id="$(<"$STATE/org-id")"
+  set +e
+  role="$(export PGPASSWORD="${POSTGRES_PASSWORD}"; compose exec -T -e PGPASSWORD postgres \
+    psql -h postgres -U "$POSTGRES_USER" -d "$OPS_POSTGRES_DB" -At -q -v ON_ERROR_STOP=1 -c "
+    UPDATE memberships SET role = 'owner', updated_at = now()
+      WHERE org_id = '${org_id}' AND user_id = (SELECT id FROM users WHERE email = '${WEB_EMAIL}');
+    INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+      SELECT gen_random_uuid(), '${org_id}', u.id, 'owner', now(), now(), now() FROM users u
+      WHERE u.email = '${WEB_EMAIL}'
+        AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.org_id = '${org_id}' AND m.user_id = u.id);
+    SELECT m.role FROM memberships m JOIN users u ON u.id = m.user_id
+      WHERE u.email = '${WEB_EMAIL}' AND m.org_id = '${org_id}' AND u.is_superuser AND u.is_verified" 2>&1)"
+  status=$?
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    printf '%s\n' "$role" | redact_log >&2
+    fs_die "could not seed the isolated web user's owner membership (psql exited ${status})"
+  fi
+  [[ "$(printf '%s' "$role" | tr -d '[:space:]')" == 'owner' ]] \
+    || fs_die "the isolated web user is not a verified superuser owner of the harness organization (read back: ${role:-no row})"
 }
 
 # The Context Packet Explorer is gated on a licensing entitlement, not just on data.
