@@ -399,6 +399,9 @@ type ownershipFixture struct {
 	// (CHAOS-4635). The row-key agreement test runs its expression through it
 	// rather than the raw driver, so it exercises the path production uses.
 	query contextpacket.ClickHouseQueryClient
+	// client is the client the source reads through: query with the stored
+	// ownership groups brought up to date before each read of them.
+	client *storedGroupsClient
 }
 
 // TestOwnershipProducerAgainstRealClickHouse is the single entry point for
@@ -440,6 +443,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 	// exist or every case here fails on "dependency unavailable" before
 	// its own assertion is even reached.
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	cases := []struct {
 		name  string
 		orgID string
@@ -493,6 +497,16 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"team reconcile walks every page and retries an unapplied page", "30000000-0000-4000-8000-000000000029", subTeamReconcileWalksEveryPageAndRetriesAnUnappliedPage},
 		{"team reconcile keeps the checkpoint after a skipped page", "30000000-0000-4000-8000-00000000002a", subTeamReconcileKeepsTheCheckpointAfterASkippedPage},
 		{"CHAOS-7139 a team at exactly the entity bound keeps every edge", "30000000-0000-4000-8000-000000000022", subCHAOS7139TeamAtEntityBoundKeepsEveryEdge},
+		// The stored ownership groups (ownership_groups_seek_integration_test.go).
+		{"ownership page cost is bounded and flat", "30000000-0000-4000-8000-0000000063a1", subOwnershipPageCostIsBoundedAndFlat},
+		{"ownership stored reader equals the oracle on a randomized fixture", "30000000-0000-4000-8000-0000000063a2", subOwnershipStoredReaderEqualsTheOracleOnARandomizedFixture},
+		{"ownership group changes yield the latest state", "30000000-0000-4000-8000-0000000063a3", subOwnershipGroupChangesYieldTheLatestState},
+		{"ownership late-committed group is read through the overlap", "30000000-0000-4000-8000-0000000063a4", subOwnershipLateCommittedGroupIsReadThroughTheOverlap},
+		{"ownership reconcile re-emits every live group with no log change", "30000000-0000-4000-8000-0000000063a5", subOwnershipReconcileReemitsEveryLiveGroupWithNoLogChange},
+		{"ownership reconcile walks every page and retries an unapplied page", "30000000-0000-4000-8000-0000000063a6", subOwnershipReconcileWalksEveryPageAndRetriesAnUnappliedPage},
+		{"ownership source-row citation carries the stored group observed_at", "30000000-0000-4000-8000-0000000063a7", subOwnershipSourceRowCitesTheStoredGroupObservedAt},
+		{"ownership superseded log row writes nothing", "30000000-0000-4000-8000-0000000063a8", subOwnershipSupersededLogRowWritesNothing},
+		{"ownership log rows without a current row are progress rows", "30000000-0000-4000-8000-0000000063a9", subOwnershipLogRowsWithoutACurrentRowAreProgressRows},
 	}
 	// The subtests run in parallel on one shared schema; the organization id
 	// is the only thing keeping their rows apart, so two cases sharing one
@@ -507,7 +521,11 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			testCase.run(t, ctx, newOwnershipFixture(t, ctx, query, direct, testCase.orgID))
+			fixture := newOwnershipFixture(t, ctx, query, direct, testCase.orgID)
+			testCase.run(t, ctx, fixture)
+			// Every case's end state is also an answer-equivalence case: the
+			// walk over the stored groups writes what the oracle writes.
+			assertOwnershipMatchesOracle(t, ctx, fixture)
 		})
 	}
 }
@@ -576,11 +594,12 @@ func newOwnershipFixture(t *testing.T, ctx context.Context, query contextpacket.
 
 	seedOwnership("github", "TEAM-GITHUB", "PROJ-AMBIG-A", "AMBIG-KEY", ownershipFirstSeen, nil)
 
-	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	client := newStoredGroupsClient(query, direct)
+	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
 	if err != nil {
 		t.Fatalf("new teams/projects source: %v", err)
 	}
-	return &ownershipFixture{orgID: orgID, source: source, direct: direct, query: query}
+	return &ownershipFixture{orgID: orgID, source: source, direct: direct, query: query, client: client}
 }
 
 func (f *ownershipFixture) project(t *testing.T, ctx context.Context) contextfabric.ProjectionBatch {

@@ -109,3 +109,59 @@ func TestLiveOwnedByTeamEdgeCountsEqualTheEdgesTheProducersAssert(t *testing.T) 
 		t.Errorf("OWNED_BY_TEAM edges from other kinds: %v", got)
 	}
 }
+
+// seedOwnershipEdgeCases seeds ownership history of every kind the statement
+// resolves: versions that close and reopen, a re-asserted version, a key-only
+// row, a row with no key, a conflicting identity (ref and key resolve to two
+// projects) and, when ambiguous is set, two projects sharing one key with
+// ownership rows that name it (the retraction case).
+func seedOwnershipEdgeCases(t *testing.T, f *ingestColumnsFixture, ambiguous bool) {
+	t.Helper()
+	synced := f.old
+	for _, id := range []string{"T1", "T2"} {
+		f.team(id, f.old, synced)
+	}
+	secondKey := "U3"
+	if ambiguous {
+		secondKey = "DUP"
+	}
+	for _, p := range [][2]any{{"P1", "K1"}, {"P2", "DUP"}, {"P3", secondKey}, {"P4", "K4"}} {
+		mustExec(t, f.ctx, f.h.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced) VALUES (?, ?, 'linear', ?, ?, 1, 'started', '', ?, ?)`,
+			p[0], f.h.orgID, p[1], "project "+p[0].(string), f.old, synced)
+	}
+	mustExec(t, f.ctx, f.h.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced) VALUES ('P5', ?, 'linear', NULL, 'project P5', 1, 'started', '', ?, ?)`, f.h.orgID, f.old, synced)
+	day := func(n int) time.Time { return f.old.Add(time.Duration(n) * 24 * time.Hour) }
+	type version struct {
+		ref, key, team, source string
+		from, to               int
+		toOpen                 bool
+		updated                int
+	}
+	versions := []version{
+		{"P1", "K1", "T1", "native", 0, 1, false, 1},
+		{"P1", "K1", "T1", "native", 1, 2, false, 2},
+		{"P1", "K1", "T1", "native", 2, 0, true, 3},
+		{"P1", "K1", "T1", "native", 2, 0, true, 5},
+		{"", "K1", "T2", "native", 0, 4, false, 1},
+		{"", "K1", "T2", "native", 4, 0, true, 2},
+		{"P4", "", "T1", "manual", 0, 0, true, 1},
+		{"P2", "DUP", "T1", "native", 0, 0, true, 1},
+		{"", "DUP", "T2", "native", 0, 0, true, 1},
+		{"P4", "K1", "T2", "native", 0, 0, true, 1},
+		{"P5", "", "T2", "native", 1, 3, false, 1},
+		{"P5", "", "T2", "native", 3, 0, true, 2},
+		{"P3", "", "T1", "native", 0, 0, true, 1},
+	}
+	for _, v := range versions {
+		var key any = v.key
+		if v.key == "" {
+			key = nil
+		}
+		var to any = day(v.to)
+		if v.toOpen {
+			to = nil
+		}
+		mustExec(t, f.ctx, f.h.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at, last_synced) VALUES (?, 'linear', ?, ?, ?, ?, ?, ?, ?, ?)`,
+			f.h.orgID, v.team, v.ref, key, v.source, day(v.from), to, day(v.updated), day(v.updated))
+	}
+}

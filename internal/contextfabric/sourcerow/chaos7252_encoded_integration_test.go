@@ -55,6 +55,9 @@ func seed7252(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
 		exec(t, ctx, direct, statement)
 	}
 	exec(t, ctx, direct, devhealthschema.ProjectMembershipPresenceViewDDL)
+	for _, statement := range devhealthschema.OwnershipGroupsViewsDDL() {
+		exec(t, ctx, direct, statement)
+	}
 	org, foreign := integrationOrg, foreignOrg
 	workItems := func(org, repo string, ids ...[2]string) string {
 		values := make([]string, 0, len(ids))
@@ -123,6 +126,13 @@ func seed7252(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) {
 		fmt.Sprintf(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, updated_at) VALUES ('%[1]s', 'gitlab', 'gl:full.chaos', 'full.chaos/chaos-ops', 'full.chaos/chaos-ops', 'native', %[2]s, %[2]s), ('%[1]s', 'gitlab', 'gl:full.chaos', 'full.chaos/chaos-ops', 'full.chaos/chaos-ops', 'manual', %[2]s, %[2]s), ('%[1]s', 'gitlab', 'gl:full.chaos', '%[1]s:gitlab:2', 'full.chaos/chaos-ops', 'manual', %[2]s, %[2]s)`, org, now7252),
 	} {
 		exec(t, ctx, direct, statement)
+	}
+	// The project -> team producer and its source row read the stored
+	// groups. The second refresh starts after the seed even when a scheduled
+	// one was running during it.
+	for range 2 {
+		exec(t, ctx, direct, "SYSTEM REFRESH VIEW project_team_ownership_groups_refresh")
+		exec(t, ctx, direct, "SYSTEM WAIT VIEW project_team_ownership_groups_refresh")
 	}
 }
 

@@ -39,6 +39,7 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
 	applyProductionSchema(t, ctx, direct, "")
+	createOwnershipGroupsStore(t, ctx, direct)
 	adapter := chaos7074FalkorAdapter(t, ctx)
 
 	// Whole seconds: git_pull_requests and team_project_ownership keep
@@ -177,7 +178,7 @@ func TestRelationshipsCurrentAxisServesEndedSubjectsOnRealStores(t *testing.T) {
 		t.Fatal(err)
 	}
 	drainSource(t, ctx, mainSource, adapter, orgID, devhealthsource.SourceName)
-	teams, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	teams, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 	if err != nil {
 		t.Fatal(err)
 	}

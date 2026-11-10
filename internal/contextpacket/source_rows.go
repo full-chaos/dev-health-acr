@@ -300,8 +300,10 @@ type OrganizationRowReference struct {
 }
 
 // WithOrganizationRowQuery adds an organization row statement this package
-// does not declare. The statement binds the organization only, as the
-// built-in ones do; an id already declared here is refused.
+// does not declare. The statement reads only what ResolveOrganizationRow
+// binds: {org_id} and the ref text {evidence_locator} (the project-team read
+// looks its stored group up by the row key the ref carries); an id already
+// declared here is refused.
 func (r *CatalogClickHouseRows) WithOrganizationRowQuery(query OrganizationRowQuery) (*CatalogClickHouseRows, error) {
 	if r == nil || query.ID != ProjectTeamSourceRowQueryID || query.Statement == "" || len(query.KeyColumns) == 0 || organizationRowQuery(query.ID) != nil || r.extraOrganization[query.ID] != nil {
 		return nil, fmt.Errorf("%w: %q", ErrUnknownSourceRowQuery, query.ID)

@@ -139,7 +139,11 @@ func startOrgIsolationClickHouseContainer(tb testing.TB) (*runtimeclickhouse.Cli
 		terminate()
 		return nil, nil, nil, fmt.Errorf("open production ClickHouse query client: %w", err)
 	}
-	for _, statement := range devhealthschema.DDL(sourceSchemaTables...) {
+	// The stored ownership groups are created here, once, beside the source
+	// tables: every test on this container shares one database, and their
+	// DDL is a plain CREATE that a second test would fail.
+	store := append(devhealthschema.DDL(append(append([]string(nil), sourceSchemaTables...), devhealthschema.OwnershipGroupsTables...)...), devhealthschema.OwnershipGroupsViewsDDL()...)
+	for _, statement := range store {
 		if err := direct.Exec(ctx, statement); err != nil {
 			logCleanupErr("close query client", query.Close())
 			logCleanupErr("close native connection", direct.Close())

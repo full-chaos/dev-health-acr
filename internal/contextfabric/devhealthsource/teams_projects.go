@@ -331,7 +331,7 @@ func teamsProjectsTablesFor(omissions *ambiguityLedger, presence *presenceTeleme
 		{name: "projects", carry: true, dimension: true, query: queryProjects, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectProject}},
 		{name: "project_membership_presence", carry: true, query: subjectProjectMembershipsQuery(presence, ingest)},
 		{name: "work_item_team_attributions", carry: true, query: workItemTeamsQuery(presence)},
-		{name: "team_project_ownership", carry: true, query: projectTeamsQuery(omissions, ingest)},
+		{name: "team_project_ownership", carry: true, query: projectTeamsQuery(omissions)},
 		// CHAOS-6561: repository -> team OWNED_BY_TEAM, the ownership edge
 		// team_repo_ownership carries (queryTeams reads the same table only
 		// for a team's authorization scope).
@@ -1364,22 +1364,21 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		space = cursorSpaceIngestColumns
 	}
 	return sourcePlan{
-		client:          s.client,
-		source:          TeamsProjectsSourceName,
-		version:         TeamsProjectsSourceVersion,
-		space:           space,
-		tables:          teamsProjectsTablesFor(ledger, presence, teamAuth, repoOwnership, ingest),
-		windowTables:    teamsProjectsTablesFor(&ambiguityLedger{}, windowPresence, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}, ingest),
-		logger:          s.logger,
-		now:             s.now,
-		overlap:         s.overlapDuration(),
-		windowInterval:  s.windowInterval,
-		windowCarry:     s.windowCarry,
-		window:          s.windowMemo(),
-		reconcile:       teamsReconcileQuery(&teamAuthorizationLedger{}),
-		reconcilePeriod: teamOwnershipReconcilePeriod,
-		recordConsumed:  s.recordConsumed(checkpoint.Cursor),
-		dropConsumed:    s.forgetConsumed,
+		client:         s.client,
+		source:         TeamsProjectsSourceName,
+		version:        TeamsProjectsSourceVersion,
+		space:          space,
+		tables:         teamsProjectsTablesFor(ledger, presence, teamAuth, repoOwnership, ingest),
+		windowTables:   teamsProjectsTablesFor(&ambiguityLedger{}, windowPresence, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}, ingest),
+		logger:         s.logger,
+		now:            s.now,
+		overlap:        s.overlapDuration(),
+		windowInterval: s.windowInterval,
+		windowCarry:    s.windowCarry,
+		window:         s.windowMemo(),
+		reconciles:     []reconcilePlan{teamsReconcilePlan(&teamAuthorizationLedger{}), projectTeamsReconcilePlan(&ambiguityLedger{})},
+		recordConsumed: s.recordConsumed(checkpoint.Cursor),
+		dropConsumed:   s.forgetConsumed,
 		observePage: func(all []candidate) {
 			presence.recordConsumed(all)
 			presence.recordTableConsumed(all)

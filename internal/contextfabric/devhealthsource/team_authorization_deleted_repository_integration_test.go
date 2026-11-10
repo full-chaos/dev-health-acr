@@ -16,6 +16,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 func subTeamAuthorizationDropsAHardDeletedRepository(t *testing.T, ctx context.Context, f *ownershipFixture) {
@@ -155,8 +156,27 @@ SELECT concat('T-', leftPad(toString(number), 4, '0')), concat('team ', toString
 	if len(seen) != 252 {
 		t.Fatalf("pass served %d distinct teams, want 252", len(seen))
 	}
+	// The project -> team ownership pass is next in plan order and is due at
+	// the same clock: it may serve its own pages now. None carries a team, and
+	// once each page is applied the pass ends.
+	cursor := two.NextCursor
+	for call := 0; ; call++ {
+		batch, ok := next(cursor)
+		if !ok {
+			break
+		}
+		if call == 10 {
+			t.Fatalf("the ownership pass after the team pass never ended")
+		}
+		for _, e := range batch.Entities {
+			if e.Subject.Kind == contractsv1.ContextFabricSubjectTeam {
+				t.Fatalf("call %d: a finished team reconcile pass served team %s again", call, e.Subject.CanonicalID)
+			}
+		}
+		cursor = batch.NextCursor
+	}
 	for call := 0; call < 3; call++ {
-		if _, ok := next(two.NextCursor); ok {
+		if _, ok := next(cursor); ok {
 			t.Fatalf("call %d: a finished reconcile pass served another batch", call)
 		}
 	}

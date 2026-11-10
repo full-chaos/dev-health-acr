@@ -23,7 +23,7 @@ func TestOwnershipEdgesAreNotTimeSlicedByTheSyncStamp(t *testing.T) {
 
 	t.Run("project to team", func(t *testing.T) {
 		t.Parallel()
-		client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership FINAL", rows: [][]any{
+		client := &fakeClient{tables: []fakeTable{{match: ownershipGroupsMarker, rows: [][]any{
 			projectTeamRow("project-x", "team-y", "manual", synced, 1, time.Time{}, synced),
 		}}}}
 		edge := relationshipByID(t, teamsProjectsBatch(t, client), devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "project-x", "team-y", "manual"))
@@ -34,7 +34,7 @@ func TestOwnershipEdgesAreNotTimeSlicedByTheSyncStamp(t *testing.T) {
 	t.Run("project to team ended before the window", func(t *testing.T) {
 		t.Parallel()
 		ended := start.Add(-24 * time.Hour)
-		client := &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership FINAL", rows: [][]any{
+		client := &fakeClient{tables: []fakeTable{{match: ownershipGroupsMarker, rows: [][]any{
 			projectTeamRow("project-x", "team-y", "manual", synced, 0, ended, synced),
 		}}}}
 		edge := relationshipByID(t, teamsProjectsBatch(t, client), devhealthsource.ProjectTeamRelationshipIDForTest(t, "github", "project-x", "team-y", "manual"))

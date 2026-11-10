@@ -18,6 +18,7 @@ var teamsReadExempt = map[string]string{
 	"internal/contextfabric/devhealthsource/teams_projects.go":               "projector emits inactive nodes with property_is_active=false",
 	"internal/contextfabric/devhealthfacts/investment_project_mix_phased.go": "input-source digest list, not a read",
 	"internal/contextfabric/devhealthschema/active_team.go":                  "the predicate builder itself",
+	"internal/contextfabric/devhealthschema/ownership_groups.go":             "ops migration 147's refresh view copied byte for byte; both of its teams reads carry is_active = 1 literally (TestOwnershipGroupsDDLMirrorsMigration147 holds it to the migration)",
 }
 
 func TestEveryTeamsReadCarriesTheActiveTeamPredicate(t *testing.T) {

@@ -73,6 +73,7 @@ var oracleSchemaTables = []string{
 	"work_graph_deployment_incident_edges", "work_graph_issue_pr",
 	"teams", "projects", "work_item_team_attributions", "team_project_ownership",
 	"project_membership_transitions", "team_repo_ownership", "work_item_transitions",
+	"project_team_ownership_groups_log", "project_team_ownership_groups_current",
 }
 
 type oracleItem struct {
@@ -202,6 +203,11 @@ func oracleClickHouse(t *testing.T, ctx context.Context) (*runtimeclickhouse.Cli
 	}
 	if err := direct.Exec(ctx, devhealthschema.ProjectMembershipPresenceViewDDL); err != nil {
 		t.Fatalf("create membership view: %v", err)
+	}
+	for _, statement := range devhealthschema.OwnershipGroupsViewsDDL() {
+		if err := direct.Exec(ctx, statement); err != nil {
+			t.Fatalf("create stored ownership group view: %v\n%s", err, statement)
+		}
 	}
 	return query, direct
 }
@@ -389,7 +395,16 @@ func TestChaos8667RepositoryWorkItemMembersGraphAgreesWithLibraryRule(t *testing
 	oracleDrain(t, ctx, source, devhealthsource.SourceName, adapter)
 	// Projects, team ownership and the issue -> project presence edges come
 	// from the teams/projects source: the graph holds what production holds,
-	// so a member admitted through any of them would show up here.
+	// so a member admitted through any of them would show up here. Its
+	// ownership edges come from the stored groups: the second refresh starts
+	// after the seed even when a scheduled one was running during it.
+	for range 2 {
+		for _, statement := range []string{"SYSTEM REFRESH VIEW project_team_ownership_groups_refresh", "SYSTEM WAIT VIEW project_team_ownership_groups_refresh"} {
+			if err := direct.Exec(ctx, statement); err != nil {
+				t.Fatalf("%s: %v", statement, err)
+			}
+		}
+	}
 	teams, err := devhealthsource.NewTeamsProjectsSource(query, true)
 	if err != nil {
 		t.Fatal(err)
