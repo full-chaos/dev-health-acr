@@ -47,6 +47,8 @@ type fakeOrgOps struct {
 	mode   atomic.Int32
 	hits   atomic.Int32
 	client *entitlements.Client
+	// elapsed moves the entitlement cache clock.
+	elapsed atomic.Int64
 }
 
 func newFakeOrgOps(t *testing.T, mode orgOpsMode) *fakeOrgOps {
@@ -89,6 +91,7 @@ func newFakeOrgOps(t *testing.T, mode orgOpsMode) *fakeOrgOps {
 	ops.client, err = entitlements.New(entitlements.Config{
 		BaseURL: baseURL, TokenFile: tokenFile, Timeout: time.Second, MaxResponseBytes: 16 << 10,
 		PositiveCacheTTL: 30 * time.Second, NegativeCacheTTL: time.Second, CacheCapacity: 4,
+		Now: func() time.Time { return orgOpsEpoch.Add(time.Duration(ops.elapsed.Load())) },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -98,6 +101,10 @@ func newFakeOrgOps(t *testing.T, mode orgOpsMode) *fakeOrgOps {
 }
 
 func (o *fakeOrgOps) set(mode orgOpsMode) { o.mode.Store(int32(mode)) }
+
+func (o *fakeOrgOps) advance(d time.Duration) { o.elapsed.Add(int64(d)) }
+
+var orgOpsEpoch = time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 
 // orgGoneTestOrg is the harness organization: a canonical UUID, as Dev Health's ids are.
 const orgGoneTestOrg = "9b2f3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
@@ -679,5 +686,30 @@ func TestOrganizationGone_mintAfterAWarmCallFailsClosedOnAnOutage(t *testing.T) 
 				t.Fatalf("the same refresh token after the outage: %d %s, want a rotation", status, raw)
 			}
 		})
+	}
+}
+
+// N: bearer authentication on a data route keeps the cached read: inside the
+// 30 s cache a deleted organization is still accepted with no Dev Health
+// read, and past it the credential is refused.
+func TestOrganizationGone_bearerReadIsBoundedByTheCache(t *testing.T) {
+	h := newOrgGoneApp(t, orgOpsLive)
+	if warm := h.capabilities(h.token); warm.Code != http.StatusOK {
+		t.Fatalf("warm capabilities: %d %s", warm.Code, warm.Body.String())
+	}
+	h.ops.set(orgOpsGone)
+	h.ops.advance(29 * time.Second)
+
+	if inside := h.capabilities(h.token); inside.Code != http.StatusOK {
+		t.Fatalf("capabilities inside the cache: %d %s, want 200", inside.Code, inside.Body.String())
+	}
+	if got := h.ops.hits.Load(); got != 1 {
+		t.Fatalf("endpoint_hits inside the cache = %d, want 1", got)
+	}
+	h.ops.advance(2 * time.Second)
+
+	h.assertOrganizationUnknownRefusal(t, h.capabilities(h.token))
+	if got := h.ops.hits.Load(); got != 2 {
+		t.Fatalf("endpoint_hits past the cache = %d, want 2", got)
 	}
 }

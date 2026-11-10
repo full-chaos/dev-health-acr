@@ -42,7 +42,10 @@ type AuthenticatorOptions struct {
 
 // OrganizationPresence answers ErrOrganizationGone only when the organization positively no longer exists.
 type OrganizationPresence interface {
+	// OrganizationKnown may answer a known organization from a cache.
 	OrganizationKnown(ctx context.Context, orgID string) error
+	// OrganizationKnownNow reads Dev Health on every call; the mint paths use it.
+	OrganizationKnownNow(ctx context.Context, orgID string) error
 }
 
 // ErrOrganizationGone is an OrganizationPresence answer: the organization no longer exists.
@@ -54,7 +57,7 @@ type OrganizationCheck int
 const (
 	// OrganizationCheckAdmitOnOutage refuses a gone organization and admits on an outage.
 	OrganizationCheckAdmitOnOutage OrganizationCheck = iota
-	// OrganizationCheckRequired refuses a gone organization and answers 503 on an outage.
+	// OrganizationCheckRequired reads fresh, refuses a gone organization and answers 503 on an outage.
 	OrganizationCheckRequired
 	// OrganizationCheckSkipped does not check.
 	OrganizationCheckSkipped
@@ -241,7 +244,11 @@ func (a *Authenticator) middleware(allowWebAssertions bool, check OrganizationCh
 			}
 		}
 		if a.orgPresence != nil && check != OrganizationCheckSkipped {
-			switch err := a.orgPresence.OrganizationKnown(r.Context(), credential.OrgID); {
+			read := a.orgPresence.OrganizationKnown
+			if check == OrganizationCheckRequired {
+				read = a.orgPresence.OrganizationKnownNow
+			}
+			switch err := read(r.Context(), credential.OrgID); {
 			case err == nil:
 			case errors.Is(err, ErrOrganizationGone):
 				a.rejectCredential(w, r, ip, "organization_unknown", &credential, decision, now)

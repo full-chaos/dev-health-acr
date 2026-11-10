@@ -82,7 +82,7 @@ func New(config Config) (*Client, error) {
 		positive:   config.PositiveCacheTTL,
 		negative:   config.NegativeCacheTTL,
 		cache:      newCache(config.CacheCapacity),
-		now:        time.Now,
+		now:        config.Now,
 		llmConfigs: &llmConfigCache{},
 	}, nil
 }

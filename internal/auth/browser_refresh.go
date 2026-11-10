@@ -199,7 +199,7 @@ func (s *BrowserRefreshService) checkFamilyOrganization(ctx context.Context, pre
 	if err != nil {
 		return fmt.Errorf("read browser family organization: %w", err)
 	}
-	switch err := s.orgs.OrganizationKnown(ctx, orgID); {
+	switch err := s.orgs.OrganizationKnownNow(ctx, orgID); {
 	case err == nil:
 		return nil
 	case errors.Is(err, ErrOrganizationGone):

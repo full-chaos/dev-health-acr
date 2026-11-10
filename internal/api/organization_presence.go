@@ -12,6 +12,7 @@ import (
 
 type organizationKnower interface {
 	OrganizationKnown(ctx context.Context, orgID string) error
+	OrganizationUnknown(ctx context.Context, orgID string) (bool, error)
 }
 
 // organizationPresence is the remote entitlement client's organization check; nil in local entitlement mode.
@@ -31,4 +32,15 @@ func (o entitlementOrganizations) OrganizationKnown(ctx context.Context, orgID s
 		return fmt.Errorf("%w: %w", auth.ErrOrganizationGone, err)
 	}
 	return err
+}
+
+func (o entitlementOrganizations) OrganizationKnownNow(ctx context.Context, orgID string) error {
+	gone, err := o.knower.OrganizationUnknown(ctx, orgID)
+	switch {
+	case err != nil:
+		return err
+	case gone:
+		return auth.ErrOrganizationGone
+	}
+	return nil
 }
