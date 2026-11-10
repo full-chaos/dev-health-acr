@@ -9,21 +9,20 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// familyRevokeReasons returns the family revoke reason every credential_revoked
-// audit row carries: family_revoke_reason, or the "browser family <reason>" text
-// of the credential that started the revocation.
+// familyRevokeReasons returns the family_revoke_reason of every
+// credential_revoked audit row, the form revokeBrowserFamilyTx writes in
+// Postgres: "<none>" for a row without it.
 func familyRevokeReasons(h *oauthHarness) []any {
 	var reasons []any
 	for _, event := range h.audit.Events() {
 		if event.Action != "credential_revoked" {
 			continue
 		}
-		if reason, ok := event.Metadata["family_revoke_reason"]; ok {
-			reasons = append(reasons, reason)
-			continue
+		reason, ok := event.Metadata["family_revoke_reason"]
+		if !ok {
+			reason = "<none>"
 		}
-		text, _ := event.Metadata["reason"].(string)
-		reasons = append(reasons, strings.TrimPrefix(text, "browser family "))
+		reasons = append(reasons, reason)
 	}
 	return reasons
 }
@@ -146,5 +145,40 @@ func TestBrowserRefresh_everyMemberOfARevokedFamilyCarriesTheReason(t *testing.T
 			}
 			requireFamilyReasons(t, h, string(reason), 2)
 		})
+	}
+}
+
+// A direct revoke of one browser credential (self-revoke or the operator
+// command): its siblings carry member_revoked, the initiating credential
+// carries the operator's text and no family reason, as in Postgres
+// (credentials_audit.go revokeBrowserFamilyTx runs after the member's own row).
+func TestBrowserRefresh_aDirectRevokeNamesTheFamilyReasonOnSiblingsOnly(t *testing.T) {
+	h, clientID := browserHarness(t)
+	login := browserLogin(t, h, clientID)
+	rotated := mustRefresh(t, h, login.RefreshToken)
+	initiator := rotated.Issued.Credential
+
+	_, err := h.creds.RevokeCredential(context.Background(), storage.CredentialRevocationInput{
+		OrgID: initiator.OrgID, CredentialID: initiator.CredentialID, ActorID: "operator_1", Reason: "operator said so",
+	})
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]map[string]any{}
+	for _, event := range h.audit.Events() {
+		if event.Action == "credential_revoked" {
+			seen[event.ResourceID] = event.Metadata
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatalf("credential_revoked rows = %v, want 2", seen)
+	}
+	first, sibling := seen[initiator.CredentialID], seen[login.Issued.Credential.CredentialID]
+	if first["reason"] != "operator said so" || first["family_revoke_reason"] != nil {
+		t.Fatalf("initiating credential row = %v, want the operator reason and no family_revoke_reason", first)
+	}
+	if sibling["family_revoke_reason"] != "member_revoked" || sibling["reason"] != nil {
+		t.Fatalf("sibling row = %v, want family_revoke_reason member_revoked and no reason", sibling)
 	}
 }
