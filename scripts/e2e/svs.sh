@@ -164,7 +164,26 @@ wait_web_ready() {
 
 bootstrap_web_user() {
   dho admin users create --email "$WEB_EMAIL" --password "$WEB_PASSWORD" --full-name 'ACR SVS Canonical Account' >/dev/null
-  dho admin users update --email "$WEB_EMAIL" --verified --org "$(<"$STATE/org-id")" --role owner >/dev/null
+  local output status=0 role
+  # dho prints a refusal ("Error: ...") on stdout: it is captured and reported, never discarded.
+  output="$(dho admin users update --email "$WEB_EMAIL" --verified 2>&1)" || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    printf '%s\n' "$output" | redact_log >&2
+    svs_die "could not mark the canonical web user verified (dho exited ${status})"
+  fi
+  # A raw seed, as fullstack-opencode.sh seed_web_owner_membership: the dho membership verbs go through
+  # auth-service (ops CHAOS-11799), which writes public.memberships only while it owns users.
+  role="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres \
+    psql -h postgres -U "$POSTGRES_USER" -d devhealth -At -q -v ON_ERROR_STOP=1 -c "
+    UPDATE memberships SET role = 'owner', updated_at = now()
+      WHERE org_id = '$(<"$STATE/org-id")' AND user_id = (SELECT id FROM users WHERE email = '${WEB_EMAIL}');
+    INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+      SELECT gen_random_uuid(), '$(<"$STATE/org-id")', u.id, 'owner', now(), now(), now() FROM users u
+      WHERE u.email = '${WEB_EMAIL}'
+        AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.org_id = '$(<"$STATE/org-id")' AND m.user_id = u.id);
+    SELECT m.role FROM memberships m JOIN users u ON u.id = m.user_id
+      WHERE u.email = '${WEB_EMAIL}' AND m.org_id = '$(<"$STATE/org-id")'")"
+  [[ "$role" == 'owner' ]] || svs_die 'failed to seed the canonical web user owner membership'
 }
 
 assert_canonical_account_login() {

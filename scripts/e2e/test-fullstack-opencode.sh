@@ -316,10 +316,38 @@ grep -Fq 'the ops api service reads ClickHouse database' "$script" \
 
 grep -Fq 'ACR_DEVICE_VERIFICATION_URL' "$driver" \
   || fail 'the isolated ACR runtime must receive the concrete web device verification URL'
-grep -Fq 'compose logs --no-color clickhouse migrate go-api-roles go-api auth-provision auth-owner-grants auth-migrate auth-grants auth-fence-init auth-workload-seed auth-workload-subject auth-service auth-issuer acr-migrate acr-api acr-tls-proxy' "$driver" \
+grep -Fq 'compose logs --no-color clickhouse migrate go-api-roles go-api auth-provision auth-owner-grants auth-migrate auth-grants auth-fence-init auth-workload-seed auth-workload-bootstrap auth-workload-subject auth-service auth-issuer acr-migrate acr-api acr-tls-proxy' "$driver" \
   || fail 'failed isolated runs must retain the TLS proxy diagnostics for device-login transport failures (and the auth stack the workload token comes from)'
 grep -Fq 'run_device_login_lifecycle' "$script" \
   || fail 'the live gate must exercise CLI login through web approval and lifecycle commands'
+
+# At the pinned ops build `dho admin users update --org/--role` goes through auth-service and needs --actor (ops
+# CHAOS-11799); its refusal is printed on stdout. The web users get their owner membership from a raw seed, and a
+# users update never discards the refusal text.
+if grep -En 'dho admin users update[^#]*--(org|role|remove-from-org)' "$script" "$svs"; then
+  fail 'the harness must seed the web user membership, not send it through the dho membership verbs'
+fi
+if grep -En 'dho admin users update.*>/dev/null' "$script" "$svs"; then
+  fail 'a dho users update must report its refusal text, never send it to /dev/null'
+fi
+awk '/^seed_web_owner_membership\(\)/,/^}/' "$script" | grep -Fq "INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)" \
+  || fail 'the full-stack web user must get its owner membership from the raw seed'
+awk '/^bootstrap_web_user\(\)/,/^}/' "$script" | grep -Fq 'seed_web_owner_membership' \
+  || fail 'bootstrap_web_user must seed the owner membership'
+grep -Fq "INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)" "$svs" \
+  || fail 'the SVS web user must get its owner membership from the raw seed'
+
+# go-api mints no token pair at the pinned ops build: the web user signs in only while go-api sends sessions to
+# auth-service with the api workload credential (ops compose.yml go-api, CHAOS-13107).
+ci_compose="$root/.github/fullstack/compose.ci.yml"
+go_api_block="$(awk '/^  go-api:$/ { inside = 1; print; next } inside && /^  [a-z]/ { exit } inside { print }' "$ci_compose")"
+for want in 'AUTH_PROXY_URL: http://auth-service:8095' 'AUTH_PROXY_SESSIONS: "true"' 'AUTH_PROXY_LOCAL_LOGIN: "true"' \
+  'AUTH_SESSION_ISSUE_CREDENTIAL: workload' 'AUTH_WORKLOAD_BOOTSTRAP_FILE: /run/workload/api.bootstrap' \
+  'networks: [dev-health, auth_plane]' 'source: workload_bootstrap' 'auth-workload-bootstrap:'; do
+  grep -Fq -- "$want" <<<"$go_api_block" || fail "the fullstack go-api must send sessions to auth-service (missing: ${want})"
+done
+grep -Fq 'extends: { file: ./ops/compose.yml, service: auth-workload-bootstrap }' "$ci_compose" \
+  || fail 'the fullstack slice must run the ops auth-workload-bootstrap one-shot that writes the api credential'
 grep -Fq 'REDIS_URL: redis://valkey:6379/0' "$script" \
   || fail 'the isolated web fixture must use the isolated Valkey rate-limit backend'
 # Device login is an acceptance precondition, not a postscript after the

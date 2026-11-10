@@ -108,7 +108,7 @@ cleanup() {
   fi
   note "cleanup receipt before: $(owned_receipt)"
   if [[ "$status" -ne 0 ]]; then
-    compose logs --no-color clickhouse migrate go-api-roles go-api auth-provision auth-owner-grants auth-migrate auth-grants auth-fence-init auth-workload-seed auth-workload-subject auth-service auth-issuer acr-migrate acr-api acr-tls-proxy 2>&1 | redact_log || true
+    compose logs --no-color clickhouse migrate go-api-roles go-api auth-provision auth-owner-grants auth-migrate auth-grants auth-fence-init auth-workload-seed auth-workload-bootstrap auth-workload-subject auth-service auth-issuer acr-migrate acr-api acr-tls-proxy 2>&1 | redact_log || true
     for service in postgres pgbouncer clickhouse valkey; do
       health_container="$(compose ps -q "$service" 2>/dev/null || true)"
       if [[ -n "$health_container" ]]; then

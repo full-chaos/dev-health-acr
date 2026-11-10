@@ -39,7 +39,7 @@ name: dev-health
 
 networks:
   dev-health: {}
-  # auth-service's own plane (ops compose.yml): the auth one-shots and auth-service join it, go-api does not.
+  # auth-service's own plane (ops compose.yml): the auth one-shots, auth-service and go-api (its session calls) join it.
   auth_plane: {}
 
 volumes:
@@ -255,9 +255,17 @@ services:
       VALKEY_URI: redis://valkey:6379/1
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-ci-fixture-jwt-secret-key-0123456789abcdef}
       # The EdDSA access-token issuer, ops compose.yml's value: go-api refuses to start without
-      # it (its only access-token verifier). Keys are fetched on the first user token only;
-      # this slice reaches go-api with the svc_acr_ credential, so no issuer service runs here.
+      # it (its only access-token verifier). auth-service signs the web user's access token under it.
       AUTH_ACCESS_TOKEN_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}
+      # Sessions are auth-service's, as in ops compose.yml (CHAOS-13107): at the pinned ops build go-api mints no
+      # token pair, so without these /api/v1/auth/login answers 503 config_missing and the web user cannot sign in.
+      # go-api sends the session issue call with the `api` workload token from the bootstrap file below.
+      AUTH_PROXY_URL: http://auth-service:8095
+      AUTH_PROXY_SESSIONS: "true"
+      AUTH_PROXY_LOCAL_LOGIN: "true"
+      AUTH_SESSION_ISSUE_CREDENTIAL: workload
+      AUTH_WORKLOAD_BOOTSTRAP_FILE: /run/workload/api.bootstrap
+      AUTH_WORKLOAD_ISSUER: ${AUTH_TOKEN_ISSUER_URL:-https://auth.dev-health.internal:8443}
       # The issuer's CA (the ca/ subpath of auth_issuer_tls), as in ops compose.yml: go-api fetches the discovery
       # document and JWKS over https from auth-issuer.
       SSL_CERT_DIR: /run/auth-issuer-ca
@@ -280,6 +288,10 @@ services:
       # row of the workload registry (auth schema) and verifies the token against the issuer's keys.
       auth-workload-seed:
         condition: service_completed_successfully
+      auth-workload-bootstrap:
+        condition: service_completed_successfully
+      auth-service:
+        condition: service_healthy
       auth-issuer:
         condition: service_started
     volumes:
@@ -289,7 +301,12 @@ services:
         read_only: true
         volume:
           subpath: ca
-    networks: [dev-health]
+      - type: volume
+        source: workload_bootstrap
+        target: /run/workload
+        read_only: true
+    # auth-service's API listener (AUTH_PROXY_URL) is on auth_plane only.
+    networks: [dev-health, auth_plane]
 
   # Go query-api: serves the Go-owned GraphQL operations the ops `api` dispatches
   # to. Same shape as dev-health-ops deploy/go-api/compose-query-api.yml: the
@@ -437,6 +454,15 @@ services:
     extends: { file: ./ops/compose.yml, service: auth-workload-seed }
     depends_on: !override
       auth-grants:
+        condition: service_completed_successfully
+
+  # Writes go-api's `api` workload bootstrap credential (-if-absent: a later up skips it).
+  auth-workload-bootstrap:
+    extends: { file: ./ops/compose.yml, service: auth-workload-bootstrap }
+    depends_on: !override
+      auth-workload-volume:
+        condition: service_completed_successfully
+      auth-workload-seed:
         condition: service_completed_successfully
 
   auth-workload-subject:
