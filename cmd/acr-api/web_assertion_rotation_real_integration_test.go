@@ -42,7 +42,6 @@ type rotationDrill struct {
 
 // runWebAssertionRotationDrill rotates the JWKS under one running acr-api (no restart, wall clock).
 func runWebAssertionRotationDrill(t *testing.T, baseURL string, privateA ed25519.PrivateKey, jwksPath string, process *apiProcess) {
-	t.Helper()
 	publicB, privateB, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -69,6 +68,7 @@ func runWebAssertionRotationDrill(t *testing.T, baseURL string, privateA ed25519
 
 	// S2: A retires in seconds; after retire_after A is refused and logged, B still verifies.
 	retireAfter := time.Now().UTC().Add(3 * time.Second).Truncate(time.Second)
+	drill.swap("S2", drill.keyA.retiring(retireAfter), drill.keyB)
 	drill.expect("S2", "A", http.StatusOK)
 	wakeAt := retireAfter.Add(time.Second)
 	time.Sleep(time.Until(wakeAt))
@@ -238,7 +238,7 @@ func (d *rotationDrill) expect(stage, label string, want int) {
 	response := d.send(private, kid)
 	defer response.Body.Close()
 	if response.StatusCode != want {
-		contents, _ := io.ReadAll(response.Body)
+		contents, _ := io.ReadAll(io.LimitReader(response.Body, 256))
 		d.t.Fatalf("%s: %s-signed status = %d, want %d body=%s", stage, label, response.StatusCode, want, contents)
 	}
 	if want == http.StatusOK {
