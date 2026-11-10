@@ -116,7 +116,8 @@
           "reuse_revoked",
           "family_expired",
           "family_revoked",
-          "unsupported_token_type"
+          "unsupported_token_type",
+          "organization_unknown"
         ]
       },
       {

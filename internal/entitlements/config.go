@@ -44,6 +44,8 @@ type Config struct {
 	// Observe, when set, receives one closed (credential, outcome) pair per
 	// outgoing call.
 	Observe func(ctx context.Context, credential, outcome string)
+	// Now is the cache clock; nil is time.Now.
+	Now func() time.Time
 }
 
 // TokenSource mints a workload access token for an audience; a
@@ -67,6 +69,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.CacheCapacity == 0 {
 		c.CacheCapacity = defaultCacheCapacity
+	}
+	if c.Now == nil {
+		c.Now = time.Now
 	}
 	return c
 }

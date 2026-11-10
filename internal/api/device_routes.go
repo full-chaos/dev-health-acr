@@ -316,7 +316,15 @@ func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {
 	if a.runtime == nil || a.authenticator == nil {
 		return http.HandlerFunc(a.handleRuntimeUnavailable)
 	}
-	return a.authenticator.Middleware(a.ProtectedHandler(limits.RequestClassAuth, next))
+	return a.authenticator.MiddlewareWithOrganizationCheck(auth.OrganizationCheckRequired, a.ProtectedHandler(limits.RequestClassAuth, next))
+}
+
+// selfRevokeHandler is selfLifecycleHandler without the organization check: revoking a gone organization's credential only removes it.
+func (a *App) selfRevokeHandler(next http.Handler) http.Handler {
+	if a.runtime == nil || a.authenticator == nil {
+		return http.HandlerFunc(a.handleRuntimeUnavailable)
+	}
+	return a.authenticator.MiddlewareWithOrganizationCheck(auth.OrganizationCheckSkipped, a.ProtectedHandler(limits.RequestClassAuth, next))
 }
 
 func (a *App) deviceRuntimeHandler(next http.Handler) http.Handler {

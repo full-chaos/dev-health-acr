@@ -1247,7 +1247,7 @@ func newOAuthService(deps Dependencies, deviceFlow *auth.DeviceFlowService) (*au
 	return auth.NewOAuthService(runtime.Store, deviceFlow, auth.OAuthConfig{
 		Issuer: runtime.Issuer, Resources: runtime.Resources, ClientMetadata: runtime.ClientMetadata, Now: deps.Now,
 		BrowserClients: runtime.BrowserClients, DevBrowserRedirectURIs: runtime.DevBrowserRedirectURIs,
-		BrowserRefresh: runtime.BrowserRefresh,
+		BrowserRefresh: runtime.BrowserRefresh, OrgPresence: organizationPresence(deps.Runtime.Entitlements),
 	})
 }
 

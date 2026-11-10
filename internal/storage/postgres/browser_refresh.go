@@ -332,6 +332,28 @@ WHERE org_id = $1::uuid AND family_id = $2 AND revoked_at IS NULL`, orgID, famil
 	return len(revoked), nil
 }
 
+// BrowserRefreshFamilyOrg reads the organization of a refresh token's family for its client, with no lock.
+func (s *BrowserRefreshStore) BrowserRefreshFamilyOrg(ctx context.Context, presentedHash, clientID string) (string, error) {
+	if err := s.ready(ctx); err != nil {
+		return "", err
+	}
+	if presentedHash == "" || clientID == "" {
+		return "", storage.ErrInvalidBrowserRefresh
+	}
+	var orgID string
+	err := s.DB.QueryRowContext(ctx, `
+SELECT f.org_id::text FROM acr.browser_refresh_tokens t
+JOIN acr.browser_token_families f ON f.family_id = t.family_id
+WHERE t.token_hash = $1 AND f.client_id = $2`, presentedHash, clientID).Scan(&orgID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", storage.ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("read browser family organization: %w", sanitizeDatabaseError(err))
+	}
+	return orgID, nil
+}
+
 // RevokeBrowserFamilyByToken revokes the family a refresh token belongs to,
 // for the client that holds it (sign-out; it works when every access token of
 // the family has expired).

@@ -91,6 +91,8 @@ const (
 	OutcomeFamilyExpired        = "family_expired"
 	OutcomeFamilyRevoked        = "family_revoked"
 	OutcomeUnsupportedTokenType = "unsupported_token_type"
+	// OutcomeOrganizationUnknown: the refresh token's family belongs to an organization Dev Health no longer has.
+	OutcomeOrganizationUnknown = "organization_unknown"
 )
 
 // OutcomeVocabulary lists every outcome, ok first.
@@ -103,6 +105,7 @@ func OutcomeVocabulary() []string {
 		OutcomeResourceMismatch, OutcomeUnauthenticated, OutcomeAuthorizationPending, OutcomeSlowDown, OutcomeRateLimited, OutcomeUnavailable,
 		OutcomeSessionRequired, OutcomeImpersonating, OutcomeUnauthorizedClient, OutcomeRotationNotAllowed,
 		OutcomeGraceReplay, OutcomeReuseRevoked, OutcomeFamilyExpired, OutcomeFamilyRevoked, OutcomeUnsupportedTokenType,
+		OutcomeOrganizationUnknown,
 	}
 }
 

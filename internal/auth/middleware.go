@@ -36,7 +36,32 @@ type AuthenticatorOptions struct {
 	// MCPHop, when set, requires acr-mcp's hop proof on every call of a
 	// credential bound to an MCP resource (CHAOS-12094). Nil requires none.
 	MCPHop *MCPHopPolicy
+	// OrgPresence refuses a credential whose organization is gone; nil (local entitlement mode) skips the check.
+	OrgPresence OrganizationPresence
 }
+
+// OrganizationPresence answers ErrOrganizationGone only when the organization positively no longer exists.
+type OrganizationPresence interface {
+	// OrganizationKnown may answer a known organization from a cache.
+	OrganizationKnown(ctx context.Context, orgID string) error
+	// OrganizationKnownNow reads Dev Health on every call; the mint paths use it.
+	OrganizationKnownNow(ctx context.Context, orgID string) error
+}
+
+// ErrOrganizationGone is an OrganizationPresence answer: the organization no longer exists.
+var ErrOrganizationGone = errors.New("organization no longer exists")
+
+// OrganizationCheck says what a route does when the organization check cannot run.
+type OrganizationCheck int
+
+const (
+	// OrganizationCheckAdmitOnOutage refuses a gone organization and admits on an outage.
+	OrganizationCheckAdmitOnOutage OrganizationCheck = iota
+	// OrganizationCheckRequired reads fresh, refuses a gone organization and answers 503 on an outage.
+	OrganizationCheckRequired
+	// OrganizationCheckSkipped does not check.
+	OrganizationCheckSkipped
+)
 
 type Authenticator struct {
 	store           storage.CredentialStore
@@ -50,6 +75,7 @@ type Authenticator struct {
 	usageTelemetry  *UsageTelemetry
 	ownsTelemetry   bool
 	mcpHop          *MCPHopPolicy
+	orgPresence     OrganizationPresence
 }
 
 func NewAuthenticator(store storage.CredentialStore, audit storage.AuditStore, options AuthenticatorOptions) (*Authenticator, error) {
@@ -74,6 +100,9 @@ func NewAuthenticator(store storage.CredentialStore, audit storage.AuditStore, o
 	if options.ClientIP == nil {
 		options.ClientIP = RemoteAddressClientIP
 	}
+	if storage.IsNil(options.OrgPresence) {
+		options.OrgPresence = nil
+	}
 	telemetry := options.UsageTelemetry
 	ownsTelemetry := false
 	if telemetry == nil {
@@ -87,7 +116,7 @@ func NewAuthenticator(store storage.CredentialStore, audit storage.AuditStore, o
 	return &Authenticator{
 		store: store, audit: audit, now: options.Now, limiter: options.Limiter, logger: options.Logger,
 		detachedTimeout: options.DetachedTimeout, clientIP: options.ClientIP, webAssertions: options.WebAssertions,
-		usageTelemetry: telemetry, ownsTelemetry: ownsTelemetry, mcpHop: options.MCPHop,
+		usageTelemetry: telemetry, ownsTelemetry: ownsTelemetry, mcpHop: options.MCPHop, orgPresence: options.OrgPresence,
 	}, nil
 }
 
@@ -103,6 +132,15 @@ func (a *Authenticator) WebAssertions() *WebAssertionVerifier {
 }
 
 func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler) http.Handler {
+	return a.middleware(allowWebAssertions, OrganizationCheckAdmitOnOutage, next)
+}
+
+// MiddlewareWithOrganizationCheck is Middleware with check in place of OrganizationCheckAdmitOnOutage.
+func (a *Authenticator) MiddlewareWithOrganizationCheck(check OrganizationCheck, next http.Handler) http.Handler {
+	return a.middleware(false, check, next)
+}
+
+func (a *Authenticator) middleware(allowWebAssertions bool, check OrganizationCheck, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		now := a.now().UTC()
 		ip := a.clientIP(r)
@@ -203,6 +241,24 @@ func (a *Authenticator) MiddlewareFor(allowWebAssertions bool, next http.Handler
 				a.logger.ErrorContext(r.Context(), "mcp hop check failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "mcp_hop_validator")
 				a.writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Credential service is temporarily unavailable", true, nil)
 				return
+			}
+		}
+		if a.orgPresence != nil && check != OrganizationCheckSkipped {
+			read := a.orgPresence.OrganizationKnown
+			if check == OrganizationCheckRequired {
+				read = a.orgPresence.OrganizationKnownNow
+			}
+			switch err := read(r.Context(), credential.OrgID); {
+			case err == nil:
+			case errors.Is(err, ErrOrganizationGone):
+				a.rejectCredential(w, r, ip, "organization_unknown", &credential, decision, now)
+				return
+			case check == OrganizationCheckRequired:
+				a.logger.ErrorContext(r.Context(), "organization check failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "organization_presence", "decision", "refused")
+				a.writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Credential service is temporarily unavailable", true, nil)
+				return
+			default:
+				a.logger.WarnContext(r.Context(), "organization check failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "organization_presence", "decision", "admitted")
 			}
 		}
 		if decision.OverBudget {

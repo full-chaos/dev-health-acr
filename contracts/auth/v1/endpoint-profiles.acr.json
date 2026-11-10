@@ -1222,12 +1222,12 @@
         "acr_client_credential"
       ],
       "primary_validator": {
-        "description": "Same selfLifecycleHandler as rotate -- bearer only, no explicit scope requirement.",
+        "description": "selfRevokeHandler = selfLifecycleHandler without the organization check (a credential of a gone organization can still revoke itself) -- bearer only, no explicit scope requirement.",
         "anchor": {
           "path": "internal/api/device_routes.go",
-          "line": 315,
-          "line_end": 320,
-          "note": "func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {"
+          "line": 323,
+          "line_end": 328,
+          "note": "func (a *App) selfRevokeHandler(next http.Handler) http.Handler {"
         }
       },
       "token_shape": {

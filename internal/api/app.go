@@ -125,7 +125,7 @@ func (a *App) registerRoutes(mux routeMux) {
 	mux.Handle("POST /api/v1/oauth/token", http.HandlerFunc(a.handleDeviceToken))
 	mux.Handle("POST /api/v1/oauth/device_approval", a.deviceRuntimeHandler(a.deviceApprovalHandler(http.HandlerFunc(a.handleDeviceApproval))))
 	mux.Handle("POST /api/v1/auth/credentials/self/rotate", a.credentialLifecycleLine(oauthvocab.StepCredentialRotate, a.selfLifecycleHandler(http.HandlerFunc(a.handleRotateSelfCredential))))
-	mux.Handle("POST /api/v1/auth/credentials/self/revoke", a.credentialLifecycleLine(oauthvocab.StepCredentialRevoke, a.selfLifecycleHandler(http.HandlerFunc(a.handleRevokeSelfCredential))))
+	mux.Handle("POST /api/v1/auth/credentials/self/revoke", a.credentialLifecycleLine(oauthvocab.StepCredentialRevoke, a.selfRevokeHandler(http.HandlerFunc(a.handleRevokeSelfCredential))))
 	if a.oauth != nil {
 		mux.HandleFunc("GET "+OAuthAuthorizationServerMetadataPath, a.handleOAuthMetadata)
 		mux.HandleFunc("GET "+OAuthAuthorizePath, a.handleOAuthAuthorize)

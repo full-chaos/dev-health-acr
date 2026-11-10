@@ -82,7 +82,7 @@ func New(config Config) (*Client, error) {
 		positive:   config.PositiveCacheTTL,
 		negative:   config.NegativeCacheTTL,
 		cache:      newCache(config.CacheCapacity),
-		now:        time.Now,
+		now:        config.Now,
 		llmConfigs: &llmConfigCache{},
 	}, nil
 }
@@ -102,20 +102,9 @@ func (c *Client) HasEntitlement(ctx context.Context, orgID, entitlement string) 
 	if strings.TrimSpace(orgID) == "" || (entitlement != agentContextRuntimeEntitlement && entitlement != serviceModelEntitlement && entitlement != platformModelFallbackEntitlement) {
 		return false, errors.New("unsupported entitlement request")
 	}
-	now := c.now()
-	value, ok := c.cache.get(orgID, now)
-	if !ok {
-		result, err := c.fetch(ctx, orgID)
-		if err != nil {
-			c.cache.delete(orgID)
-			return false, err
-		}
-		ttl := c.negative
-		if result.runtime {
-			ttl = c.positive
-		}
-		c.cache.put(orgID, result, now.Add(ttl))
-		value = result
+	value, err := c.lookup(ctx, orgID)
+	if err != nil {
+		return false, err
 	}
 	switch entitlement {
 	case serviceModelEntitlement:
@@ -124,6 +113,33 @@ func (c *Client) HasEntitlement(ctx context.Context, orgID, entitlement string) 
 		return value.platformModelFallback, nil
 	}
 	return value.runtime, nil
+}
+
+// OrganizationKnown is ErrOrganizationUnknown only for the coded 404; any other failure is the unavailable error.
+func (c *Client) OrganizationKnown(ctx context.Context, orgID string) error {
+	if strings.TrimSpace(orgID) == "" {
+		return errUnavailable
+	}
+	_, err := c.lookup(ctx, orgID)
+	return err
+}
+
+func (c *Client) lookup(ctx context.Context, orgID string) (grants, error) {
+	now := c.now()
+	if value, ok := c.cache.get(orgID, now); ok {
+		return value, nil
+	}
+	result, err := c.fetch(ctx, orgID)
+	if err != nil {
+		c.cache.delete(orgID)
+		return grants{}, err
+	}
+	ttl := c.negative
+	if result.runtime {
+		ttl = c.positive
+	}
+	c.cache.put(orgID, result, now.Add(ttl))
+	return result, nil
 }
 
 // Check verifies the authenticated Dev Health service-health contract before
