@@ -140,11 +140,38 @@ spec:
          restricted rule (an ipBlock pinned to the cluster's actual
          apiserver Service IP) becomes a chart change when a scale/
          multi-tenant deployment needs one -- track that separately, do not
-         silently narrow this rule without a new ticket. */}}
-    {{- if and (include "acr.tokenReview" .) .Values.networkPolicy.egress.kubernetesAPIPort }}
+         silently narrow this rule without a new ticket.
+         CHAOS-13481: networkPolicy.egress.kubernetesAPIEndpoints, when set,
+         replaces the port-only rule with one ipBlock /32 + port per entry.
+         On k3s (kube-router) the policy matches the packet AFTER the Service
+         DNAT, so an entry names the apiserver endpoint address and port (the
+         `kubernetes` EndpointSlice, e.g. 6443), not the ClusterIP and 443: a
+         ClusterIP:443 entry opens nothing (bigboy proof, 2026-11-10). An
+         empty list renders the port-only rule exactly as before. */}}
+    {{- $kubeAPI := .Values.networkPolicy.egress.kubernetesAPIEndpoints | default list }}
+    {{- range $i, $e := $kubeAPI }}
+    {{- if not (and (kindIs "map" $e) (kindIs "string" $e.cidr) (regexMatch "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/32$" (toString $e.cidr))) }}
+    {{- fail (printf "networkPolicy.egress.kubernetesAPIEndpoints[%d].cidr must be one IPv4 address as a /32 CIDR" $i) }}
+    {{- end }}
+    {{- if not (and (or (kindIs "float64" $e.port) (kindIs "int" $e.port) (kindIs "int64" $e.port)) (ge (int $e.port) 1) (le (int $e.port) 65535)) }}
+    {{- fail (printf "networkPolicy.egress.kubernetesAPIEndpoints[%d].port must be a TCP port 1-65535" $i) }}
+    {{- end }}
+    {{- end }}
+    {{- if include "acr.tokenReview" . }}
+    {{- if $kubeAPI }}
+    {{- range $kubeAPI }}
+    - to:
+        - ipBlock:
+            cidr: {{ .cidr | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ int .port }}
+    {{- end }}
+    {{- else if .Values.networkPolicy.egress.kubernetesAPIPort }}
     - ports:
         - protocol: TCP
           port: {{ .Values.networkPolicy.egress.kubernetesAPIPort }}
+    {{- end }}
     {{- end }}
     {{- with include "acr.otelEgress" . }}
     {{- . | nindent 4 }}
