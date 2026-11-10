@@ -357,6 +357,14 @@ for want in 'AUTH_PROXY_URL: http://auth-service:8095' 'AUTH_PROXY_SESSIONS: "tr
 done
 grep -Fq 'extends: { file: ./ops/compose.yml, service: auth-workload-bootstrap }' "$ci_compose" \
   || fail 'the fullstack slice must run the ops auth-workload-bootstrap one-shot that writes the api credential'
+# go-api runs with AUTH_PROXY_SESSIONS on, so every one-shot that applies the api role's grants must read the same
+# value (prod migrate-job.yaml carries it); otherwise the api login keeps INSERT/UPDATE on refresh_tokens and
+# go-api's /readyz refuses its role posture.
+for grant_service in migrate go-api-grants; do
+  awk -v s="  ${grant_service}:" '$0 == s { inside = 1; print; next } inside && /^  [a-z]/ { exit } inside { print }' "$ci_compose" \
+    | grep -Fq 'AUTH_PROXY_SESSIONS: "true"' \
+    || fail "the fullstack ${grant_service} one-shot must apply the api grants with go-api's AUTH_PROXY_SESSIONS"
+done
 grep -Fq 'REDIS_URL: redis://valkey:6379/0' "$script" \
   || fail 'the isolated web fixture must use the isolated Valkey rate-limit backend'
 # Device login is an acceptance precondition, not a postscript after the

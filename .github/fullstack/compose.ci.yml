@@ -144,6 +144,11 @@ services:
     command: ["migrate", "upgrade", "--river"]
     environment:
       DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER: ${DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER:-1}
+      # go-api's AUTH_PROXY_SESSIONS, as the prod chart's migrate Job carries it (ops
+      # deploy/helm/dev-health/templates/migrate-job.yaml:240-245): the River step's api role grants on
+      # refresh_tokens follow it (auth-service writes them, go-api only revokes). A later `compose up` re-runs
+      # this service, so it must apply the same api grants as go-api-grants or go-api's /readyz refuses.
+      AUTH_PROXY_SESSIONS: "true"
       RIVER_DATABASE_SCHEMA: ${RIVER_DATABASE_SCHEMA:-river}
       RIVER_DOMAIN_DATABASE_ROLE: ${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}
       RIVER_QUEUE_DATABASE_ROLE: ${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}
@@ -198,6 +203,9 @@ services:
     restart: "no"
     command: ["migrate", "river", "--apply-and-check"]
     environment:
+      # go-api's AUTH_PROXY_SESSIONS (ops compose.yml go-river-migrate, prod migrate-job.yaml:240-245): the api
+      # role's refresh_tokens grants follow it, and go-api's /readyz refuses a login that holds more.
+      AUTH_PROXY_SESSIONS: "true"
       DEV_HEALTH_MIGRATION_PG_HOST: postgres
       DEV_HEALTH_MIGRATION_PG_USER: ${POSTGRES_USER:-devhealth}
       DEV_HEALTH_MIGRATION_PG_PASSWORD: ${POSTGRES_PASSWORD:-devhealth}
