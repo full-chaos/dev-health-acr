@@ -88,7 +88,7 @@ func newFakeOrgOps(t *testing.T, mode orgOpsMode) *fakeOrgOps {
 	}
 	ops.client, err = entitlements.New(entitlements.Config{
 		BaseURL: baseURL, TokenFile: tokenFile, Timeout: time.Second, MaxResponseBytes: 16 << 10,
-		PositiveCacheTTL: time.Minute, NegativeCacheTTL: time.Second, CacheCapacity: 4,
+		PositiveCacheTTL: 30 * time.Second, NegativeCacheTTL: time.Second, CacheCapacity: 4,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -98,6 +98,9 @@ func newFakeOrgOps(t *testing.T, mode orgOpsMode) *fakeOrgOps {
 }
 
 func (o *fakeOrgOps) set(mode orgOpsMode) { o.mode.Store(int32(mode)) }
+
+// orgGoneTestOrg is the harness organization: a canonical UUID, as Dev Health's ids are.
+const orgGoneTestOrg = "9b2f3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
 
 // orgGoneApp is an app whose entitlements are the real client over
 // fakeOrgOps, holding one native-device (user-class) credential issued by the
@@ -164,6 +167,8 @@ func newOrgGoneApp(t *testing.T, mode orgOpsMode) *orgGoneApp {
 	if err != nil {
 		t.Fatal(err)
 	}
+	deviceApprovalExtraClaims = map[string]any{"org_id": orgGoneTestOrg}
+	t.Cleanup(func() { deviceApprovalExtraClaims = nil })
 	h.token, h.credentialID, h.orgID = h.issueDeviceCredential(t, now, private)
 	h.ops.set(mode)
 	return h
@@ -423,7 +428,7 @@ func newOrgGoneBrowser(t *testing.T) *orgGoneBrowser {
 	b.app, b.logs = app, logs
 	t.Cleanup(func() { oauthConsentExtraClaims = nil })
 	all := []string{"*"}
-	oauthConsentExtraClaims = map[string]any{"sid": "sess_1"}
+	oauthConsentExtraClaims = map[string]any{"sid": "sess_1", "org_id": orgGoneTestOrg}
 	_, body := serveConsent(app, consentRequest(t, map[string]any{"action": "approve", "handle": authorizeToConsent(t, app, oauthTestAuthorizeQuery(auth.DevBrowserClientID)), "repository_scopes": all}, all, "r1"))
 	redirect, _ := url.Parse(body["redirect_url"].(string))
 	status, login, raw := postOAuthForm(t, app, OAuthTokenPath, url.Values{"grant_type": {"authorization_code"}, "code": {redirect.Query().Get("code")},
@@ -541,6 +546,137 @@ func TestOrganizationGone_browserRefreshUnknownOrForeignTokenKeepsItsAnswer(t *t
 			b.ops.set(orgOpsLive)
 			if code := b.read(b.login.AccessToken); code != http.StatusOK {
 				t.Fatalf("the family's access token afterwards: %d, want 200 (family not revoked)", code)
+			}
+		})
+	}
+}
+
+// The mint paths (self rotate, self ack, browser refresh) read the
+// organization fresh on every call: a warm, successful call does not let a
+// deletion or an outage through the entitlement cache.
+
+func (h *orgGoneApp) rotatedToken(t *testing.T, response *httptest.ResponseRecorder) string {
+	t.Helper()
+	var rotated contractsv1.CredentialRotateResponse
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &rotated) != nil {
+		t.Fatalf("warm rotate: %d %s", response.Code, response.Body.String())
+	}
+	return rotated.AccessToken
+}
+
+// L: warm, then the organization is deleted: the next mint call is refused.
+func TestOrganizationGone_mintAfterAWarmCallSeesTheDeletion(t *testing.T) {
+	t.Run("rotate", func(t *testing.T) {
+		h := newOrgGoneApp(t, orgOpsLive)
+		successor := h.rotatedToken(t, h.rotate(t, h.token))
+		h.ops.set(orgOpsGone)
+
+		response := h.rotate(t, successor)
+
+		assertErrorResponse(t, response, http.StatusUnauthorized, "invalid_token")
+		if got := h.ops.hits.Load(); got != 2 {
+			t.Fatalf("endpoint_hits = %d, want 2 (one fresh read per rotate)", got)
+		}
+		if got := h.rotations.Load(); got != 1 {
+			t.Fatalf("store Rotate calls = %d, want 1 (the warm one)", got)
+		}
+	})
+	t.Run("ack", func(t *testing.T) {
+		h := newOrgGoneApp(t, orgOpsLive)
+		if warm := h.ack(t, h.token, h.credentialID); warm.Code != http.StatusOK {
+			t.Fatalf("warm ack: %d %s", warm.Code, warm.Body.String())
+		}
+		h.ops.set(orgOpsGone)
+
+		response := h.ack(t, h.token, h.credentialID)
+
+		h.assertOrganizationUnknownRefusal(t, response)
+		if got := h.ops.hits.Load(); got != 2 {
+			t.Fatalf("endpoint_hits = %d, want 2 (one fresh read per ack)", got)
+		}
+	})
+	t.Run("refresh", func(t *testing.T) {
+		b := newOrgGoneBrowser(t)
+		status, warm, raw := b.refreshWith(t, b.login.RefreshToken)
+		if status != http.StatusOK {
+			t.Fatalf("warm refresh: %d %s", status, raw)
+		}
+		b.ops.set(orgOpsGone)
+
+		status, answer, raw := b.refreshWith(t, warm.RefreshToken)
+
+		if status != http.StatusBadRequest || answer.Error != "invalid_grant" || !strings.Contains(b.logs.String(), `"step":"token","outcome":"organization_unknown"`) {
+			t.Fatalf("refresh after the deletion: %d %s, want invalid_grant organization_unknown", status, raw)
+		}
+		if got := b.ops.hits.Load(); got != 2 {
+			t.Fatalf("endpoint_hits = %d, want 2 (one fresh read per refresh)", got)
+		}
+		if got := b.refresh.minted(); got != 1 {
+			t.Fatalf("successors minted = %d, want 1 (the warm one)", got)
+		}
+		b.ops.set(orgOpsLive)
+		if code := b.read(warm.AccessToken); code != http.StatusUnauthorized {
+			t.Fatalf("the family's access token after the refusal: %d, want 401 (family revoked)", code)
+		}
+	})
+}
+
+// M: warm, then Dev Health cannot answer: the next mint call is a 503 with
+// no successor, and the refresh token is not consumed.
+func TestOrganizationGone_mintAfterAWarmCallFailsClosedOnAnOutage(t *testing.T) {
+	outages := map[string]orgOpsMode{"5xx": orgOpsServerError, "uncoded 404": orgOpsUncodedNotFound}
+	for name, mode := range outages {
+		t.Run("rotate/"+name, func(t *testing.T) {
+			h := newOrgGoneApp(t, orgOpsLive)
+			successor := h.rotatedToken(t, h.rotate(t, h.token))
+			h.ops.set(mode)
+
+			response := h.rotate(t, successor)
+
+			assertErrorResponse(t, response, http.StatusServiceUnavailable, "upstream_unavailable")
+			if got := h.ops.hits.Load(); got != 2 {
+				t.Fatalf("endpoint_hits = %d, want 2", got)
+			}
+			if got := h.rotations.Load(); got != 1 {
+				t.Fatalf("store Rotate calls = %d, want 1 (the warm one)", got)
+			}
+		})
+		t.Run("ack/"+name, func(t *testing.T) {
+			h := newOrgGoneApp(t, orgOpsLive)
+			if warm := h.ack(t, h.token, h.credentialID); warm.Code != http.StatusOK {
+				t.Fatalf("warm ack: %d %s", warm.Code, warm.Body.String())
+			}
+			h.ops.set(mode)
+
+			response := h.ack(t, h.token, h.credentialID)
+
+			assertErrorResponse(t, response, http.StatusServiceUnavailable, "upstream_unavailable")
+			if got := h.ops.hits.Load(); got != 2 {
+				t.Fatalf("endpoint_hits = %d, want 2", got)
+			}
+		})
+		t.Run("refresh/"+name, func(t *testing.T) {
+			b := newOrgGoneBrowser(t)
+			status, warm, raw := b.refreshWith(t, b.login.RefreshToken)
+			if status != http.StatusOK {
+				t.Fatalf("warm refresh: %d %s", status, raw)
+			}
+			b.ops.set(mode)
+
+			status, _, raw = b.refreshWith(t, warm.RefreshToken)
+
+			if status != http.StatusServiceUnavailable {
+				t.Fatalf("refresh in an outage: %d %s, want 503", status, raw)
+			}
+			if got := b.ops.hits.Load(); got != 2 {
+				t.Fatalf("endpoint_hits = %d, want 2", got)
+			}
+			if got := b.refresh.minted(); got != 1 {
+				t.Fatalf("successors minted = %d, want 1 (the warm one)", got)
+			}
+			b.ops.set(orgOpsLive)
+			if status, after, raw := b.refreshWith(t, warm.RefreshToken); status != http.StatusOK || after.RefreshToken == warm.RefreshToken {
+				t.Fatalf("the same refresh token after the outage: %d %s, want a rotation", status, raw)
 			}
 		})
 	}
