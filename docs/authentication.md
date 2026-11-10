@@ -587,8 +587,8 @@ revocation.
   family revocation (`reuse`, `sign_out`, `org_deprovisioned`, or a rotation
   that finds a revoked member) writes `family_id` and `family_revoke_reason` on
   every member row. A direct revoke of one credential (`member_revoked`) writes
-  them on its siblings; the credential revoked directly carries the operator's
-  reason text instead.
+  them on its siblings, if any; the credential revoked directly carries the
+  operator's reason text instead.
 
 ### Browser family purge (CHAOS-12140)
 
