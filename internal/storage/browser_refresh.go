@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -43,6 +44,50 @@ const (
 	// BrowserFamilyRevokedNow: a revocation request revoked a live family.
 	BrowserFamilyRevokedNow BrowserRefreshDecision = "revoked"
 )
+
+// BrowserFamilyRevokeReason is why a browser token family was revoked: the
+// closed set the revoked_reason column accepts (migrations 0062, 0073).
+type BrowserFamilyRevokeReason string
+
+const (
+	// BrowserFamilyRevokeReuse: a consumed refresh token was presented outside the grace rule.
+	BrowserFamilyRevokeReuse BrowserFamilyRevokeReason = "reuse"
+	// BrowserFamilyRevokeSignOut: the holder of a refresh token signed out.
+	BrowserFamilyRevokeSignOut BrowserFamilyRevokeReason = "sign_out"
+	// BrowserFamilyRevokeMemberRevoked: a member credential of the family was revoked.
+	BrowserFamilyRevokeMemberRevoked BrowserFamilyRevokeReason = "member_revoked"
+	// BrowserFamilyRevokeOrgDeprovisioned: the family's organization is gone.
+	BrowserFamilyRevokeOrgDeprovisioned BrowserFamilyRevokeReason = "org_deprovisioned"
+)
+
+// BrowserFamilyRevokeReasonVocabulary lists every reason.
+func BrowserFamilyRevokeReasonVocabulary() []BrowserFamilyRevokeReason {
+	return []BrowserFamilyRevokeReason{
+		BrowserFamilyRevokeReuse, BrowserFamilyRevokeSignOut, BrowserFamilyRevokeMemberRevoked, BrowserFamilyRevokeOrgDeprovisioned,
+	}
+}
+
+// Valid reports whether the reason is a member of the closed set.
+func (r BrowserFamilyRevokeReason) Valid() bool {
+	for _, known := range BrowserFamilyRevokeReasonVocabulary() {
+		if r == known {
+			return true
+		}
+	}
+	return false
+}
+
+// BrowserFamilyReasonPrefix starts the credential revocation text of a family revoke.
+const BrowserFamilyReasonPrefix = "browser family "
+
+// BrowserFamilyReasonOf reads the family reason out of a credential
+// revocation text; any other text is a revoke of one member.
+func BrowserFamilyReasonOf(text string) BrowserFamilyRevokeReason {
+	if reason, ok := strings.CutPrefix(text, BrowserFamilyReasonPrefix); ok && BrowserFamilyRevokeReason(reason).Valid() {
+		return BrowserFamilyRevokeReason(reason)
+	}
+	return BrowserFamilyRevokeMemberRevoked
+}
 
 // BrowserRefreshDecisionVocabulary lists every decision.
 func BrowserRefreshDecisionVocabulary() []BrowserRefreshDecision {
@@ -117,8 +162,9 @@ type BrowserRefreshStore interface {
 	// RotateBrowserRefresh decides one refresh under the family's row lock.
 	RotateBrowserRefresh(ctx context.Context, rotation BrowserRefreshRotation) (BrowserRefreshOutcome, error)
 	// RevokeBrowserFamilyByToken revokes the family a refresh token belongs
-	// to (consumed or not), for the client that holds it.
-	RevokeBrowserFamilyByToken(ctx context.Context, presentedHash, clientID, actorID string, now time.Time) (BrowserFamilyRevocationOutcome, error)
+	// to (consumed or not), for the client that holds it, recording reason; a
+	// reason outside the closed set is ErrInvalidBrowserRefresh and writes nothing.
+	RevokeBrowserFamilyByToken(ctx context.Context, presentedHash, clientID, actorID string, reason BrowserFamilyRevokeReason, now time.Time) (BrowserFamilyRevocationOutcome, error)
 	// BrowserRefreshFamilyOrg reads a token's family organization with no lock or write; ErrNotFound if unknown or another client's.
 	BrowserRefreshFamilyOrg(ctx context.Context, presentedHash, clientID string) (string, error)
 }

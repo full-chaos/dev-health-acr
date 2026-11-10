@@ -203,7 +203,7 @@ func (s *BrowserRefreshService) checkFamilyOrganization(ctx context.Context, pre
 	case err == nil:
 		return nil
 	case errors.Is(err, ErrOrganizationGone):
-		if _, err := s.store.RevokeBrowserFamilyByToken(ctx, presentedHash, clientID, browserRefreshActor, s.now().UTC()); err != nil {
+		if _, err := s.store.RevokeBrowserFamilyByToken(ctx, presentedHash, clientID, browserRefreshActor, storage.BrowserFamilyRevokeOrgDeprovisioned, s.now().UTC()); err != nil {
 			return fmt.Errorf("revoke browser family of a gone organization: %w", err)
 		}
 		return errRefreshOrganizationGone
@@ -217,7 +217,7 @@ func (s *BrowserRefreshService) RevokeFamily(ctx context.Context, presented, cli
 	if !ValidRefreshTokenShape(presented) || clientID == "" {
 		return storage.BrowserRefreshUnknownToken, nil
 	}
-	outcome, err := s.store.RevokeBrowserFamilyByToken(ctx, HashRefreshToken(presented), clientID, browserRefreshActor, s.now().UTC())
+	outcome, err := s.store.RevokeBrowserFamilyByToken(ctx, HashRefreshToken(presented), clientID, browserRefreshActor, storage.BrowserFamilyRevokeSignOut, s.now().UTC())
 	if err != nil {
 		return "", err
 	}

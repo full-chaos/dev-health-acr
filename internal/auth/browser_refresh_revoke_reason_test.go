@@ -2,8 +2,11 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // familyRevokeReasons returns the family revoke reason every credential_revoked
@@ -87,4 +90,42 @@ func TestBrowserRefresh_aSecondRevokeKeepsTheFirstReason(t *testing.T) {
 	_, _ = refreshOnce(t, h, login.RefreshToken)
 
 	requireFamilyReasons(t, h, "sign_out", 1)
+}
+
+func TestBrowserRefresh_theStoreRefusesAReasonOutsideTheClosedSet(t *testing.T) {
+	for _, reason := range []storage.BrowserFamilyRevokeReason{"", "other", "SIGN_OUT", "sign_out ", "browser family sign_out", "revoked"} {
+		t.Run(string(reason), func(t *testing.T) {
+			h, clientID := browserHarness(t)
+			login := browserLogin(t, h, clientID)
+
+			_, err := h.refresh.RevokeBrowserFamilyByToken(context.Background(), HashRefreshToken(login.RefreshToken), clientID, browserRefreshActor, reason, h.now)
+
+			if !errors.Is(err, storage.ErrInvalidBrowserRefresh) {
+				t.Fatalf("reason %q: %v, want ErrInvalidBrowserRefresh", reason, err)
+			}
+			if got := familyRevokeReasons(h); len(got) != 0 {
+				t.Fatalf("reason %q wrote revocations %v, want none", reason, got)
+			}
+			stored, err := h.creds.FindByTokenHash(context.Background(), HashToken(login.Issued.Token))
+			if err != nil || stored.RevokedAt != nil {
+				t.Fatalf("reason %q: credential revoked %v, %v; want live", reason, stored.RevokedAt, err)
+			}
+		})
+	}
+}
+
+func TestBrowserRefresh_everyReasonOfTheClosedSetRevokesWithItself(t *testing.T) {
+	for _, reason := range storage.BrowserFamilyRevokeReasonVocabulary() {
+		t.Run(string(reason), func(t *testing.T) {
+			h, clientID := browserHarness(t)
+			login := browserLogin(t, h, clientID)
+
+			out, err := h.refresh.RevokeBrowserFamilyByToken(context.Background(), HashRefreshToken(login.RefreshToken), clientID, browserRefreshActor, reason, h.now)
+
+			if err != nil || out.Decision != storage.BrowserFamilyRevokedNow {
+				t.Fatalf("reason %q: %v, %v; want revoked", reason, out.Decision, err)
+			}
+			requireFamilyReasons(t, h, string(reason), 1)
+		})
+	}
 }

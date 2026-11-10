@@ -178,7 +178,7 @@ func (s *credentialStore) revokeCredential(ctx context.Context, input storage.Cr
 				continue
 			}
 			event := credentialRevokedEvent(member.Metadata, input.ActorID, now)
-			event.Metadata = map[string]any{"family_id": familyID, "family_revoke_reason": "member_revoked"}
+			event.Metadata = map[string]any{"family_id": familyID, "family_revoke_reason": string(storage.BrowserFamilyReasonOf(input.Reason))}
 			events[id] = event
 			siblings = append(siblings, id)
 		}

@@ -99,7 +99,7 @@ func (s *BrowserRefreshStore) RotateBrowserRefresh(ctx context.Context, rotation
 		return storage.BrowserRefreshOutcome{}, err
 	}
 	if source.RevokedAt != nil {
-		revoked, err := s.revokeFamilyLocked(ctx, token.familyID, "member_revoked", rotation.ActorID, now)
+		revoked, err := s.revokeFamilyLocked(ctx, token.familyID, storage.BrowserFamilyRevokeMemberRevoked, rotation.ActorID, now)
 		if err != nil {
 			return storage.BrowserRefreshOutcome{}, err
 		}
@@ -125,7 +125,7 @@ func (s *BrowserRefreshStore) RotateBrowserRefresh(ctx context.Context, rotation
 		replay.OrgID, replay.FamilyID = outcome.OrgID, outcome.FamilyID
 		return replay, nil
 	}
-	revoked, err := s.revokeFamilyLocked(ctx, token.familyID, "reuse", rotation.ActorID, now)
+	revoked, err := s.revokeFamilyLocked(ctx, token.familyID, storage.BrowserFamilyRevokeReuse, rotation.ActorID, now)
 	if err != nil {
 		return storage.BrowserRefreshOutcome{}, err
 	}
@@ -152,17 +152,17 @@ func (s *BrowserRefreshStore) graceReplayLocked(ctx context.Context, family *bro
 }
 
 // revokeFamilyLocked revokes the family and every live member credential.
-func (s *BrowserRefreshStore) revokeFamilyLocked(ctx context.Context, familyID, reason, actorID string, now time.Time) (int, error) {
+func (s *BrowserRefreshStore) revokeFamilyLocked(ctx context.Context, familyID string, reason storage.BrowserFamilyRevokeReason, actorID string, now time.Time) (int, error) {
 	family := s.families[familyID]
 	if family.revokedAt == nil {
 		revokedAt := now
-		family.revokedAt, family.revokedReason = &revokedAt, reason
+		family.revokedAt, family.revokedReason = &revokedAt, string(reason)
 	}
 	return revokeFamilyCredentials(ctx, s.credentials, family.orgID, familyID, actorID, reason)
 }
 
 // revokeFamilyCredentials revokes every live credential of a family.
-func revokeFamilyCredentials(ctx context.Context, credentials *storage.CredentialLifecycle, orgID, familyID, actorID, reason string) (int, error) {
+func revokeFamilyCredentials(ctx context.Context, credentials *storage.CredentialLifecycle, orgID, familyID, actorID string, reason storage.BrowserFamilyRevokeReason) (int, error) {
 	members, err := credentials.List(ctx, orgID)
 	if err != nil {
 		return 0, err
@@ -177,7 +177,7 @@ func revokeFamilyCredentials(ctx context.Context, credentials *storage.Credentia
 		}
 		live++
 		if _, err := credentials.RevokeCredential(ctx, storage.CredentialRevocationInput{
-			OrgID: orgID, CredentialID: member.CredentialID, ActorID: actorID, Reason: "browser family " + reason,
+			OrgID: orgID, CredentialID: member.CredentialID, ActorID: actorID, Reason: storage.BrowserFamilyReasonPrefix + string(reason),
 		}); err != nil && !errors.Is(err, storage.ErrConflict) {
 			return 0, err
 		}
@@ -207,11 +207,11 @@ func (s *BrowserRefreshStore) BrowserRefreshFamilyOrg(ctx context.Context, prese
 }
 
 // RevokeBrowserFamilyByToken revokes the family a refresh token belongs to.
-func (s *BrowserRefreshStore) RevokeBrowserFamilyByToken(ctx context.Context, presentedHash, clientID, actorID string, now time.Time) (storage.BrowserFamilyRevocationOutcome, error) {
+func (s *BrowserRefreshStore) RevokeBrowserFamilyByToken(ctx context.Context, presentedHash, clientID, actorID string, reason storage.BrowserFamilyRevokeReason, now time.Time) (storage.BrowserFamilyRevocationOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return storage.BrowserFamilyRevocationOutcome{}, err
 	}
-	if presentedHash == "" || clientID == "" || actorID == "" || now.IsZero() {
+	if presentedHash == "" || clientID == "" || actorID == "" || !reason.Valid() || now.IsZero() {
 		return storage.BrowserFamilyRevocationOutcome{}, storage.ErrInvalidBrowserRefresh
 	}
 	s.mu.Lock()
@@ -230,7 +230,7 @@ func (s *BrowserRefreshStore) RevokeBrowserFamilyByToken(ctx context.Context, pr
 		outcome.Decision = storage.BrowserRefreshFamilyRevoked
 		return outcome, nil
 	}
-	revoked, err := s.revokeFamilyLocked(ctx, token.familyID, "sign_out", actorID, now.UTC())
+	revoked, err := s.revokeFamilyLocked(ctx, token.familyID, reason, actorID, now.UTC())
 	if err != nil {
 		return storage.BrowserFamilyRevocationOutcome{}, err
 	}
