@@ -79,6 +79,10 @@ func (a *App) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 			a.writeTokenExchangeError(w, contractsv1.TokenExchangeErrorInvalidTarget, http.StatusBadRequest)
 		case errors.Is(err, authverify.ErrScopeNotGranted):
 			a.writeTokenExchangeError(w, contractsv1.TokenExchangeErrorInvalidScope, http.StatusBadRequest)
+		case errors.Is(err, auth.ErrWorkloadOrgCheckUnavailable):
+			// A live_orgs binding whose organization check could not be read:
+			// retryable, and nothing was issued.
+			a.writeDeviceDependencyError(w, r)
 		default:
 			a.writeDeviceDependencyError(w, r)
 		}

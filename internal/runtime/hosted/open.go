@@ -200,7 +200,7 @@ func open(ctx context.Context, request buildRequest) (*Runtime, error) {
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize context fabric investigator: %w", err))
 	}
-	workloadTokenExchange, err := buildWorkloadTokenExchange(postgres, request.options.Now, os.LookupEnv)
+	workloadTokenExchange, err := buildWorkloadTokenExchange(postgres, api.OrganizationPresenceFor(entitlement), request.options.Now, os.LookupEnv)
 	if err != nil {
 		return nil, closeAfterError(runtime, fmt.Errorf("initialize workload token exchange: %w", err))
 	}
