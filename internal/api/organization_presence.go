@@ -24,6 +24,13 @@ func organizationPresence(provider EntitlementProvider) auth.OrganizationPresenc
 	return entitlementOrganizations{knower: knower}
 }
 
+// OrganizationPresenceFor is organizationPresence for the runtime wiring: the
+// workload grant resolver reads it for a live_orgs binding. Nil in local
+// entitlement mode.
+func OrganizationPresenceFor(provider EntitlementProvider) auth.OrganizationPresence {
+	return organizationPresence(provider)
+}
+
 type entitlementOrganizations struct{ knower organizationKnower }
 
 func (o entitlementOrganizations) OrganizationKnown(ctx context.Context, orgID string) error {

@@ -13,6 +13,10 @@ var (
 	// has no enabled binding for. A bound-but-disabled organization reads the
 	// same.
 	ErrWorkloadOrgNotBound = errors.New("workload identity has no enabled binding for the selected organization")
+	// ErrWorkloadOrgCheckUnavailable: the identity's live_orgs binding needs
+	// Dev Health's answer that the selected organization exists, and the
+	// answer could not be read. No credential is issued; the caller may retry.
+	ErrWorkloadOrgCheckUnavailable = errors.New("the selected organization's existence could not be checked")
 )
 
 type workloadOrgSelectorKey struct{}

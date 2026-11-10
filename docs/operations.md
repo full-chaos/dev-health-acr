@@ -2659,7 +2659,7 @@ privilege escalation, `RuntimeDefault` seccomp) despite running as root.
 
 ### Workload bindings: add, move and disable
 
-`acr.workload_bindings` maps one Kubernetes identity to one organization, one role and a set of repository scopes.
+`acr.workload_bindings` maps one Kubernetes identity to one organization (or, for a `live_orgs` revoke row, to each organization Dev Health has), one role and a set of repository scopes.
 The token exchange looks the row up by the exact tuple of trust domain, namespace, ServiceAccount name, ServiceAccount UID
 and, when more than one organization is bound, an organization selector
 (`internal/auth/workload_grant_resolver.go`). The table has no HTTP route and no `acr-api` or `acr-migrate` verb by design
@@ -2673,7 +2673,8 @@ Run the statements below as the migration role (the login in `ACR_POSTGRES_MIGRA
 | Column | Meaning |
 | --- | --- |
 | `binding_id` | Text primary key. Credentials issued for the binding carry it. Choose a stable name and never reuse it. |
-| `org_id` | The organization the binding serves (UUID). |
+| `org_id` | The organization the binding serves (UUID). Null only on a `live_orgs` row. |
+| `org_scope` | `org` (the default): the row serves `org_id`. `live_orgs`: the one revoke row that serves every organization Dev Health has (migration 0072, below). |
 | `trust_domain` | The deployment trust domain (`ACR_WORKLOAD_TRUST_DOMAIN`). |
 | `namespace` | The Kubernetes namespace of the ServiceAccount. |
 | `service_account_name` | The ServiceAccount name. |
@@ -2728,9 +2729,40 @@ Credentials the binding already issued stay valid until they expire (300 seconds
 Check the result with a read, and expect one row per binding:
 
 ```sql
-SELECT binding_id, org_id, role, disabled_at FROM acr.workload_bindings
+SELECT binding_id, org_id, org_scope, role, disabled_at FROM acr.workload_bindings
   WHERE namespace = '<namespace>' AND service_account_name = '<service account>' ORDER BY org_id;
 ```
+
+A `live_orgs` row (migration 0072). go-api's on-behalf revoke (`POST /internal/v1/credentials/{credential_id}/revoke`) acts in every
+organization. Instead of one revoke row per organization, its identity can hold one row with `org_scope = 'live_orgs'` and no
+`org_id`. The exchange then binds the credential to the organization the request selects, but only after Dev Health answers,
+read fresh on every exchange, that the organization exists (`internal/auth/workload_grant_resolver.go`, `liveOrgsGrant`):
+
+- a row bound to the selected organization still wins over the `live_orgs` row;
+- a gone or unknown organization is refused (`invalid_target`), and no credential row is written;
+- if Dev Health cannot be read, the exchange answers 503 `upstream_unavailable` and writes no credential row;
+- the credential carries the revoke scope only, with the fixed repository scope `*` that every credential needs, whatever the row holds;
+- a request with no organization selector is refused (`invalid_request`).
+
+The table refuses any other use. `ck_acr_workload_bindings_org_scope` ties `org_scope` to `org_id` (`org` with an `org_id`,
+`live_orgs` without one). `ck_acr_workload_bindings_live_orgs_revoke` allows only the `revoke` role and `'[]'` repository scopes on a
+`live_orgs` row. `uq_acr_workload_bindings_live_orgs_identity` allows at most one enabled `live_orgs` row per identity. A new
+organization needs no row; a removed organization is refused at its next exchange. The organization purge deletes per-org rows
+only; a `live_orgs` row has no `org_id`.
+
+Add the `live_orgs` row (fcsup's kit, one prod write after the acr roll that ships migration 0072):
+
+```sql
+INSERT INTO acr.workload_bindings
+  (binding_id, org_id, org_scope, trust_domain, namespace, service_account_name, service_account_uid,
+   role, repository_scopes, created_at, created_by)
+VALUES
+  ('<binding id>', NULL, 'live_orgs', '<trust domain>', '<namespace>', '<service account>', '<uid>',
+   'revoke', '[]'::jsonb, now(), '<operator>');
+```
+
+Disable it with the same `UPDATE ... SET disabled_at = now()` as any row. The per-org revoke rows of the same identity can be disabled
+once an exchange through the `live_orgs` row has read back; until then a per-org row answers for its organization.
 
 Recovery.
 
