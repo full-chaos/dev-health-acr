@@ -476,6 +476,10 @@ printf '%s\n' "1100|10.0.0.2|${c1}" "1450|10.0.0.2|${c1}" "1310|10.0.0.9|${c2}" 
 [[ "$(rotation_judge_cutover "$rows" '10.0.0.2' "$c1" "$c2" 1200 1200 600 200 2000)" == FAIL:* ]]
 printf '1850|10.0.0.2|%s\n' "$c1" >> "$rows"
 [[ "$(rotation_judge_cutover "$rows" '10.0.0.2' "$c1" "$c2" 1380 1200 600 200 2000)" == FAIL:* ]]
+# A time never seen reads "none", not an empty or a raw epoch.
+[[ "$(rotation_after TS 1411 1380)" == 'TS+31 s' ]]
+[[ "$(rotation_after TS '' 1380)" == none ]]
+[[ "$(rotation_judge_neg 1000 '' 1280 1300 '' x 0)" == *'refused revoked at none'*'200 at none'* ]]
 [[ "$(rotation_judge_cells PASS PASS PASS PASS PASS)" == PASS:* ]]
 [[ "$(rotation_judge_cells PASS PASS PASS FAIL PASS)" == FAIL:* ]]
 [[ "$(rotation_judge_bounds a=PASS b=PASS)" == PASS:* ]]

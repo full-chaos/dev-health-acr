@@ -1020,6 +1020,10 @@ rotation_sleep_until() {
   wait=$(( $1 - $(rotation_now) ))
   if (( wait > 0 )); then sleep "$wait"; fi
 }
+# rotation_after <label> <time> <base>: "<label>+<time - base> s", or "none" when the time was never seen.
+rotation_after() {
+  if [[ -n "$2" ]]; then printf '%s+%s s' "$1" "$(( $2 - $3 ))"; else printf 'none'; fi
+}
 rotation_note() {
   note "rotation: $*"
   printf '%s %s\n' "$(rotation_at "$(rotation_now)")" "$*" >> "$ROTATION_RECORDS/steps.log"
@@ -1194,9 +1198,9 @@ rotation_judge_neg() {
     && (( tr - tn <= ROTATION_NEG_REFUSE_BOUND_S && tf - tn <= ROTATION_NEG_FAIL_BOUND_S && tok - tc <= ROTATION_NEG_RECOVER_BOUND_S )); then
     verdict=PASS
   fi
-  printf '%s: C1 put back: refused revoked by TN+%s s (bound %s), capabilities non-200 from TN+%s s (bound %s), acr-api C1 tokens after TN %s; C2 put back: 200 at TC+%s s (bound %s), non-200 in the next %s s: %s' \
-    "$verdict" "${tr:+$((tr - tn))}" "$ROTATION_NEG_REFUSE_BOUND_S" "${tf:+$((tf - tn))}" "$ROTATION_NEG_FAIL_BOUND_S" "$c1neg" \
-    "${tok:+$((tok - tc))}" "$ROTATION_NEG_RECOVER_BOUND_S" "$ROTATION_NEG_STEADY_S" "$after"
+  printf '%s: C1 put back: refused revoked at %s (bound %s s), capabilities non-200 from %s (bound %s s), acr-api C1 tokens after TN %s; C2 put back: 200 at %s (bound %s s), non-200 in the next %s s: %s' \
+    "$verdict" "$(rotation_after TN "$tr" "$tn")" "$ROTATION_NEG_REFUSE_BOUND_S" "$(rotation_after TN "$tf" "$tn")" "$ROTATION_NEG_FAIL_BOUND_S" "$c1neg" \
+    "$(rotation_after TC "$tok" "$tc")" "$ROTATION_NEG_RECOVER_BOUND_S" "$ROTATION_NEG_STEADY_S" "$after"
 }
 
 # Rule 8 <files...>: no bootstrap credential value (the workload bootstrap prefix and a value body) in any log or record.
@@ -1291,7 +1295,7 @@ run_bootstrap_rotation() {
     [[ -n "$first" ]] && break
     sleep 10
   done
-  rotation_note "S4: first acr-api exchange with C2 ${first:+at TS+$((first - ts)) s}${first:-not seen by TS+${ROTATION_CUT_BOUND_S} s}"
+  rotation_note "S4: first acr-api exchange with C2 at $(rotation_after TS "$first" "$ts") (looked until TS+${ROTATION_CUT_BOUND_S} s)"
 
   # S5: the overlap is over: C2 alone is live and C1 is refused as expired.
   rotation_sleep_until $((t0 + ROTATION_EXPIRED_AT_S))
@@ -1326,6 +1330,7 @@ run_bootstrap_rotation() {
   rotation_rule 2 "$(rotation_judge_overlap_use "$STATE/rotation-rows.txt" "$ROTATION_ACR_IPS" "$c1" "$t0" "$ROTATION_OVERLAP_S")"
   tn="$(rotation_now)"
   rotation_rule 3 "$(rotation_judge_cutover "$STATE/rotation-rows.txt" "$ROTATION_ACR_IPS" "$c1" "$c2" "$ts" "$t0" "$ROTATION_OVERLAP_S" "$ROTATION_CUT_BOUND_S" "$tn")"
+  first="$(rotation_acr_rows "$STATE/rotation-rows.txt" "$ROTATION_ACR_IPS" | awk -F'|' -v c="$c2" -v a="$ts" '$3 == c && $1 >= a { print $1; exit }')"
   rotation_rule 4 "$(rotation_judge_cells "$x1" "$x2" "$x3" "$x4" "$x5")"
   rotation_rule 5 "$(rotation_judge_bounds "c1-expiry=${ex}" "61m-refused=${b61}" "2nd-rotate-refused-no-out=${b2}" "audit-plus-1=${ba}" "live2-in-overlap=${r5a}" "c2-alone-after=${r5b}" "expired-to-revoked=${rv}" "repeat-revoke=${rr}" "delivered-65532-600=${dl}")"
   rotation_rule 6 "$(rotation_judge_counts $(( $(cut -d' ' -f1 <<<"$counts2") - $(cut -d' ' -f1 <<<"$counts0") )) $(( $(cut -d' ' -f2 <<<"$counts2") - $(cut -d' ' -f2 <<<"$counts0") )) $(( $(cut -d' ' -f3 <<<"$counts2") - $(cut -d' ' -f3 <<<"$counts0") )) $(( $(cut -d' ' -f5 <<<"$counts2") - $(cut -d' ' -f5 <<<"$counts0") )))"
@@ -1346,7 +1351,7 @@ run_bootstrap_rotation() {
   done
   rotation_put_back "$ROTATION_HOLD_C2" || die 'rotation S8: C2 could not be put back'
   tc="$(rotation_now)"
-  rotation_note "S8 NEG: refused revoked seen ${tr:+at TN+$((tr - tn)) s}${tr:-not by the bound}; first capabilities non-200 ${tf:+at TN+$((tf - tn)) s}${tf:-not by the bound}; C2 put back at TC=$(rotation_at "$tc")"
+  rotation_note "S8 NEG: refused revoked seen at $(rotation_after TN "$tr" "$tn"); first capabilities non-200 at $(rotation_after TN "$tf" "$tn"); C2 put back at TC=$(rotation_at "$tc")"
   while (( $(rotation_now) <= tc + ROTATION_NEG_RECOVER_BOUND_S )); do
     sleep 5
     tok="$(awk -v a="$tc" 'NF == 2 && $1 >= a && $2 == "200" { print $1; exit }' "$ROTATION_RECORDS/pent.log")"
@@ -1369,8 +1374,8 @@ run_bootstrap_rotation() {
   {
     printf 'bootstrap-rotation drill, project %s\n' "$PROJECT"
     printf 'C1 %s, C2 %s, T0 %s, overlap %s, C1 expires_at %s (T0+%s s), delivered at T0+%s s, first acr-api C2 exchange %s, revoke at T0+%s s\n' \
-      "$c1" "$c2" "$(rotation_at "$t0")" "$ROTATION_OVERLAP" "$c1_exp" "$((c1_exp_s - t0))" "$((ts - t0))" "${first:+TS+$((first - ts)) s}${first:-none}" "$((trv - t0))"
-    printf 'NEG: refused revoked at TN+%s s, capabilities non-200 from TN+%s s, recovered at TC+%s s\n' "${tr:+$((tr - tn))}" "${tf:+$((tf - tn))}" "${tok:+$((tok - tc))}"
+      "$c1" "$c2" "$(rotation_at "$t0")" "$ROTATION_OVERLAP" "$c1_exp" "$((c1_exp_s - t0))" "$((ts - t0))" "$(rotation_after TS "$first" "$ts")" "$((trv - t0))"
+    printf 'NEG: refused revoked at %s, capabilities non-200 from %s, recovered at %s\n' "$(rotation_after TN "$tr" "$tn")" "$(rotation_after TN "$tf" "$tn")" "$(rotation_after TC "$tok" "$tc")"
     cat "$ROTATION_RECORDS/rules.md"
   } > "$ROTATION_RECORDS/summary.md"
   if grep -Eq '^RULE [0-9]+: (FAIL|VOID)' "$ROTATION_RECORDS/rules.md"; then
