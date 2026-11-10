@@ -384,12 +384,19 @@ func TestOrganizationGone_cachedOrganizationThenUnknownPrincipalIs403(t *testing
 type countingRefreshStore struct {
 	storage.BrowserRefreshStore
 	rotations atomic.Int32
+	mints     atomic.Int32
 }
 
 func (s *countingRefreshStore) RotateBrowserRefresh(ctx context.Context, rotation storage.BrowserRefreshRotation) (storage.BrowserRefreshOutcome, error) {
 	s.rotations.Add(1)
-	return s.BrowserRefreshStore.RotateBrowserRefresh(ctx, rotation)
+	outcome, err := s.BrowserRefreshStore.RotateBrowserRefresh(ctx, rotation)
+	if err == nil && (outcome.Decision == storage.BrowserRefreshRotated || outcome.Decision == storage.BrowserRefreshGraceReplay) {
+		s.mints.Add(1)
+	}
+	return outcome, err
 }
+
+func (s *countingRefreshStore) minted() int32 { return s.mints.Load() }
 
 type orgGoneBrowser struct {
 	app     *App
@@ -404,6 +411,7 @@ func newOrgGoneBrowser(t *testing.T) *orgGoneBrowser {
 	b := &orgGoneBrowser{ops: newFakeOrgOps(t, orgOpsLive), refresh: &countingRefreshStore{}}
 	app, logs, err := newOAuthTestAppWith(t, &OAuthRuntime{
 		Issuer: oauthTestIssuer, Resources: []string{oauthTestResource, oauthTestIssuer}, DevBrowserRedirectURIs: []string{oauthTestRedirect},
+		BrowserClients: []string{orgGoneOtherBrowser}, ClientMetadata: auth.NewClientMetadataFetcher(http.DefaultClient),
 	}, true, func(deps *Dependencies) {
 		deps.Runtime.Entitlements = b.ops.client
 		b.refresh.BrowserRefreshStore = deps.Runtime.OAuth.BrowserRefresh
@@ -427,9 +435,16 @@ func newOrgGoneBrowser(t *testing.T) *orgGoneBrowser {
 	return b
 }
 
+const orgGoneOtherBrowser = "https://www.example.test/acr/client-metadata.json"
+
 func (b *orgGoneBrowser) refreshWith(t *testing.T, refreshToken string) (int, oauthTokenAnswer, string) {
 	t.Helper()
-	return postOAuthForm(t, b.app, OAuthTokenPath, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refreshToken}, "client_id": {auth.DevBrowserClientID}})
+	return b.refreshAs(t, refreshToken, auth.DevBrowserClientID)
+}
+
+func (b *orgGoneBrowser) refreshAs(t *testing.T, refreshToken, clientID string) (int, oauthTokenAnswer, string) {
+	t.Helper()
+	return postOAuthForm(t, b.app, OAuthTokenPath, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refreshToken}, "client_id": {clientID}})
 }
 
 func (b *orgGoneBrowser) read(accessToken string) int {
@@ -492,6 +507,40 @@ func TestOrganizationGone_browserRefreshOutageKeepsTheToken(t *testing.T) {
 			}
 			if code := b.read(rotated.AccessToken); code != http.StatusOK {
 				t.Fatalf("the rotated access token: %d, want 200", code)
+			}
+		})
+	}
+}
+
+// K: with the organization gone, an unknown refresh token and another browser
+// client's attempt keep their own answers: no organization_unknown, nothing
+// minted, and the family is not revoked.
+func TestOrganizationGone_browserRefreshUnknownOrForeignTokenKeepsItsAnswer(t *testing.T) {
+	for name, tc := range map[string]struct {
+		token           func(*orgGoneBrowser) string
+		client, outcome string
+	}{
+		"unknown token":          {func(*orgGoneBrowser) string { return auth.RefreshTokenPrefix + strings.Repeat("A", 43) }, auth.DevBrowserClientID, "invalid_grant"},
+		"another browser client": {func(b *orgGoneBrowser) string { return b.login.RefreshToken }, orgGoneOtherBrowser, "client_mismatch"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newOrgGoneBrowser(t)
+			b.ops.set(orgOpsGone)
+
+			status, answer, raw := b.refreshAs(t, tc.token(b), tc.client)
+
+			if status != http.StatusBadRequest || answer.Error != "invalid_grant" {
+				t.Fatalf("refresh: %d %s, want 400 invalid_grant", status, raw)
+			}
+			if !strings.Contains(b.logs.String(), `"step":"token","outcome":"`+tc.outcome+`"`) || strings.Contains(b.logs.String(), `"outcome":"organization_unknown"`) {
+				t.Fatalf("want token outcome %s and no organization_unknown:\n%s", tc.outcome, b.logs.String())
+			}
+			if got := b.refresh.minted(); got != 0 {
+				t.Fatalf("successors minted = %d, want 0", got)
+			}
+			b.ops.set(orgOpsLive)
+			if code := b.read(b.login.AccessToken); code != http.StatusOK {
+				t.Fatalf("the family's access token afterwards: %d, want 200 (family not revoked)", code)
 			}
 		})
 	}
