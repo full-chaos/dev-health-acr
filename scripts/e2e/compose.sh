@@ -25,10 +25,10 @@ NGINX_IMAGE="nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3
 
 # allow: SIZE_OK — the isolated scenario lifecycle shares one trap-owned state directory.
 
-usage() { printf 'usage: %s --compose <root-compose.yml> --overlay <acr.compose.yml> --project <acr-e2e-name> [--scenario happy|existing-volume|missing-ops-token|invalid-ca|revoked-acr-token|clickhouse-read-denied|migration-failure]\n' "$0" >&2; }
+usage() { printf 'usage: %s --compose <root-compose.yml> --overlay <acr.compose.yml> --project <acr-e2e-name> [--scenario happy|existing-volume|missing-ops-token|invalid-ca|revoked-acr-token|clickhouse-read-denied|migration-failure|bootstrap-rotation]\n' "$0" >&2; }
 die() { printf '[compose-e2e] FAIL: %s\n' "$*" >&2; exit 1; }
 note() { printf '[compose-e2e] %s\n' "$*" >&2; }
-redact_log() { sed -E -e 's/(fcacr|svc_acr)_[[:alnum:]_-]+/REDACTED/g' -e 's#(postgresql?|clickhouse)://[^[:space:]]+#REDACTED_DSN#g'; }
+redact_log() { sed -E -e 's/(fcacr|svc_acr|fcwlb)_[[:alnum:]_-]+/REDACTED/g' -e 's#(postgresql?|clickhouse)://[^[:space:]]+#REDACTED_DSN#g'; }
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
@@ -42,7 +42,7 @@ parse_args() {
     esac
   done
 
-  case "$SCENARIO" in happy|existing-volume|missing-ops-token|invalid-ca|revoked-acr-token|clickhouse-read-denied|migration-failure) ;; *) usage; exit 2 ;; esac
+  case "$SCENARIO" in happy|existing-volume|missing-ops-token|invalid-ca|revoked-acr-token|clickhouse-read-denied|migration-failure|bootstrap-rotation) ;; *) usage; exit 2 ;; esac
   [[ -f "$COMPOSE_FILE" && -f "$OVERLAY_FILE" ]] || { usage; exit 2; }
   [[ "$PROJECT" =~ ^acr-(e2e|svs)-[a-z0-9][a-z0-9-]{2,40}$ ]] || die 'project must be an isolated acr-e2e-* or acr-svs-* name'
   [[ "$PROJECT" != dev-health && "$PROJECT" != default ]] || die 'refusing the operator default Compose project'
@@ -970,6 +970,420 @@ run_failure() {
   return 1
 }
 
+# --- bootstrap-rotation ---------------------------------------------------------------------------------------------------
+# The acr-api workload bootstrap credential is rotated with a bounded overlap, delivered, then the old one is revoked, all
+# under load. It runs about 40 minutes with real waits (the overlap is real), so it is a manual or dispatch scenario and is
+# not in the PR smoke set. The order is the operations runbook (docs/operations.md, acr-api workload credential on
+# Compose): rotate into a .next file, deliver it over the live file (mv -f as uid 65532) inside the overlap, let the old
+# credential expire, revoke it.
+#   S0 start_happy; C1 is the live credential | S1 baseline | S2 rotate (dry run first) -overlap 10m: C2 in .next (T0)
+#   S3 T0+60 direct cells and bound cells | S4 T0+180 deliver (TS) | S5 T0+630 C1 refused expired
+#   S6 T0+660 revoke C1 (dry run, apply, repeat) | S7 post window to T0+1020 | S8 NEG: C1 put back, then C2 put back
+# Probes: P-ent (an fcacr_ capabilities call every 5 s: each one needs an entitlement lookup, which acr-api sends with its
+# workload token and which fails closed with 503 when it has no token: the token_unavailable outcome), A-rows
+# (auth.security_audit_events auth.workload.token_issued: client_ip, credential_id; acr-api rows by its container
+# addresses), direct cells (acr-workload-probe exchanges one named credential file; the refusal reason is read from the
+# auth-service log). Credential values never leave the volume (cp and mv run as uid 65532 in the volume one-shot image);
+# the records hold credential ids, counts and times only. T0 is the end of the rotate apply (host clock).
+ROTATION_OVERLAP=10m
+ROTATION_OVERLAP_S=600
+ROTATION_BASE_S=300
+ROTATION_DELIVER_AT_S=180
+ROTATION_EXPIRED_AT_S=630
+ROTATION_REVOKE_AT_S=660
+ROTATION_POST_END_S=1020
+ROTATION_CUT_BOUND_S=200
+ROTATION_NEG_REFUSE_BOUND_S=330
+ROTATION_NEG_FAIL_BOUND_S=360
+ROTATION_NEG_RECOVER_BOUND_S=90
+ROTATION_NEG_STEADY_S=60
+ROTATION_LOAD_EVERY_S=5
+ROTATION_LIVE=/run/workload/acr-api.bootstrap
+ROTATION_NEXT=/run/workload/acr-api.bootstrap.next
+ROTATION_HOLD_C1=/run/workload/acr-api.bootstrap.drill-c1
+ROTATION_HOLD_C2=/run/workload/acr-api.bootstrap.drill-c2
+ROTATION_SPARE=/run/workload/acr-api.bootstrap.drill-spare
+ROTATION_RECORDS=""
+ROTATION_ACR_IPS=""
+ROTATION_LOAD_PID=""
+
+# The direct cell's script: workload_probe_script with the credential file named by $ACR_PROBE_BOOTSTRAP (a file in the
+# read-only volume), so a cell can present C1 or C2 whichever one is live.
+# shellcheck disable=SC2016 # expanded by the probe container's sh, not here.
+rotation_probe_path='"$ACR_PROBE_BOOTSTRAP"'
+rotation_probe_script="${workload_probe_script//\/run\/workload\/acr-api.bootstrap/$rotation_probe_path}"
+
+rotation_now() { date -u +%s; }
+rotation_at() { date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ; }
+rotation_sleep_until() {
+  local wait
+  wait=$(( $1 - $(rotation_now) ))
+  if (( wait > 0 )); then sleep "$wait"; fi
+}
+# rotation_after <label> <time> <base>: "<label>+<time - base> s", or "none" when the time was never seen.
+rotation_after() {
+  if [[ -n "$2" ]]; then printf '%s+%s s' "$1" "$(( $2 - $3 ))"; else printf 'none'; fi
+}
+rotation_note() {
+  note "rotation: $*"
+  printf '%s %s\n' "$(rotation_at "$(rotation_now)")" "$*" >> "$ROTATION_RECORDS/steps.log"
+}
+# rotation_rule <n> <verdict line>: one PASS, FAIL or VOID line per rule, on stderr and in rules.md.
+rotation_rule() { printf 'RULE %s: %s\n' "$1" "$2" | tee -a "$ROTATION_RECORDS/rules.md" >&2; }
+
+# rotation_verb <record name> <auth-migrate args...>: one auth-migrate workloads verb in the acr-workload-bootstrap
+# one-shot (the credential volume read-write, uid 65532). Its output names credential ids, never a value; it is the
+# record verb-<name>.log. Prints the exit status.
+rotation_verb() {
+  local name="$1" status
+  shift
+  set +e
+  compose run --rm --no-deps -T acr-workload-bootstrap "$@" > "$ROTATION_RECORDS/verb-${name}.log" 2>&1
+  status=$?
+  set -e
+  printf '%s' "$status"
+}
+
+# rotation_volume <sh script>: one file step inside the credential volume as its owner (uid 65532), in the volume
+# one-shot image (no network). No value is read out of the volume.
+rotation_volume() {
+  compose run --rm --no-deps -T --user 65532:65532 --entrypoint sh acr-workload-volume -c "$1" 2>"$STATE/rotation-volume.stderr"
+}
+# rotation_deliver is the runbook's delivery: the rotated file replaces the live one in one rename, as its owner.
+rotation_deliver() { rotation_volume "mv -f ${ROTATION_NEXT} ${ROTATION_LIVE}"; }
+# rotation_put_back <held file>: the NEG cells put a held credential back over the live file, also in one rename.
+rotation_put_back() { rotation_volume "cp -p $1 ${ROTATION_SPARE} && mv -f ${ROTATION_SPARE} ${ROTATION_LIVE}"; }
+
+rotation_sql() {
+  compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres psql -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -v ON_ERROR_STOP=1 -c "$1"
+}
+# rotation_rows <file>: every auth.workload.token_issued row as epoch|client_ip|credential_id.
+rotation_rows() {
+  rotation_sql "SELECT extract(epoch FROM occurred_at)::bigint || '|' || coalesce(host(client_ip), 'null') || '|' || coalesce(attributes->>'credential_id', 'null') FROM auth.security_audit_events WHERE event_type = 'auth.workload.token_issued' ORDER BY id" > "$1"
+}
+# rotation_audit_counts: bootstrap_created bootstrap_rotated bootstrap_revoked all-bootstrap rows, then the outbox
+# workload.bootstrap_changed rows, on one line.
+rotation_audit_counts() {
+  local audit outbox
+  audit="$(rotation_sql "SELECT count(*) FILTER (WHERE event_type = 'auth.workload.bootstrap_created') || ' ' || count(*) FILTER (WHERE event_type = 'auth.workload.bootstrap_rotated') || ' ' || count(*) FILTER (WHERE event_type = 'auth.workload.bootstrap_revoked') || ' ' || count(*) FILTER (WHERE event_type LIKE 'auth.workload.bootstrap_%') FROM auth.security_audit_events")"
+  outbox="$(rotation_sql "SELECT count(*) FROM auth.auth_outbox_events WHERE event_type = 'workload.bootstrap_changed'")"
+  printf '%s %s' "$audit" "$outbox"
+}
+
+# rotation_refusals_since <epoch> <reason>: auth-service "workload exchange refused" lines for a bootstrap subject with
+# that reason, logged at or after epoch.
+rotation_refusals_since() {
+  { compose logs --no-color --no-log-prefix --since "$(rotation_at "$1")" auth-service 2>/dev/null || true; } \
+    | grep -F 'workload exchange refused' | grep -E 'subject"?[:=]"?bootstrap' | grep -Ec "reason\"?[:=]\"?${2}([\"[:space:],}]|$)" || true
+}
+# rotation_lookup_failures <from epoch> <to epoch>: acr-api "entitlement lookup failed" lines in the window.
+rotation_lookup_failures() {
+  { compose logs --no-color --no-log-prefix --since "$(rotation_at "$1")" --until "$(rotation_at "$2")" acr-api 2>/dev/null || true; } \
+    | grep -Fc 'entitlement lookup failed' || true
+}
+
+# rotation_cell <label> <credential file> <want: 200|refused> <reason|->: three direct exchanges with one credential
+# file. 200: each exchange accepted and the go-api internal acr route answers 200 with the token. refused: each exchange
+# refused, and the auth-service log names the reason on at least three refusals since the cell started. Prints PASS or
+# FAIL; the line is in cells.md.
+rotation_cell() {
+  local label="$1" file="$2" want="$3" reason="$4" mark output status codes="" verdict=PASS lines=-
+  mark="$(rotation_now)"
+  for _ in 1 2 3; do
+    output="$(ACR_PROBE_URL="${go_api_internal}${acr_health_path}" ACR_PROBE_BOOTSTRAP="$file" compose run --rm --no-deps -T -e ACR_PROBE_URL -e ACR_PROBE_BOOTSTRAP acr-workload-probe "$rotation_probe_script" 2>&1)" || true
+    if grep -q EXCHANGE-REFUSED <<<"$output"; then
+      status=refused
+    else
+      status="$(http_status_of "$output")"
+      status="${status:-none}"
+    fi
+    codes="${codes} ${status}"
+    [[ "$status" == "$want" ]] || verdict=FAIL
+    sleep 1
+  done
+  if [[ "$reason" != - ]]; then
+    sleep 2
+    lines="$(rotation_refusals_since "$mark" "$reason")"
+    (( lines >= 3 )) || verdict=FAIL
+  fi
+  printf '%s %s %s: results%s; auth-service refusals with reason %s: %s -> %s\n' "$(rotation_at "$mark")" "$label" "${file##*/}" "$codes" "$reason" "$lines" "$verdict" >> "$ROTATION_RECORDS/cells.md"
+  printf '%s' "$verdict"
+}
+
+# rotation_load <log> <flag file> <parent pid>: P-ent. One capabilities call every ROTATION_LOAD_EVERY_S s with the
+# scoped fcacr_ credential (sent from a 0600 header file, never an argument), one "epoch status" line each, while the
+# flag file exists and the parent runs.
+rotation_load() {
+  local log="$1" flag="$2" parent="$3" status
+  while [[ -f "$flag" ]] && kill -0 "$parent" 2>/dev/null; do
+    status="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 --cacert "$STATE/pki/ca.crt" --noproxy '*' -H "$ACR_CLIENT_VERSION_HEADER" -H @"$STATE/rotation-auth.header" "https://localhost:${PORT}/api/v1/agent-context/capabilities" 2>/dev/null)" || true
+    printf '%s %s\n' "$(rotation_now)" "${status:-000}" >> "$log"
+    sleep "$ROTATION_LOAD_EVERY_S"
+  done
+}
+
+# --- the rule judges: pure functions of the records, so test-compose.sh can feed them planted inputs ---------------------
+# rotation_acr_rows <rows file> <addresses>: the token_issued rows whose client_ip is one of acr-api's addresses.
+rotation_acr_rows() { awk -F'|' -v ips=" $2 " 'index(ips, " " $2 " ")' "$1"; }
+
+# Rule 1 <P-ent log> <from> <to> <lookup failures>: every capabilities call in the window answered 200, at least one call
+# per (interval + 1) s, and acr-api logged no failed entitlement lookup (token_unavailable fails a lookup closed).
+rotation_judge_load() {
+  local log="$1" from="$2" to="$3" failures="$4" minimum n bad hist verdict=FAIL
+  minimum=$(( (to - from) / (ROTATION_LOAD_EVERY_S + 1) ))
+  read -r n bad hist < <(awk -v a="$from" -v b="$to" 'NF == 2 && $1 >= a && $1 <= b { n++; if ($2 != "200") f++; h[$2]++ }
+    END { s = ""; for (k in h) s = s k "=" h[k] ","; print n + 0, f + 0, (s == "" ? "none" : s) }' "$log")
+  if (( n >= minimum && bad == 0 && failures == 0 )); then verdict=PASS; fi
+  printf '%s: capabilities calls %s..%s: %s (want >= %s), non-200 %s (%s); acr-api entitlement lookup failures %s (want 0)' \
+    "$verdict" "$(rotation_at "$from")" "$(rotation_at "$to")" "$n" "$minimum" "$bad" "$hist" "$failures"
+}
+
+# Rule 2 <rows> <addresses> <C1> <T0> <overlap s>: acr-api exchanged C1 inside the overlap (T0, T0+overlap).
+rotation_judge_overlap_use() {
+  local rows="$1" ips="$2" c1="$3" t0="$4" overlap="$5" n nulls verdict=FAIL
+  n="$(rotation_acr_rows "$rows" "$ips" | awk -F'|' -v c="$c1" -v a="$t0" -v b=$((t0 + overlap)) '$3 == c && $1 > a && $1 < b' | wc -l | tr -d ' ')"
+  nulls="$(awk -F'|' '$2 == "null"' "$rows" | wc -l | tr -d ' ')"
+  if (( n >= 1 )); then verdict=PASS; fi
+  if (( nulls > 0 )); then verdict="VOID(client_ip null x${nulls})"; fi
+  printf '%s: acr-api exchanges with C1 inside the overlap (T0..T0+%s): %s (want >= 1)' "$verdict" "$overlap" "$n"
+}
+
+# Rule 3 <rows> <addresses> <C1> <C2> <TS> <T0> <overlap s> <bound s> <until>: the first acr-api exchange with C2 at or
+# after the delivery TS is within bound s and before the overlap ends; acr-api made no C1 exchange from the end of the
+# overlap to until (the NEG start).
+rotation_judge_cutover() {
+  local rows="$1" ips="$2" c1="$3" c2="$4" ts="$5" t0="$6" overlap="$7" bound="$8" until="$9" first late verdict=FAIL after=none
+  first="$(rotation_acr_rows "$rows" "$ips" | awk -F'|' -v c="$c2" -v a="$ts" '$3 == c && $1 >= a { print $1; exit }')"
+  late="$(rotation_acr_rows "$rows" "$ips" | awk -F'|' -v c="$c1" -v a=$((t0 + overlap)) -v b="$until" '$3 == c && $1 >= a && $1 < b' | wc -l | tr -d ' ')"
+  if [[ -n "$first" ]]; then
+    after="TS+$((first - ts)) s"
+    if (( first - ts <= bound && first < t0 + overlap && late == 0 )); then verdict=PASS; fi
+  fi
+  printf '%s: first acr-api exchange with C2 at %s (bound %s s, before T0+%s); acr-api C1 exchanges after the overlap: %s' \
+    "$verdict" "$after" "$bound" "$overlap" "$late"
+}
+
+# Rule 4 <x1..x5>: the direct cells (C1, C2 inside the overlap; C1 expired; C1 revoked; C2 after the revoke).
+rotation_judge_cells() {
+  local verdict=PASS cell
+  for cell in "$@"; do [[ "$cell" == PASS ]] || verdict=FAIL; done
+  printf '%s: C1/C2 inside the overlap 200 (%s/%s); C1 after the overlap refused expired (%s); after the revoke C1 refused revoked (%s), C2 200 (%s)' \
+    "$verdict" "$1" "$2" "$3" "$4" "$5"
+}
+
+# Rule 5 <name=verdict...>: the bounds of the verbs and the file.
+rotation_judge_bounds() {
+  local verdict=PASS item detail=""
+  for item in "$@"; do
+    [[ "${item#*=}" == PASS ]] || verdict=FAIL
+    detail="${detail} ${item}"
+  done
+  printf '%s:%s' "$verdict" "$detail"
+}
+
+# Rule 6 <created> <rotated> <revoked> <outbox>: the deltas from before the rotate to the end of S7.
+rotation_judge_counts() {
+  local verdict=FAIL
+  if [[ "$1" == 0 && "$2" == 1 && "$3" == 1 && "$4" == 2 ]]; then verdict=PASS; fi
+  printf '%s: audit bootstrap_created +%s, bootstrap_rotated +%s, bootstrap_revoked +%s (want +0, +1, +1); outbox workload.bootstrap_changed +%s (want +2)' \
+    "$verdict" "$1" "$2" "$3" "$4"
+}
+
+# Rule 7 <TN> <TR> <TF> <TC> <TOK> <non-200 after recovery> <acr-api C1 tokens after TN>: C1 put back is refused
+# (revoked) within the refusal bound and acr-api fails closed within the failure bound; C2 put back recovers within the
+# recovery bound and stays up.
+rotation_judge_neg() {
+  local tn="$1" tr="$2" tf="$3" tc="$4" tok="$5" after="$6" c1neg="$7" verdict=FAIL
+  if [[ -n "$tr" && -n "$tf" && -n "$tok" && "$after" == 0 && "$c1neg" == 0 ]] \
+    && (( tr - tn <= ROTATION_NEG_REFUSE_BOUND_S && tf - tn <= ROTATION_NEG_FAIL_BOUND_S && tok - tc <= ROTATION_NEG_RECOVER_BOUND_S )); then
+    verdict=PASS
+  fi
+  printf '%s: C1 put back: refused revoked at %s (bound %s s), capabilities non-200 from %s (bound %s s), acr-api C1 tokens after TN %s; C2 put back: 200 at %s (bound %s s), non-200 in the next %s s: %s' \
+    "$verdict" "$(rotation_after TN "$tr" "$tn")" "$ROTATION_NEG_REFUSE_BOUND_S" "$(rotation_after TN "$tf" "$tn")" "$ROTATION_NEG_FAIL_BOUND_S" "$c1neg" \
+    "$(rotation_after TC "$tok" "$tc")" "$ROTATION_NEG_RECOVER_BOUND_S" "$ROTATION_NEG_STEADY_S" "$after"
+}
+
+# Rule 8 <files...>: no bootstrap credential value (the workload bootstrap prefix and a value body) in any log or record.
+rotation_judge_leak() {
+  local hits prefix=fcwlb
+  hits="$(cat "$@" 2>/dev/null | grep -Ec "${prefix}_[A-Za-z0-9_-]{8,}" || true)"
+  if [[ "$hits" == 0 ]]; then
+    printf 'PASS: leak scan of %s files (service logs and records): 0 bootstrap values' "$#"
+  else
+    printf 'FAIL: leak scan of %s files found %s lines with a bootstrap value' "$#" "$hits"
+  fi
+}
+
+run_bootstrap_rotation() {
+  local tb t0 ts tn tr="" tf="" tc tok="" trv c1 c2 c1_exp c1_exp_s rc rc61 rc2 left first after c1neg failures
+  local x1 x2 x3 x4 x5 b61 b2 ba r5a r5b rv rr dl ex counts0 counts1 counts2 load_flag mode
+  ROTATION_RECORDS="${ACR_E2E_RECORDS:-$STATE/rotation}"
+  mkdir -p "$ROTATION_RECORDS"
+  [[ -z "$(ls -A "$ROTATION_RECORDS")" ]] || die 'the rotation records directory must be new or empty'
+  start_happy
+  ROTATION_ACR_IPS="$(docker inspect --format '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$(compose ps -q acr-api)")"
+  ROTATION_ACR_IPS="${ROTATION_ACR_IPS% }"
+  [[ -n "$ROTATION_ACR_IPS" ]] || die 'acr-api has no container address'
+  rotation_note "S0: acr-api addresses ${ROTATION_ACR_IPS}"
+
+  # S0: C1 is the one live credential; P-ent starts.
+  rc="$(rotation_verb dry0 workloads bootstrap-rotate -workload acr-api -out "$ROTATION_NEXT" -overlap "$ROTATION_OVERLAP")"
+  if [[ "$rc" != 0 ]] || ! grep -q 'dry run: workload=acr-api live=1 ' "$ROTATION_RECORDS/verb-dry0.log"; then die 'rotation S0: the rotate dry run does not list one live credential'; fi
+  c1="$(sed -nE 's/^live credential=([0-9a-f-]{36}) .*/\1/p' "$ROTATION_RECORDS/verb-dry0.log")"
+  [[ "$c1" =~ ^[0-9a-f-]{36}$ ]] || die 'rotation S0: no C1 credential id'
+  (umask 077; printf 'Authorization: Bearer %s\n' "$(<"$STATE/secrets/acr-rotated-token")" > "$STATE/rotation-auth.header")
+  load_flag="$STATE/rotation-load.on"
+  : > "$load_flag"
+  rotation_load "$ROTATION_RECORDS/pent.log" "$load_flag" "$$" &
+  ROTATION_LOAD_PID=$!
+  rotation_note "S0: C1 credential=${c1}; P-ent pid ${ROTATION_LOAD_PID}"
+  sleep 60
+  rotation_rows "$STATE/rotation-rows.txt"
+  [[ "$(awk '$2 == "200"' "$ROTATION_RECORDS/pent.log" | wc -l)" -ge 3 ]] || die 'rotation pre-check: fewer than 3 capabilities calls answered 200'
+  [[ "$(rotation_acr_rows "$STATE/rotation-rows.txt" "$ROTATION_ACR_IPS" | awk -F'|' -v c="$c1" '$3 == c' | wc -l)" -ge 1 ]] || die 'rotation pre-check: no acr-api exchange with C1'
+  if rotation_acr_rows "$STATE/rotation-rows.txt" "$ROTATION_ACR_IPS" | awk -F'|' -v c="$c1" '$3 != c' | grep -q .; then die 'rotation pre-check: an acr-api exchange names a credential other than C1'; fi
+
+  # S1: baseline.
+  tb="$(rotation_now)"
+  rotation_note "S1: baseline ${ROTATION_BASE_S} s"
+  rotation_sleep_until $((tb + ROTATION_BASE_S))
+
+  # S2: rotate into .next (dry run first); C1 and C2 are held in the volume for the direct and NEG cells.
+  rotation_volume "cp -p ${ROTATION_LIVE} ${ROTATION_HOLD_C1}" || die 'rotation S2: C1 could not be held'
+  counts0="$(rotation_audit_counts)"
+  rc="$(rotation_verb dry1 workloads bootstrap-rotate -workload acr-api -out "$ROTATION_NEXT" -overlap "$ROTATION_OVERLAP")"
+  if [[ "$rc" != 0 ]] || ! grep -q "^live credential=${c1} " "$ROTATION_RECORDS/verb-dry1.log"; then die 'rotation S2: the rotate dry run failed'; fi
+  rc="$(rotation_verb rotate workloads bootstrap-rotate -workload acr-api -out "$ROTATION_NEXT" -overlap "$ROTATION_OVERLAP" -apply)"
+  t0="$(rotation_now)"
+  [[ "$rc" == 0 ]] || die 'rotation S2: bootstrap-rotate failed (verb-rotate.log)'
+  c2="$(sed -nE 's/^workloads bootstrap-rotate applied: workload=acr-api credential=([0-9a-f-]{36}) .*/\1/p' "$ROTATION_RECORDS/verb-rotate.log")"
+  c1_exp="$(sed -nE "s/^previous credential=${c1} now expires_at=(.*)$/\1/p" "$ROTATION_RECORDS/verb-rotate.log")"
+  [[ "$c2" =~ ^[0-9a-f-]{36}$ && -n "$c1_exp" ]] || die 'rotation S2: the rotate output lacks C2 or the C1 expiry'
+  c1_exp_s="$(date -u -d "$c1_exp" +%s)"
+  if (( c1_exp_s >= t0 + ROTATION_OVERLAP_S - 60 && c1_exp_s <= t0 + ROTATION_OVERLAP_S + 5 )); then ex=PASS; else ex=FAIL; fi
+  rotation_volume "cp -p ${ROTATION_NEXT} ${ROTATION_HOLD_C2}" || die 'rotation S2: C2 could not be held'
+  rotation_note "S2: rotate -overlap ${ROTATION_OVERLAP} applied at T0=$(rotation_at "$t0"): C2 credential=${c2}; C1 now expires_at=${c1_exp} (T0+$((c1_exp_s - t0)) s) ${ex}"
+  rotation_sleep_until $((t0 + 30))
+  rc="$(rotation_verb dry2 workloads bootstrap-rotate -workload acr-api -out "${ROTATION_LIVE}.dry" -overlap "$ROTATION_OVERLAP")"
+  if [[ "$rc" == 0 ]] && grep -q 'dry run: workload=acr-api live=2 ' "$ROTATION_RECORDS/verb-dry2.log"; then r5a=PASS; else r5a=FAIL; fi
+  rotation_note "S2: dry run at T0+30 lists live=2: ${r5a}"
+
+  # S3: both credentials exchange inside the overlap; the bounds hold; the audit grows by the rotate only.
+  rotation_sleep_until $((t0 + 60))
+  x1="$(rotation_cell 'S3 inside the overlap' "$ROTATION_HOLD_C1" 200 -)"
+  x2="$(rotation_cell 'S3 inside the overlap' "$ROTATION_NEXT" 200 -)"
+  rc61="$(rotation_verb b61 workloads bootstrap-rotate -workload acr-api -out "${ROTATION_LIVE}.b61" -overlap 61m -apply)"
+  rc2="$(rotation_verb b2 workloads bootstrap-rotate -workload acr-api -out "${ROTATION_LIVE}.second" -overlap 5m -apply)"
+  left="$(rotation_volume "ls -A /run/workload" | grep -Ec '\.(b61|second)$' || true)"
+  counts1="$(rotation_audit_counts)"
+  if [[ "$rc61" != 0 ]] && grep -q -- '-overlap must be from 0 to 1h' "$ROTATION_RECORDS/verb-b61.log"; then b61=PASS; else b61=FAIL; fi
+  if [[ "$rc2" == 1 ]] && grep -q 'bootstrap-rotate failed (a rotation is still in its overlap)' "$ROTATION_RECORDS/verb-b2.log" && [[ "$left" == 0 ]]; then b2=PASS; else b2=FAIL; fi
+  if [[ "$(cut -d' ' -f4 <<<"$counts1")" == $(( $(cut -d' ' -f4 <<<"$counts0") + 1 )) ]]; then ba=PASS; else ba=FAIL; fi
+  rotation_note "S3: cells C1 ${x1} C2 ${x2}; -overlap 61m rc=${rc61} ${b61}; 2nd rotate rc=${rc2} -out files left=${left} ${b2}; bootstrap audit rows $(cut -d' ' -f4 <<<"$counts0") -> $(cut -d' ' -f4 <<<"$counts1") ${ba}"
+
+  # S4: deliver C2 over the live file (the runbook step).
+  rotation_sleep_until $((t0 + ROTATION_DELIVER_AT_S))
+  rotation_deliver || die 'rotation S4: the delivery failed'
+  ts="$(rotation_now)"
+  mode="$(rotation_volume "stat -c '%u:%a' ${ROTATION_LIVE}")" || true
+  if [[ "$mode" == 65532:600 ]]; then dl=PASS; else dl=FAIL; fi
+  rotation_note "S4: .next moved over the live file at TS=$(rotation_at "$ts") (T0+$((ts - t0)) s); live file ${mode:-unknown} ${dl}"
+  first=""
+  while (( $(rotation_now) <= ts + ROTATION_CUT_BOUND_S )); do
+    rotation_rows "$STATE/rotation-rows.txt"
+    first="$(rotation_acr_rows "$STATE/rotation-rows.txt" "$ROTATION_ACR_IPS" | awk -F'|' -v c="$c2" -v a="$ts" '$3 == c && $1 >= a { print $1; exit }')"
+    [[ -n "$first" ]] && break
+    sleep 10
+  done
+  rotation_note "S4: first acr-api exchange with C2 at $(rotation_after TS "$first" "$ts") (looked until TS+${ROTATION_CUT_BOUND_S} s)"
+
+  # S5: the overlap is over: C2 alone is live and C1 is refused as expired.
+  rotation_sleep_until $((t0 + ROTATION_EXPIRED_AT_S))
+  rc="$(rotation_verb dry3 workloads bootstrap-rotate -workload acr-api -out "${ROTATION_LIVE}.dry" -overlap "$ROTATION_OVERLAP")"
+  if [[ "$rc" == 0 ]] && grep -q 'dry run: workload=acr-api live=1 ' "$ROTATION_RECORDS/verb-dry3.log" && grep -q "^live credential=${c2} " "$ROTATION_RECORDS/verb-dry3.log"; then r5b=PASS; else r5b=FAIL; fi
+  x3="$(rotation_cell 'S5 after the overlap' "$ROTATION_HOLD_C1" refused expired)"
+  rotation_note "S5: dry run lists C2 alone: ${r5b}; cell C1 expired ${x3}"
+
+  # S6: revoke C1 (dry run, apply, dry run, repeat apply).
+  rotation_sleep_until $((t0 + ROTATION_REVOKE_AT_S))
+  [[ "$(rotation_verb rv0 workloads bootstrap-revoke -credential "$c1" -reason owner_request)" == 0 ]] || die 'rotation S6: the revoke dry run failed'
+  [[ "$(rotation_verb rv1 workloads bootstrap-revoke -credential "$c1" -reason owner_request -apply)" == 0 ]] || die 'rotation S6: bootstrap-revoke failed (verb-rv1.log)'
+  trv="$(rotation_now)"
+  [[ "$(rotation_verb rv2 workloads bootstrap-revoke -credential "$c1" -reason owner_request)" == 0 ]] || die 'rotation S6: the second revoke dry run failed'
+  rc="$(rotation_verb rv3 workloads bootstrap-revoke -credential "$c1" -reason owner_request -apply)"
+  if grep -q "credential=${c1} status=expired" "$ROTATION_RECORDS/verb-rv0.log" && grep -q "credential=${c1} status=revoked" "$ROTATION_RECORDS/verb-rv2.log"; then rv=PASS; else rv=FAIL; fi
+  if [[ "$rc" == 0 ]]; then rr=PASS; else rr=FAIL; fi
+  x4="$(rotation_cell 'S6 after the revoke' "$ROTATION_HOLD_C1" refused revoked)"
+  x5="$(rotation_cell 'S6 after the revoke' "$ROTATION_LIVE" 200 -)"
+  rotation_note "S6: revoke C1 applied at T0+$((trv - t0)) s; status expired -> revoked ${rv}; repeat apply rc=${rc} ${rr}; cells C1 revoked ${x4}, C2 ${x5}"
+
+  # S7: post window.
+  rotation_sleep_until $((t0 + ROTATION_POST_END_S))
+  rotation_note "S7: post window over (T0+${ROTATION_POST_END_S})"
+
+  # Rules 1..6.
+  rotation_rows "$STATE/rotation-rows.txt"
+  cp "$STATE/rotation-rows.txt" "$ROTATION_RECORDS/token-issued-s1-s7.txt"
+  counts2="$(rotation_audit_counts)"
+  failures="$(rotation_lookup_failures "$tb" $((t0 + ROTATION_POST_END_S)))"
+  rotation_rule 1 "$(rotation_judge_load "$ROTATION_RECORDS/pent.log" "$tb" $((t0 + ROTATION_POST_END_S)) "$failures")"
+  rotation_rule 2 "$(rotation_judge_overlap_use "$STATE/rotation-rows.txt" "$ROTATION_ACR_IPS" "$c1" "$t0" "$ROTATION_OVERLAP_S")"
+  tn="$(rotation_now)"
+  rotation_rule 3 "$(rotation_judge_cutover "$STATE/rotation-rows.txt" "$ROTATION_ACR_IPS" "$c1" "$c2" "$ts" "$t0" "$ROTATION_OVERLAP_S" "$ROTATION_CUT_BOUND_S" "$tn")"
+  first="$(rotation_acr_rows "$STATE/rotation-rows.txt" "$ROTATION_ACR_IPS" | awk -F'|' -v c="$c2" -v a="$ts" '$3 == c && $1 >= a { print $1; exit }')"
+  rotation_rule 4 "$(rotation_judge_cells "$x1" "$x2" "$x3" "$x4" "$x5")"
+  rotation_rule 5 "$(rotation_judge_bounds "c1-expiry=${ex}" "61m-refused=${b61}" "2nd-rotate-refused-no-out=${b2}" "audit-plus-1=${ba}" "live2-in-overlap=${r5a}" "c2-alone-after=${r5b}" "expired-to-revoked=${rv}" "repeat-revoke=${rr}" "delivered-65532-600=${dl}")"
+  rotation_rule 6 "$(rotation_judge_counts $(( $(cut -d' ' -f1 <<<"$counts2") - $(cut -d' ' -f1 <<<"$counts0") )) $(( $(cut -d' ' -f2 <<<"$counts2") - $(cut -d' ' -f2 <<<"$counts0") )) $(( $(cut -d' ' -f3 <<<"$counts2") - $(cut -d' ' -f3 <<<"$counts0") )) $(( $(cut -d' ' -f5 <<<"$counts2") - $(cut -d' ' -f5 <<<"$counts0") )))"
+
+  # S8 NEG: the revoked C1 put back is refused and acr-api fails closed; C2 put back recovers it. No direct cell runs
+  # here, so every refusal in the auth-service log is acr-api's.
+  rotation_put_back "$ROTATION_HOLD_C1" || die 'rotation S8: C1 could not be put back'
+  tn="$(rotation_now)"
+  rotation_note "S8 NEG: C1 (revoked) put back over the live file at TN=$(rotation_at "$tn")"
+  while (( $(rotation_now) <= tn + ROTATION_NEG_REFUSE_BOUND_S )); do
+    sleep 15
+    if (( $(rotation_refusals_since "$tn" revoked) >= 1 )); then tr="$(rotation_now)"; break; fi
+  done
+  while (( $(rotation_now) <= tn + ROTATION_NEG_FAIL_BOUND_S )); do
+    tf="$(awk -v a="$tn" 'NF == 2 && $1 >= a && $2 != "200" { print $1; exit }' "$ROTATION_RECORDS/pent.log")"
+    [[ -n "$tf" ]] && break
+    sleep 10
+  done
+  rotation_put_back "$ROTATION_HOLD_C2" || die 'rotation S8: C2 could not be put back'
+  tc="$(rotation_now)"
+  rotation_note "S8 NEG: refused revoked seen at $(rotation_after TN "$tr" "$tn"); first capabilities non-200 at $(rotation_after TN "$tf" "$tn"); C2 put back at TC=$(rotation_at "$tc")"
+  while (( $(rotation_now) <= tc + ROTATION_NEG_RECOVER_BOUND_S )); do
+    sleep 5
+    tok="$(awk -v a="$tc" 'NF == 2 && $1 >= a && $2 == "200" { print $1; exit }' "$ROTATION_RECORDS/pent.log")"
+    [[ -n "$tok" ]] && break
+  done
+  if [[ -n "$tok" ]]; then rotation_sleep_until $((tok + ROTATION_NEG_STEADY_S + ROTATION_LOAD_EVERY_S)); fi
+  rm -f "$load_flag"
+  wait "$ROTATION_LOAD_PID" 2>/dev/null || true
+  after=x
+  if [[ -n "$tok" ]]; then after="$(awk -v a="$tok" -v b=$((tok + ROTATION_NEG_STEADY_S)) 'NF == 2 && $1 > a && $1 <= b && $2 != "200"' "$ROTATION_RECORDS/pent.log" | wc -l | tr -d ' ')"; fi
+  rotation_rows "$STATE/rotation-rows.txt"
+  cp "$STATE/rotation-rows.txt" "$ROTATION_RECORDS/token-issued-all.txt"
+  c1neg="$(rotation_acr_rows "$STATE/rotation-rows.txt" "$ROTATION_ACR_IPS" | awk -F'|' -v c="$c1" -v a="$tn" '$3 == c && $1 >= a' | wc -l | tr -d ' ')"
+  rotation_rule 7 "$(rotation_judge_neg "$tn" "$tr" "$tf" "$tc" "$tok" "$after" "$c1neg")"
+
+  # Rule 8: every service log of the project and every record.
+  compose logs --no-color > "$STATE/rotation-services.log" 2>&1 || true
+  rotation_rule 8 "$(rotation_judge_leak "$STATE/rotation-services.log" "$STATE/rendered.yml" "$ROTATION_RECORDS"/*)"
+
+  {
+    printf 'bootstrap-rotation drill, project %s\n' "$PROJECT"
+    printf 'C1 %s, C2 %s, T0 %s, overlap %s, C1 expires_at %s (T0+%s s), delivered at T0+%s s, first acr-api C2 exchange %s, revoke at T0+%s s\n' \
+      "$c1" "$c2" "$(rotation_at "$t0")" "$ROTATION_OVERLAP" "$c1_exp" "$((c1_exp_s - t0))" "$((ts - t0))" "$(rotation_after TS "$first" "$ts")" "$((trv - t0))"
+    printf 'NEG: refused revoked at %s, capabilities non-200 from %s, recovered at %s\n' "$(rotation_after TN "$tr" "$tn")" "$(rotation_after TN "$tf" "$tn")" "$(rotation_after TC "$tok" "$tc")"
+    cat "$ROTATION_RECORDS/rules.md"
+  } > "$ROTATION_RECORDS/summary.md"
+  if grep -Eq '^RULE [0-9]+: (FAIL|VOID)' "$ROTATION_RECORDS/rules.md"; then
+    die "bootstrap rotation drill: $(grep -Ec '^RULE [0-9]+: (FAIL|VOID)' "$ROTATION_RECORDS/rules.md") rule(s) failed or void (rules.md)"
+  fi
+  SAFE_BOUNDARY='the acr-api bootstrap credential rotated with a 10m overlap, delivered by mv -f inside the overlap, the old one expired then revoked: rules 1..8 PASS, 0 failed capabilities calls across the switch'
+}
+
 main() {
   parse_args "$@"
   assert_project_unused
@@ -990,6 +1404,8 @@ main() {
     record_acl_probe
     run_mcp "$(<"$STATE/secrets/acr-rotated-token")"
     SAFE_BOUNDARY='existing project-scoped volumes survived a complete application restart and reconciled role, password, ownership, and ACL drift'
+  elif [[ "$SCENARIO" == bootstrap-rotation ]]; then
+    run_bootstrap_rotation
   else
     run_failure
   fi
