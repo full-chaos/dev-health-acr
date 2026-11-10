@@ -83,6 +83,7 @@ func TestWindowPassOverA60msRoundTrip(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	client, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{DSN: rig.DSN, TLS: tlsConfig})
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +102,7 @@ SELECT ?, NULL, ?, 'work_item', concat('linear:WAN-', leftPad(toString(number), 
 		wanOrgID, wanRepoZeroID, wanProjectID, first.UnixMilli(), first.UnixMilli(), first.UnixMilli(), uint64(wanLargeRows))
 
 	run := func(carry bool) wanRun {
-		counter := &wanCountingClient{inner: client}
+		counter := &wanCountingClient{inner: newStoredGroupsClient(client, direct)}
 		src, err := devhealthsource.NewTeamsProjectsSource(counter, true)
 		if err != nil {
 			t.Fatal(err)

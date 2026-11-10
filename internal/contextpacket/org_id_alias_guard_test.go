@@ -33,11 +33,15 @@ func orgIDAliasViolations(src string) []string {
 	return out
 }
 
-// orgIDAliasAllowed names the one construction that adds org_id by alias: it
-// does so over a folded derived table that has no org_id column, with no org
-// filter in that scope.
+// orgIDAliasAllowed names the constructions that add org_id by alias, each
+// with no org filter in the aliasing scope: investment_issue_size.go over a
+// folded derived table that has no org_id column; ownership_groups.go is ops
+// migration 147's refresh view copied byte for byte, whose outer SELECT picks
+// org_id from the side of a FULL JOIN that holds the row (g_org_id or
+// c_org_id) and filters only on g_ and c_ columns.
 var orgIDAliasAllowed = map[string]int{
 	filepath.FromSlash("internal/contextfabric/devhealthfacts/investment_issue_size.go"): 1,
+	filepath.FromSlash("internal/contextfabric/devhealthschema/ownership_groups.go"):     1,
 }
 
 func TestOrgIDAliasDetection(t *testing.T) {

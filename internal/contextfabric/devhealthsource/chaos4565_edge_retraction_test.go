@@ -37,11 +37,11 @@ func suppressedProjectTeamRow(projectID, teamID, source string, at time.Time, co
 	if conflictingIdentity == 1 {
 		identities = []string{"own-ref\x00OWN-KEY\x00" + teamID + "\x00" + source}
 	}
-	return []any{projectID, teamID, source, at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), identities, conflictingIdentity}
+	return storedGroupRow([]any{projectID, teamID, source, at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), identities, conflictingIdentity})
 }
 
 func retractionClient(rows ...[]any) *fakeClient {
-	return &fakeClient{tables: []fakeTable{{match: "FROM team_project_ownership FINAL", rows: rows}}}
+	return &fakeClient{tables: []fakeTable{{match: ownershipGroupsMarker, rows: rows}}}
 }
 
 // retractionBatch runs ONE incremental pass. The cursor is non-empty on
@@ -212,8 +212,8 @@ func TestChaos4565_NoBatchAssertsAndRetractsTheSameEdge(t *testing.T) {
 	// A shared group (a clean row beside a conflicting one: edge_suppressed
 	// stays 0 and the conflict is still recorded), plus a group that really
 	// has no asserting row.
-	sharedGroup := []any{"proj-shared", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github",
-		uint8(0), []string{"own-ref-conflicting\x00KEY-B"}, uint8(1)}
+	sharedGroup := storedGroupRow([]any{"proj-shared", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github",
+		uint8(0), []string{"own-ref-conflicting\x00KEY-B"}, uint8(1)})
 	batch := retractionBatch(t, retractionClient(
 		sharedGroup,
 		suppressedProjectTeamRow("proj-gone", "team-x", "native", at, 1),
@@ -249,7 +249,7 @@ func TestChaos4565_NoBatchAssertsAndRetractsTheSameEdge(t *testing.T) {
 func TestChaos4565_ReRunningThePassProducesTheIdenticalRetraction(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
-	rows := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), []string{}, uint8(0)}
+	rows := storedGroupRow([]any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), []string{}, uint8(0)})
 
 	first := retractionBatch(t, retractionClient(rows), nil)
 	second := retractionBatch(t, retractionClient(rows), nil)

@@ -30,11 +30,9 @@ awk '/^  race-mcp:/ { g = 1; next } g && /^  [A-Za-z0-9_-]+:/ { g = 0 } g' "$wor
 
 heavy="$root/scripts/ci/devhealthsource-heavy-tests.txt"
 for t in \
-  TestProjectTeamOwnershipStatementMemoryAgainstTheOwnershipHistory \
   TestEveryBlockerLinkOfTheLargestOrganizationRemovedIsRetracted \
   TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges \
   TestIngestTimeCursor \
-  TestProjectTeamOwnershipStatementMemoryOnTheProdShape \
   TestMembershipColumnArmDrainsEveryRowWhileASyncRewritesThem; do
   if grep -qxF "$t" "$heavy"; then fail "$t is still in the devhealthsource heavy list"; fi
 done

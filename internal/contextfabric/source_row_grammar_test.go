@@ -262,7 +262,7 @@ func producerGrammars() []producerGrammar {
 		{kind: contractsv1.ContextFabricEvidenceEntityProjectTeamV2, shape: "mint/4", keyByColumns: true,
 			keyColumns:    []string{"provider", "project_id", "team_id", "source"},
 			keyExceptions: map[string]string{"valid_from": "the ref names the projector's ownership GROUP: every assertion of (provider, project, team, source) aggregated"},
-			sites:         sites(source + "teams_projects_edges.go|queryProjectTeams")},
+			sites:         sites(source + "teams_projects_edges.go|scanProjectTeamGroup")},
 		{kind: contractsv1.ContextFabricEvidenceEntityProjectTeamV2, shape: "sqlmint/4", keyByColumns: true,
 			keyColumns:    []string{"provider", "project_id", "team_id", "source"},
 			keyExceptions: map[string]string{"valid_from": "the ref names the projector's ownership GROUP: every assertion of (provider, project, team, source) aggregated"},

@@ -56,6 +56,37 @@ func cursorSpace(t *testing.T, cursor string) string {
 	return state.Space
 }
 
+// pagedRelationshipsOfType counts the relationships of typ in the batches a
+// walk read, leaving out reconcile batches (their cursor carries an ack). A
+// source with no reconcile state in this process (a new source, or a restart)
+// runs each reconcile pass on its first caught-up call, and the ownership pass
+// writes every live project -> team edge once more.
+func pagedRelationshipsOfType(t *testing.T, d drained, typ contractsv1.ContextFabricRelationshipType) int {
+	t.Helper()
+	n := 0
+	for _, b := range d.batches {
+		raw, err := base64.RawURLEncoding.DecodeString(b.NextCursor)
+		if err != nil {
+			t.Fatalf("decode cursor %q: %v", b.NextCursor, err)
+		}
+		var state struct {
+			Ack string `json:"ack"`
+		}
+		if err := json.Unmarshal(raw, &state); err != nil {
+			t.Fatalf("decode cursor %q: %v", b.NextCursor, err)
+		}
+		if state.Ack != "" {
+			continue
+		}
+		for _, r := range b.Relationships {
+			if r.Type == typ {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 type ingestColumnsFixture struct {
 	t                 *testing.T
 	ctx               context.Context
@@ -71,6 +102,7 @@ func newIngestColumnsFixture(t *testing.T, orgID string, client contextpacket.Cl
 	if client == nil {
 		client = query
 	}
+	client = newStoredGroupsClient(client, direct)
 	src, err := devhealthsource.NewTeamsProjectsSource(client, true)
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +259,7 @@ func TestIngestColumnsSwitchResetsTheCursorOnce(t *testing.T) {
 		t.Fatalf("legacy cursor space = %q", got)
 	}
 
-	upgraded, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	upgraded, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, f.h.direct), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +275,7 @@ func TestIngestColumnsSwitchResetsTheCursorOnce(t *testing.T) {
 	}
 	f.h.src = upgraded
 	after := f.h.drain(first.cursor)
-	if got := relationshipsOfType(after, contractsv1.ContextFabricRelationshipOwnedByTeam); got != 2 {
+	if got := pagedRelationshipsOfType(t, after, contractsv1.ContextFabricRelationshipOwnedByTeam); got != 2 {
 		t.Fatalf("after the switch %d OWNED_BY_TEAM edges were re-read, want 2: the reset skipped rows", got)
 	}
 	again := f.h.drain(after.cursor)
@@ -346,13 +378,13 @@ SELECT concat('WI-', toString(number)), ?, ?, 'issue', 'open', '', '', 'linear',
 	}
 
 	counting := &countingQueryClient{inner: query}
-	upgraded, err := devhealthsource.NewTeamsProjectsSource(counting, true)
+	upgraded, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(counting, f.h.direct), true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.h.src = upgraded
 	after := f.h.drain(first.cursor)
-	if got := relationshipsOfType(after, contractsv1.ContextFabricRelationshipOwnedByTeam); got != rows {
+	if got := pagedRelationshipsOfType(t, after, contractsv1.ContextFabricRelationshipOwnedByTeam); got != rows {
 		t.Fatalf("re-read %d OWNED_BY_TEAM edges, want %d", got, rows)
 	}
 	if got := relationshipsOfType(after, contractsv1.ContextFabricRelationshipBelongsToProject); got != rows {

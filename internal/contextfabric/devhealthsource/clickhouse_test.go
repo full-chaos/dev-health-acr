@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
@@ -104,6 +105,26 @@ const projectCatalogMarker = "AS project_catalog_digest"
 // into the wrong destinations -- a panic that reports itself as a scan-type
 // bug rather than a fake-routing one.
 const ambiguousProjectKeysMarker = "AS ambiguous_keys"
+
+// ownershipGroupsMarker identifies the stored ownership group reads (the page
+// and the reconcile read, ownership_groups_reader.go); their rows are
+// storedGroupRow rows.
+const ownershipGroupsMarker = "project_team_ownership_groups_"
+
+// storedGroupRow is a stored ownership group row as the page and the
+// reconcile read select it: the group's eleven columns, its row key, live
+// and stored_at. The group is stored at its own observed_at, so a fake keyed
+// on it pages in the order the per-organization statement paged.
+func storedGroupRow(group []any) []any {
+	key := identity.JoinSegments(group[7].(string), group[0].(string), group[1].(string), group[2].(string))
+	return append(append([]any(nil), group...), key, uint8(1), group[6])
+}
+
+// storedGroupCursor is the (stored_at, row_key) keyset position of a
+// storedGroupRow.
+func storedGroupCursor(row []any) (time.Time, string) {
+	return row[13].(time.Time), row[11].(string)
+}
 
 // endedLinksMarker identifies the removed-link set read (relationcurrent.EndedLinksSQL).
 const endedLinksMarker = "AS ended_links"

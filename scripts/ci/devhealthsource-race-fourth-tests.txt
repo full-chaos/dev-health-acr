@@ -11,5 +11,4 @@
 # scripts/ci/race-split.sh (race-partition, verify).
 TestLiveTheMembershipRefreshFollowsTheCatalogNotItsStamp
 TestOwnershipProducerAgainstRealClickHouse
-TestProjectTeamOwnershipStatementMemoryAgainstTheOwnershipHistory
 TestWindowPassOverA60msRoundTrip

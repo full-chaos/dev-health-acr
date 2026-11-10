@@ -303,6 +303,7 @@ func TestChaos7074OracleO3OwnedRepositories(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	adapter := chaos7074FalkorAdapter(t, ctx)
 
 	now := time.Now().UTC()
@@ -310,7 +311,7 @@ func TestChaos7074OracleO3OwnedRepositories(t *testing.T) {
 	otherOrg := "o3000000-0000-4000-8000-000000000002"
 	o3Seed(t, ctx, direct, orgID, now)
 	o3Seed(t, ctx, direct, otherOrg, now) // same team ids, other organization
-	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	source, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 	if err != nil {
 		t.Fatal(err)
 	}

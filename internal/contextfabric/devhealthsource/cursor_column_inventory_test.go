@@ -38,6 +38,7 @@ var ingestCursorColumns = map[string]struct{ expr, writer string }{
 	"teams":                                {queryTeamsIngestExpr, "teams.last_synced (011_ensure_teams.sql:8 DEFAULT now()) or the team_repo_ownership write-time watermark"},
 	"projects":                             {"last_synced", "migrations/clickhouse/051_team_attribution_dimensions.sql:13 DEFAULT now64(3)"},
 	"work_item_team_attributions":          {workItemTeamsWatermark, "migrations/clickhouse/051_team_attribution_dimensions.sql:89 ReplacingMergeTree(computed_at) (unchanged), max over the rows of one work item and team"},
+	"team_project_ownership":               {"stored_at", "ops migration 147: project_team_ownership_groups_log.stored_at, now64(6) at the start of the refresh that stored the group (the refresh view); its commit lag is read through the trailing overlap"},
 	"team_repo_ownership":                  {repositoryTeamsWatermark, "updated_at = write time on every writer (team_repo_ownership_derivation_clickhouse.go:89,692; github_team_catalog.go:269; linear_reference_catalog_route.go:487) folded with repos.last_synced"},
 }
 
@@ -48,7 +49,6 @@ var ingestCursorColumns = map[string]struct{ expr, writer string }{
 // TestIngestColumnsRegistryPagesOnTheIngestStamp. The value is the expression
 // they page on before the columns; the test fails when either one changes.
 var cursorUnsoundTables = map[string]string{
-	"team_project_ownership":      projectTeamsWatermark,
 	"project_membership_presence": "observed_at",
 }
 
@@ -76,21 +76,27 @@ func (r *statementRecorder) Query(_ context.Context, statement string, _ []conte
 func cursorExpression(t *testing.T, table, statement string) string {
 	t.Helper()
 	gt := " > " + sinceBoundSQL + " OR ("
-	eq := " = " + sinceBoundSQL + " AND toString("
 	i := strings.LastIndex(statement, gt)
 	if i < 0 {
 		t.Fatalf("%s: statement carries no keyset predicate with the microsecond-exact bound:\n%s", table, statement)
 	}
 	rest := statement[i+len(gt):]
-	j := strings.Index(rest, eq)
-	if j < 0 {
-		t.Fatalf("%s: keyset predicate has no equality arm:\n%s", table, statement)
+	// The stored ownership group seek compares its String row_key column
+	// itself (ownershipGroupsSeekSQL); every other producer compares
+	// toString(<row key expression>).
+	for _, tiebreak := range []struct{ eq, order string }{{" AND toString(", " ASC, toString("}, {" AND row_key > {after:String}", " ASC, row_key ASC"}} {
+		j := strings.Index(rest, " = "+sinceBoundSQL+tiebreak.eq)
+		if j < 0 {
+			continue
+		}
+		expr := rest[:j]
+		if !strings.Contains(statement, "ORDER BY "+expr+tiebreak.order) {
+			t.Fatalf("%s: ORDER BY does not page on the predicate's expression %q:\n%s", table, expr, statement)
+		}
+		return expr
 	}
-	expr := rest[:j]
-	if !strings.Contains(statement, " ORDER BY "+expr+" ASC, toString(") {
-		t.Fatalf("%s: ORDER BY does not page on the predicate's expression %q:\n%s", table, expr, statement)
-	}
-	return expr
+	t.Fatalf("%s: keyset predicate has no equality arm:\n%s", table, statement)
+	return ""
 }
 
 func TestEveryProjectedTablePagesOnItsIngestColumnOrIsDisclosed(t *testing.T) {
@@ -149,8 +155,8 @@ func TestEveryProjectedTablePagesOnItsIngestColumnOrIsDisclosed(t *testing.T) {
 	if len(stale) > 0 {
 		t.Errorf("inventory names tables no registry reads: %v", stale)
 	}
-	if len(cursorUnsoundTables) != 2 {
-		t.Errorf("the disclosed exemption list has %d tables, want exactly the 2 without an ingest column", len(cursorUnsoundTables))
+	if len(cursorUnsoundTables) != 1 {
+		t.Errorf("the disclosed exemption list has %d tables, want exactly the 1 without an ingest column", len(cursorUnsoundTables))
 	}
 }
 
@@ -177,31 +183,37 @@ func TestWithOverlapRefusesANonPositiveWindow(t *testing.T) {
 	}
 }
 
-// With the ingest columns present the two producers page on the ingest stamp,
-// selected as the statement's trailing column, and never on the provider time.
+// With the ingest columns present the membership producer pages on the ingest
+// stamp, selected as the statement's trailing column, and never on the
+// provider time. The ownership producer pages on the stored groups' stored_at
+// with or without them (the stored groups come with a later migration).
 func TestIngestColumnsRegistryPagesOnTheIngestStamp(t *testing.T) {
-	want := map[string]string{
-		"team_project_ownership":      projectTeamsIngestWatermark,
-		"project_membership_presence": "ingest_at",
+	want := map[string]struct {
+		expr   string
+		always bool
+	}{
+		"team_project_ownership":      {"stored_at", true},
+		"project_membership_presence": {"ingest_at", false},
 	}
 	cursor := cursorState{Since: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), After: "k", Space: cursorSpaceIngestColumns}
 	for _, ingest := range []bool{false, true} {
 		for _, table := range teamsProjectsTablesFor(&ambiguityLedger{}, &presenceTelemetryLedger{}, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}, ingest) {
-			expr, ok := want[table.name]
+			w, ok := want[table.name]
 			if !ok {
 				continue
 			}
+			expr := w.expr
 			rec := &statementRecorder{}
 			if _, _, err := table.query(context.Background(), rec, "org-1", cursor, 10); !errors.Is(err, errStatementRecorded) {
 				t.Fatalf("%s: producer did not reach its query (err=%v)", table.name, err)
 			}
 			statement := rec.statements[0]
 			got := cursorExpression(t, table.name, statement)
-			if ingest {
+			if ingest || w.always {
 				if got != expr {
-					t.Errorf("%s pages on %q with the ingest columns, want %q", table.name, got, expr)
+					t.Errorf("%s pages on %q (ingest columns %v), want %q", table.name, got, ingest, expr)
 				}
-				if !strings.HasSuffix(strings.TrimSpace(strings.SplitN(statement, "\nFROM", 2)[0]), "ingest_at") {
+				if !strings.HasSuffix(strings.TrimSpace(strings.SplitN(statement, "\nFROM", 2)[0]), expr) {
 					t.Errorf("%s does not select the ingest stamp as its trailing column", table.name)
 				}
 				continue
