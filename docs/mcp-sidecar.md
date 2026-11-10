@@ -72,7 +72,7 @@ Path to an additional PEM-encoded CA bundle file, layered on top of the system t
 Deprecated compatibility boolean (`true`/`false`). A plain `http://` `ACR_API_URL` is automatically accepted when its host is loopback (`127.0.0.1`, `::1`, or `localhost`), so this variable is no longer required. Non-loopback HTTP remains rejected regardless of this value.
 
 **ACR_CREDENTIAL_LIFECYCLE_LOCK_PATH**
-macOS/Linux only. Alternate path of the credential lifecycle lock file shared by `login`, `login --refresh`, `logout` and credential loads (see [Credential Management](#credential-management)). Default: `/var/tmp/acr-credential-lifecycle-<uid>.lock`. The directory must be a real directory owned by the user or root and not group- or other-writable unless sticky.
+macOS/Linux only. Alternate path of the credential lifecycle lock file shared by `login`, `login --refresh`, `logout` and credential loads (see [Credential Management](#credential-management)). Default: `acr-credential-lifecycle-<uid>.lock` in `var/tmp` under the filesystem root. The directory must be a real directory owned by the user or root and not group- or other-writable unless sticky.
 
 **ACR_SIDECAR_CLIENT_NAME**
 Identifies the sidecar client in the hosted API client-info payload. Default: `dev-health-acr-mcp`.
@@ -250,7 +250,7 @@ for such a mutation to finish. A tool call that is still refused after that wait
 (or finds another operation active) returns an `unavailable` tool error,
 "another acr-mcp credential operation is in progress; retry shortly"; `doctor`
 reports the same condition as `credential_unavailable`. On macOS and Linux the
-lock file defaults to `/var/tmp/acr-credential-lifecycle-<uid>.lock`;
+lock file defaults to `acr-credential-lifecycle-<uid>.lock` in `var/tmp` under the filesystem root;
 `ACR_CREDENTIAL_LIFECYCLE_LOCK_PATH` names another path, for example to keep a
 process off the host-wide lock. Its directory must be a real directory owned by
 the user or root, and not writable by group or others unless it is sticky.

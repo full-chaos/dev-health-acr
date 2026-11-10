@@ -2471,7 +2471,7 @@ path and leaves the just-built epoch orphaned until a future decision.
 
 `authWorkloadClient.enabled=true` (default false; off renders byte-equal to before) gives acr-api a projected ServiceAccount token
 (`auth-workload-subject`, audience `dev-health-workload-exchange`, 600 s, mode 0400, read-only, no `subPath`) at
-`/var/run/secrets/dev-health/auth-workload/token`, and the acr-api ConfigMap four variables: `ACR_AUTH_WORKLOAD_EXCHANGE_URL`
+`var/run/secrets/dev-health/auth-workload/token` under the container root, and the acr-api ConfigMap four variables: `ACR_AUTH_WORKLOAD_EXCHANGE_URL`
 (`authWorkloadClient.exchangeURL`, auth-service's origin), `ACR_AUTH_WORKLOAD_ALLOW_PLAIN_HTTP` (`allowPlainHTTP`),
 `ACR_AUTH_WORKLOAD_ISSUER` (`issuer`, auth-service's https token issuer) and `ACR_AUTH_WORKLOAD_SUBJECT_FILE`. The audience and the 600 s
 are not values: auth-service's exchange reviews against the one audience. Without Kubernetes the subject is a Compose bootstrap credential
