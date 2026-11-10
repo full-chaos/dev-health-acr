@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
@@ -75,18 +74,6 @@ func (r BrowserFamilyRevokeReason) Valid() bool {
 		}
 	}
 	return false
-}
-
-// BrowserFamilyReasonPrefix starts the credential revocation text of a family revoke.
-const BrowserFamilyReasonPrefix = "browser family "
-
-// BrowserFamilyReasonOf reads the family reason out of a credential
-// revocation text; any other text is a revoke of one member.
-func BrowserFamilyReasonOf(text string) BrowserFamilyRevokeReason {
-	if reason, ok := strings.CutPrefix(text, BrowserFamilyReasonPrefix); ok && BrowserFamilyRevokeReason(reason).Valid() {
-		return BrowserFamilyRevokeReason(reason)
-	}
-	return BrowserFamilyRevokeMemberRevoked
 }
 
 // BrowserRefreshDecisionVocabulary lists every decision.

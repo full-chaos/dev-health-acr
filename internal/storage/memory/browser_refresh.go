@@ -177,7 +177,7 @@ func revokeFamilyCredentials(ctx context.Context, credentials *storage.Credentia
 		}
 		live++
 		if _, err := credentials.RevokeCredential(ctx, storage.CredentialRevocationInput{
-			OrgID: orgID, CredentialID: member.CredentialID, ActorID: actorID, Reason: storage.BrowserFamilyReasonPrefix + string(reason),
+			OrgID: orgID, CredentialID: member.CredentialID, ActorID: actorID, FamilyReason: string(reason),
 		}); err != nil && !errors.Is(err, storage.ErrConflict) {
 			return 0, err
 		}

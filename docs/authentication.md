@@ -583,9 +583,12 @@ revocation.
   revoked; an outage of that check is `unavailable` and consumes nothing);
   `step=revoke` with `ok`, `family_revoked`, `client_mismatch`,
   `invalid_grant`, `unsupported_token_type`. Every successor and every
-  revocation writes a `credential_created` / `credential_revoked` audit row with
-  `family_id` and `family_revoke_reason`, the family's reason (`reuse`,
-  `sign_out`, `member_revoked` or `org_deprovisioned`).
+  revocation writes a `credential_created` / `credential_revoked` audit row. A
+  family revocation (`reuse`, `sign_out`, `org_deprovisioned`, or a rotation
+  that finds a revoked member) writes `family_id` and `family_revoke_reason` on
+  every member row. A direct revoke of one credential (`member_revoked`) writes
+  them on its siblings; the credential revoked directly carries the operator's
+  reason text instead.
 
 ### Browser family purge (CHAOS-12140)
 

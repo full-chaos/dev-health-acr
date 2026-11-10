@@ -33,19 +33,3 @@ func TestBrowserFamilyRevokeReasonVocabularyMatchesTheMigration(t *testing.T) {
 		}
 	}
 }
-
-func TestBrowserFamilyReasonOf(t *testing.T) {
-	for text, want := range map[string]BrowserFamilyRevokeReason{
-		"browser family reuse":             BrowserFamilyRevokeReuse,
-		"browser family sign_out":          BrowserFamilyRevokeSignOut,
-		"browser family org_deprovisioned": BrowserFamilyRevokeOrgDeprovisioned,
-		"browser family member_revoked":    BrowserFamilyRevokeMemberRevoked,
-		"browser family other":             BrowserFamilyRevokeMemberRevoked,
-		"":                                 BrowserFamilyRevokeMemberRevoked,
-		"operator said so":                 BrowserFamilyRevokeMemberRevoked,
-	} {
-		if got := BrowserFamilyReasonOf(text); got != want {
-			t.Fatalf("BrowserFamilyReasonOf(%q) = %q, want %q", text, got, want)
-		}
-	}
-}

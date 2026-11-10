@@ -315,6 +315,7 @@ func normalizeRevocation(input RevocationInput) (RevocationInput, error) {
 		}
 	}
 	input.ActorType = strings.TrimSpace(input.ActorType)
+	input.FamilyReason = strings.TrimSpace(input.FamilyReason)
 	return input, nil
 }
 
