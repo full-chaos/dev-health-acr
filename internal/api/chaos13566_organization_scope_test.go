@@ -1,13 +1,17 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
@@ -123,5 +127,60 @@ func TestAnOpsOrganizationScopeReachesTheHandlerAsUniversal(t *testing.T) {
 	}
 	if got := auth.ClassifyGrant(*seen); got != auth.GrantUniversal || !slices.Equal(seen.RepositoryScopes, []string{"*"}) {
 		t.Fatalf("principal %q class %q, want universal", seen.RepositoryScopes, got)
+	}
+}
+
+// acp M1 on #2081: the fail-closed branch of keepOrganizationWideGrant. A grant
+// with no repository (empty) is 409 no_repository before the handler, and a
+// project-only principal is refused with the same error as on today's
+// non-empty inventory path.
+func TestAnOrganizationScopeRefusesAnEmptyGrant(t *testing.T) {
+	for _, grant := range [][]string{nil, {}} {
+		for _, class := range userClasses() {
+			t.Run(string(class), func(t *testing.T) {
+				harness, _ := newMemorySubmissionHarness(t, 1)
+				app := harness.apps[0]
+				reader := &fakePrincipalAccess{}
+				reader.set(organizationAccess(), nil)
+				app.runtime.PrincipalAccess = reader
+				authenticateAsCredential(t, app, class, grant)
+				recorder, code, seen := serveCapturing(t, app, harness.tokenA)
+				if recorder.Code != http.StatusConflict || code != contractsv1.ErrorCodeNoRepository || seen != nil {
+					t.Fatalf("grant %#v: %d %s (handler reached %v), want 409 no_repository before the handler", grant, recorder.Code, code, seen != nil)
+				}
+				if len(reader.calls) != 1 {
+					t.Fatalf("%d access reads, want 1", len(reader.calls))
+				}
+			})
+		}
+	}
+}
+
+func TestAnOrganizationScopeRefusesAProjectOnlyPrincipal(t *testing.T) {
+	harness, _ := newMemorySubmissionHarness(t, 1)
+	app := harness.apps[0]
+	authenticateAsCredential(t, app, storage.CredentialClientClassOAuthUser, []string{"*"})
+	var ctx context.Context
+	handler := app.authenticator.Middleware(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { ctx = r.Context() }))
+	request := httptest.NewRequest(http.MethodPost, "/", nil)
+	request.Header.Set("Authorization", "Bearer "+harness.tokenA)
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+	if ctx == nil {
+		t.Fatal("the credential did not authenticate")
+	}
+	projectOnly, err := auth.NarrowToProjectScopes(ctx, []string{"project.v2:jira:ENG"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if principal, _ := auth.PrincipalFromContext(projectOnly); auth.ClassifyGrant(principal) != auth.GrantProjectOnly {
+		t.Fatalf("class %q, want project_only", auth.ClassifyGrant(principal))
+	}
+	got, err := keepOrganizationWideGrant(projectOnly)
+	if !errors.Is(err, auth.ErrEmptyRepositoryScope) || got != projectOnly {
+		t.Fatalf("err %v (ctx unchanged %v), want ErrEmptyRepositoryScope and ctx unchanged", err, got == projectOnly)
+	}
+	today := grantedAccess()
+	if _, todayErr := narrowLiveScope(projectOnly, effectiveRepositoryScope([]string{contractsv1.ProjectOnlyRepositoryScope}, today.Repositories), today); !errors.Is(todayErr, auth.ErrEmptyRepositoryScope) {
+		t.Fatalf("today's non-empty inventory path: %v, want the same ErrEmptyRepositoryScope", todayErr)
 	}
 }

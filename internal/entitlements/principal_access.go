@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 	"github.com/google/uuid"
@@ -223,10 +224,10 @@ type projectScopeProject struct {
 
 // decodePrincipalAccess accepts exactly one acr_principal_access.v1 object
 // for orgID and userID: every field present with its type, no unknown field,
-// a session object exactly when one was asked for, a repository scope of kind
-// "repos" with a non-empty repos array or kind "none" or "organization" with
-// none, and, when
-// present, a project scope of kind "projects" with 1 to
+// no key named twice in any object (case-folded), a session object exactly
+// when one was asked for, a repository scope of kind "repos" with a non-empty
+// repos array or kind "none" or "organization" with no repos key (null
+// included), and, when present, a project scope of kind "projects" with 1 to
 // maxProjectScopeProjects valid, distinct pairs or kind "none" with none.
 func decodePrincipalAccess(payload []byte, orgID, userID string, sessionAsked bool) (PrincipalAccess, error) {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
@@ -242,6 +243,9 @@ func decodePrincipalAccess(payload []byte, orgID, userID string, sessionAsked bo
 		return PrincipalAccess{}, errors.New("trailing JSON")
 	}
 	invalid := errors.New("invalid principal access document")
+	if repeatedObjectKey(payload) {
+		return PrincipalAccess{}, invalid
+	}
 	switch {
 	case document.SchemaVersion == nil || *document.SchemaVersion != principalAccessSchemaVersion,
 		document.OrgID == nil || *document.OrgID != orgID,
@@ -264,11 +268,11 @@ func decodePrincipalAccess(payload []byte, orgID, userID string, sessionAsked bo
 	}
 	switch *document.RepositoryScope.Kind {
 	case "none":
-		if document.RepositoryScope.Repos != nil {
+		if reposKeyPresent(payload) {
 			return PrincipalAccess{}, invalid
 		}
 	case "organization":
-		if document.RepositoryScope.Repos != nil {
+		if reposKeyPresent(payload) {
 			return PrincipalAccess{}, invalid
 		}
 		access.OrganizationWide = true
@@ -308,6 +312,92 @@ func decodePrincipalAccess(payload []byte, orgID, userID string, sessionAsked bo
 		}
 	}
 	return access, nil
+}
+
+// reposKeyPresent reports whether repository_scope carries a repos key at all,
+// null included: kinds "none" and "organization" have no repos key on the wire
+// (ops acr-entitlement-route.md), and the strict decode reads a null like an
+// absent key. As projectsKeyPresent, a failure counts as present (refused).
+func reposKeyPresent(payload []byte) bool {
+	var document struct {
+		RepositoryScope struct {
+			Repos json.RawMessage `json:"repos"`
+		} `json:"repository_scope"`
+	}
+	if err := json.Unmarshal(payload, &document); err != nil {
+		return true
+	}
+	return document.RepositoryScope.Repos != nil
+}
+
+// repeatedObjectKey reports whether any object of payload, at any depth, names
+// one key twice. encoding/json matches keys without regard to case and keeps
+// the last value of a repeated key, so such a document would be read as only
+// part of what it says (member false, then true, reads as a member). Keys are
+// compared case-folded, as the decoder matches them. A token error counts as a
+// repeat (refused); the strict decode has already read payload.
+func repeatedObjectKey(payload []byte) bool {
+	type frame struct {
+		keys      map[string]struct{}
+		expectKey bool
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	var stack []*frame
+	valueStarts := func() {
+		if len(stack) > 0 && stack[len(stack)-1].keys != nil {
+			stack[len(stack)-1].expectKey = true
+		}
+	}
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			return false
+		}
+		if err != nil {
+			return true
+		}
+		switch value := token.(type) {
+		case json.Delim:
+			switch value {
+			case '{':
+				valueStarts()
+				stack = append(stack, &frame{keys: map[string]struct{}{}, expectKey: true})
+			case '[':
+				valueStarts()
+				stack = append(stack, &frame{})
+			default:
+				stack = stack[:len(stack)-1]
+			}
+		case string:
+			if top := len(stack) - 1; top >= 0 && stack[top].keys != nil && stack[top].expectKey {
+				key := foldedKey(value)
+				if _, seen := stack[top].keys[key]; seen {
+					return true
+				}
+				stack[top].keys[key] = struct{}{}
+				stack[top].expectKey = false
+				continue
+			}
+			valueStarts()
+		default:
+			valueStarts()
+		}
+	}
+}
+
+// foldedKey maps every rune of key to the least rune of its simple case-fold
+// orbit, so two keys fold equal exactly when strings.EqualFold holds (the rule
+// encoding/json uses to match a key to a field).
+func foldedKey(key string) string {
+	var folded strings.Builder
+	for _, r := range key {
+		least := r
+		for f := unicode.SimpleFold(r); f != r; f = unicode.SimpleFold(f) {
+			least = min(least, f)
+		}
+		folded.WriteRune(least)
+	}
+	return folded.String()
 }
 
 // projectsKeyPresent reports whether project_scope carries a projects key at
