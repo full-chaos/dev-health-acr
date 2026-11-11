@@ -69,7 +69,10 @@ func (r DeviceApprovalPreviewRequest) Validate() error {
 	if r.SchemaVersion != DeviceApprovalPreviewRequestSchema || !validDeviceUserCode(r.UserCode) {
 		return fmt.Errorf("device approval preview request violates v1 bounds")
 	}
-	return nil
+	if r.RepositoryScopes == nil {
+		return nil
+	}
+	return validateDeviceApprovalRepositoryScopes(r.RepositoryScopes)
 }
 
 func (r DeviceApprovalPreviewResponse) Validate() error {

@@ -431,3 +431,44 @@ func repeatedSeed(seed byte, count int) []byte {
 type readerError struct{ message string }
 
 func (e readerError) Read([]byte) (int, error) { return 0, errors.New(e.message) }
+
+// CHAOS-13562: the preview reads the grant from the body under the approval's
+// rule; a body without a list keeps the claim form.
+func TestDeviceFlow_Preview_takesTheGrantFromTheBody(t *testing.T) {
+	hints := []string{"full-chaos/dev-health-acr", "full-chaos/dev-health-web"}
+	claimLess := deviceApprovalPrincipal()
+	claimLess.RepositoryScopes = nil
+	claimLess.RepositoryScopesInBody = true
+	over := make([]string, contractsv1.MaxRepositoryScopes+1)
+	for i := range over {
+		over[i] = fmt.Sprintf("full-chaos/repo-%04d", i)
+	}
+	for i, cell := range []struct {
+		name      string
+		principal storage.Principal
+		body      []string
+		want      []string
+		wantErr   error
+	}{
+		{"claim-less, body names one", claimLess, []string{"full-chaos/dev-health-web"}, []string{"full-chaos/dev-health-web"}, nil},
+		{"claim equal to body", deviceApprovalPrincipal("full-chaos/dev-health-acr"), []string{"full-chaos/dev-health-acr"}, []string{"full-chaos/dev-health-acr"}, nil},
+		{"claim wider than body", deviceApprovalPrincipal("full-chaos/dev-health-acr", "full-chaos/dev-health-web"), []string{"full-chaos/dev-health-acr"}, nil, ErrApprovalScopesDiffer},
+		{"body over the bound", claimLess, over, nil, ErrTooManyRepositories},
+		{"body malformed", claimLess, []string{"not a slug"}, nil, ErrInvalidDeviceFlow},
+		{"no body list, claim", deviceApprovalPrincipal("full-chaos/dev-health-web"), nil, []string{"full-chaos/dev-health-web"}, nil},
+		{"no body list, no claim", claimLess, nil, nil, ErrInvalidDeviceFlow},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			fixture := newDeviceFlowFixture(t, deviceFlowRandom(byte(60+i)))
+			started, err := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{RepositoryHints: hints})
+			require.NoError(t, err)
+			preview, err := fixture.flow.Preview(context.Background(), DeviceApprovalPreviewRequest{Principal: cell.principal, UserCode: started.UserCode, RepositoryScopes: cell.body})
+			if cell.wantErr != nil {
+				require.ErrorIs(t, err, cell.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, cell.want, preview.RepositoryHints)
+		})
+	}
+}

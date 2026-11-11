@@ -150,16 +150,16 @@ func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if request.SchemaVersion == contractsv1.DeviceApprovalPreviewRequestSchema {
-		if request.RepositoryScopes != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, bodyFieldDetails("repository_scopes"))
-			return
-		}
-		previewRequest := contractsv1.DeviceApprovalPreviewRequest{SchemaVersion: request.SchemaVersion, UserCode: request.UserCode}
+		previewRequest := contractsv1.DeviceApprovalPreviewRequest{SchemaVersion: request.SchemaVersion, UserCode: request.UserCode, RepositoryScopes: request.RepositoryScopes}
 		if err := previewRequest.Validate(); err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, schemaViolationDetails())
+			details := schemaViolationDetails()
+			if errors.Is(err, contractsv1.ErrTooManyRepositoryScopes) {
+				details = tooManyRepositoriesDetails()
+			}
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, details)
 			return
 		}
-		preview, err := a.deviceFlow.Preview(r.Context(), auth.DeviceApprovalPreviewRequest{Principal: principal, UserCode: previewRequest.UserCode})
+		preview, err := a.deviceFlow.Preview(r.Context(), auth.DeviceApprovalPreviewRequest{Principal: principal, UserCode: previewRequest.UserCode, RepositoryScopes: previewRequest.RepositoryScopes})
 		if err != nil {
 			a.logDevicePreviewFailure(r, err)
 			a.writeDeviceApprovalError(w, r, err)

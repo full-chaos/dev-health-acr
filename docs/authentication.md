@@ -71,8 +71,12 @@ its repositories from the request body, which the web assertion binds by
 `body_sha256`. The assertion's `repository_scopes` claim may be left out on
 these two approvals only; when it is sent it must name the same list as the
 body, or the approval is refused (`400`) and the request stays pending. The
-device preview still needs the claim (it filters the hints by it), and every
-other route refuses an assertion without it.
+device preview (`device_approval_preview_request.v1`) follows the same rule
+when its body names `repository_scopes`: it filters the hints by that list, the
+claim is optional, a present claim must equal it, and 257 is
+`too_many_repositories`. A preview body without the list keeps the earlier
+form, where the claim carries the grant; a null list, or neither list nor
+claim, is `400`. Every other route refuses an assertion without the claim.
 
 ## Lifecycle
 

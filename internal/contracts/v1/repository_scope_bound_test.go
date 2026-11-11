@@ -18,6 +18,7 @@ func TestRepositoryScopeBoundIsTheDeviceSchemasMaxItems(t *testing.T) {
 		path   []string
 	}{
 		{"device_approval_request.v1.schema.json", []string{"properties", "repository_scopes", "anyOf", "0", "maxItems"}},
+		{"device_approval_preview_request.v1.schema.json", []string{"properties", "repository_scopes", "anyOf", "0", "maxItems"}},
 		{"device_authorization_request.v1.schema.json", []string{"properties", "repository_hints", "maxItems"}},
 		{"device_approval_preview_response.v1.schema.json", []string{"properties", "repository_hints", "maxItems"}},
 		{"acr_client_credential.v1.schema.json", []string{"properties", "repository_scopes", "maxItems"}},
@@ -60,6 +61,10 @@ func TestRepositoryScopeBoundRefusesOneOverByName(t *testing.T) {
 		err := request.Validate()
 		if cell.wantErr != (err != nil) || (cell.wantErr && !errors.Is(err, ErrTooManyRepositoryScopes)) {
 			t.Errorf("%d scopes: err = %v, want too many = %v", cell.count, err, cell.wantErr)
+		}
+		preview := DeviceApprovalPreviewRequest{SchemaVersion: DeviceApprovalPreviewRequestSchema, UserCode: "BCDFGHJK", RepositoryScopes: scopes(cell.count)}
+		if previewErr := preview.Validate(); cell.wantErr != (previewErr != nil) || (cell.wantErr && !errors.Is(previewErr, ErrTooManyRepositoryScopes)) {
+			t.Errorf("%d preview scopes: err = %v, want too many = %v", cell.count, previewErr, cell.wantErr)
 		}
 		hints := scopes(cell.count)
 		hintErr := DeviceAuthorizationRequest{SchemaVersion: DeviceAuthorizationRequestSchema, RepositoryHints: &hints}.Validate()

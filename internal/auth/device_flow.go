@@ -107,6 +107,9 @@ type DeviceApprovalRequest struct {
 type DeviceApprovalPreviewRequest struct {
 	Principal storage.Principal
 	UserCode  string
+	// RepositoryScopes is the grant the body names (CHAOS-13562); nil when the
+	// body names none and the assertion's claim carries it.
+	RepositoryScopes []string
 }
 
 type DeviceApprovalPreview struct {
@@ -226,9 +229,9 @@ func (s *DeviceFlowService) Preview(ctx context.Context, request DeviceApprovalP
 	if err != nil {
 		return DeviceApprovalPreview{}, fmt.Errorf("preview device authorization: %w", err)
 	}
-	principalRepositories, err := normalizedPrincipalRepositories(request.Principal)
+	principalRepositories, err := previewRepositoryCeiling(request.Principal, request.RepositoryScopes)
 	if err != nil {
-		return DeviceApprovalPreview{}, ErrInvalidDeviceFlow
+		return DeviceApprovalPreview{}, err
 	}
 	if record.OrganizationIDHint != "" && record.OrganizationIDHint != request.Principal.OrgID {
 		return DeviceApprovalPreview{}, ErrInvalidDeviceFlow
@@ -402,6 +405,28 @@ func approvalRepositoryCeiling(principal storage.Principal, repositories []strin
 		return nil, ErrApprovalScopesDiffer
 	}
 	return principalRepositories, nil
+}
+
+// previewRepositoryCeiling is the grant a preview filters the hints by
+// (CHAOS-13562). A body that names a list is read under the approval's rule
+// (approvalRepositoryCeiling); a body that names none keeps the earlier form,
+// where the assertion's claim carries the grant.
+func previewRepositoryCeiling(principal storage.Principal, bodyScopes []string) ([]string, error) {
+	if bodyScopes == nil {
+		repositories, err := normalizedPrincipalRepositories(principal)
+		if err != nil {
+			return nil, ErrInvalidDeviceFlow
+		}
+		return repositories, nil
+	}
+	repositories, err := NormalizeRepositoryScopes(bodyScopes)
+	if err != nil {
+		return nil, ErrInvalidDeviceFlow
+	}
+	if len(repositories) > contractsv1.MaxRepositoryScopes {
+		return nil, ErrTooManyRepositories
+	}
+	return approvalRepositoryCeiling(principal, repositories)
 }
 
 func repositoriesWithinGrant(grant, selected []string) bool {
