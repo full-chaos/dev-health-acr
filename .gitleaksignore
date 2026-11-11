@@ -1,0 +1,11 @@
+# cross-implementation test vector signed with the public test seed; no deployed verifier trusts this key
+internal/auth/testdata/web-approver.v1.json:jwt:32
+internal/auth/testdata/web-approver.v1.json:jwt:33
+internal/auth/testdata/web-approver.v1.json:jwt:43
+internal/auth/testdata/web-approver.v1.json:jwt:44
+internal/auth/testdata/web-approver.v1.json:jwt:54
+internal/auth/testdata/web-approver.v1.json:jwt:55
+internal/auth/testdata/web-approver.v1.json:jwt:65
+internal/auth/testdata/web-approver.v1.json:jwt:66
+internal/auth/testdata/web-approver.v1.json:jwt:76
+internal/auth/testdata/web-approver.v1.json:jwt:77

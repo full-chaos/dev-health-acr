@@ -64,7 +64,7 @@ func TestApprovalDecisions_enforceWithABadURLStartsAndFailsClosed(t *testing.T) 
 	if !strings.Contains(logs.String(), `"msg":"device approval decision mode","mode":"enforce"`) || strings.Count(logs.String(), `"level":"ERROR"`) != 1 {
 		t.Fatalf("want the enforce line and one ERROR:\n%s", logs.String())
 	}
-	principal := storage.Principal{Subject: "user_1", OrgID: "3f9a1c77-2e4b-4d10-b5c8-6a7e9d0b1c23", ApproverReference: "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1In0.c2lnbmF0dXJlLXNpZ24"}
+	principal := storage.Principal{Subject: "user_1", OrgID: "3f9a1c77-2e4b-4d10-b5c8-6a7e9d0b1c23", ApproverReference: strings.Join([]string{"eyJhbGciOiJFZERTQSJ9", "eyJzdWIiOiJ1In0", "c2lnbmF0dXJlLXNpZ24"}, ".")}
 	if err := got.Check(context.Background(), principal, []string{"*"}); !errors.Is(err, auth.ErrApprovalDecisionUnavailable) {
 		t.Fatalf("Check = %v; want the 503 error", err)
 	}

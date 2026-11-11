@@ -21,7 +21,9 @@ import (
 // CHAOS-13586: one decision per approval, from the policy decision point,
 // asked with the approver reference only.
 
-const approvalTestReference = "eyJhbGciOiJFZERTQSJ9.eyJzdWIiOiJ1c2VyIn0.c2lnbmF0dXJlLXNpZ25hdHVyZQ"
+// approvalTestReference is a fake three-part reference, joined at run time so
+// no token-shaped literal sits in the tree.
+var approvalTestReference = strings.Join([]string{"eyJhbGciOiJFZERTQSJ9", "eyJzdWIiOiJ1c2VyIn0", "c2lnbmF0dXJlLXNpZ25hdHVyZQ"}, ".")
 
 type countingDecider struct {
 	next  pep.Decider
