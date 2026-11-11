@@ -132,7 +132,8 @@ func TestOrganizationDisabled_bearerReadIsBoundedByTheCacheAndMintReadsFresh(t *
 }
 
 // DF: the native device approval of a disabled or gone organization is
-// refused before anything is approved; an outage fails closed.
+// refused before anything is approved, even with a warm cached answer (the
+// approval reads fresh); an outage fails closed.
 func TestOrganizationDisabled_deviceApprovalIsRefused(t *testing.T) {
 	for name, tc := range map[string]struct {
 		mode   orgOpsMode
@@ -146,6 +147,9 @@ func TestOrganizationDisabled_deviceApprovalIsRefused(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			h := newOrgGoneApp(t, orgOpsLive)
 			authorization := h.startDevice(t)
+			if warm := h.capabilities(h.token); warm.Code != http.StatusOK {
+				t.Fatalf("warm capabilities: %d %s", warm.Code, warm.Body.String())
+			}
 			h.ops.set(tc.mode)
 			before := h.ops.hits.Load()
 
@@ -164,7 +168,8 @@ func TestOrganizationDisabled_deviceApprovalIsRefused(t *testing.T) {
 }
 
 // DG: an approval made while the organization was live is not redeemed once
-// it is disabled or gone; an outage fails closed; nothing is issued.
+// it is disabled or gone, even with a warm cached answer (the redemption reads
+// fresh); an outage fails closed; nothing is issued.
 func TestOrganizationDisabled_deviceRedeemIsRefused(t *testing.T) {
 	for name, tc := range map[string]struct {
 		mode   orgOpsMode
@@ -182,6 +187,9 @@ func TestOrganizationDisabled_deviceRedeemIsRefused(t *testing.T) {
 				t.Fatalf("approval while live: %d %s", approved.Code, approved.Body.String())
 			}
 			live := h.liveCredentials(t)
+			if warm := h.capabilities(h.token); warm.Code != http.StatusOK {
+				t.Fatalf("warm capabilities: %d %s", warm.Code, warm.Body.String())
+			}
 			h.ops.set(tc.mode)
 
 			response := h.serve(deviceTokenRequest(t, authorization.DeviceCode))
