@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http"
 	"slices"
@@ -44,6 +45,39 @@ func readAssertionBody(r *http.Request, maximum int64) ([]byte, error) {
 func assertionBodyDigest(body []byte) string {
 	digest := sha256.Sum256(body)
 	return base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
+// webAssertionBodyScopedPaths are the approvals whose request body names the
+// repositories (device_approval_request.repository_scopes, the consent
+// approve's repository_scopes). On them the repository_scopes claim may be
+// left out (CHAOS-13562): the body, bound by body_sha256, carries the list,
+// so the header stays the same size at any count.
+var webAssertionBodyScopedPaths = []string{"/api/v1/oauth/device_approval", "/authorize/consent"}
+
+// webAssertionScopeClaim is the repository_scopes claim with its presence: an
+// assertion that leaves the member out differs from one that sends null or [].
+type webAssertionScopeClaim struct {
+	present bool
+	values  []string
+}
+
+func (c *webAssertionScopeClaim) UnmarshalJSON(raw []byte) error {
+	c.present = true
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		c.values = nil
+		return nil
+	}
+	return json.Unmarshal(raw, &c.values)
+}
+
+// validWebRepositoryClaim admits an absent claim only for a credential issue
+// on a body-scoped approval path; a present claim follows validWebRepositories.
+func validWebRepositoryClaim(claim webAssertionScopeClaim, permissions []string, method, path string) bool {
+	if !claim.present {
+		return len(permissions) == 1 && permissions[0] == WebAssertionPermissionCredentialIssue &&
+			method == http.MethodPost && slices.Contains(webAssertionBodyScopedPaths, path)
+	}
+	return validWebRepositories(claim.values, permissions, method, path)
 }
 
 func validWebRepositories(scopes, permissions []string, method, path string) bool {

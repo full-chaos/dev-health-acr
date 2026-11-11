@@ -118,7 +118,8 @@
           "family_revoked",
           "unsupported_token_type",
           "organization_unknown",
-          "organization_disabled"
+          "organization_disabled",
+          "too_many_repositories"
         ]
       },
       {

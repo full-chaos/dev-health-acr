@@ -58,6 +58,22 @@ working directory, local Git discovery, and the current analytics repository
 catalog are display or request context only; none narrows or expands
 authorization.
 
+An approval (`POST /api/v1/oauth/device_approval` and the consent `approve`)
+names at most 256 repositories, the ops decision point's allowlist bound
+(`contractsv1.MaxRepositoryScopes`, CHAOS-13562); the device hints and an issued
+credential carry the same bound. 257 or more is refused by name: the device
+approval answers `400 invalid_request` with `details.reason`
+`too_many_repositories` and `details.max_repository_scopes` 256, the consent
+`400 {"error":"too_many_repositories"}`. The consent JSON body may hold 256
+keys of 255 bytes (`oauthConsentBodyMaxBytes`); a larger body is `400
+invalid_request` with `error_description` `body_too_large`. The approval takes
+its repositories from the request body, which the web assertion binds by
+`body_sha256`. The assertion's `repository_scopes` claim may be left out on
+these two approvals only; when it is sent it must name the same list as the
+body, or the approval is refused (`400`) and the request stays pending. The
+device preview still needs the claim (it filters the hints by it), and every
+other route refuses an assertion without it.
+
 ## Lifecycle
 
 Credential services support create, list, rotate, and revoke operations. Rotation defaults to immediate cutover and may request a bounded overlap of no more than 15 minutes. Expired or revoked credentials return the generic `invalid_token` contract response so callers cannot enumerate credential state.

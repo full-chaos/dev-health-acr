@@ -174,7 +174,11 @@ func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := request.Validate(); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, schemaViolationDetails())
+		details := schemaViolationDetails()
+		if errors.Is(err, contractsv1.ErrTooManyRepositoryScopes) {
+			details = tooManyRepositoriesDetails()
+		}
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, details)
 		return
 	}
 	if _, err := a.deviceFlow.Approve(r.Context(), auth.DeviceApprovalRequest{
@@ -205,6 +209,12 @@ func (a *App) writeDeviceApprovalError(w http.ResponseWriter, r *http.Request, e
 		return
 	}
 	a.writeDeviceDependencyError(w, r)
+}
+
+// tooManyRepositoriesDetails is the details of an approval naming more than
+// contractsv1.MaxRepositoryScopes repositories (CHAOS-13562).
+func tooManyRepositoriesDetails() map[string]any {
+	return map[string]any{"reason": contractsv1.TooManyRepositoriesReason, "max_repository_scopes": contractsv1.MaxRepositoryScopes}
 }
 
 // deviceApprovalRefusalReason is the oauthvocab outcome of a named approval refusal, or "".

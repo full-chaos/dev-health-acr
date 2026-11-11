@@ -98,6 +98,12 @@ type Principal struct {
 	// for every other authentication.
 	SessionID     string
 	Impersonating bool
+	// RepositoryScopesInBody marks a web assertion that left out the
+	// repository_scopes claim (CHAOS-13562): RepositoryScopes is empty and
+	// the approval it signs takes its repositories from the body the
+	// assertion binds. Only a credential-issue approval admits it; any other
+	// reader must treat such a principal as holding no repository.
+	RepositoryScopesInBody bool
 	// CredentialSessionID is the ACP web session a browser-class credential
 	// is bound to (its row's session_id, CHAOS-12123), copied by
 	// authentication; empty for every other credential and for a web

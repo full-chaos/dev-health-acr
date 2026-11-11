@@ -188,7 +188,7 @@ func validateCredentialMetadata(credential ClientCredential) error {
 }
 
 func validCredentialRepositoryScopes(repositories []string) bool {
-	if repositories == nil || len(repositories) > 100 || !uniqueStrings(repositories) {
+	if repositories == nil || len(repositories) > MaxRepositoryScopes || !uniqueStrings(repositories) {
 		return false
 	}
 	for _, repository := range repositories {
@@ -203,7 +203,10 @@ func validateBoundedRepositoryScopes(repositories []string) error {
 	if repositories == nil {
 		return fmt.Errorf("repository scopes are required")
 	}
-	if len(repositories) == 0 || len(repositories) > 100 || !uniqueStrings(repositories) {
+	if len(repositories) > MaxRepositoryScopes {
+		return ErrTooManyRepositoryScopes
+	}
+	if len(repositories) == 0 || !uniqueStrings(repositories) {
 		return fmt.Errorf("repository scopes violate v1 bounds")
 	}
 	for _, repository := range repositories {

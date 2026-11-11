@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -45,6 +46,14 @@ var (
 	// ErrBrowserSessionRequired refuses a browser-class redemption whose
 	// approval named no web session. It is an ErrInvalidDeviceFlow.
 	ErrBrowserSessionRequired = fmt.Errorf("%w: a browser credential needs the approving web session", ErrInvalidDeviceFlow)
+	// ErrTooManyRepositories refuses an approval that names more than
+	// contractsv1.MaxRepositoryScopes repositories (CHAOS-13562). It is an
+	// ErrInvalidDeviceFlow.
+	ErrTooManyRepositories = fmt.Errorf("%w: %w", ErrInvalidDeviceFlow, contractsv1.ErrTooManyRepositoryScopes)
+	// ErrApprovalScopesDiffer refuses an approval whose assertion claim names
+	// a repository list other than the body's (CHAOS-13562). It is an
+	// ErrInvalidDeviceFlow.
+	ErrApprovalScopesDiffer = fmt.Errorf("%w: the assertion's repository scopes differ from the body's", ErrInvalidDeviceFlow)
 )
 
 type DeviceFlowOptions struct {
@@ -286,6 +295,9 @@ func (s *DeviceFlowService) approveUserCodeHash(ctx context.Context, principal s
 	if err != nil {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
+	if len(repositories) > contractsv1.MaxRepositoryScopes {
+		return storage.DeviceAuthorization{}, ErrTooManyRepositories
+	}
 	switch err := s.checkOrganization(ctx, principal.OrgID); {
 	case errors.Is(err, ErrOrganizationGone):
 		return storage.DeviceAuthorization{}, ErrApprovalOrganizationGone
@@ -294,9 +306,9 @@ func (s *DeviceFlowService) approveUserCodeHash(ctx context.Context, principal s
 	case err != nil:
 		return storage.DeviceAuthorization{}, fmt.Errorf("check approving organization: %w", err)
 	}
-	principalRepositories, err := normalizedPrincipalRepositories(principal)
+	principalRepositories, err := approvalRepositoryCeiling(principal, repositories)
 	if err != nil {
-		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
+		return storage.DeviceAuthorization{}, err
 	}
 	record, err := s.store.Preview(ctx, userCodeHash)
 	if err != nil {
@@ -369,6 +381,27 @@ func hasRepositoryWildcard(repositories []string) bool {
 		}
 	}
 	return false
+}
+
+// approvalRepositoryCeiling is the repository grant an approval is checked
+// against (CHAOS-13562). An assertion without the repository_scopes claim
+// grants exactly the list its bound body names; an assertion with the claim
+// must name the same list as the body, else the approval is refused.
+func approvalRepositoryCeiling(principal storage.Principal, repositories []string) ([]string, error) {
+	if principal.RepositoryScopesInBody {
+		if len(principal.RepositoryScopes) != 0 {
+			return nil, ErrInvalidDeviceFlow
+		}
+		return repositories, nil
+	}
+	principalRepositories, err := normalizedPrincipalRepositories(principal)
+	if err != nil {
+		return nil, ErrInvalidDeviceFlow
+	}
+	if !slices.Equal(principalRepositories, repositories) {
+		return nil, ErrApprovalScopesDiffer
+	}
+	return principalRepositories, nil
 }
 
 func repositoriesWithinGrant(grant, selected []string) bool {
