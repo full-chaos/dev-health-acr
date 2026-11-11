@@ -41,6 +41,11 @@ const (
 	// authorized. Only the revoke workload role carries it; it is never part
 	// of the OAuth default scope.
 	ScopeCredentialLifecycleRevoke = "credential_lifecycle:revoke"
+	// ScopeCredentialLifecycleRevokeOrganization gates the revoke of every
+	// credential of the caller's organization, which the Auth Control Plane
+	// asks for when it disables or deletes the organization. Only the revoke
+	// workload role carries it; it is never part of the OAuth default scope.
+	ScopeCredentialLifecycleRevokeOrganization = "credential_lifecycle:revoke_organization"
 )
 
 var (
@@ -63,12 +68,13 @@ var (
 )
 
 var knownScopes = map[string]struct{}{
-	ScopeContextRead:               {},
-	ScopeEvidenceRead:              {},
-	ScopeEpisodeWrite:              {},
-	ScopeDataRead:                  {},
-	ScopeCredentialLifecycleRead:   {},
-	ScopeCredentialLifecycleRevoke: {},
+	ScopeContextRead:                           {},
+	ScopeEvidenceRead:                          {},
+	ScopeEpisodeWrite:                          {},
+	ScopeDataRead:                              {},
+	ScopeCredentialLifecycleRead:               {},
+	ScopeCredentialLifecycleRevoke:             {},
+	ScopeCredentialLifecycleRevokeOrganization: {},
 }
 
 type CreateCredentialRequest struct {

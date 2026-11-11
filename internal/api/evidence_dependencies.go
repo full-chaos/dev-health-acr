@@ -118,14 +118,16 @@ type App struct {
 	runtime              *RuntimeDependencies
 	authenticator        *auth.Authenticator
 	credentialService    *auth.Service
-	deviceFlow           *auth.DeviceFlowService
-	oauth                *auth.OAuthService
-	oauthConsentURL      string
-	clientIP             auth.ClientIPResolver
-	usageTelemetry       *auth.UsageTelemetry
-	mcpHop               *auth.MCPHopPolicy
-	metrics              *hostedmetrics.Instruments
-	closers              appClosers
+	// organizationRevokeBatch overrides auth.OrganizationRevokeBatch (tests); zero keeps it.
+	organizationRevokeBatch int
+	deviceFlow              *auth.DeviceFlowService
+	oauth                   *auth.OAuthService
+	oauthConsentURL         string
+	clientIP                auth.ClientIPResolver
+	usageTelemetry          *auth.UsageTelemetry
+	mcpHop                  *auth.MCPHopPolicy
+	metrics                 *hostedmetrics.Instruments
+	closers                 appClosers
 	// readinessTransitions (dictation 811) tracks the last OBSERVED /readyz
 	// outcome -- aggregate AND per-check -- so handleReady can log a
 	// transition line whenever either actually changes, instead of one

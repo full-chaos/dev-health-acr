@@ -220,7 +220,9 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 	// protected workload credential listing CHAOS-11200 adds, and
 	// (37 = 27 / 10) the protected first-party authorize route CHAOS-12568
 	// adds (web assertion only, limited per user), and (38 = 28 / 10) the
-	// protected workload on-behalf revoke of an MCP-bound credential.
+	// protected workload on-behalf revoke of an MCP-bound credential, and
+	// (39 = 29 / 10) the protected workload revoke of every credential of an
+	// organization.
 	// A different number is a finding to reconcile, not an adjustment.
 	root := repoRoot(t)
 	inventoryPath := filepath.Join(root, "contracts", "auth", "v1", "endpoint-profiles.acr.json")
@@ -229,8 +231,8 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := asArray(inventory["rows"])
-	if len(rows) != 38 {
-		t.Fatalf("expected 38 rows, got %d", len(rows))
+	if len(rows) != 39 {
+		t.Fatalf("expected 39 rows, got %d", len(rows))
 	}
 	var protected, public int
 	for _, r := range rows {
@@ -242,8 +244,8 @@ func TestRealInventoryRowCountMatchesTheWave0Baseline(t *testing.T) {
 			public++
 		}
 	}
-	if protected != 28 {
-		t.Errorf("expected 28 protected rows, got %d", protected)
+	if protected != 29 {
+		t.Errorf("expected 29 protected rows, got %d", protected)
 	}
 	if public != 10 {
 		t.Errorf("expected 10 public rows, got %d", public)

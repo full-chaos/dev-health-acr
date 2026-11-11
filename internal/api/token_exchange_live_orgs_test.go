@@ -118,14 +118,14 @@ func TestTokenExchange_liveOrgsBindingAnswersPerOrganizationState(t *testing.T) 
 	if err := json.Unmarshal(response.Body.Bytes(), &token); err != nil {
 		t.Fatal(err)
 	}
-	if token.Scope != auth.ScopeCredentialLifecycleRevoke {
-		t.Fatalf("live org: scope = %q, want the revoke scope only", token.Scope)
+	if token.Scope != auth.ScopeCredentialLifecycleRevoke+" "+auth.ScopeCredentialLifecycleRevokeOrganization {
+		t.Fatalf("live org: scope = %q, want the two revoke scopes only", token.Scope)
 	}
 	stored, err := credentials.FindByTokenHash(context.Background(), auth.HashToken(token.AccessToken))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.OrgID != liveOrgsLive || !reflect.DeepEqual(stored.Scopes, []string{auth.ScopeCredentialLifecycleRevoke}) || !reflect.DeepEqual(stored.RepositoryScopes, []string{"*"}) {
+	if stored.OrgID != liveOrgsLive || !reflect.DeepEqual(stored.Scopes, auth.RoleScopes("revoke")) || !reflect.DeepEqual(stored.RepositoryScopes, []string{"*"}) {
 		t.Fatalf("live org: credential org = %q scopes = %v repository = %v", stored.OrgID, stored.Scopes, stored.RepositoryScopes)
 	}
 
@@ -183,8 +183,8 @@ func TestTokenExchange_liveOrgsCredentialHoldsOnlyTheRevokeAction(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(stored.Scopes, []string{auth.ScopeCredentialLifecycleRevoke}) || !reflect.DeepEqual(result.Scope, []string{auth.ScopeCredentialLifecycleRevoke}) {
-		t.Fatalf("stored scopes = %v issued scope = %v, want exactly %q", stored.Scopes, result.Scope, auth.ScopeCredentialLifecycleRevoke)
+	if !reflect.DeepEqual(stored.Scopes, auth.RoleScopes("revoke")) || !reflect.DeepEqual(result.Scope, auth.RoleScopes("revoke")) {
+		t.Fatalf("stored scopes = %v issued scope = %v, want exactly %v", stored.Scopes, result.Scope, auth.RoleScopes("revoke"))
 	}
 
 	list := httptest.NewRequest(http.MethodGet, CredentialLifecycleListPath, nil)

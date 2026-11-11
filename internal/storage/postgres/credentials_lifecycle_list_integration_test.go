@@ -211,5 +211,5 @@ VALUES ($1, $2, 'cluster.local', 'ns', 'sa-' || $1, 'uid-' || $1, $3, '["*"]'::j
 	require.NoError(t, err)
 	require.Len(t, bindings, 1)
 	require.Equal(t, "revoke", bindings[0].Role)
-	require.Equal(t, []string{auth.ScopeCredentialLifecycleRevoke}, auth.RoleScopes(bindings[0].Role))
+	require.Equal(t, []string{auth.ScopeCredentialLifecycleRevoke, auth.ScopeCredentialLifecycleRevokeOrganization}, auth.RoleScopes(bindings[0].Role))
 }

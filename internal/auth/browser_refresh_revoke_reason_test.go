@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -180,5 +181,32 @@ func TestBrowserRefresh_aDirectRevokeNamesTheFamilyReasonOnSiblingsOnly(t *testi
 	}
 	if sibling["family_revoke_reason"] != "member_revoked" || sibling["reason"] != nil {
 		t.Fatalf("sibling row = %v, want family_revoke_reason member_revoked and no reason", sibling)
+	}
+}
+
+// No-change pin: a family revoke that carries no revocation details (here
+// sign-out) writes the row form it always wrote: actor user, the family fields
+// and nothing else.
+func TestBrowserRefresh_signOutRowFormIsUnchanged(t *testing.T) {
+	h, clientID := browserHarness(t)
+	login := browserLogin(t, h, clientID)
+
+	if _, err := h.oauth.refresh.RevokeFamily(context.Background(), login.RefreshToken, clientID); err != nil {
+		t.Fatal(err)
+	}
+
+	var rows int
+	for _, event := range h.audit.Events() {
+		if event.Action != "credential_revoked" {
+			continue
+		}
+		rows++
+		want := map[string]any{"family_id": login.Issued.Credential.Provenance.FamilyID, "family_revoke_reason": "sign_out"}
+		if event.ActorType != "user" || !reflect.DeepEqual(event.Metadata, want) {
+			t.Fatalf("sign-out row = actor %q metadata %v; want actor user metadata %v", event.ActorType, event.Metadata, want)
+		}
+	}
+	if rows != 1 {
+		t.Fatalf("credential_revoked rows = %d, want 1", rows)
 	}
 }

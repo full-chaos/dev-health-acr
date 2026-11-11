@@ -1727,6 +1727,60 @@
         }
       }
     },
+    "/internal/v1/organization/credentials/revoke": {
+      "post": {
+        "operationId": "revokeOrganizationCredentials",
+        "x-required-scope": "credential_lifecycle:revoke_organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../jsonschema/v1/credential_revoke_organization_request.v1.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One batch of the organization's live credentials is revoked. The credential each revoke operation names gets one credential_revoked audit row (actor type admin, the reason; a browser credential's row also carries family_id and family_revoke_reason org_deprovisioned) and one revoked lifecycle event; a browser sibling revoked with its family gets the family cascade's row (actor type user, family_id, family_revoke_reason). An expired credential is never a revoke target; an expired browser credential that is a sibling in a revoked family is revoked with its family (the existing cascade). Only a workload-class credential whose binding role is revoke is served; a disabled organization is served; a deleted organization is 401 at authentication once the cached organization state holds the deletion; before that the fresh state read decides, and a deleted organization is then served only with organization_deleted; a live one is 409 organization_live (nothing revoked).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../jsonschema/v1/credential_revoke_organization_response.v1.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/context-fabric/data/catalog": {
       "get": {
         "operationId": "readContextFabricDataCatalog",
