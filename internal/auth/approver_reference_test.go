@@ -122,6 +122,9 @@ func TestApproverReference_refusals(t *testing.T) {
 		{name: "expired", fault: ApproverReferenceClaims, mutate: func(c *approverCase, m map[string]any) {
 			m["iat"], m["nbf"], m["exp"] = c.now.Add(-40*time.Second).Unix(), c.now.Add(-40*time.Second).Unix(), c.now.Add(-10*time.Second).Unix()
 		}},
+		{name: "iat in the future only", fault: ApproverReferenceClaims, mutate: func(c *approverCase, m map[string]any) { m["iat"] = c.now.Add(10 * time.Second).Unix() }},
+		{name: "nbf in the future only", fault: ApproverReferenceClaims, mutate: func(c *approverCase, m map[string]any) { m["nbf"] = c.now.Add(10 * time.Second).Unix() }},
+		{name: "exp before iat", fault: ApproverReferenceClaims, mutate: func(c *approverCase, m map[string]any) { m["exp"] = c.now.Add(-time.Second).Unix() }},
 		{name: "a claim the contract lacks", fault: ApproverReferenceClaims, mutate: func(_ *approverCase, m map[string]any) { m["repository_scopes"] = []string{"*"} }},
 		{name: "the web assertion in the approver header", fault: ApproverReferenceMalformed, token: func(_ *testing.T, c *approverCase, _ map[string]any) []string { return []string{c.raw} }},
 		{name: "unknown kid", fault: ApproverReferenceSignature, token: func(t *testing.T, c *approverCase, m map[string]any) []string {
