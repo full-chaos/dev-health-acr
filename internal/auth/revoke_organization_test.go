@@ -265,3 +265,28 @@ func TestRevokeOrganization_RefusesBadInput(t *testing.T) {
 	}
 	require.Nil(t, r.revokedAt(t, deviceFlowTestOrgID, id))
 }
+
+// An expired credential is never a revoke target; an expired browser
+// credential that is a sibling in a revoked family is revoked with its family
+// (the existing cascade).
+func TestRevokeOrganization_AnExpiredCredentialIsNoTargetButAnExpiredSiblingGoesWithItsFamily(t *testing.T) {
+	r := newOrgRevokeRig(t)
+	soon := r.now.Add(-time.Minute)
+	expiredBearer := r.create(t, storage.CredentialCreateInput{CredentialID: "cred_expiredbear01", ExpiresAt: &soon})
+	live := r.browserCredential(t, "cred_browserfam001")
+	family := time.Date(2026, 11, 5, 6, 0, 0, 0, time.UTC)
+	expiredSibling := r.create(t, storage.CredentialCreateInput{CredentialID: "cred_browserfam002", ExpiresAt: &soon,
+		ActorID: onBehalfApprover, RepositoryScopes: []string{"owner/repo"},
+		IssuanceProvenance: storage.CredentialIssuanceProvenanceDeviceAuthorization, ApprovingUserID: onBehalfApprover,
+		Resource: "https://acr.example.test", ClientID: "acrc_browser0000000000000000000000000",
+		ClientClass: storage.CredentialClientClassBrowser, SessionID: "ses_web_1", FamilyID: "fam_cred_browserfam001", FamilyExpiresAt: &family})
+	caller := r.workload(t, "cred_callerexpir01", orgRevokeBinding)
+
+	result, err := r.service.RevokeOrganization(context.Background(), deviceFlowTestOrgID, orgRevokeBinding, caller, orgRevokeActor, OrganizationRevokeReasonDisabled, OrganizationRevokeBatch)
+
+	require.NoError(t, err)
+	require.Equal(t, OrganizationRevocation{Revoked: 1, CallerRevoked: 1}, result, "only the live browser credential is a target")
+	require.NotNil(t, r.revokedAt(t, deviceFlowTestOrgID, live))
+	require.Nil(t, r.revokedAt(t, deviceFlowTestOrgID, expiredBearer), "an expired credential is never a target")
+	require.NotNil(t, r.revokedAt(t, deviceFlowTestOrgID, expiredSibling), "an expired sibling is revoked with its family")
+}

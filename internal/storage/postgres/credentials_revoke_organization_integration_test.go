@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/orgrevokerows"
 )
 
 // The organization revoke on a real database: every live credential of the
@@ -80,21 +81,19 @@ VALUES ($1, $2, $1, 'fcacr_abcdefghij', $3, '["*"]'::jsonb, '["context:read"]'::
 SELECT count(*), coalesce(max(actor_type), ''), coalesce(max(metadata::text), '')
 FROM acr.audit_events WHERE org_id = $1 AND action = 'credential_revoked' AND resource_id = $2`, credentialTestOrgID, id).Scan(&n, &actorType, &metadata))
 		require.Equal(t, 1, n, id)
-		// A family sibling's row is written by the family revoke, whose audit
-		// actor type is fixed to user (both stores, since CHAOS-12124); the
-		// credential the organization revoke named carries admin.
-		wantActor := auth.OnBehalfActorAdmin
-		if id == browser[1] {
-			wantActor = "user"
-		}
-		require.Equal(t, wantActor, actorType, id)
 		var details map[string]any
 		require.NoError(t, json.Unmarshal([]byte(metadata), &details), id)
-		if id == browser[0] || id == browser[1] {
-			require.Equal(t, "org_deprovisioned", details["family_revoke_reason"], id)
-		} else {
-			require.Equal(t, auth.OrganizationRevokeReasonDeleted, details["reason"], id)
+		// The browser rows are checked against the expectation the memory
+		// route cell shares (orgrevokerows), so the stores cannot disagree.
+		wantActor, wantMetadata := auth.OnBehalfActorAdmin, map[string]any{"reason": auth.OrganizationRevokeReasonDeleted}
+		switch id {
+		case browser[0]:
+			wantActor, wantMetadata = orgrevokerows.NamedBrowserRow(auth.OrganizationRevokeReasonDeleted, "orgrevokefam")
+		case browser[1]:
+			wantActor, wantMetadata = orgrevokerows.SiblingBrowserRow("orgrevokefam")
 		}
+		require.Equal(t, wantActor, actorType, id)
+		require.Equal(t, wantMetadata, details, id)
 		rows := lifecycleRows(t, f.ctx, f.db, id)
 		require.Equal(t, "acr_credential.revoked", rows[len(rows)-1].EventType, id)
 		revoked := 0

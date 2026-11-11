@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/orgrevokerows"
 )
 
 // The organization revoke route: POST /internal/v1/organization/credentials/revoke
@@ -300,5 +302,65 @@ func TestOrganizationRevoke_aDeleteOfADisabledOrganizationIsServed(t *testing.T)
 	}
 	if got := h.liveIn(t, h.orgID); got != 0 {
 		t.Fatalf("live credentials = %d, want 0", got)
+	}
+}
+
+// browserFamily stores n live browser credentials of one family in the
+// harness organization and returns their ids, lowest first.
+func (h *orgGoneApp) browserFamily(t *testing.T, family string, n int) []string {
+	t.Helper()
+	var ids []string
+	for i := 0; i < n; i++ {
+		id := "cred_" + family + string(rune('a'+i))
+		expires := h.now.Add(time.Hour)
+		familyEnd := h.now.Add(12 * time.Hour)
+		created, err := h.credentials.CreateCredential(context.Background(), storage.CredentialCreateInput{
+			CredentialID: id, OrgID: h.orgID, Name: "browser", TokenPrefix: "fcacr_" + id[5:13], TokenHash: auth.HashToken("fcacr_" + id + "_secret_value_for_hash"),
+			RepositoryScopes: []string{"*"}, Scopes: []string{auth.ScopeContextRead}, ActorID: "usr_browser_1", ExpiresAt: &expires,
+			IssuanceProvenance: storage.CredentialIssuanceProvenanceDeviceAuthorization, ApprovingUserID: "usr_browser_1",
+			Resource: "https://acr.example.test", ClientID: "acrc_browser0000000000000000000000000",
+			ClientClass: storage.CredentialClientClassBrowser, SessionID: "ses_web_1", FamilyID: family, FamilyExpiresAt: &familyEnd,
+		})
+		if err != nil {
+			t.Fatalf("seed browser credential: %v", err)
+		}
+		ids = append(ids, created.CredentialID)
+	}
+	return ids
+}
+
+// OR9: the browser credential the organization revoke names keeps the call's
+// admin actor and organization reason on its credential_revoked row and adds
+// the family fields; its sibling gets the cascade's form. Both forms come from
+// the expectation the Postgres cell shares (orgrevokerows).
+func TestOrganizationRevoke_theNamedBrowserRowKeepsTheCallsDetails(t *testing.T) {
+	h := newOrgGoneApp(t, orgOpsLive)
+	browser := h.browserFamily(t, "orgrevbrfam", 2)
+	caller := h.workloadToken(t, orgRevokeRouteBinding, []string{orgRevokeRouteScope})
+	h.ops.set(orgOpsDisabled)
+
+	response := h.revokeOrganization(caller, orgRevokeRouteBody)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("organization revoke: %d %s, want 200", response.Code, response.Body.String())
+	}
+	rows := map[string]storage.AuditEvent{}
+	for _, event := range h.app.runtime.Audit.(*memory.AuditStore).Events() {
+		if event.Action == "credential_revoked" {
+			rows[event.ResourceID] = event
+		}
+	}
+	for i, id := range browser {
+		wantActor, wantMetadata := orgrevokerows.SiblingBrowserRow("orgrevbrfam")
+		if i == 0 {
+			wantActor, wantMetadata = orgrevokerows.NamedBrowserRow("organization_disabled", "orgrevbrfam")
+		}
+		row, ok := rows[id]
+		if !ok {
+			t.Fatalf("no credential_revoked row for %s", id)
+		}
+		if row.ActorType != wantActor || !reflect.DeepEqual(row.Metadata, wantMetadata) {
+			t.Fatalf("%s row = actor %q metadata %v; want actor %q metadata %v", id, row.ActorType, row.Metadata, wantActor, wantMetadata)
+		}
 	}
 }
