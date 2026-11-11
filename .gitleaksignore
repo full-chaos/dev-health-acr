@@ -9,3 +9,5 @@ internal/auth/testdata/web-approver.v1.json:jwt:65
 internal/auth/testdata/web-approver.v1.json:jwt:66
 internal/auth/testdata/web-approver.v1.json:jwt:76
 internal/auth/testdata/web-approver.v1.json:jwt:77
+# history only: a fake token literal that commit 6cd9df23 added and a later commit replaced with a run-time join; the row is pinned to that commit and can match nothing else
+6cd9df239969dd316f1d1d7e32375843b884f437:internal/auth/approval_decision_test.go:jwt:24
