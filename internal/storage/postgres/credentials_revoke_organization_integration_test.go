@@ -33,6 +33,12 @@ func TestCredentialRevokeOrganization_RevokesEveryLiveCredentialOnARealDatabase(
 		require.NoError(t, err)
 		return credential.CredentialID
 	}
+	for binding, role := range map[string]string{"wlb_projector_read": "read", "wlb_go_api_revoke": "revoke"} {
+		_, err := f.db.ExecContext(f.ctx, `
+INSERT INTO acr.workload_bindings (binding_id, org_id, trust_domain, namespace, service_account_name, service_account_uid, role, repository_scopes, created_at, created_by)
+VALUES ($1, $2, 'cluster.local', 'ns', 'sa-' || $1, 'uid-' || $1, $3, '["*"]'::jsonb, now(), 'test_actor')`, binding, credentialTestOrgID, role)
+		require.NoError(t, err)
+	}
 	hour := time.Now().UTC().Add(time.Hour)
 	browser := browserFamilyMembers(t, f, "orgrevokefam", 2)
 	_, err := f.db.ExecContext(f.ctx, `
