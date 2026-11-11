@@ -218,14 +218,15 @@ func subTeamAuthorizationRefreshedByOwnershipOnlyChange(t *testing.T, ctx contex
 	// Ownership-only change: team_repo_ownership gets a brand-new row,
 	// timestamped strictly after everything already consumed; the teams
 	// table itself is not touched at all.
-	refreshedAt := time.Now().UTC()
+	refreshedAt := changeAboveCursor(t, cursor)
 	if err := fixture.direct.Exec(ctx,
-		`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		fixture.orgID, "github", "TEAM-GITHUB", nil, "acme/freshly-granted-repo", "exact", "native", uint8(1), uint16(1), int32(1), refreshedAt, nil, refreshedAt); err != nil {
+		`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,toDateTime64(?, 3, 'UTC'),?,toDateTime64(?, 3, 'UTC'))`,
+		fixture.orgID, "github", "TEAM-GITHUB", nil, "acme/freshly-granted-repo", "exact", "native", uint8(1), uint16(1), int32(1), millisText(refreshedAt), nil, millisText(refreshedAt)); err != nil {
 		t.Fatalf("seed ownership-only change: %v", err)
 	}
+	change := storedChangeAboveCursor(t, ctx, fixture, cursor, "acme/freshly-granted-repo")
 
-	how := pollTeamAfterChange(t, ctx, fixture, clock, cursor, refreshedAt, func(slugs []string) bool { return slices.Contains(slugs, "acme/freshly-granted-repo") })
+	how := pollTeamAfterChange(t, ctx, fixture, clock, cursor, change, func(slugs []string) bool { return slices.Contains(slugs, "acme/freshly-granted-repo") })
 	if how == "" {
 		t.Fatal("TEAM-GITHUB was never re-emitted after an ownership-only change, not even by the window pass -- the watermark did not advance for a team_repo_ownership-only update")
 	}
@@ -247,8 +248,8 @@ func subTeamAuthorizationRefreshedByRevokingLastOpenRepository(t *testing.T, ctx
 	seedResolvableRepo(t, ctx, fixture, fixture.orgID, "acme/only-repo")
 	seed := func(validFrom time.Time, validTo any, updatedAt time.Time) {
 		if err := fixture.direct.Exec(ctx,
-			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			fixture.orgID, "github", "TEAM-GITHUB", nil, "acme/only-repo", "exact", "native", uint8(1), uint16(1), int32(1), validFrom, validTo, updatedAt); err != nil {
+			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,toDateTime64(?, 3, 'UTC'),toDateTime64(?, 3, 'UTC'),toDateTime64(?, 3, 'UTC'))`,
+			fixture.orgID, "github", "TEAM-GITHUB", nil, "acme/only-repo", "exact", "native", uint8(1), uint16(1), int32(1), millisText(validFrom), validTo, millisText(updatedAt)); err != nil {
 			t.Fatalf("seed team_repo_ownership: %v", err)
 		}
 	}
@@ -259,10 +260,11 @@ func subTeamAuthorizationRefreshedByRevokingLastOpenRepository(t *testing.T, ctx
 
 	// Revoke the team's ONLY open repository: the same row (same valid_from,
 	// later updated_at) now carries a valid_to, leaving no open row.
-	revokedAt := time.Now().UTC()
-	seed(grantedAt, revokedAt, revokedAt)
+	revokedAt := changeAboveCursor(t, cursor)
+	seed(grantedAt, millisText(revokedAt), revokedAt)
+	change := storedChangeAboveCursor(t, ctx, fixture, cursor, "acme/only-repo")
 
-	how := pollTeamAfterChange(t, ctx, fixture, clock, cursor, revokedAt, func(slugs []string) bool { return !slices.Contains(slugs, "acme/only-repo") })
+	how := pollTeamAfterChange(t, ctx, fixture, clock, cursor, change, func(slugs []string) bool { return !slices.Contains(slugs, "acme/only-repo") })
 	if how == "" {
 		t.Fatal("TEAM-GITHUB was never re-emitted without acme/only-repo after its only open repository was revoked, not even by the window pass -- the watermark regressed when the last open row dropped out of the aggregation")
 	}
@@ -366,6 +368,38 @@ func teamEmittedWithin(t *testing.T, ctx context.Context, fixture *ownershipFixt
 		}
 	}
 	return false
+}
+
+// changeAboveCursor is the stamp of a team change written after convergence:
+// the first millisecond (team_repo_ownership.updated_at is DateTime64(3))
+// above the converged cursor. It comes from the cursor, not the wall clock: the
+// cursor is a server refresh stamp, and time.Now() bound through a positional
+// "?" travels at whole seconds (clickhouse-go format(tz, Seconds, v)), so a
+// change in the cursor's own second used to land below it.
+func changeAboveCursor(t *testing.T, cursor string) time.Time {
+	t.Helper()
+	return decodeCursorPosition(t, cursor).Since.UTC().Truncate(time.Millisecond).Add(time.Millisecond)
+}
+
+// millisText is a stamp as toDateTime64(?, 3, 'UTC') reads it.
+func millisText(at time.Time) string {
+	return at.UTC().Format("2006-01-02 15:04:05.000")
+}
+
+// storedChangeAboveCursor reads back the stamp ClickHouse stored for the
+// change and fails unless it is above the converged cursor: the position the
+// producer pages on, not the value the test meant to write.
+func storedChangeAboveCursor(t *testing.T, ctx context.Context, fixture *ownershipFixture, cursor, repo string) time.Time {
+	t.Helper()
+	since := decodeCursorPosition(t, cursor).Since
+	var stored time.Time
+	if err := fixture.direct.QueryRow(ctx, `SELECT max(updated_at) FROM team_repo_ownership FINAL WHERE org_id = ? AND repo_full_name = ?`, fixture.orgID, repo).Scan(&stored); err != nil {
+		t.Fatalf("read the stored change stamp of %s: %v", repo, err)
+	}
+	if !stored.After(since) {
+		t.Fatalf("fixture: the stored change stamp %v of %s is not above the converged cursor %v", stored.UTC(), repo, since)
+	}
+	return stored.UTC()
 }
 
 // pollTeamAfterChange is the deadline form of a "change is re-emitted" check:
