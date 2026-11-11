@@ -98,6 +98,12 @@ type Principal struct {
 	// for every other authentication.
 	SessionID     string
 	Impersonating bool
+	// ApproverReference is the web approver reference (CHAOS-13586) that came
+	// with a web assertion and passed the pair check, the one token an
+	// approval forwards to the policy decision point; empty otherwise, with
+	// ApproverReferenceFault naming why (closed set, for the log).
+	ApproverReference      string
+	ApproverReferenceFault string
 	// CredentialSessionID is the ACP web session a browser-class credential
 	// is bound to (its row's session_id, CHAOS-12123), copied by
 	// authentication; empty for every other credential and for a web

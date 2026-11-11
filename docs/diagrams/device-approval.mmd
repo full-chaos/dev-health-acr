@@ -1,0 +1,25 @@
+%% Device and consent approval with the approver decision (CHAOS-13586).
+%% Page: web docs/auth-acr-device-approval.md. Code: internal/auth/approver_reference.go,
+%% internal/auth/approval_decision.go, internal/auth/device_flow.go (approveUserCodeHash).
+sequenceDiagram
+    participant B as Browser
+    participant W as web server
+    participant A as acr-api
+    participant P as auth-service (policy decision point)
+    B->>W: approve (session cookie)
+    W->>W: session read, impersonation read, W9-13 decision (user access token)
+    W->>A: POST approval + X-ACR-Web-Assertion (aud acr-api, 30 s, jti once) + X-ACR-Approver-Reference (aud auth-service, 30 s, req = SHA-256 of the assertion)
+    A->>A: verify assertion (key, iss, aud, method, path, body, jti record)
+    A->>A: pair check (req, sub, org_id, impersonating, sid if signed, not outliving the assertion)
+    A->>A: local checks (impersonation, organization state, repositories within the grant)
+    A->>P: POST /v1/authorize (acr-api workload token; principal_reference = approver reference; acr.credential.issue on the organization)
+    P->>P: caller is acr-api, verify reference (web JWKS), sid live and owned by sub (no cache)
+    P-->>A: decision (allow + obligations, or deny)
+    alt allow (or mode off/shadow)
+        A->>A: store the approval
+        A-->>W: 200
+    else deny or no valid reference (enforce)
+        A-->>W: 403 access_denied (authorization stays pending)
+    else no decision (enforce)
+        A-->>W: 503
+    end

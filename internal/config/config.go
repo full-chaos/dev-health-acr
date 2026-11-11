@@ -413,6 +413,9 @@ type Config struct {
 	AuthWorkload AuthWorkloadConfig
 	// AuthProjection (CHAOS-11198) switches on the lifecycle outbox publisher; zero is off. See auth_projection.go.
 	AuthProjection AuthProjectionConfig
+	// DeviceApprovalPDP (CHAOS-13586) is the approver check of a device or consent approval; zero is off. See
+	// device_approval_pdp.go.
+	DeviceApprovalPDP DeviceApprovalPDPConfig
 
 	// dataQueryURL / dataQueryTimeout: internal ops query service call
 	// (ACR_DATA_QUERY_URL, ACR_DATA_QUERY_TIMEOUT); read via the
@@ -549,6 +552,10 @@ func load(lookup lookupEnv) (Config, error) {
 	if err := cfg.AuthProjection.Validate(cfg.AuthWorkload); err != nil {
 		return Config{}, err
 	}
+	cfg.DeviceApprovalPDP = deviceApprovalPDPValue(lookup)
+	if err := cfg.DeviceApprovalPDP.Validate(cfg.AuthWorkload); err != nil {
+		return Config{}, err
+	}
 
 	if cfg.RequestTimeout, err = durationValue(lookup, "ACR_REQUEST_TIMEOUT", defaultRequestTimeout); err != nil {
 		return Config{}, err
@@ -629,6 +636,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.AuthProjection.Validate(c.AuthWorkload); err != nil {
+		return err
+	}
+	if err := c.DeviceApprovalPDP.Validate(c.AuthWorkload); err != nil {
 		return err
 	}
 	switch c.Environment {

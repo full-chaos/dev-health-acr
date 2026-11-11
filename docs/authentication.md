@@ -665,6 +665,44 @@ rows per statement.
   `browser family purge tick failed; retrying on next tick` with the error class
   and table only.
 
+## Approver decision at approval (CHAOS-13586)
+
+`ACR_DEVICE_APPROVAL_PDP` (`off` by default, `shadow`, `enforce`) makes a device
+approval (`POST /api/v1/oauth/device_approval`) and a consent approve
+(`POST /authorize/consent`) ask the policy decision point in auth-service
+whether the approver may issue the credential. The architecture page, with the
+sequence and component diagrams and the table of every signed token, is web
+`docs/auth-acr-device-approval.md`; the diagram source here is
+[`docs/diagrams/device-approval.mmd`](diagrams/device-approval.mmd).
+
+- web sends a second token with the web assertion: `X-ACR-Approver-Reference`,
+  an EdDSA JWT signed with the web assertion key, `typ` `web-approver+jwt`,
+  `aud` `auth-service`, 30 seconds, claims `sub`, `org_id`, `sid`,
+  `impersonating`, `action` (`acr.credential.issue`) and `req`, the SHA-256 of
+  the exact `X-ACR-Web-Assertion` of the same request. It has no repository
+  scopes.
+- acr checks the pair (`internal/auth/approver_reference.go`): the same key
+  rules as the web assertion, `req` over the assertion it verified, the same
+  `sub`, `org_id` and `impersonating`, the assertion's `sid` when web signed
+  one, and the reference never outlives its assertion. The pair and the
+  assertion's own jti record bind the reference to one approval.
+- After the local checks (impersonation, the organization's state, the
+  repositories within the grant) and before the approval is stored, acr asks
+  `POST /v1/authorize` with its workload token, the reference as
+  `principal_reference` and `acr.credential.issue` on the organization
+  (`internal/auth/approval_decision.go`). Poll and redeem never ask.
+- `enforce`: a deny, a missing reference or a reference that failed the pair
+  check is `403 access_denied` (consent: `access_denied`); no decision (outage,
+  timeout, rate limit, no client) is `503`. The authorization stays pending.
+  `shadow` asks, logs `device approval decision` with the outcome and counts
+  `acr_device_approval_decisions_total{mode,outcome}`, and never refuses.
+- `ACR_DEVICE_APPROVAL_PDP_URL` is auth-service's origin; the call needs the
+  workload client (`ACR_AUTH_WORKLOAD_*`). `shadow` or `enforce` without them
+  still starts: one ERROR line, and `enforce` refuses every approval.
+- At the decision point the reference is not approval-specific: for its 30
+  seconds it proves only that the user's session is live and may issue in the
+  organization, and only acr-api may present it.
+
 ## Per-call access re-check (CHAOS-12092)
 
 A user-class credential (class `browser`, `oauth_user` or `native_device`) is

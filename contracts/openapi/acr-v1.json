@@ -1405,6 +1405,18 @@
             }
           }
         },
+        "parameters": [
+          {
+            "name": "X-ACR-Approver-Reference",
+            "in": "header",
+            "required": false,
+            "description": "The web approver reference (CHAOS-13586): a compact EdDSA JWT, typ web-approver+jwt, audience auth-service, at most 1000 characters, signed with the web assertion key over the SHA-256 of this request's X-ACR-Web-Assertion (claim req). An approval checks it against the web assertion and forwards only it to the policy decision point while ACR_DEVICE_APPROVAL_PDP is shadow or enforce; with enforce an approval without a valid one, or one the decision point denies, is 403 access_denied, and a decision point failure is 503. A preview ignores it.",
+            "schema": {
+              "type": "string",
+              "maxLength": 1000
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Bounded device grant approved or advisory hints previewed",
