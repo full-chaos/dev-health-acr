@@ -595,12 +595,15 @@ jobs:
         if: steps.decide.outputs.run == 'true'
         with:
           node-version: 25
+      # No --with-deps: it runs apt on the hosted runner, and apt is not on a test path here
+      # (CHAOS-13577). The hosted image already carries Chromium's shared libraries; the
+      # browser launch in the gate below proves it on every run.
       - name: Install web dependencies and the Playwright browser runtime
         if: steps.decide.outputs.run == 'true'
         working-directory: dev-health/web
         run: |
           pnpm install --frozen-lockfile
-          pnpm exec playwright install --with-deps chromium
+          pnpm exec playwright install chromium
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         if: steps.decide.outputs.run == 'true'
