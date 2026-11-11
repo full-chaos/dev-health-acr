@@ -1727,6 +1727,57 @@
         }
       }
     },
+    "/internal/v1/organization/credentials/revoke": {
+      "post": {
+        "operationId": "revokeOrganizationCredentials",
+        "x-required-scope": "credential_lifecycle:revoke_organization",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "../jsonschema/v1/credential_revoke_organization_request.v1.schema.json"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "One batch of the organization's live credentials is revoked; each writes one credential_revoked audit row (actor type admin, the reason) and one revoked lifecycle event. Only a workload-class credential whose binding role is revoke is served; a disabled organization is served, a deleted one is 401.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../jsonschema/v1/credential_revoke_organization_response.v1.schema.json"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/api/v1/context-fabric/data/catalog": {
       "get": {
         "operationId": "readContextFabricDataCatalog",

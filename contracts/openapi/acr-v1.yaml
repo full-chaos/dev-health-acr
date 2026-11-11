@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 30e5ecec43bce3a5a74185abc54807ee6a72d68a2cb502c3c73f7a64458e4b24
+# canonical-content-sha256: f398ba05ff9f2dd4c51e0192159ccacec7aa83006e885ac3c853a5f3a7491b86
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1405,6 +1405,38 @@ paths:
         -
           bearerAuth: []
       x-required-scope: "credential_lifecycle:revoke"
+  "/internal/v1/organization/credentials/revoke":
+    post:
+      operationId: "revokeOrganizationCredentials"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/credential_revoke_organization_request.v1.schema.json"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/credential_revoke_organization_response.v1.schema.json"
+          description: "One batch of the organization's live credentials is revoked; each writes one credential_revoked audit row (actor type admin, the reason) and one revoked lifecycle event. Only a workload-class credential whose binding role is revoke is served; a disabled organization is served, a deleted one is 401."
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+      x-required-scope: "credential_lifecycle:revoke_organization"
   "/readyz":
     get:
       operationId: "getReadiness"

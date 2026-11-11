@@ -212,16 +212,25 @@ WHERE org_id = $1 AND credential_id = $2
 		return contractsv1.ClientCredential{}, storage.ErrConflict
 	}
 	credential.RevokedAt = cloneTime(&now)
-	if err := s.audit.record(ctx, tx, withRevocationDetails(credentialRevokedEvent(credential, input.ActorID, now), input)); err != nil {
+	// CHAOS-12124: revoking a browser credential revokes its whole family. The
+	// family reason is member_revoked unless the caller names one (an
+	// organization revoke names org_deprovisioned); a named reason is also the
+	// revoked credential's own audit detail, as the memory store writes it.
+	familyReason := storage.BrowserFamilyRevokeMemberRevoked
+	event := withRevocationDetails(credentialRevokedEvent(credential, input.ActorID, now), input)
+	browserFamily := credential.Provenance.ClientClass == string(storage.CredentialClientClassBrowser) && credential.Provenance.FamilyID != ""
+	if browserFamily && input.FamilyReason != "" {
+		familyReason = storage.BrowserFamilyRevokeReason(input.FamilyReason)
+		event.Metadata = map[string]any{"family_id": credential.Provenance.FamilyID, "family_revoke_reason": input.FamilyReason}
+	}
+	if err := s.audit.record(ctx, tx, event); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
 	if err := s.audit.appendLifecycle(ctx, tx, credentiallifecycle.Facts{Kind: credentiallifecycle.KindRevoked, Credential: credential, At: now, Actor: credentiallifecycle.RevocationActor(input)}); err != nil {
 		return contractsv1.ClientCredential{}, err
 	}
-	// CHAOS-12124: revoking a browser credential revokes its whole family
-	// (every member credential and its refresh tokens), in this transaction.
-	if credential.Provenance.ClientClass == string(storage.CredentialClientClassBrowser) && credential.Provenance.FamilyID != "" {
-		if _, err := revokeBrowserFamilyTx(ctx, tx, s.audit, input.OrgID, credential.Provenance.FamilyID, storage.BrowserFamilyRevokeMemberRevoked, input.ActorID, credentiallifecycle.RevocationActor(input), now); err != nil {
+	if browserFamily {
+		if _, err := revokeBrowserFamilyTx(ctx, tx, s.audit, input.OrgID, credential.Provenance.FamilyID, familyReason, input.ActorID, credentiallifecycle.RevocationActor(input), now); err != nil {
 			return contractsv1.ClientCredential{}, err
 		}
 	}

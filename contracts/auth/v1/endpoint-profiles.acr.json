@@ -1380,6 +1380,49 @@
       ]
     },
     {
+      "id": "POST /internal/v1/organization/credentials/revoke [dev-health-acr-api]",
+      "surface_kind": "rest",
+      "method": "POST",
+      "route": "/internal/v1/organization/credentials/revoke",
+      "graphql_field_name": null,
+      "service": "dev-health-acr-api",
+      "source": {
+        "file": "internal/api/app.go",
+        "line": 142
+      },
+      "classification": "protected",
+      "public_rationale": null,
+      "accepted_credential_classes": [
+        "acr_client_credential"
+      ],
+      "primary_validator": {
+        "description": "credentialRevokeOrganizationHandler: Authenticator.MiddlewareWithOrganizationCheck(OrganizationCheckAdmitDisabled) refuses an absent or malformed bearer and any web assertion before the credential lookup, refuses a credential of an organization Dev Health answers as deleted (401) and admits one it answers as disabled; requireWorkloadClass then refuses every credential whose row class is not workload (403 credential_class_refused); RequireScope(credential_lifecycle:revoke_organization), which only the revoke binding role carries, refuses every other workload (403 insufficient_scope). The handler then validates the closed credential_revoke_organization_request.v1 body, and Service.RevokeOrganization revokes, in batches, every live credential of the binding's organization.",
+        "anchor": {
+          "path": "internal/api/credential_revoke_organization_route.go",
+          "line": 23,
+          "line_end": 31,
+          "note": "func (a *App) credentialRevokeOrganizationHandler() http.Handler {"
+        }
+      },
+      "token_shape": {
+        "token_type": "fcacr_ bearer only",
+        "issuer": null,
+        "audience": null,
+        "algorithm": null
+      },
+      "reachable_validators": [],
+      "action": "auth.credentials.lifecycle.revoke_organization",
+      "resource_resolver": "principal.OrgID (the workload binding's organization); the body names the actor and the reason, never the organization.",
+      "tenant_requirement": "org_scoped",
+      "current_state_cache_behavior": "Revokes up to 500 live credential rows of the caller's own organization per call, each through the shared storage revoke (one credential_revoked audit row and one lifecycle event per credential, a browser family as org_deprovisioned); the caller's own binding's credentials are revoked by the call that finds no other left; response is 200 credential_revoke_organization_response.v1 with Cache-Control no-store.",
+      "impersonation_policy": "not_applicable_non_main_app",
+      "entitlement_requirement": null,
+      "disclosure_behavior": "writeError() closed envelope; a success answers counts only (revoked, caller_revoked, more), never a credential id.",
+      "gaps": [
+        "entitlement_requirement: a workload-class revoke; no Dev Health licensing feature gates it, and the handler does not read the entitlement provider."
+      ]
+    },
+    {
       "surface_kind": "rest",
       "graphql_field_name": null,
       "service": "dev-health-acr-api",

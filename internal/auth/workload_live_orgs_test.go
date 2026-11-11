@@ -63,7 +63,7 @@ func TestLiveOrgs_aLiveOrganizationGetsTheRevokeScopeInThatOrganization(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := authverify.WorkloadBinding{BindingID: "wlb_live", OrgID: selectorOrgA, GrantedScopes: []string{ScopeCredentialLifecycleRevoke}, RepositoryScopes: []string{"*"}}
+	want := authverify.WorkloadBinding{BindingID: "wlb_live", OrgID: selectorOrgA, GrantedScopes: RoleScopes("revoke"), RepositoryScopes: []string{"*"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("binding = %#v, want %#v", got, want)
 	}
@@ -82,7 +82,7 @@ func TestLiveOrgs_aWildcardOnTheRowStillYieldsTheRevokeScopeOnly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if !reflect.DeepEqual(got.GrantedScopes, []string{ScopeCredentialLifecycleRevoke}) || !reflect.DeepEqual(got.RepositoryScopes, []string{"*"}) {
+		if !reflect.DeepEqual(got.GrantedScopes, RoleScopes("revoke")) || !reflect.DeepEqual(got.RepositoryScopes, []string{"*"}) {
 			t.Fatalf("%s: granted = %v repository = %v, want the revoke scope and the fixed repository scope", name, got.GrantedScopes, got.RepositoryScopes)
 		}
 	}

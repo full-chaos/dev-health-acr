@@ -152,25 +152,25 @@ func TestOrganizationRevoke_aGoneOrganizationIsRefused(t *testing.T) {
 // and only a closed body; every refusal revokes nothing.
 func TestOrganizationRevoke_refusesEveryOtherCaller(t *testing.T) {
 	for name, tc := range map[string]struct {
-		token  func(*orgGoneApp) string
+		token  func(*testing.T, *orgGoneApp) string
 		body   string
 		status int
 		code   string
 	}{
-		"on-behalf revoke scope only": {func(h *orgGoneApp) string {
+		"on-behalf revoke scope only": {func(t *testing.T, h *orgGoneApp) string {
 			return h.workloadToken(t, orgRevokeRouteBinding, []string{"credential_lifecycle:revoke"})
 		}, orgRevokeRouteBody, http.StatusForbidden, "insufficient_scope"},
-		"user-class credential": {func(h *orgGoneApp) string { return h.token }, orgRevokeRouteBody, http.StatusForbidden, "credential_class_refused"},
-		"unknown reason": {func(h *orgGoneApp) string {
+		"user-class credential": {func(_ *testing.T, h *orgGoneApp) string { return h.token }, orgRevokeRouteBody, http.StatusForbidden, "credential_class_refused"},
+		"unknown reason": {func(t *testing.T, h *orgGoneApp) string {
 			return h.workloadToken(t, orgRevokeRouteBinding, []string{orgRevokeRouteScope})
 		}, `{"schema_version":"credential_revoke_organization_request.v1","actor_id":"usr_1","reason":"organization_suspended"}`, http.StatusBadRequest, "invalid_request"},
-		"an organization in the body": {func(h *orgGoneApp) string {
+		"an organization in the body": {func(t *testing.T, h *orgGoneApp) string {
 			return h.workloadToken(t, orgRevokeRouteBinding, []string{orgRevokeRouteScope})
 		}, `{"schema_version":"credential_revoke_organization_request.v1","actor_id":"usr_1","reason":"organization_disabled","org_id":"` + orgRevokeRouteOther + `"}`, http.StatusBadRequest, "invalid_request"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newOrgGoneApp(t, orgOpsLive)
-			token := tc.token(h)
+			token := tc.token(t, h)
 			before := h.liveIn(t, h.orgID)
 
 			response := h.revokeOrganization(token, tc.body)
@@ -180,5 +180,42 @@ func TestOrganizationRevoke_refusesEveryOtherCaller(t *testing.T) {
 				t.Fatalf("live credentials = %d, want %d (nothing revoked)", got, before)
 			}
 		})
+	}
+}
+
+// OR4: with a batch of one and a new caller credential per call (go-api
+// exchanges per call), the loop ends: each call answers more until the last,
+// which revokes every caller credential and answers more false.
+func TestOrganizationRevoke_theBatchLoopEndsWithABatchOfOne(t *testing.T) {
+	h := newOrgGoneApp(t, orgOpsLive)
+	h.app.organizationRevokeBatch = 1
+	h.issue(t, auth.CreateCredentialRequest{})
+	h.workloadToken(t, "wlb_projector_read", []string{auth.ScopeContextRead})
+	calls := 0
+	for {
+		calls++
+		if calls > 5 {
+			t.Fatal("the loop did not end")
+		}
+		response := h.revokeOrganization(h.workloadToken(t, orgRevokeRouteBinding, []string{orgRevokeRouteScope}), orgRevokeRouteBody)
+		var answer orgRevokeAnswer
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &answer) != nil {
+			t.Fatalf("call %d: %d %s", calls, response.Code, response.Body.String())
+		}
+		if answer.Revoked > 1 {
+			t.Fatalf("call %d revoked %d, want at most the batch of 1", calls, answer.Revoked)
+		}
+		if !answer.More {
+			if answer.CallerRevoked != calls {
+				t.Fatalf("last call revoked %d caller credentials, want %d", answer.CallerRevoked, calls)
+			}
+			break
+		}
+	}
+	if calls != 3 {
+		t.Fatalf("calls = %d, want 3 (one per credential the caller's binding did not mint; the third also ends the loop)", calls)
+	}
+	if got := h.liveIn(t, h.orgID); got != 0 {
+		t.Fatalf("live credentials = %d, want 0", got)
 	}
 }

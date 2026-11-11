@@ -15,8 +15,13 @@ func TestRoleScopes(t *testing.T) {
 	if got := RoleScopes("reconcile"); !reflect.DeepEqual(got, []string{ScopeCredentialLifecycleRead}) {
 		t.Fatalf("reconcile role scopes = %#v, want only the listing scope", got)
 	}
-	if got := RoleScopes("revoke"); !reflect.DeepEqual(got, []string{ScopeCredentialLifecycleRevoke}) {
-		t.Fatalf("revoke role scopes = %#v, want only the revoke scope", got)
+	if got := RoleScopes("revoke"); !reflect.DeepEqual(got, []string{ScopeCredentialLifecycleRevoke, ScopeCredentialLifecycleRevokeOrganization}) {
+		t.Fatalf("revoke role scopes = %#v, want only the two revoke scopes", got)
+	}
+	for _, role := range []string{"read", "ops", "reconcile"} {
+		if HasScope(RoleScopes(role), ScopeCredentialLifecycleRevokeOrganization) {
+			t.Fatalf("role %s carries the organization revoke scope", role)
+		}
 	}
 	for _, role := range []string{"read", "ops", "revoke"} {
 		if HasScope(RoleScopes(role), ScopeCredentialLifecycleRead) {

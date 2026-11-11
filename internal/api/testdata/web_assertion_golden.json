@@ -215,6 +215,13 @@
       "path": "/internal/v1/credentials/cred_routembound01/revoke",
       "scope": "",
       "web_assertion": false
+    },
+    {
+      "method": "POST",
+      "pattern": "/internal/v1/organization/credentials/revoke",
+      "path": "/internal/v1/organization/credentials/revoke",
+      "scope": "",
+      "web_assertion": false
     }
   ]
 }
