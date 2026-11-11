@@ -11,7 +11,7 @@
 ARG ACR_IMAGE_MIRROR_PREFIX=
 
 # Digest update and verification instructions are in docs/container-images.md.
-FROM --platform=$BUILDPLATFORM ${ACR_IMAGE_MIRROR_PREFIX}golang:1.27.3-alpine3.23@sha256:8a5046497cda39860b832ffdbe8dd66018a0f05bb01352f533a36e7e2ced66a0 AS build
+FROM --platform=$BUILDPLATFORM ${ACR_IMAGE_MIRROR_PREFIX}golang:1.27.4-alpine3.23@sha256:146e3b9c7c1e2ec3d3f5348c8a686151a75e1976e50efac9fc022ebe446a9a82 AS build
 
 ARG TARGETOS
 ARG TARGETARCH
