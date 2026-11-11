@@ -219,3 +219,40 @@ func TestOrganizationRevoke_theBatchLoopEndsWithABatchOfOne(t *testing.T) {
 		t.Fatalf("live credentials = %d, want 0", got)
 	}
 }
+
+// OR5: the route refuses a live organization (a fresh read): 409
+// organization_live, nothing revoked. The Auth Control Plane calls it only
+// after the organization is disabled or deleted.
+func TestOrganizationRevoke_aLiveOrganizationIsRefused(t *testing.T) {
+	h := newOrgGoneApp(t, orgOpsLive)
+	h.issue(t, auth.CreateCredentialRequest{})
+	caller := h.workloadToken(t, orgRevokeRouteBinding, []string{"credential_lifecycle:revoke", orgRevokeRouteScope})
+	before := h.liveIn(t, h.orgID)
+
+	response := h.revokeOrganization(caller, orgRevokeRouteBody)
+
+	assertErrorResponse(t, response, http.StatusConflict, "organization_live")
+	if got := h.liveIn(t, h.orgID); got != before {
+		t.Fatalf("live credentials = %d, want %d (nothing revoked)", got, before)
+	}
+}
+
+// OR6: Dev Health unreadable at the state read: 503, nothing revoked. The
+// warm cache admits the caller at authentication; the state read is fresh.
+func TestOrganizationRevoke_anOutageAtTheStateReadRevokesNothing(t *testing.T) {
+	h := newOrgGoneApp(t, orgOpsLive)
+	h.issue(t, auth.CreateCredentialRequest{})
+	caller := h.workloadToken(t, orgRevokeRouteBinding, []string{"credential_lifecycle:revoke", orgRevokeRouteScope})
+	if warm := h.capabilities(h.token); warm.Code != http.StatusOK {
+		t.Fatalf("warm capabilities: %d %s", warm.Code, warm.Body.String())
+	}
+	before := h.liveIn(t, h.orgID)
+	h.ops.set(orgOpsServerError)
+
+	response := h.revokeOrganization(caller, orgRevokeRouteBody)
+
+	assertErrorResponse(t, response, http.StatusServiceUnavailable, "upstream_unavailable")
+	if got := h.liveIn(t, h.orgID); got != before {
+		t.Fatalf("live credentials = %d, want %d (nothing revoked)", got, before)
+	}
+}
