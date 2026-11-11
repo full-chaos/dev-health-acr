@@ -184,6 +184,8 @@ func newOrgGoneApp(t *testing.T, mode orgOpsMode) *orgGoneApp {
 	t.Cleanup(func() { deviceApprovalExtraClaims = nil })
 	h.now, h.private = now, private
 	h.token, h.credentialID, h.orgID = h.issueDeviceCredential(t, now, private)
+	// The issuance read the organization fresh (approval, redemption); the cells count only their own reads.
+	h.ops.hits.Store(0)
 	h.ops.set(mode)
 	return h
 }
@@ -451,6 +453,8 @@ func newOrgGoneBrowser(t *testing.T) *orgGoneBrowser {
 		t.Fatalf("login: %d %s", status, raw)
 	}
 	b.login = login
+	// The login read the organization fresh (consent, redemption); the cells count only their own reads.
+	b.ops.hits.Store(0)
 	return b
 }
 

@@ -340,6 +340,23 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   `503 upstream_unavailable` (refresh: `temporarily_unavailable`) until the
   organization answers. Self revoke is not checked. Local entitlement mode
   skips the check.
+- A disabled organization (Dev Health's 404 coded `acr_organization_disabled`:
+  the organization exists and is disabled) is refused the same way, with audit
+  reason `organization_disabled`, and is never read as gone: the organization
+  purge refuses it. The credential lifecycle routes a revoke workload uses
+  (`POST /internal/v1/credentials/{credential_id}/revoke` and the listing)
+  admit it, and the `live_orgs` revoke binding still binds it. A disabled
+  answer is never cached; a reactivated organization is admitted on its next
+  read.
+- Issuance reads the organization fresh: the device approval and the OAuth
+  consent (both approve through one path) refuse a gone or disabled
+  organization before anything is approved (`400 invalid_request`; consent
+  outcome `organization_unknown` / `organization_disabled`), and every
+  redemption (device token, authorization code, RFC 8628 device code) refuses
+  it before a credential is written (device token `access_denied`; token
+  outcome `organization_unknown` / `organization_disabled`). An outage fails
+  both closed (503). The approval and token refusals log
+  `device approval refused` / `device token refused` with the reason.
 - Each OAuth request writes one `acr-api oauth step` line (step, outcome,
   client kind, status). Steps: `register`, `authorize` (ok = sent to the
   consent page), `consent_preview`, `consent` (ok = approved, `access_denied`
@@ -582,7 +599,9 @@ revocation.
   `ok` (rotated), `grace_replay`, `reuse_revoked`, `family_expired`,
   `family_revoked`, `client_mismatch`, `invalid_grant` (unknown token),
   `organization_unknown` (the family's organization is gone; the family is
-  revoked; an outage of that check is `unavailable` and consumes nothing);
+  revoked; an outage of that check is `unavailable` and consumes nothing),
+  `organization_disabled` (the family's organization is disabled; the family is
+  revoked with reason `org_deprovisioned`);
   `step=revoke` with `ok`, `family_revoked`, `client_mismatch`,
   `invalid_grant`, `unsupported_token_type`. Every successor and every
   revocation writes a `credential_created` / `credential_revoked` audit row. A

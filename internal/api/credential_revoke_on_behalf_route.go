@@ -26,7 +26,7 @@ func (a *App) credentialRevokeOnBehalfHandler() http.Handler {
 		return http.HandlerFunc(a.handleRuntimeUnavailable)
 	}
 	return a.credentialLifecycleLine(oauthvocab.StepCredentialRevoke,
-		a.authenticator.MiddlewareFor(false,
+		a.authenticator.MiddlewareWithOrganizationCheck(auth.OrganizationCheckAdmitDisabled,
 			a.requireWorkloadClass(
 				a.authenticator.RequireScope(auth.ScopeCredentialLifecycleRevoke,
 					LimitMiddleware(a.limits, limits.RequestClassAuth, http.HandlerFunc(a.handleCredentialRevokeOnBehalf))))))

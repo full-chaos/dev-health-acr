@@ -114,6 +114,9 @@ func (a *App) handleDeviceCodeToken(w http.ResponseWriter, r *http.Request) {
 		}
 		var pollError *auth.DevicePollError
 		if errors.As(err, &pollError) {
+			if pollError.Outcome != "" {
+				a.logger.InfoContext(r.Context(), "device token refused", "reason", pollError.Outcome, "request_id", RequestID(r.Context()))
+			}
 			a.writeOAuthDeviceError(w, contractsv1.OAuthDeviceErrorCode(pollError.Kind), pollError.RetryAfter)
 			return
 		}
@@ -191,10 +194,10 @@ func (a *App) writeDeviceApprovalError(w http.ResponseWriter, r *http.Request, e
 		writeError(w, r, http.StatusConflict, "device_authorization_conflict", "Device authorization is no longer pending", false, nil)
 		return
 	}
-	if errors.Is(err, auth.ErrImpersonatedApproval) {
-		// CHAOS-12123: the one refusal of this route named by its reason.
+	if reason := deviceApprovalRefusalReason(err); reason != "" {
+		// CHAOS-12123: the refusals of this route named by their reason.
 		a.logger.InfoContext(r.Context(), "device approval refused",
-			"reason", oauthvocab.OutcomeImpersonating,
+			"reason", reason,
 			"request_id", RequestID(r.Context()))
 	}
 	if errors.Is(err, auth.ErrInvalidDeviceFlow) || errors.Is(err, storage.ErrDeviceAuthorizationNotFound) || errors.Is(err, storage.ErrDeviceAuthorizationExpired) {
@@ -202,6 +205,19 @@ func (a *App) writeDeviceApprovalError(w http.ResponseWriter, r *http.Request, e
 		return
 	}
 	a.writeDeviceDependencyError(w, r)
+}
+
+// deviceApprovalRefusalReason is the oauthvocab outcome of a named approval refusal, or "".
+func deviceApprovalRefusalReason(err error) string {
+	switch {
+	case errors.Is(err, auth.ErrImpersonatedApproval):
+		return oauthvocab.OutcomeImpersonating
+	case errors.Is(err, auth.ErrApprovalOrganizationGone):
+		return oauthvocab.OutcomeOrganizationUnknown
+	case errors.Is(err, auth.ErrApprovalOrganizationDisabled):
+		return oauthvocab.OutcomeOrganizationDisabled
+	}
+	return ""
 }
 
 func (a *App) handleRotateSelfCredential(w http.ResponseWriter, r *http.Request) {

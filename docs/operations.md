@@ -2748,6 +2748,8 @@ read fresh on every exchange, that the organization exists (`internal/auth/workl
 
 - a row bound to the selected organization still wins over the `live_orgs` row;
 - a gone or unknown organization is refused (`invalid_target`), and no credential row is written;
+- a disabled organization (the 404 coded `acr_organization_disabled`) is bound: the grant only revokes, and it is how that
+  organization's credentials are revoked;
 - if Dev Health cannot be read, the exchange answers 503 `upstream_unavailable` and writes no credential row;
 - the credential carries the revoke scope only, with the fixed repository scope `*` that every credential needs, whatever the row holds;
 - a request with no organization selector is refused (`invalid_request`).

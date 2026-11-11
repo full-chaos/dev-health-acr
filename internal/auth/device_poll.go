@@ -8,6 +8,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -65,6 +66,9 @@ var ErrOAuthDeviceGrantLookupUnavailable = errors.New("oauth device grant lookup
 type DevicePollError struct {
 	Kind       DevicePollErrorKind
 	RetryAfter time.Duration
+	// Outcome names, in the oauthvocab outcome vocabulary, why a redemption was refused when the kind alone does
+	// not: organization_unknown or organization_disabled. Empty otherwise.
+	Outcome string
 }
 
 func (e *DevicePollError) Error() string {
@@ -177,6 +181,14 @@ func (s *DeviceFlowService) redeemAs(ctx context.Context, record storage.DeviceA
 		ExpiresAt:        &expiresAt,
 		Resource:         resource,
 		ClientID:         clientID,
+	}
+	switch err := s.checkOrganization(ctx, record.AuthorizedOrgID); {
+	case errors.Is(err, ErrOrganizationGone):
+		return IssuedCredential{}, &DevicePollError{Kind: DevicePollAccessDenied, Outcome: oauthvocab.OutcomeOrganizationUnknown}
+	case errors.Is(err, ErrOrganizationDisabled):
+		return IssuedCredential{}, &DevicePollError{Kind: DevicePollAccessDenied, Outcome: oauthvocab.OutcomeOrganizationDisabled}
+	case err != nil:
+		return IssuedCredential{}, fmt.Errorf("check device authorization organization: %w", err)
 	}
 	if browser {
 		if record.ApprovingSessionID == "" {

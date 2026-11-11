@@ -224,6 +224,9 @@ func (s *DeviceFlowService) redeemForResource(ctx context.Context, hash storage.
 	if err != nil {
 		var pollError *DevicePollError
 		if errors.As(err, &pollError) {
+			if pollError.Outcome != "" {
+				return IssuedCredential{}, pollError
+			}
 			return IssuedCredential{}, ErrOAuthDeviceNotApproved
 		}
 		return IssuedCredential{}, err

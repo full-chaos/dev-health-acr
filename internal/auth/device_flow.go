@@ -38,6 +38,10 @@ var (
 	// that impersonates another user (CHAOS-12123, chris decision 6: deny
 	// all while impersonating). It is an ErrInvalidDeviceFlow.
 	ErrImpersonatedApproval = fmt.Errorf("%w: the approving web session is impersonating", ErrInvalidDeviceFlow)
+	// ErrApprovalOrganizationGone and ErrApprovalOrganizationDisabled refuse an approval whose organization Dev
+	// Health, read fresh, answers as gone or as disabled.
+	ErrApprovalOrganizationGone     = fmt.Errorf("%w: the organization is gone", ErrInvalidDeviceFlow)
+	ErrApprovalOrganizationDisabled = fmt.Errorf("%w: the organization is disabled", ErrInvalidDeviceFlow)
 	// ErrBrowserSessionRequired refuses a browser-class redemption whose
 	// approval named no web session. It is an ErrInvalidDeviceFlow.
 	ErrBrowserSessionRequired = fmt.Errorf("%w: a browser credential needs the approving web session", ErrInvalidDeviceFlow)
@@ -58,6 +62,9 @@ type DeviceFlowOptions struct {
 	// leaving this unset, so "OAuth is genuinely off" and "OAuth is on but
 	// someone forgot to wire the lookup" can never be the same nil.
 	OAuthDeviceGrants OAuthDeviceGrantLookup
+	// Organizations is read fresh before an approval and before a redemption: a gone or disabled organization gets
+	// neither, and an unreadable answer fails closed. Nil (local entitlement mode) checks nothing.
+	Organizations OrganizationPresence
 }
 
 type DeviceFlowService struct {
@@ -67,6 +74,7 @@ type DeviceFlowService struct {
 	random            io.Reader
 	randomMu          sync.Mutex
 	oauthDeviceGrants OAuthDeviceGrantLookup
+	organizations     OrganizationPresence
 }
 
 type DeviceAuthorizationStart struct {
@@ -141,10 +149,23 @@ func NewDeviceFlowService(store storage.DeviceAuthorizationStore, credentials *S
 	if storage.IsNil(options.OAuthDeviceGrants) {
 		return nil, fmt.Errorf("%w: OAuthDeviceGrants is required (pass NoOAuthDeviceGrants{} when OAuth login is not configured)", ErrInvalidDeviceFlow)
 	}
+	organizations := options.Organizations
+	if storage.IsNil(organizations) {
+		organizations = nil
+	}
 	return &DeviceFlowService{
 		store: store, credentials: credentials, now: options.Now, random: options.Random,
-		oauthDeviceGrants: options.OAuthDeviceGrants,
+		oauthDeviceGrants: options.OAuthDeviceGrants, organizations: organizations,
 	}, nil
+}
+
+// checkOrganization reads orgID's state from Dev Health, never from a cache: ErrOrganizationGone,
+// ErrOrganizationDisabled, another error when the answer cannot be read, nil when live or when no check is wired.
+func (s *DeviceFlowService) checkOrganization(ctx context.Context, orgID string) error {
+	if s.organizations == nil {
+		return nil
+	}
+	return s.organizations.OrganizationKnownNow(ctx, orgID)
 }
 
 func (s *DeviceFlowService) Start(ctx context.Context, hints DeviceAuthorizationHints) (DeviceAuthorizationStart, error) {
@@ -264,6 +285,14 @@ func (s *DeviceFlowService) approveUserCodeHash(ctx context.Context, principal s
 	repositories, err := NormalizeRepositoryScopes(repositoryScopes)
 	if err != nil {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
+	}
+	switch err := s.checkOrganization(ctx, principal.OrgID); {
+	case errors.Is(err, ErrOrganizationGone):
+		return storage.DeviceAuthorization{}, ErrApprovalOrganizationGone
+	case errors.Is(err, ErrOrganizationDisabled):
+		return storage.DeviceAuthorization{}, ErrApprovalOrganizationDisabled
+	case err != nil:
+		return storage.DeviceAuthorization{}, fmt.Errorf("check approving organization: %w", err)
 	}
 	principalRepositories, err := normalizedPrincipalRepositories(principal)
 	if err != nil {

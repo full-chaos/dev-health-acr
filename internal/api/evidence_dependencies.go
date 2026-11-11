@@ -224,7 +224,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		if deps.Runtime.OAuth != nil {
 			oauthDeviceGrants = deps.Runtime.OAuth.Store
 		}
-		deviceFlow, err = auth.NewDeviceFlowService(deps.Runtime.DeviceAuthorizations, credentialService, auth.DeviceFlowOptions{Now: deps.Now, OAuthDeviceGrants: oauthDeviceGrants})
+		deviceFlow, err = auth.NewDeviceFlowService(deps.Runtime.DeviceAuthorizations, credentialService, auth.DeviceFlowOptions{Now: deps.Now, OAuthDeviceGrants: oauthDeviceGrants, Organizations: organizationPresence(deps.Runtime.Entitlements)})
 		if err != nil {
 			return nil, err
 		}

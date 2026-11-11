@@ -45,6 +45,8 @@ var (
 	errRefreshDerivation = errors.New("browser refresh successor does not match its derivation")
 	// errRefreshOrganizationGone reports a family whose organization is gone; the family is revoked.
 	errRefreshOrganizationGone = errors.New("browser refresh family organization is gone")
+	// errRefreshOrganizationDisabled reports a family whose organization is disabled; the family is revoked.
+	errRefreshOrganizationDisabled = errors.New("browser refresh family organization is disabled")
 )
 
 // ValidRefreshTokenShape reports whether a value has the refresh token shape.
@@ -186,7 +188,8 @@ func (s *BrowserRefreshService) Refresh(ctx context.Context, presented, clientID
 	return result, nil
 }
 
-// checkFamilyOrganization refuses, and revokes, a family whose organization is gone; an outage refuses without a write.
+// checkFamilyOrganization refuses, and revokes, a family whose organization is gone or disabled; an outage refuses
+// without a write. Both revokes record org_deprovisioned (the family reasons are fixed by migration 0073).
 func (s *BrowserRefreshService) checkFamilyOrganization(ctx context.Context, presentedHash, clientID string) error {
 	if s.orgs == nil {
 		return nil
@@ -207,6 +210,11 @@ func (s *BrowserRefreshService) checkFamilyOrganization(ctx context.Context, pre
 			return fmt.Errorf("revoke browser family of a gone organization: %w", err)
 		}
 		return errRefreshOrganizationGone
+	case errors.Is(err, ErrOrganizationDisabled):
+		if _, err := s.store.RevokeBrowserFamilyByToken(ctx, presentedHash, clientID, browserRefreshActor, storage.BrowserFamilyRevokeOrgDeprovisioned, s.now().UTC()); err != nil {
+			return fmt.Errorf("revoke browser family of a disabled organization: %w", err)
+		}
+		return errRefreshOrganizationDisabled
 	default:
 		return fmt.Errorf("check browser family organization: %w", err)
 	}

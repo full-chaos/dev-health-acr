@@ -306,3 +306,42 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// DK: the on-behalf revoke serves a disabled organization's revoke workload
+// (that is how its credentials are revoked); a gone organization stays 401.
+func TestOrganizationDisabled_onBehalfRevokeStillServesTheRevokeWorkload(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mode   orgOpsMode
+		status int
+		live   bool
+	}{
+		"disabled": {orgOpsDisabled, http.StatusNoContent, false},
+		"gone":     {orgOpsGone, http.StatusUnauthorized, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			rig := newOnBehalfRouteRig(t, storage.CredentialClientClassWorkload, revokeScopes())
+			ops := newFakeOrgOps(t, tc.mode)
+			authenticator, err := auth.NewAuthenticator(countingClassStore{
+				lookups: rig.lookups,
+				classCredentialStore: classCredentialStore{row: contractsv1.ClientCredential{
+					CredentialID: "revoke_caller", OrgID: onBehalfRouteOrg, Scopes: revokeScopes(), RepositoryScopes: []string{hostedTestRepository},
+					Provenance: contractsv1.CredentialProvenance{ClientClass: string(storage.CredentialClientClassWorkload)},
+				}},
+			}, nil, auth.AuthenticatorOptions{Now: time.Now, OrgPresence: OrganizationPresenceFor(ops.client)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rig.app.authenticator = authenticator
+			id := rig.seed(t, onBehalfRouteOrg, "cred_routedisab01", onBehalfRouteResource)
+
+			response := rig.post(id, onBehalfBody(contractsv1.CredentialRevokeOnBehalfActorAdmin, "usr_admin_9"), &rig.token)
+
+			if response.Code != tc.status {
+				t.Fatalf("on-behalf revoke: %d %s, want %d", response.Code, response.Body.String(), tc.status)
+			}
+			if got := rig.live(t, onBehalfRouteOrg, id); got != tc.live {
+				t.Fatalf("credential live = %v, want %v", got, tc.live)
+			}
+		})
+	}
+}
