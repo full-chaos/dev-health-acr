@@ -140,8 +140,8 @@ It logs deleted `aggregates` and `rows` counts. A failed run deletes nothing.
    workload tokens. The ops server uses the workload registry to select the
    single live `acr-api` workload with organization `NULL` and audience
    `dev-health-api`. Configure its trusted issuer and the auth-service exchange.
-   Configure the ACR workload client. Keep the service token file mounted
-   during the rollback window.
+   Configure the ACR workload client. Note the current `acr-api` image and
+   chart revision: they are the rollback target (see Rollback).
 2. Set `ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=workload`, or set chart key
    `config.entitlement.credential=workload`. Roll out `acr-api`.
 3. Watch `acr_entitlement_credential_total` across all `acr-api` instances.
@@ -155,12 +155,26 @@ It logs deleted `aggregates` and `rows` counts. A failed run deletes nothing.
 
 ## Rollback
 
-While the service token file is still mounted, set
-`ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=service_token`, or set chart key
-`config.entitlement.credential=service_token`. Roll out `acr-api`.
-This works only while the ops server build still accepts `svc_acr_` credentials
-on its internal ACR routes. Builds that retired these credentials refuse them
-with a uniform `401` on all four routes. Check the ops build before rollback.
+The rollback is the image rollback. Run `helm rollback` of the acr release to
+the previous revision, then roll forward again when the fault is fixed. The
+rehearsal 143 -> 142 -> 143 passed (row A1, fcdev RECORD-11241-1, sha256
+`d955471080f1`, run `run-a1v3-1`): revoked credentials stayed revoked, a removed
+member stayed refused, and `/readyz` returned 200 after each step.
+
+Do not use the flag as a rollback. Setting
+`ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=service_token` (or chart key
+`config.entitlement.credential=service_token`) against a current ops build
+stops `acr-api` at start with exit 1 and the message
+`initialize hosted runtime: initial entitlement readiness check: Dev Health
+entitlement service unavailable`. Current ops builds refuse the class with a
+uniform `401` on all four internal ACR routes, including the health route that
+the start check calls. `acr` serves nothing until the flag is set back to
+`workload` and `acr-api` is rolled out (rehearsal row A2: `/readyz` returned
+200 at the first poll after that).
+
+Not rehearsed: `acr-projector` 143 -> 142, and a rollback while go-api is down.
+Whether the `service_token` mode should be removed from `acr-api` is open
+(CHAOS-13548).
 
 Never reactivate a revoked or expired credential. Rotation does not restore it.
 Current ops builds have no command that mints a new `svc_acr_` credential. To go back, use an ops build that still accepts the class and a credential that is still valid.

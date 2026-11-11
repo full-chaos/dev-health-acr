@@ -102,7 +102,9 @@ config:
     # credentials.entitlementToken.existingSecret is required. workload: acr-api
     # sends its auth workload token (needs authWorkloadClient.enabled), never
     # reads the file, and the token Secret is optional (when set it is still
-    # mounted, for a rollback). Set it here, not in deployment.extraEnv.
+    # mounted but never opened). Setting service_token against a current ops
+    # build stops acr-api at start; it is not a rollback. Roll back with
+    # helm rollback. Set it here, not in deployment.extraEnv.
     credential: ""
   # Optional PEM CA bundles mounted from existing Secrets (references only).
   postgresCaBundle:
