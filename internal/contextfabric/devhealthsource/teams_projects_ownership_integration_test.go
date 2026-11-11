@@ -371,7 +371,9 @@ func teamEmittedWithin(t *testing.T, ctx context.Context, fixture *ownershipFixt
 // pollTeamAfterChange is the deadline form of a "change is re-emitted" check:
 // incremental pages first, then, if they end with nothing available, one
 // window pass (the named deadline: DefaultWindowPassInterval on the source
-// clock). It returns how the change arrived ("incremental" or "window pass"),
+// clock). A change stamped above the converged cursor must come on an
+// incremental page; only a change at or below it may wait for the window
+// pass. It returns how the change arrived ("incremental" or "window pass"),
 // or "" when it never did, and logs the cursor and change stamps either way.
 func pollTeamAfterChange(t *testing.T, ctx context.Context, fixture *ownershipFixture, clock *teamPollClock, cursor string, change time.Time, want func([]string) bool) string {
 	t.Helper()
@@ -382,7 +384,10 @@ func pollTeamAfterChange(t *testing.T, ctx context.Context, fixture *ownershipFi
 	}
 	clock.advance(devhealthsource.DefaultWindowPassInterval + time.Minute)
 	if teamEmittedWithin(t, ctx, fixture, &cursor, want) {
-		t.Logf("team change read only by the window pass: no incremental page read it (converged since %v, change %v, change below cursor %t)", since, change, !change.After(since))
+		if change.After(since) {
+			t.Fatalf("a change above the cursor was not read incrementally: only the window pass read it (converged since %v, change %v)", since, change)
+		}
+		t.Logf("team change read only by the window pass: it is stamped at or below the cursor (converged since %v, change %v)", since, change)
 		return "window pass"
 	}
 	t.Logf("team change never read (converged since %v, change %v, change below cursor %t)", since, change, !change.After(since))
