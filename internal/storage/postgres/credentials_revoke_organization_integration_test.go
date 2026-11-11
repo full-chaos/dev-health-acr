@@ -80,7 +80,14 @@ VALUES ($1, $2, $1, 'fcacr_abcdefghij', $3, '["*"]'::jsonb, '["context:read"]'::
 SELECT count(*), coalesce(max(actor_type), ''), coalesce(max(metadata::text), '')
 FROM acr.audit_events WHERE org_id = $1 AND action = 'credential_revoked' AND resource_id = $2`, credentialTestOrgID, id).Scan(&n, &actorType, &metadata))
 		require.Equal(t, 1, n, id)
-		require.Equal(t, auth.OnBehalfActorAdmin, actorType, id)
+		// A family sibling's row is written by the family revoke, whose audit
+		// actor type is fixed to user (both stores, since CHAOS-12124); the
+		// credential the organization revoke named carries admin.
+		wantActor := auth.OnBehalfActorAdmin
+		if id == browser[1] {
+			wantActor = "user"
+		}
+		require.Equal(t, wantActor, actorType, id)
 		var details map[string]any
 		require.NoError(t, json.Unmarshal([]byte(metadata), &details), id)
 		if id == browser[0] || id == browser[1] {
