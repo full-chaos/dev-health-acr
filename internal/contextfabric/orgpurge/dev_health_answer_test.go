@@ -63,6 +63,7 @@ func TestRunProceedsOnlyOnTheCodedNotFoundFromDevHealth(t *testing.T) {
 	}{
 		"404 with the code":                    {status(404, `{"detail":"Not found","code":"acr_organization_unknown"}`), false},
 		"404 without the code (older ops)":     {status(404, `{"detail":"Not found"}`), true},
+		"404 disabled organization":            {status(404, `{"detail":"Not found","code":"acr_organization_disabled"}`), true},
 		"404 from a proxy":                     {status(404, `<html></html>`), true},
 		"503 outage":                           {status(503, `{"detail":"Service unavailable"}`), true},
 		"500 carrying the code":                {status(500, `{"code":"acr_organization_unknown"}`), true},

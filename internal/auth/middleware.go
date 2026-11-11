@@ -40,7 +40,8 @@ type AuthenticatorOptions struct {
 	OrgPresence OrganizationPresence
 }
 
-// OrganizationPresence answers ErrOrganizationGone only when the organization positively no longer exists.
+// OrganizationPresence answers ErrOrganizationGone only when the organization positively no longer exists, and
+// ErrOrganizationDisabled only when it positively exists and is disabled.
 type OrganizationPresence interface {
 	// OrganizationKnown may answer a known organization from a cache.
 	OrganizationKnown(ctx context.Context, orgID string) error
@@ -50,6 +51,9 @@ type OrganizationPresence interface {
 
 // ErrOrganizationGone is an OrganizationPresence answer: the organization no longer exists.
 var ErrOrganizationGone = errors.New("organization no longer exists")
+
+// ErrOrganizationDisabled is an OrganizationPresence answer: the organization exists and is disabled.
+var ErrOrganizationDisabled = errors.New("organization is disabled")
 
 // OrganizationCheck says what a route does when the organization check cannot run.
 type OrganizationCheck int
@@ -61,6 +65,9 @@ const (
 	OrganizationCheckRequired
 	// OrganizationCheckSkipped does not check.
 	OrganizationCheckSkipped
+	// OrganizationCheckAdmitDisabled is OrganizationCheckAdmitOnOutage that also admits a disabled organization:
+	// the credential lifecycle routes a revoke reaches it through.
+	OrganizationCheckAdmitDisabled
 )
 
 type Authenticator struct {
@@ -252,6 +259,11 @@ func (a *Authenticator) middleware(allowWebAssertions bool, check OrganizationCh
 			case err == nil:
 			case errors.Is(err, ErrOrganizationGone):
 				a.rejectCredential(w, r, ip, "organization_unknown", &credential, decision, now)
+				return
+			case errors.Is(err, ErrOrganizationDisabled) && check == OrganizationCheckAdmitDisabled:
+				a.logger.InfoContext(r.Context(), "organization check admitted a disabled organization", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "organization_disabled", "decision", "admitted")
+			case errors.Is(err, ErrOrganizationDisabled):
+				a.rejectCredential(w, r, ip, "organization_disabled", &credential, decision, now)
 				return
 			case check == OrganizationCheckRequired:
 				a.logger.ErrorContext(r.Context(), "organization check failed", "request_id", logsanitize.SanitizeLogAttr(requestID(r)), "failure_class", "organization_presence", "decision", "refused")

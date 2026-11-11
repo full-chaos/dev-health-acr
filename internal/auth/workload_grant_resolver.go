@@ -64,12 +64,12 @@ func (r *storageGrantResolver) Resolve(ctx context.Context, identity authverify.
 		if len(enabled) > 1 || liveOrgs != nil {
 			return authverify.WorkloadBinding{}, ErrWorkloadOrgSelectorRequired
 		}
-		return grantFor(enabled[0]), nil
+		return r.orgGrant(ctx, enabled[0])
 	}
 	// A row bound to the selected organization wins over a live_orgs row.
 	for _, candidate := range enabled {
 		if candidate.OrgScope != storage.WorkloadOrgScopeLiveOrgs && candidate.OrgID == selected {
-			return grantFor(candidate), nil
+			return r.orgGrant(ctx, candidate)
 		}
 	}
 	if liveOrgs == nil {
@@ -78,9 +78,29 @@ func (r *storageGrantResolver) Resolve(ctx context.Context, identity authverify.
 	return r.liveOrgsGrant(ctx, *liveOrgs, selected)
 }
 
+// orgGrant is grantFor for a row bound to one organization. A row of any role
+// but revoke is bound only when Dev Health, read fresh, says the organization
+// is live: a gone or disabled organization is not bound, and an unreadable
+// answer is ErrWorkloadOrgCheckUnavailable. A revoke row reaches its
+// organization in every state with no read, so its credentials can always be
+// revoked. Local entitlement mode (no organization check) reads nothing.
+func (r *storageGrantResolver) orgGrant(ctx context.Context, row storage.WorkloadBinding) (authverify.WorkloadBinding, error) {
+	if row.Role == "revoke" || r.orgs == nil {
+		return grantFor(row), nil
+	}
+	switch err := r.orgs.OrganizationKnownNow(ctx, row.OrgID); {
+	case errors.Is(err, ErrOrganizationGone), errors.Is(err, ErrOrganizationDisabled):
+		return authverify.WorkloadBinding{}, ErrWorkloadOrgNotBound
+	case err != nil:
+		return authverify.WorkloadBinding{}, errors.Join(ErrWorkloadOrgCheckUnavailable, err)
+	}
+	return grantFor(row), nil
+}
+
 // liveOrgsGrant binds a live_orgs row to the selected organization when Dev
 // Health, read fresh (never from a cache), says the organization exists. A
-// gone or unknown organization is not bound; an unreadable answer is
+// gone or unknown organization is not bound, a disabled one is (the grant only
+// revokes); an unreadable answer is
 // ErrWorkloadOrgCheckUnavailable, so no credential is issued while the
 // organization state is unknown. The grant is fixed here, whatever the row
 // holds (migration 0072 also refuses any other role, and any repository scope,
@@ -92,6 +112,8 @@ func (r *storageGrantResolver) liveOrgsGrant(ctx context.Context, row storage.Wo
 	switch err := r.orgs.OrganizationKnownNow(ctx, selected); {
 	case errors.Is(err, ErrOrganizationGone):
 		return authverify.WorkloadBinding{}, ErrWorkloadOrgNotBound
+	case errors.Is(err, ErrOrganizationDisabled):
+		// Bound: the revoke grant is how a disabled organization's credentials are revoked.
 	case err != nil:
 		return authverify.WorkloadBinding{}, errors.Join(ErrWorkloadOrgCheckUnavailable, err)
 	}

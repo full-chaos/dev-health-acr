@@ -998,6 +998,10 @@ func consentDecisionError(err error) error {
 	switch {
 	case errors.Is(err, ErrImpersonatedApproval):
 		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeImpersonating, false)
+	case errors.Is(err, ErrApprovalOrganizationGone):
+		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeOrganizationUnknown, false)
+	case errors.Is(err, ErrApprovalOrganizationDisabled):
+		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeOrganizationDisabled, false)
 	case errors.Is(err, ErrInvalidDeviceFlow):
 		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidRequest, false)
 	case errors.Is(err, storage.ErrDeviceAuthorizationConflict):
@@ -1103,6 +1107,9 @@ func (s *OAuthService) Exchange(ctx context.Context, request OAuthTokenRequest) 
 		redeem = s.devices.RedeemBrowserForResource
 	}
 	issued, err := redeem(ctx, pending.DeviceCodeHash, pending.ClientID, pending.Resource, strings.Fields(scope))
+	if outcome := devicePollOrganizationOutcome(err); outcome != "" {
+		return refuse("invalid_grant", outcome)
+	}
 	if errors.Is(err, ErrOAuthDeviceNotApproved) {
 		return refuse("invalid_grant", oauthvocab.OutcomeInvalidGrant)
 	}
@@ -1153,6 +1160,9 @@ func (s *OAuthService) Refresh(ctx context.Context, request OAuthRefreshRequest)
 	result, err := s.refresh.Refresh(ctx, request.RefreshToken, request.ClientID)
 	if errors.Is(err, errRefreshOrganizationGone) {
 		return refuse(oauthvocab.OutcomeOrganizationUnknown)
+	}
+	if errors.Is(err, errRefreshOrganizationDisabled) {
+		return refuse(oauthvocab.OutcomeOrganizationDisabled)
 	}
 	if err != nil {
 		return OAuthToken{ClientKind: clientKind}, fmt.Errorf("%w: refresh: %w", ErrOAuthUnavailable, err)
@@ -1362,6 +1372,9 @@ func (s *OAuthService) ExchangeDeviceCode(ctx context.Context, request OAuthDevi
 // package's legacy JSON device flow already used (DevicePollErrorKind's own
 // doc comment).
 func mapDevicePollOutcome(pollError *DevicePollError) error {
+	if pollError.Outcome != "" {
+		return oauthDeviceGrantError(pollError.Kind, pollError.Outcome, 0)
+	}
 	switch pollError.Kind {
 	case DevicePollAuthorizationPending:
 		return oauthDeviceGrantError(DevicePollAuthorizationPending, oauthvocab.OutcomeAuthorizationPending, 0)
@@ -1374,6 +1387,15 @@ func mapDevicePollOutcome(pollError *DevicePollError) error {
 	default:
 		return oauthDeviceGrantError(DevicePollInvalidGrant, oauthvocab.OutcomeInvalidGrant, 0)
 	}
+}
+
+// devicePollOrganizationOutcome is the outcome of a redemption refused for its organization, or "".
+func devicePollOrganizationOutcome(err error) string {
+	var pollError *DevicePollError
+	if errors.As(err, &pollError) {
+		return pollError.Outcome
+	}
+	return ""
 }
 
 func oauthDeviceGrantError(kind DevicePollErrorKind, outcome string, retryAfter time.Duration) error {

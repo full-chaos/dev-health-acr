@@ -137,14 +137,26 @@ func TestLiveOrgs_noOrganizationCheckLeavesTheRowUnusable(t *testing.T) {
 	}
 }
 
-func TestLiveOrgs_aRowBoundToTheSelectedOrganizationWinsWithoutARead(t *testing.T) {
+// A row bound to the selected organization wins over the live_orgs row. A
+// revoke row is bound with no read, whatever the organization's state; a row
+// of any other role reads the organization fresh and is not bound when it is
+// gone.
+func TestLiveOrgs_aRowBoundToTheSelectedOrganizationWins(t *testing.T) {
 	presence := &fakeOrgPresence{gone: map[string]bool{selectorOrgA: true}}
-	got, err := liveOrgsResolve(t, presence, selectorOrgA, orgRow("wlb_a", selectorOrgA, "read"), liveOrgsRow("wlb_live"))
-	if err != nil || got.BindingID != "wlb_a" || got.OrgID != selectorOrgA || !reflect.DeepEqual(got.GrantedScopes, RoleScopes("read")) {
+	got, err := liveOrgsResolve(t, presence, selectorOrgA, orgRow("wlb_a", selectorOrgA, "revoke"), liveOrgsRow("wlb_live"))
+	if err != nil || got.BindingID != "wlb_a" || got.OrgID != selectorOrgA || !reflect.DeepEqual(got.GrantedScopes, RoleScopes("revoke")) {
 		t.Fatalf("binding = %#v err = %v, want the org row wlb_a", got, err)
 	}
 	if len(presence.calls) != 0 {
-		t.Fatalf("organization reads = %v, want none for an org row", presence.calls)
+		t.Fatalf("organization reads = %v, want none for a revoke org row", presence.calls)
+	}
+
+	got, err = liveOrgsResolve(t, presence, selectorOrgA, orgRow("wlb_a", selectorOrgA, "read"), liveOrgsRow("wlb_live"))
+	if !errors.Is(err, ErrWorkloadOrgNotBound) || got.BindingID != "" {
+		t.Fatalf("read org row of a gone organization: binding = %#v err = %v, want ErrWorkloadOrgNotBound", got, err)
+	}
+	if len(presence.calls) != 1 {
+		t.Fatalf("organization reads = %v, want one fresh read for a read org row", presence.calls)
 	}
 }
 

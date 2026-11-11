@@ -25,12 +25,30 @@ const entitlementSchemaVersion = "acr_entitlement.v1"
 // well-formed organization id that has no organization row.
 const unknownOrganizationCode = "acr_organization_unknown"
 
+// disabledOrganizationCode is the stable code Dev Health sends on the 404 for
+// an organization row that exists but is disabled. It is never "unknown": a
+// disabled organization is refused, never purged.
+const disabledOrganizationCode = "acr_organization_disabled"
+
 var (
 	errUnavailable = errors.New("Dev Health entitlement service unavailable")
 
 	// ErrOrganizationUnknown means Dev Health positively answered that the
 	// organization does not exist. It is never a grant and never cached.
 	ErrOrganizationUnknown = errors.New("Dev Health does not know the organization")
+
+	// ErrOrganizationDisabled means Dev Health positively answered that the
+	// organization exists and is disabled. It is never a grant and never cached.
+	ErrOrganizationDisabled = errors.New("Dev Health answers the organization as disabled")
+)
+
+// OrganizationState is Dev Health's positive answer about an organization.
+type OrganizationState int
+
+const (
+	OrganizationLive OrganizationState = iota
+	OrganizationDisabled
+	OrganizationUnknown
 )
 
 // Client implements api.EntitlementProvider without exposing credentials or
@@ -192,8 +210,13 @@ func (c *Client) fetch(ctx context.Context, orgID string) (grants, error) {
 		return grants{}, rejected(reasonTransport)
 	}
 	defer response.Body.Close()
-	if response.StatusCode == http.StatusNotFound && isUnknownOrganizationBody(response.Body, c.maxBody) {
-		return grants{}, ErrOrganizationUnknown
+	if response.StatusCode == http.StatusNotFound {
+		switch notFoundCode(response.Body, c.maxBody) {
+		case unknownOrganizationCode:
+			return grants{}, ErrOrganizationUnknown
+		case disabledOrganizationCode:
+			return grants{}, ErrOrganizationDisabled
+		}
 	}
 	if response.StatusCode != http.StatusOK {
 		return grants{}, rejected(reasonStatus)
@@ -213,47 +236,69 @@ func (c *Client) fetch(ctx context.Context, orgID string) (grants, error) {
 
 // OrganizationUnknown reports whether Dev Health positively says the
 // organization does not exist: true only for a 404 carrying the stable
-// unknown-organization code. An HTTP 200 (any body) is (false, nil). A
-// malformed id, a transport failure, a timeout, any 5xx, a 404 without the
-// code and every other status are (false, errUnavailable), so an outage can
-// never read as a deletion.
+// unknown-organization code. An HTTP 200 (any body) and the coded 404 of a
+// disabled organization are (false, nil). A malformed id, a transport
+// failure, a timeout, any 5xx, a 404 without a known code and every other
+// status are (false, errUnavailable), so an outage can never read as a
+// deletion.
 func (c *Client) OrganizationUnknown(ctx context.Context, orgID string) (bool, error) {
+	state, err := c.OrganizationStateNow(ctx, orgID)
+	if err != nil {
+		return false, err
+	}
+	return state == OrganizationUnknown, nil
+}
+
+// OrganizationStateNow reads Dev Health's entitlement route for orgID, never
+// the cache: an HTTP 200 (any body) is live, the 404 with the disabled code is
+// disabled, the 404 with the unknown code is unknown. Every other answer is
+// errUnavailable.
+func (c *Client) OrganizationStateNow(ctx context.Context, orgID string) (OrganizationState, error) {
 	if parsed, err := uuid.Parse(strings.TrimSpace(orgID)); err != nil || parsed.String() != orgID {
-		return false, errUnavailable
+		return OrganizationLive, errUnavailable
 	}
 	requestContext, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	request, err := http.NewRequestWithContext(requestContext, http.MethodGet, entitlementURL(c.baseURL, orgID), nil)
 	if err != nil {
-		return false, errUnavailable
+		return OrganizationLive, errUnavailable
 	}
 	if !c.authorize(ctx, request) {
-		return false, errUnavailable
+		return OrganizationLive, errUnavailable
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
-		return false, errUnavailable
+		return OrganizationLive, errUnavailable
 	}
 	defer response.Body.Close()
-	switch {
-	case response.StatusCode == http.StatusOK:
-		return false, nil
-	case response.StatusCode == http.StatusNotFound && isUnknownOrganizationBody(response.Body, c.maxBody):
-		return true, nil
-	default:
-		return false, errUnavailable
+	switch response.StatusCode {
+	case http.StatusOK:
+		return OrganizationLive, nil
+	case http.StatusNotFound:
+		switch notFoundCode(response.Body, c.maxBody) {
+		case unknownOrganizationCode:
+			return OrganizationUnknown, nil
+		case disabledOrganizationCode:
+			return OrganizationDisabled, nil
+		}
 	}
+	return OrganizationLive, errUnavailable
 }
 
-func isUnknownOrganizationBody(body io.Reader, maxBytes int64) bool {
+// notFoundCode is the code a Dev Health 404 body carries, or "" when the body
+// is unreadable, too large or carries none.
+func notFoundCode(body io.Reader, maxBytes int64) string {
 	payload, err := readBounded(body, maxBytes)
 	if err != nil {
-		return false
+		return ""
 	}
 	var parsed struct {
 		Code string `json:"code"`
 	}
-	return json.Unmarshal(payload, &parsed) == nil && parsed.Code == unknownOrganizationCode
+	if json.Unmarshal(payload, &parsed) != nil {
+		return ""
+	}
+	return parsed.Code
 }
 
 func entitlementURL(baseURL *url.URL, orgID string) string {

@@ -12,7 +12,7 @@ import (
 
 type organizationKnower interface {
 	OrganizationKnown(ctx context.Context, orgID string) error
-	OrganizationUnknown(ctx context.Context, orgID string) (bool, error)
+	OrganizationStateNow(ctx context.Context, orgID string) (entitlements.OrganizationState, error)
 }
 
 // organizationPresence is the remote entitlement client's organization check; nil in local entitlement mode.
@@ -35,19 +35,24 @@ type entitlementOrganizations struct{ knower organizationKnower }
 
 func (o entitlementOrganizations) OrganizationKnown(ctx context.Context, orgID string) error {
 	err := o.knower.OrganizationKnown(ctx, orgID)
-	if errors.Is(err, entitlements.ErrOrganizationUnknown) {
+	switch {
+	case errors.Is(err, entitlements.ErrOrganizationUnknown):
 		return fmt.Errorf("%w: %w", auth.ErrOrganizationGone, err)
+	case errors.Is(err, entitlements.ErrOrganizationDisabled):
+		return fmt.Errorf("%w: %w", auth.ErrOrganizationDisabled, err)
 	}
 	return err
 }
 
 func (o entitlementOrganizations) OrganizationKnownNow(ctx context.Context, orgID string) error {
-	gone, err := o.knower.OrganizationUnknown(ctx, orgID)
+	state, err := o.knower.OrganizationStateNow(ctx, orgID)
 	switch {
 	case err != nil:
 		return err
-	case gone:
+	case state == entitlements.OrganizationUnknown:
 		return auth.ErrOrganizationGone
+	case state == entitlements.OrganizationDisabled:
+		return auth.ErrOrganizationDisabled
 	}
 	return nil
 }

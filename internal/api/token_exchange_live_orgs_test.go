@@ -53,6 +53,14 @@ func (liveOrgsEntitlement) OrganizationUnknown(_ context.Context, orgID string) 
 	return false, nil
 }
 
+func (e liveOrgsEntitlement) OrganizationStateNow(ctx context.Context, orgID string) (entitlements.OrganizationState, error) {
+	gone, err := e.OrganizationUnknown(ctx, orgID)
+	if gone {
+		return entitlements.OrganizationUnknown, err
+	}
+	return entitlements.OrganizationLive, err
+}
+
 type liveOrgsValidator struct{}
 
 func (liveOrgsValidator) Validate(context.Context, string) (authverify.SubjectIdentity, error) {

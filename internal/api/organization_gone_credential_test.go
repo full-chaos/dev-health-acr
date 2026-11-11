@@ -35,6 +35,7 @@ const (
 	orgOpsServerError
 	orgOpsUncodedNotFound
 	orgOpsTimeout
+	orgOpsDisabled
 )
 
 var orgOpsOutages = map[string]orgOpsMode{
@@ -69,6 +70,9 @@ func newFakeOrgOps(t *testing.T, mode orgOpsMode) *fakeOrgOps {
 		case orgOpsGone:
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"detail":"Not found","code":"acr_organization_unknown"}`))
+		case orgOpsDisabled:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"detail":"Not found","code":"acr_organization_disabled"}`))
 		case orgOpsServerError:
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_, _ = w.Write([]byte(`{"detail":"unavailable"}`))
@@ -121,6 +125,8 @@ type orgGoneApp struct {
 	token        string
 	credentialID string
 	orgID        string
+	now          time.Time
+	private      ed25519.PrivateKey
 }
 
 func newOrgGoneApp(t *testing.T, mode orgOpsMode) *orgGoneApp {
@@ -176,7 +182,10 @@ func newOrgGoneApp(t *testing.T, mode orgOpsMode) *orgGoneApp {
 	}
 	deviceApprovalExtraClaims = map[string]any{"org_id": orgGoneTestOrg}
 	t.Cleanup(func() { deviceApprovalExtraClaims = nil })
+	h.now, h.private = now, private
 	h.token, h.credentialID, h.orgID = h.issueDeviceCredential(t, now, private)
+	// The issuance read the organization fresh (approval, redemption); the cells count only their own reads.
+	h.ops.hits.Store(0)
 	h.ops.set(mode)
 	return h
 }
@@ -444,6 +453,8 @@ func newOrgGoneBrowser(t *testing.T) *orgGoneBrowser {
 		t.Fatalf("login: %d %s", status, raw)
 	}
 	b.login = login
+	// The login read the organization fresh (consent, redemption); the cells count only their own reads.
+	b.ops.hits.Store(0)
 	return b
 }
 
