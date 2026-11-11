@@ -362,15 +362,11 @@ remove_runtime_entitlement() {
 }
 
 bootstrap_failure_ops() {
-  local output org_id token db
+  local output org_id db
   compose up -d postgres clickhouse valkey pgbouncer mailpit migrate go-api-roles go-api >/dev/null
-  token="$(mint_ops_service_token)" || svs_die 'Ops credential provisioning failed'
-  write_secret "$STATE/secrets/ops-token" "$token"
-  # Host-readable copy for assert_service_credential_refused: secrets/ops-token is chowned to the acr-api UID.
-  write_secret "$STATE/ops-probe-token" "$token"
   provision_acr_workload
   wait_go_api
-  assert_service_credential_refused
+  assert_retired_bearer_refused
   if ! output="$(dho admin orgs create --name "${PROJECT} SVS" --slug "$PROJECT" --description 'isolated SVS control plane' --tier community)"; then
     printf '%s\n' "$output" >&2
     svs_die 'Ops organization provisioning failed'

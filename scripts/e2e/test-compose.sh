@@ -33,7 +33,7 @@ fi
 grep -Fq 'Ops organization provisioning failed' "$script"
 # The ops internal acr routes accept only the acr-api workload token (ops CHAOS-12977): the harness writes the
 # acr-api bootstrap credential, the readiness probe exchanges it at auth-service and sends the workload token, and
-# the svc_acr_ service credential is then measured to get 401 on the same route.
+# a retired-class bearer and no bearer are then measured to get 401 on the same route.
 grep -Fq 'http://auth-service:8095/internal/v1/token/exchange' "$script"
 grep -Fq 'urn%3Adev-health%3Aparams%3Aoauth%3Atoken-type%3Aworkload-bootstrap' "$script"
 grep -Fq -- '--post-file /tmp/form' "$script"
@@ -46,7 +46,7 @@ if sed -n '/^workload_probe_script=/,/^$/p' "$script" | grep -nE -- '--post-data
 fi
 # shellcheck disable=SC2016 # the pin is a literal source line.
 sed -n '/^wait_go_api()/,/^}/p' "$script" | grep -Fq 'workload_probe "${go_api_internal}${acr_health_path}"'
-# The svc_acr_ control: the token reaches the probe by environment name, and anything but 401 fails the run.
+# The refusal controls: the bearer reaches the probe by environment name, and anything but 401 fails the run.
 grep -Fq -- '-e ACR_PROBE_TOKEN -e ACR_PROBE_URL --entrypoint sh acr-tls-proxy -c' "$script"
 # shellcheck disable=SC2016 # the pin is a literal source line.
 grep -Fq -- '--header "Authorization: Bearer $ACR_PROBE_TOKEN" "$ACR_PROBE_URL"' "$script"
@@ -56,13 +56,34 @@ if sed -n '/^wait_go_api()/,/^}/p' "$script" | grep -nE 'Bearer \$\{token\}|Bear
   printf 'the readiness probe must not expand a bearer value on this side\n' >&2
   exit 1
 fi
-grep -Fq 'mint_ops_service_token()' "$script"
-mint_line="$(grep -n 'token="$(mint_ops_service_token)"' "$script" | head -n 1 | cut -d: -f1)"
-bootstrap_line="$(grep -n '^  provision_acr_workload$' "$script" | head -n 1 | cut -d: -f1)"
-wait_line="$(grep -n '^  wait_go_api$' "$script" | head -n 1 | cut -d: -f1)"
-control_line="$(grep -n '^  assert_service_credential_refused$' "$script" | head -n 1 | cut -d: -f1)"
-[[ -n "$mint_line" && -n "$bootstrap_line" && -n "$wait_line" && -n "$control_line" ]]
-[[ "$mint_line" -lt "$bootstrap_line" && "$bootstrap_line" -lt "$wait_line" && "$wait_line" -lt "$control_line" ]]
+# pin: retired-verbs (ops CHAOS-13170 removed `dho service-credentials`; nothing can mint a svc_acr_ credential)
+retired_callers="$(grep -lE 'service-credentials|mint_ops_service_token|ops-probe-token|secrets/ops-token' "$script_dir"/*.sh | grep -vxF "$script_dir/test-compose.sh" || true)"
+if [[ -n "$retired_callers" ]]; then
+  printf 'an e2e script still uses the retired service credential: %s\n' "$retired_callers" >&2
+  exit 1
+fi
+# pin: control-retired-bearer (made at run time, never a repo literal, a file or a dho call)
+control_body="$(sed -n '/^assert_retired_bearer_refused()/,/^}/p' "$script")"
+# shellcheck disable=SC2016 # the pin is a literal source line.
+grep -Fq 'ACR_PROBE_TOKEN="svc_acr_$(random_secret)"' <<<"$control_body"
+grep -Fq 'a retired-class bearer is refused' <<<"$control_body"
+if grep -nE '(^|[^[:alnum:]_])dho([^[:alnum:]_]|$)|STATE' <<<"$control_body"; then
+  printf 'the retired-class bearer must be made at run time in the control\n' >&2
+  exit 1
+fi
+# pin: control-no-bearer (the same route with no Authorization header at all)
+control_body="$(sed -n '/^assert_retired_bearer_refused()/,/^}/p' "$script")"
+grep -Fq -- "-c 'wget -S -O /dev/null \"\$ACR_PROBE_URL\"'" <<<"$control_body"
+grep -Fq 'no bearer is refused' <<<"$control_body"
+# pin: control-order (bootstrap, then readiness, then the controls, in both drivers)
+for driver in "$script" "$script_dir/svs.sh"; do
+  bootstrap_line="$(grep -n '^  provision_acr_workload$' "$driver" | head -n 1 | cut -d: -f1)"
+  wait_line="$(grep -n '^  wait_go_api$' "$driver" | head -n 1 | cut -d: -f1)"
+  control_line="$(grep -n '^  assert_retired_bearer_refused$' "$driver" | head -n 1 | cut -d: -f1)"
+  [[ -n "$bootstrap_line" && -n "$wait_line" && -n "$control_line" ]]
+  [[ "$bootstrap_line" -lt "$wait_line" && "$wait_line" -lt "$control_line" ]]
+done
+# pin: end
 if grep -Fq 'wget -q -O /dev/null http://go-api:8091' "$script"; then
   printf 'the ops readiness probe must send a credential\n' >&2
   exit 1

@@ -187,7 +187,6 @@ prepare_state() {
   write_container_secret "$STATE/secrets/clickhouse-password" "$(random_secret)"
   write_container_secret "$STATE/secrets/evidence-kid" 'acr-e2e-kid'
   write_container_secret "$STATE/secrets/evidence-keys" "acr-e2e-kid=$(random_base64)"
-  : > "$STATE/secrets/ops-token"; chmod 600 "$STATE/secrets/ops-token"
   write_clickhouse_readonly_client_config
   write_go_api_envelope_material
   cat > "$STATE/nginx-api.conf" <<'EOF'
@@ -395,7 +394,7 @@ EOF
   # Nothing caught it because ACR's own ClickHouse access uses a separately parameterized DSN
   # that always named the right database, and the fixture probes queried that database
   # directly rather than through the application.
-  export ACR_IMAGE="$IMAGE" POSTGRES_USER=devhealth POSTGRES_PASSWORD="$pg" POSTGRES_PORT="$postgres_port" CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=ch CLICKHOUSE_DB="$db" CLICKHOUSE_HTTP_PORT="$clickhouse_http_port" CLICKHOUSE_NATIVE_PORT="$clickhouse_native_port" REDIS_PORT="$redis_port" ACR_DB_NAME="$db" ACR_RUNTIME_DB_USER=acr_runtime ACR_MIGRATION_DB_USER=acr_migration ACR_POSTGRES_ADMIN_PASSWORD_FILE="$STATE/secrets/postgres-password" ACR_RUNTIME_DB_PASSWORD_FILE="$STATE/secrets/runtime-password" ACR_MIGRATION_DB_PASSWORD_FILE="$STATE/secrets/migration-password" ACR_RUNTIME_DSN_FILE="$STATE/secrets/runtime-dsn" ACR_MIGRATION_DSN_FILE="$STATE/secrets/migration-dsn" ACR_CLICKHOUSE_DSN_FILE="$STATE/secrets/clickhouse-dsn" ACR_OPS_TOKEN_FILE="$STATE/secrets/ops-token" ACR_CA_FILE="$STATE/pki/ca.crt" ACR_EVIDENCE_ACTIVE_KID_FILE="$STATE/secrets/evidence-kid" ACR_EVIDENCE_KEYS_FILE="$STATE/secrets/evidence-keys"
+  export ACR_IMAGE="$IMAGE" POSTGRES_USER=devhealth POSTGRES_PASSWORD="$pg" POSTGRES_PORT="$postgres_port" CLICKHOUSE_USER=default CLICKHOUSE_PASSWORD=ch CLICKHOUSE_DB="$db" CLICKHOUSE_HTTP_PORT="$clickhouse_http_port" CLICKHOUSE_NATIVE_PORT="$clickhouse_native_port" REDIS_PORT="$redis_port" ACR_DB_NAME="$db" ACR_RUNTIME_DB_USER=acr_runtime ACR_MIGRATION_DB_USER=acr_migration ACR_POSTGRES_ADMIN_PASSWORD_FILE="$STATE/secrets/postgres-password" ACR_RUNTIME_DB_PASSWORD_FILE="$STATE/secrets/runtime-password" ACR_MIGRATION_DB_PASSWORD_FILE="$STATE/secrets/migration-password" ACR_RUNTIME_DSN_FILE="$STATE/secrets/runtime-dsn" ACR_MIGRATION_DSN_FILE="$STATE/secrets/migration-dsn" ACR_CLICKHOUSE_DSN_FILE="$STATE/secrets/clickhouse-dsn" ACR_CA_FILE="$STATE/pki/ca.crt" ACR_EVIDENCE_ACTIVE_KID_FILE="$STATE/secrets/evidence-kid" ACR_EVIDENCE_KEYS_FILE="$STATE/secrets/evidence-keys"
 }
 
 assert_safe_render() {
@@ -463,34 +462,6 @@ dho() {
     query-api "$@"
 }
 
-# mint_ops_service_token creates the svc_acr_ credential the ops internal listener requires on every
-# request (ops CHAOS-9993). It talks to Postgres directly through dho, so it needs no running api, but
-# the schema may still be migrating when the services are first started: it retries, bounded by an
-# attempt count and a deadline, and logs each retry with the first line of dho's stderr and the final
-# outcome. The token is printed on stdout only; nothing else is. principal_access:read is the
-# per-call access read acr-api makes for every user-class call (CHAOS-12092; ops CHAOS-12084).
-mint_ops_service_token() {
-  local attempt=1 max_attempts=30 deadline=$((SECONDS + 180)) token reason errfile
-  errfile="$(mktemp)"
-  while :; do
-    if token="$(dho service-credentials create --service acr --scope entitlements:read --scope llm_config:read --scope principal_access:read 2>"$errfile")" && [[ "$token" == svc_acr_* ]]; then
-      rm -f "$errfile"
-      note "ops service credential minted (attempt ${attempt})"
-      printf '%s' "$token"
-      return 0
-    fi
-    reason="$(head -n 1 "$errfile" | cut -c1-200)"
-    if (( attempt >= max_attempts || SECONDS >= deadline )); then
-      rm -f "$errfile"
-      note "ops service credential not minted after ${attempt} attempts: ${reason:-no error output}"
-      return 1
-    fi
-    note "ops service credential not minted yet (attempt ${attempt}/${max_attempts}): ${reason:-no error output}"
-    attempt=$((attempt + 1))
-    sleep 2
-  done
-}
-
 # workload_probe_script is the probe container's own script (acr-workload-probe, run by sh -c): it exchanges the
 # acr-api bootstrap credential at auth-service for a workload token (the same form workloadtoken's client sends:
 # token exchange, audience dev-health-api) and calls $ACR_PROBE_URL with it. The bootstrap is read from the
@@ -553,15 +524,21 @@ wait_go_api() {
   die "Go ops api internal listener did not become ready (last HTTP status: ${status:-none, not accepting connections})"
 }
 
-# assert_service_credential_refused measures the auth path the other way: the svc_acr_ service credential, the
-# harness's credential before ops CHAOS-12977, must get the uniform 401 on the same internal acr route.
-assert_service_credential_refused() {
+# assert_retired_bearer_refused measures the auth path the other way, on the same internal acr route: a bearer of the
+# retired svc_acr_ class (made here at run time; nothing can mint a real one since ops CHAOS-13170, and go-api refuses
+# every classed bearer before any credential read) and a request with no bearer must each get the uniform 401.
+assert_retired_bearer_refused() {
   local output status
   # shellcheck disable=SC2016 # $ACR_PROBE_TOKEN and $ACR_PROBE_URL are expanded by the probe container's sh, not here.
-  output="$(ACR_PROBE_TOKEN="$(<"$STATE/ops-probe-token")" ACR_PROBE_URL="${go_api_internal}${acr_health_path}" compose run --rm --no-deps -T -e ACR_PROBE_TOKEN -e ACR_PROBE_URL --entrypoint sh acr-tls-proxy -c 'wget -S -O /dev/null --header "Authorization: Bearer $ACR_PROBE_TOKEN" "$ACR_PROBE_URL"' 2>&1)" || true
+  output="$(ACR_PROBE_TOKEN="svc_acr_$(random_secret)" ACR_PROBE_URL="${go_api_internal}${acr_health_path}" compose run --rm --no-deps -T -e ACR_PROBE_TOKEN -e ACR_PROBE_URL --entrypoint sh acr-tls-proxy -c 'wget -S -O /dev/null --header "Authorization: Bearer $ACR_PROBE_TOKEN" "$ACR_PROBE_URL"' 2>&1)" || true
   status="$(http_status_of "$output")"
-  [[ "$status" == 401 ]] || die "a svc_acr_ service credential on the go-api internal acr route answered ${status:-no status}, want 401"
-  note "CONTROL svc_acr_ service credential on the go-api internal acr route: HTTP ${status} (refused)"
+  [[ "$status" == 401 ]] || die "a retired-class bearer is refused: the go-api internal acr route answered ${status:-no status}, want 401"
+  note "CONTROL a retired-class bearer is refused: svc_acr_ bearer on the go-api internal acr route, HTTP ${status}"
+  # shellcheck disable=SC2016 # $ACR_PROBE_URL is expanded by the probe container's sh, not here.
+  output="$(ACR_PROBE_URL="${go_api_internal}${acr_health_path}" compose run --rm --no-deps -T -e ACR_PROBE_URL --entrypoint sh acr-tls-proxy -c 'wget -S -O /dev/null "$ACR_PROBE_URL"' 2>&1)" || true
+  status="$(http_status_of "$output")"
+  [[ "$status" == 401 ]] || die "no bearer is refused: the go-api internal acr route answered ${status:-no status}, want 401"
+  note "CONTROL no bearer is refused: no Authorization header on the go-api internal acr route, HTTP ${status}"
 }
 
 # provision_acr_workload writes the acr-api bootstrap credential into its volume once (bootstrap-create refuses a
@@ -579,7 +556,7 @@ ops_clickhouse_database() { printf 'acr_%s_e2e' "${PROJECT//-/}"; }
 clickhouse_query() { compose exec -T clickhouse clickhouse-client --user default --password ch --query "$1"; }
 
 provision_ops_control_plane() {
-  local output org_id token
+  local output org_id
   # The isolated ClickHouse database is created before the ops services start, not in
   # provision_evidence_database below: those services resolve CLICKHOUSE_DB at container start
   # and connect immediately, so a database that does not exist yet is a boot failure rather
@@ -587,13 +564,9 @@ provision_ops_control_plane() {
   compose up -d --wait clickhouse >/dev/null
   clickhouse_query "CREATE DATABASE IF NOT EXISTS $(ops_clickhouse_database)" >/dev/null
   compose up -d postgres valkey pgbouncer mailpit migrate go-api-roles go-api query-api >/dev/null
-  token="$(mint_ops_service_token)" || die 'Ops credential provisioning failed'
-  write_secret "$STATE/secrets/ops-token" "$token"
-  # Host-readable copy for assert_service_credential_refused: secrets/ops-token is chowned to the acr-api UID.
-  write_secret "$STATE/ops-probe-token" "$token"
   provision_acr_workload
   wait_go_api
-  assert_service_credential_refused
+  assert_retired_bearer_refused
   if ! output="$(dho admin orgs create --name "${PROJECT} E2E" --slug "$PROJECT" --description 'isolated compose E2E' --tier community)"; then
     printf '%s\n' "$output" >&2
     die 'Ops organization provisioning failed'
@@ -601,21 +574,6 @@ provision_ops_control_plane() {
   org_id="$(printf '%s\n' "$output" | sed -nE 's/.*id:[[:space:]]*([0-9a-fA-F-]{36}).*/\1/p')"
   [[ "$org_id" =~ ^[0-9a-fA-F-]{36}$ ]] || die 'Ops org provisioning did not return an ID'
   dho admin bundles assign-org --org-id "$org_id" --feature-key agent_context_runtime --reason 'isolated compose E2E' --expires-days 1 >/dev/null
-  # This is the one secret file the entitlement client reads through readRestrictedFile /
-  # isPrivateSecret (internal/entitlements/file_owner_unix.go), not the more common
-  # internal/config.SecretValue path the rest of write_secret()'s files go through.
-  # isPrivateSecret requires BOTH zero group/other bits (600, not this function's usual 644 --
-  # see write_secret()'s own comment for why 644) AND that the file's owning UID equal
-  # acr-api's own euid: the distroless nonroot UID 65532 baked into the Dockerfile's `USER
-  # 65532:65532`, never whatever host UID this script itself runs as. `chown` therefore has to
-  # run as root. GitHub-hosted runners carry passwordless sudo for exactly this; a local
-  # developer's machine may not, so this is best-effort -- the file already had this same
-  # UID-mismatch problem on any real Linux Docker host before write_secret() existed, since
-  # nothing here can make a bind-mounted host file appear owned by a different container UID
-  # without a privileged chown.
-  chmod 600 "$STATE/secrets/ops-token"
-  sudo -n chown 65532:65532 "$STATE/secrets/ops-token" 2>/dev/null \
-    || note 'could not chown ops-token to the acr-api container UID (no passwordless sudo); acr-api may reject it as an unsafe secret file on a real Linux Docker host'
   printf '%s' "$org_id" > "$STATE/org-id"
 }
 
@@ -652,8 +610,8 @@ seed_synthetic_evidence() {
 }
 
 # probe_ops_principal_access proves go-api's own ClickHouse login serves the principal access
-# read end to end (CHAOS-12183): the read for this run's organization, as the svc_acr_
-# credential, answers acr_principal_access.v1 with the seeded repositories as its inventory
+# read end to end (CHAOS-12183): the read for this run's organization, with the acr-api workload
+# token, answers acr_principal_access.v1 with the seeded repositories as its inventory
 # (kind repos, not none), which go-api reads with SELECT on repos. Any user id works: the
 # inventory is the organization's. It runs after the seed hook, whatever corpus that seeds.
 probe_ops_principal_access() {
