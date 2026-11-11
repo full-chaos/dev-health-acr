@@ -1396,11 +1396,11 @@
         "acr_client_credential"
       ],
       "primary_validator": {
-        "description": "credentialRevokeOrganizationHandler: Authenticator.MiddlewareWithOrganizationCheck(OrganizationCheckAdmitDisabled) refuses an absent or malformed bearer and any web assertion before the credential lookup, refuses a credential of an organization Dev Health answers as deleted (401) and admits one it answers as disabled; requireWorkloadClass then refuses every credential whose row class is not workload (403 credential_class_refused); RequireScope(credential_lifecycle:revoke_organization), which only the revoke binding role carries, refuses every other workload (403 insufficient_scope). The handler then validates the closed credential_revoke_organization_request.v1 body, and Service.RevokeOrganization revokes, in batches, every live credential of the binding's organization.",
+        "description": "credentialRevokeOrganizationHandler: Authenticator.MiddlewareWithOrganizationCheck(OrganizationCheckAdmitDisabled) refuses an absent or malformed bearer and any web assertion before the credential lookup, refuses a credential of an organization Dev Health answers as deleted (401) and admits one it answers as disabled; requireWorkloadClass then refuses every credential whose row class is not workload (403 credential_class_refused); RequireScope(credential_lifecycle:revoke_organization), which only the revoke binding role carries, refuses every other workload (403 insufficient_scope). The handler then validates the closed credential_revoke_organization_request.v1 body, reads the organization's state fresh (live: 409 organization_live; unreadable: 503; nothing revoked in either case; the reason must fit the state, else 400), and Service.RevokeOrganization revokes, in batches, every live credential of the binding's organization.",
         "anchor": {
           "path": "internal/api/credential_revoke_organization_route.go",
-          "line": 23,
-          "line_end": 31,
+          "line": 24,
+          "line_end": 32,
           "note": "func (a *App) credentialRevokeOrganizationHandler() http.Handler {"
         }
       },

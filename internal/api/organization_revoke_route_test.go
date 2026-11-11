@@ -84,13 +84,13 @@ func (h *orgGoneApp) liveIn(t *testing.T, org string) int {
 
 const orgRevokeRouteBody = `{"schema_version":"credential_revoke_organization_request.v1","actor_id":"usr_platform_admin_1","reason":"organization_disabled"}`
 
-// OR1: for a live or a disabled organization the route revokes every live
+// OR1: for a disabled organization the route revokes every live
 // credential of the organization (native device, org bearer, another
 // binding's workload, the caller last), answers the counts, writes one
 // credential_revoked audit row with the reason each, and leaves another
 // organization alone.
 func TestOrganizationRevoke_routeRevokesEveryCredentialOfTheOrganization(t *testing.T) {
-	for name, mode := range map[string]orgOpsMode{"live": orgOpsLive, "disabled": orgOpsDisabled} {
+	for name, mode := range map[string]orgOpsMode{"disabled": orgOpsDisabled} {
 		t.Run(name, func(t *testing.T) {
 			h := newOrgGoneApp(t, orgOpsLive)
 			h.issue(t, auth.CreateCredentialRequest{})
@@ -191,6 +191,7 @@ func TestOrganizationRevoke_theBatchLoopEndsWithABatchOfOne(t *testing.T) {
 	h.app.organizationRevokeBatch = 1
 	h.issue(t, auth.CreateCredentialRequest{})
 	h.workloadToken(t, "wlb_projector_read", []string{auth.ScopeContextRead})
+	h.ops.set(orgOpsDisabled)
 	calls := 0
 	for {
 		calls++
@@ -254,5 +255,50 @@ func TestOrganizationRevoke_anOutageAtTheStateReadRevokesNothing(t *testing.T) {
 	assertErrorResponse(t, response, http.StatusServiceUnavailable, "upstream_unavailable")
 	if got := h.liveIn(t, h.orgID); got != before {
 		t.Fatalf("live credentials = %d, want %d (nothing revoked)", got, before)
+	}
+}
+
+// OR7: the reason must fit the organization's state: organization_disabled
+// needs a disabled organization, organization_deleted a disabled or deleted
+// one; a live organization fits no reason.
+func TestOrganizationRevoke_theReasonMustFitTheState(t *testing.T) {
+	for _, tc := range []struct {
+		state  organizationRevokeStateValue
+		reason string
+		fits   bool
+	}{
+		{organizationStateDisabled, "organization_disabled", true},
+		{organizationStateDisabled, "organization_deleted", true},
+		{organizationStateGone, "organization_deleted", true},
+		{organizationStateGone, "organization_disabled", false},
+		{organizationStateLive, "organization_disabled", false},
+		{organizationStateLive, "organization_deleted", false},
+		{organizationStateDisabled, "organization_suspended", false},
+	} {
+		if got := organizationRevokeReasonFits(tc.state, tc.reason); got != tc.fits {
+			t.Fatalf("state %s, reason %s: fits = %v, want %v", tc.state, tc.reason, got, tc.fits)
+		}
+	}
+}
+
+// OR8: a disabled organization revoked with the delete reason (ops deletes
+// after it sets is_active=false) is served, with that reason on the rows.
+func TestOrganizationRevoke_aDeleteOfADisabledOrganizationIsServed(t *testing.T) {
+	h := newOrgGoneApp(t, orgOpsLive)
+	caller := h.workloadToken(t, orgRevokeRouteBinding, []string{orgRevokeRouteScope})
+	h.ops.set(orgOpsDisabled)
+
+	response := h.revokeOrganization(caller, `{"schema_version":"credential_revoke_organization_request.v1","actor_id":"usr_1","reason":"organization_deleted"}`)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("organization revoke: %d %s, want 200", response.Code, response.Body.String())
+	}
+	for _, event := range h.app.runtime.Audit.(*memory.AuditStore).Events() {
+		if event.Action == "credential_revoked" && event.Metadata["reason"] != "organization_deleted" {
+			t.Fatalf("credential_revoked row %+v, want reason organization_deleted", event)
+		}
+	}
+	if got := h.liveIn(t, h.orgID); got != 0 {
+		t.Fatalf("live credentials = %d, want 0", got)
 	}
 }

@@ -1748,7 +1748,7 @@
         },
         "responses": {
           "200": {
-            "description": "One batch of the organization's live credentials is revoked; each writes one credential_revoked audit row (actor type admin, the reason) and one revoked lifecycle event. Only a workload-class credential whose binding role is revoke is served; a disabled organization is served, a deleted one is 401.",
+            "description": "One batch of the organization's live credentials is revoked; each writes one credential_revoked audit row (actor type admin, the reason) and one revoked lifecycle event. Only a workload-class credential whose binding role is revoke is served; a disabled organization is served, a deleted one is 401, a live one is 409 organization_live (nothing revoked).",
             "content": {
               "application/json": {
                 "schema": {
@@ -1764,6 +1764,9 @@
             "$ref": "#/components/responses/Error"
           },
           "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
             "$ref": "#/components/responses/Error"
           },
           "429": {
