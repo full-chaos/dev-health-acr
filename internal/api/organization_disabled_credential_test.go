@@ -435,3 +435,42 @@ func TestOrganizationDisabled_perOrgWorkloadRowIsRefusedExceptRevoke(t *testing.
 		}
 	}
 }
+
+// DN: the credential listing keeps the default organization check: a
+// disabled organization's reconcile workload is refused with 401
+// organization_disabled (no revoke grant carries the listing scope, so
+// admitting a disabled organization there would reach no caller).
+func TestOrganizationDisabled_credentialListingRefusesTheWorkload(t *testing.T) {
+	h := newOrgGoneApp(t, orgOpsLive)
+	expires := h.now.Add(10 * time.Minute)
+	issued, err := h.app.credentialService.Create(context.Background(), auth.CreateCredentialRequest{
+		OrgID: h.orgID, Name: "reconcile", RepositoryScopes: []string{"*"}, Scopes: []string{auth.ScopeCredentialLifecycleRead},
+		CreatedBy: "wlb_reconcile", ExpiresAt: &expires,
+		IssuanceProvenance: storage.CredentialIssuanceProvenanceWorkloadExchange, WorkloadBindingID: "wlb_reconcile",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list := func() *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodGet, CredentialLifecycleListPath, nil)
+		request.Header.Set("Authorization", "Bearer "+issued.Token)
+		return h.serve(request)
+	}
+	// This app wires no lifecycle lister, so a call past authentication answers
+	// the handler's own 503; only the authenticator's answer matters here.
+	if live := list(); live.Code == http.StatusUnauthorized {
+		t.Fatalf("listing for a live organization: %d %s, want past authentication", live.Code, live.Body.String())
+	}
+	h.ops.set(orgOpsDisabled)
+	h.ops.advance(31 * time.Second)
+
+	response := list()
+
+	assertErrorResponse(t, response, http.StatusUnauthorized, "invalid_token")
+	for _, event := range h.app.runtime.Audit.(*memory.AuditStore).Events() {
+		if event.Action == "credential_auth_denied" && event.ResourceID == issued.Credential.CredentialID && event.Metadata["reason"] == "organization_disabled" {
+			return
+		}
+	}
+	t.Fatal("no credential_auth_denied audit with reason organization_disabled for the listing workload")
+}
