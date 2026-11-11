@@ -31,6 +31,10 @@ const invalidSessionCode = "acr_access_invalid_sid"
 const (
 	projectScopeOverLimitCode    = "acr_access_project_scope_over_limit"
 	repositoryScopeOverLimitCode = "acr_access_repository_scope_over_limit"
+	// repositoryAllowlistTooLargeCode is the read's 503 for a user who may
+	// read more repositories than one answer carries (ops CHAOS-13561, the
+	// read-listing cap of CHAOS-13542): refused, never truncated.
+	repositoryAllowlistTooLargeCode = "acr_access_repository_allowlist_too_large"
 )
 
 // maxProjectScopeProjects is the most projects one project_scope may carry. It
@@ -67,6 +71,10 @@ type PrincipalAccess struct {
 	// Repositories is the organization's live repository inventory, sorted.
 	// Empty means the inventory is empty (kind "none").
 	Repositories []string
+	// OrganizationWide is kind "organization" (ops CHAOS-13561): the user may
+	// read every repository of an organization that has repositories. The
+	// answer then names no repository, so Repositories is empty.
+	OrganizationWide bool
 	// Projects is the organization's live project inventory (ops CHAOS-12224,
 	// project_scope), as the canonical project.v2 identities derived once here:
 	// exact, sorted and unique. Nil when the answer names none: no project_scope
@@ -130,6 +138,8 @@ func (c *Client) PrincipalAccess(ctx context.Context, orgID, userID, sessionID s
 			return PrincipalAccess{}, rejected(reasonProjectScopeOverLimit)
 		case repositoryScopeOverLimitCode:
 			return PrincipalAccess{}, rejected(reasonRepositoryScopeOverLimit)
+		case repositoryAllowlistTooLargeCode:
+			return PrincipalAccess{}, rejected(reasonRepositoryAllowlistTooLarge)
 		}
 		return PrincipalAccess{}, rejected(reasonStatus)
 	default:
@@ -214,7 +224,8 @@ type projectScopeProject struct {
 // decodePrincipalAccess accepts exactly one acr_principal_access.v1 object
 // for orgID and userID: every field present with its type, no unknown field,
 // a session object exactly when one was asked for, a repository scope of kind
-// "repos" with a non-empty repos array or kind "none" with none, and, when
+// "repos" with a non-empty repos array or kind "none" or "organization" with
+// none, and, when
 // present, a project scope of kind "projects" with 1 to
 // maxProjectScopeProjects valid, distinct pairs or kind "none" with none.
 func decodePrincipalAccess(payload []byte, orgID, userID string, sessionAsked bool) (PrincipalAccess, error) {
@@ -256,6 +267,11 @@ func decodePrincipalAccess(payload []byte, orgID, userID string, sessionAsked bo
 		if document.RepositoryScope.Repos != nil {
 			return PrincipalAccess{}, invalid
 		}
+	case "organization":
+		if document.RepositoryScope.Repos != nil {
+			return PrincipalAccess{}, invalid
+		}
+		access.OrganizationWide = true
 	case "repos":
 		if document.RepositoryScope.Repos == nil || len(*document.RepositoryScope.Repos) == 0 {
 			return PrincipalAccess{}, invalid

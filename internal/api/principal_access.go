@@ -186,6 +186,9 @@ func (a *App) requireLiveAccess(enforceFlags bool, next http.Handler) http.Handl
 // scoped to the caller's organization. A grant that names repositories or owners
 // is still narrowed to the inventory and keeps every restricted rule.
 func narrowLiveScope(ctx context.Context, effective []string, access entitlements.PrincipalAccess) (context.Context, error) {
+	if access.OrganizationWide {
+		return keepOrganizationWideGrant(ctx)
+	}
 	if len(access.Repositories) == 0 {
 		return auth.NarrowToProjectScopes(ctx, access.Projects)
 	}
@@ -200,6 +203,27 @@ func narrowLiveScope(ctx context.Context, effective []string, access entitlement
 		return ctx, err
 	}
 	return auth.NarrowRepositoryScopes(ctx, effective)
+}
+
+// keepOrganizationWideGrant serves kind "organization" (ops CHAOS-13561): the
+// user may read every repository of an organization that has repositories. A
+// "*" grant stays "*", as with a non-empty inventory. A grant that names
+// repositories or owners is already the limit of what the caller reads, so it
+// is kept as issued. Any other grant (project-only, or no repository) is
+// refused, as an empty effective scope always was.
+func keepOrganizationWideGrant(ctx context.Context) (context.Context, error) {
+	kept, err := auth.KeepUniversalGrant(ctx)
+	switch {
+	case err == nil:
+		return kept, nil
+	case !errors.Is(err, auth.ErrGrantNotUniversal):
+		return ctx, err
+	}
+	principal, ok := auth.PrincipalFromContext(ctx)
+	if !ok || auth.ClassifyGrant(principal) != auth.GrantRestricted {
+		return ctx, auth.ErrEmptyRepositoryScope
+	}
+	return ctx, nil
 }
 
 // logAccessGranted writes a granted read's basis, at Debug (one line per
