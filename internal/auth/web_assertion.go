@@ -58,6 +58,7 @@ type WebAssertionOptions struct {
 	Logger  *slog.Logger
 }
 
+// Flow and token diagrams for the device approval that uses this assertion: device-approval-architecture.md
 type WebAssertionVerifier struct {
 	issuer       string
 	audience     string

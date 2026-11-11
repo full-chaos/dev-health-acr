@@ -9,6 +9,8 @@ ACR product entitlement and ACR API authentication are separate controls.
 
 See [acr-api workload token](acr-api-workload-token.md) for the server's ops credentials, migration, and rollback.
 
+See [ACR device approval](device-approval.md) for the device approval flow, its signed tokens and what ACR checks.
+
 ## Token form
 
 ```text
