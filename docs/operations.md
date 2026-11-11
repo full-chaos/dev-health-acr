@@ -2484,13 +2484,13 @@ auth-service in this change. CHAOS-11203 is the first caller (next section).
 ### CHAOS-11203: the entitlement and llm-config client sends a workload token
 
 `ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL` picks the credential every call of the Dev Health entitlement client carries (health, entitlement,
-llm-config and principal access, in acr-api and in `acr-projector purge`): `service_token` (the default and the rollback value) reads the
+llm-config and principal access, in acr-api and in `acr-projector purge`): `service_token` (the default; not a rollback value, see below) reads the
 `svc_acr_` token from `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE` as before; `workload` asks the auth workload client for a token for the audience
 `dev-health-api` (no scope: go-api's internal acr routes carry no action) and sends it. Any other value stops the start; the error never echoes it.
 The chart key is `config.entitlement.credential` (`service_token` or `workload`; unset keeps the token Secret). With `workload` the token Secret is optional and, when unset, no token volume or init container is rendered. Set it there, not in `deployment.extraEnv` (the render fails if both are set).
 
 - `workload` needs `ACR_DEV_HEALTH_ENTITLEMENT_URL` and the `ACR_AUTH_WORKLOAD_*` client. A token file that stays set is not an error and is
-  never opened in this mode, so a rollback only needs the flag back to `service_token` with the file still mounted.
+  never opened in this mode. The flag is not a rollback: `service_token` against a current ops build stops acr-api at start (the ops server refuses the `svc_acr_` class with `401` on the health route, so the start-time readiness check fails). The rollback is the image rollback (`helm rollback` to the previous revision; rehearsed 143 -> 142 -> 143, fcdev RECORD-11241-1 sha256 `d955471080f1`, row A1). Not rehearsed: `acr-projector` 143 -> 142, and a rollback while go-api is down. Removing the `service_token` mode is open (CHAOS-13548).
 - There is no runtime fallback. When no token can be minted (auth-service down, subject file unreadable) the call is not sent and fails closed as
   an unavailable entitlement; `svc_acr_` never goes out in `workload` mode. The auth-service client keeps a token until just before its expiry
   (at most 300 s), so a short outage does not stop calls.
