@@ -74,9 +74,15 @@ body, or the approval is refused (`400`) and the request stays pending. The
 device preview (`device_approval_preview_request.v1`) follows the same rule
 when its body names `repository_scopes`: it filters the hints by that list, the
 claim is optional, a present claim must equal it, and 257 is
-`too_many_repositories`. A preview body without the list keeps the earlier
-form, where the claim carries the grant; a null list, or neither list nor
-claim, is `400`. Every other route refuses an assertion without the claim.
+`too_many_repositories`. A preview body without the list is the
+**compatibility form**: the claim carries the grant, and the preview answers
+exactly as before CHAOS-13562 (pinned by
+`TestCHAOS13562_PreviewClaimFormAnswersAsBefore`, run on the old and the new
+code with the same output). It exists only for the web that is live today,
+which sends no list on the preview. acr drops the compatibility form only after
+the web build of CHAOS-13564 (which sends the list) is LIVE, in its own PR. A
+null list, or neither list nor claim, is `400`. Every other route refuses an
+assertion without the claim.
 
 ## Lifecycle
 
