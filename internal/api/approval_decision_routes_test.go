@@ -229,8 +229,8 @@ func TestApprovalDecisionRoute_aReplayedAssertionAsksNothing(t *testing.T) {
 	first := approveWith(t, app, private, now, approval, "approval_replayed", true)
 	replay := approveWith(t, app, private, now, approval, "approval_replayed", true)
 
-	if first.Code != http.StatusOK || replay.Code == http.StatusOK || decider.calls != 1 {
-		t.Fatalf("first %d replay %d calls %d; want 200, a refusal and 1", first.Code, replay.Code, decider.calls)
+	if first.Code != http.StatusOK || replay.Code != http.StatusTooManyRequests || decider.calls != 1 {
+		t.Fatalf("first %d replay %d calls %d; want 200, the replay refusal (429) and 1", first.Code, replay.Code, decider.calls)
 	}
 }
 
