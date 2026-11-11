@@ -553,9 +553,6 @@ func load(lookup lookupEnv) (Config, error) {
 		return Config{}, err
 	}
 	cfg.DeviceApprovalPDP = deviceApprovalPDPValue(lookup)
-	if err := cfg.DeviceApprovalPDP.Validate(cfg.AuthWorkload); err != nil {
-		return Config{}, err
-	}
 
 	if cfg.RequestTimeout, err = durationValue(lookup, "ACR_REQUEST_TIMEOUT", defaultRequestTimeout); err != nil {
 		return Config{}, err
@@ -636,9 +633,6 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.AuthProjection.Validate(c.AuthWorkload); err != nil {
-		return err
-	}
-	if err := c.DeviceApprovalPDP.Validate(c.AuthWorkload); err != nil {
 		return err
 	}
 	switch c.Environment {

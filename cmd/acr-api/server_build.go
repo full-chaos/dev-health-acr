@@ -105,34 +105,45 @@ func webAssertionVerifier(cfg config.Config, replays auth.WebAssertionReplayStor
 }
 
 // approvalDecisions builds the approver check of an approval (CHAOS-13586): nil when ACR_DEVICE_APPROVAL_PDP is off.
-// In shadow or enforce without ACR_DEVICE_APPROVAL_PDP_URL or the workload client it has no PDP client: one ERROR
-// line, and enforce refuses every approval (fail closed). acr-api starts either way.
+// It never stops the start (product rule 3): an unknown mode is off with one ERROR line; shadow or enforce without a
+// well-formed ACR_DEVICE_APPROVAL_PDP_URL or the workload client has no PDP client, one ERROR line, and enforce then
+// refuses every approval (fail closed). One INFO line names the effective mode, for the roll read-back.
 func approvalDecisions(cfg config.Config, logger *slog.Logger) (*auth.ApprovalDecisions, error) {
 	mode, err := auth.ParseApprovalDecisionMode(cfg.DeviceApprovalPDP.Mode)
 	if err != nil {
-		return nil, err
+		logger.Error("device approval decision mode unknown", "key", "ACR_DEVICE_APPROVAL_PDP", "allowed", "off,shadow,enforce", "error", err.Error())
 	}
+	logger.Info("device approval decision mode", "mode", string(mode))
 	if mode == auth.ApprovalDecisionOff {
 		return nil, nil
 	}
 	var decider pep.Decider
 	if cfg.DeviceApprovalPDP.Configured(cfg.AuthWorkload) {
-		tokens, err := authworkload.Build(cfg.AuthWorkload, logger)
+		client, err := approvalDecisionClient(cfg, logger)
 		if err != nil {
-			return nil, err
+			logger.Error("device approval decision client invalid", "error", err.Error())
+		} else {
+			decider = client
 		}
-		httpClient, err := tokens.HTTPClient(outboundhttp.Transport(), cfg.DeviceApprovalPDP.URL, "auth-service")
-		if err != nil {
-			return nil, errors.New("the device approval decision client is invalid (ACR_DEVICE_APPROVAL_PDP_URL)")
-		}
-		client, err := pep.New(pep.Config{BaseURL: cfg.DeviceApprovalPDP.URL, AllowPlainHTTP: cfg.AuthWorkload.AllowPlainHTTP,
-			HTTPClient: httpClient, ClientService: "dev-health-acr-api"})
-		if err != nil {
-			return nil, errors.New("the device approval decision client is invalid (ACR_DEVICE_APPROVAL_PDP_URL)")
-		}
-		decider = client
 	}
 	return auth.NewApprovalDecisions(mode, decider, logger)
+}
+
+func approvalDecisionClient(cfg config.Config, logger *slog.Logger) (pep.Decider, error) {
+	tokens, err := authworkload.Build(cfg.AuthWorkload, logger)
+	if err != nil {
+		return nil, err
+	}
+	httpClient, err := tokens.HTTPClient(outboundhttp.Transport(), cfg.DeviceApprovalPDP.URL, "auth-service")
+	if err != nil {
+		return nil, errors.New("ACR_DEVICE_APPROVAL_PDP_URL cannot carry the workload token")
+	}
+	client, err := pep.New(pep.Config{BaseURL: cfg.DeviceApprovalPDP.URL, AllowPlainHTTP: cfg.AuthWorkload.AllowPlainHTTP,
+		HTTPClient: httpClient, ClientService: "dev-health-acr-api"})
+	if err != nil {
+		return nil, errors.New("ACR_DEVICE_APPROVAL_PDP_URL is not a valid policy decision point origin")
+	}
+	return client, nil
 }
 
 func applicationDependencies(ctx context.Context, request serverBuildRequest) (api.Dependencies, func() error, error) {

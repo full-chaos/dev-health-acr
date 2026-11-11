@@ -1,7 +1,6 @@
 package config
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -17,17 +16,16 @@ func TestDeviceApprovalPDPUnsetIsOff(t *testing.T) {
 	}
 }
 
-func TestDeviceApprovalPDPRefusesAnUnknownModeWithoutEchoingIt(t *testing.T) {
-	_, err := load(dataQueryEnv(map[string]string{"ACR_DEVICE_APPROVAL_PDP": "secret-mode"}))
-	if err == nil || !strings.Contains(err.Error(), "ACR_DEVICE_APPROVAL_PDP") || strings.Contains(err.Error(), "secret-mode") {
-		t.Fatalf("err = %v", err)
+// The setting is optional: an unknown mode or a malformed URL never stops the
+// load (product rule 3); acr-api logs it at start and the check stays off or
+// fails closed.
+func TestDeviceApprovalPDPUnknownModeAndMalformedURLStillLoad(t *testing.T) {
+	cfg, err := load(dataQueryEnv(map[string]string{"ACR_DEVICE_APPROVAL_PDP": "enforced", "ACR_DEVICE_APPROVAL_PDP_URL": "https://pdp.example.test/path"}))
+	if err != nil {
+		t.Fatalf("load refused: %v", err)
 	}
-}
-
-func TestDeviceApprovalPDPRefusesAMalformedURL(t *testing.T) {
-	_, err := load(dataQueryEnv(map[string]string{"ACR_DEVICE_APPROVAL_PDP": "enforce", "ACR_DEVICE_APPROVAL_PDP_URL": "https://secret-host.example.test/path"}))
-	if err == nil || !strings.Contains(err.Error(), "ACR_DEVICE_APPROVAL_PDP_URL") || strings.Contains(err.Error(), "secret-host") {
-		t.Fatalf("err = %v", err)
+	if cfg.DeviceApprovalPDP.Mode != "enforced" || cfg.DeviceApprovalPDP.Configured(cfg.AuthWorkload) {
+		t.Fatalf("%+v", cfg.DeviceApprovalPDP)
 	}
 }
 

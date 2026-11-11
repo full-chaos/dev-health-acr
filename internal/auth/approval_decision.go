@@ -28,7 +28,9 @@ const (
 	ApprovalDecisionEnforce ApprovalDecisionMode = "enforce"
 )
 
-// ParseApprovalDecisionMode reads the mode; "" is off.
+// ParseApprovalDecisionMode reads the mode; "" is off. An unknown value is off
+// with an error the caller logs: a typo never passes as enforce, and it never
+// stops the start.
 func ParseApprovalDecisionMode(value string) (ApprovalDecisionMode, error) {
 	switch ApprovalDecisionMode(value) {
 	case "", ApprovalDecisionOff:
@@ -36,7 +38,7 @@ func ParseApprovalDecisionMode(value string) (ApprovalDecisionMode, error) {
 	case ApprovalDecisionShadow, ApprovalDecisionEnforce:
 		return ApprovalDecisionMode(value), nil
 	}
-	return "", errors.New("ACR_DEVICE_APPROVAL_PDP must be off, shadow or enforce")
+	return ApprovalDecisionOff, errors.New("ACR_DEVICE_APPROVAL_PDP is not off, shadow or enforce; the approver check is off")
 }
 
 var (

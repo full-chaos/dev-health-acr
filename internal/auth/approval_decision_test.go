@@ -223,7 +223,7 @@ func TestParseApprovalDecisionMode(t *testing.T) {
 			t.Fatalf("%q = %q, %v; want %q", value, got, err, want)
 		}
 	}
-	if _, err := ParseApprovalDecisionMode("on"); err == nil {
-		t.Fatal("an unknown mode was accepted")
+	if got, err := ParseApprovalDecisionMode("on"); err == nil || got != ApprovalDecisionOff {
+		t.Fatalf("unknown mode = %q, %v; want off and an error to log", got, err)
 	}
 }
