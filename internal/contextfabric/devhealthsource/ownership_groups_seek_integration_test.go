@@ -126,12 +126,39 @@ func (c *storedGroupsClient) sync(ctx context.Context, orgID string) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("the stored groups of %s never matched the oracle: %s", orgID, diff)
 		}
-		for _, statement := range []string{"SYSTEM REFRESH VIEW " + ownershipGroupsRefreshView, "SYSTEM WAIT VIEW " + ownershipGroupsRefreshView} {
-			if err := c.direct.Exec(ctx, statement); err != nil {
-				return fmt.Errorf("%s: %w", statement, err)
-			}
+		if err := refreshStoredGroups(ctx, c.direct); err != nil {
+			return err
 		}
 	}
+}
+
+// ownershipRefreshGate orders the refresh view between parallel subtests: a
+// sync refreshes under a read lock, and a subtest that must write a log row
+// with no refresh in between takes the write lock (landWithoutRefresh).
+var ownershipRefreshGate sync.RWMutex
+
+func refreshStoredGroups(ctx context.Context, direct clickhousedriver.Conn) error {
+	ownershipRefreshGate.RLock()
+	defer ownershipRefreshGate.RUnlock()
+	for _, statement := range []string{"SYSTEM REFRESH VIEW " + ownershipGroupsRefreshView, "SYSTEM WAIT VIEW " + ownershipGroupsRefreshView} {
+		if err := direct.Exec(ctx, statement); err != nil {
+			return fmt.Errorf("%s: %w", statement, err)
+		}
+	}
+	return nil
+}
+
+// landWithoutRefresh runs land while no refresh of the stored groups can run:
+// it holds the gate against the syncs of parallel subtests and stops the
+// view's own 60-second schedule, then starts the schedule again.
+func landWithoutRefresh(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, land func()) {
+	t.Helper()
+	ownershipRefreshGate.Lock()
+	defer ownershipRefreshGate.Unlock()
+	mustExec(t, ctx, direct, "SYSTEM STOP VIEW "+ownershipGroupsRefreshView)
+	defer mustExec(t, ctx, direct, "SYSTEM START VIEW "+ownershipGroupsRefreshView)
+	mustExec(t, ctx, direct, "SYSTEM WAIT VIEW "+ownershipGroupsRefreshView)
+	land()
 }
 
 // storedDiff is "" when the live stored groups equal the oracle's groups,
@@ -690,34 +717,28 @@ func subOwnershipLateCommittedGroupIsReadThroughTheOverlap(t *testing.T, ctx con
 	old := frontier.Add(-2 * time.Hour)
 	refreshSelect := strings.SplitN(devhealthschema.OwnershipGroupsRefreshViewDDL, "\nAS ", 2)[1]
 	const columns = "org_id, row_key, project_id, team_id, source_name, provider, first_valid_from, latest_is_open, latest_valid_to, observed_at, edge_suppressed, conflict_identities, conflicting_identity_present, content_hash"
-	var edgeID string
-	for attempt := 0; attempt < 5 && edgeID == ""; attempt++ {
-		projectID, teamID := fmt.Sprintf("PROJ-C4-LATE-%d", attempt), fmt.Sprintf("TEAM-C4-%d", attempt)
+	projectID, teamID := "PROJ-C4-LATE", "TEAM-C4"
+	rowKey := identity.JoinSegments("gitea-c4", projectID, teamID, "native")
+	landWithoutRefresh(t, ctx, f.direct, func() {
 		mustExec(t, ctx, f.direct, `INSERT INTO teams (id, name, description, updated_at, last_synced, org_id, provider, native_team_key, project_keys, is_active) VALUES (?, ?, '', ?, ?, ?, 'gitea-c4', ?, [], 1)`,
 			teamID, teamID, old, old, f.orgID, teamID)
 		mustExec(t, ctx, f.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced) VALUES (?, ?, 'gitea-c4', ?, ?, 1, 'started', '', ?, ?)`,
 			projectID, f.orgID, projectID+"-KEY", projectID, old, old)
 		mustExec(t, ctx, f.direct, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at, last_synced) VALUES (?, 'gitea-c4', ?, ?, ?, 'native', ?, NULL, ?, ?)`,
 			f.orgID, teamID, projectID, projectID+"-KEY", ownershipFirstSeen, old, old)
-		rowKey := identity.JoinSegments("gitea-c4", projectID, teamID, "native")
 		mustExec(t, ctx, f.direct, `INSERT INTO project_team_ownership_groups_log (`+columns+`, stored_at, is_deleted)
 SELECT `+columns+`, fromUnixTimestamp64Micro(toInt64(?), 'UTC'), is_deleted FROM (`+refreshSelect+`) WHERE org_id = ? AND row_key = ?`, late.UnixMicro(), f.orgID, rowKey)
-		mustExec(t, ctx, f.direct, "SYSTEM WAIT VIEW "+ownershipGroupsRefreshView)
-		var logRows uint64
-		var storedUS int64
-		if err := f.direct.QueryRow(ctx, `SELECT (SELECT count() FROM project_team_ownership_groups_log WHERE org_id = ? AND row_key = ?),
+	})
+	var logRows uint64
+	var storedUS int64
+	if err := f.direct.QueryRow(ctx, `SELECT (SELECT count() FROM project_team_ownership_groups_log WHERE org_id = ? AND row_key = ?),
   (SELECT toUnixTimestamp64Micro(stored_at) FROM project_team_ownership_groups_current FINAL WHERE org_id = ? AND row_key = ?)`, f.orgID, rowKey, f.orgID, rowKey).Scan(&logRows, &storedUS); err != nil {
-			t.Fatal(err)
-		}
-		if logRows == 1 && storedUS == late.UnixMicro() {
-			edgeID = devhealthsource.ProjectTeamRelationshipIDForTest(t, "gitea-c4", projectID, teamID, "native")
-		} else {
-			t.Logf("attempt %d: a concurrent refresh stored the group itself (log rows %d, stored_at %d); retrying with a new group", attempt, logRows, storedUS)
-		}
+		t.Fatal(err)
 	}
-	if edgeID == "" {
-		t.Fatalf("could not land a late group without a concurrent refresh in 5 attempts")
+	if logRows != 1 || storedUS != late.UnixMicro() {
+		t.Fatalf("the late group was not landed alone: log rows %d (want 1), stored_at %d (want %d)", logRows, storedUS, late.UnixMicro())
 	}
+	edgeID := devhealthsource.ProjectTeamRelationshipIDForTest(t, "gitea-c4", projectID, teamID, "native")
 	clock = clock.Add(devhealthsource.DefaultWindowPassInterval + time.Minute)
 	_, after := ownershipTicks(t, ctx, f, c0)
 	for _, b := range after {
