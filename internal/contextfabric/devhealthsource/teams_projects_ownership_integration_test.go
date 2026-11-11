@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -210,19 +212,8 @@ func subTeamAuthorizationKeepsAnOpenAssertionWhenALaterRowClosesItsDuplicate(t *
 // re-selects the team with the new repository present.
 func subTeamAuthorizationRefreshedByOwnershipOnlyChange(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
 	seedResolvableRepo(t, ctx, fixture, fixture.orgID, "acme/freshly-granted-repo")
-	cursor := ""
-	for page := 0; page < 10; page++ {
-		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
-			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
-		})
-		if err != nil {
-			t.Fatalf("page %d: %v", page, err)
-		}
-		if !available {
-			break
-		}
-		cursor = batch.NextCursor
-	}
+	clock := newTeamPollClock(fixture)
+	cursor := convergeTeams(t, ctx, fixture, "")
 
 	// Ownership-only change: team_repo_ownership gets a brand-new row,
 	// timestamped strictly after everything already consumed; the teams
@@ -234,34 +225,9 @@ func subTeamAuthorizationRefreshedByOwnershipOnlyChange(t *testing.T, ctx contex
 		t.Fatalf("seed ownership-only change: %v", err)
 	}
 
-	found := false
-	for page := 0; page < 10; page++ {
-		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
-			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
-		})
-		if err != nil {
-			t.Fatalf("post-refresh page %d: %v", page, err)
-		}
-		if !available {
-			break
-		}
-		cursor = batch.NextCursor
-		for _, e := range batch.Entities {
-			if e.Subject.CanonicalID != "team:TEAM-GITHUB" {
-				continue
-			}
-			for _, repo := range e.Authorization.RepositorySlugs {
-				if repo == "acme/freshly-granted-repo" {
-					found = true
-				}
-			}
-		}
-		if found {
-			break
-		}
-	}
-	if !found {
-		t.Fatal("TEAM-GITHUB was never re-emitted after an ownership-only change -- the watermark did not advance for a team_repo_ownership-only update")
+	how := pollTeamAfterChange(t, ctx, fixture, clock, cursor, refreshedAt, func(slugs []string) bool { return slices.Contains(slugs, "acme/freshly-granted-repo") })
+	if how == "" {
+		t.Fatal("TEAM-GITHUB was never re-emitted after an ownership-only change, not even by the window pass -- the watermark did not advance for a team_repo_ownership-only update")
 	}
 }
 
@@ -288,64 +254,139 @@ func subTeamAuthorizationRefreshedByRevokingLastOpenRepository(t *testing.T, ctx
 	}
 	grantedAt := ownershipFirstSeen
 	seed(grantedAt, nil, grantedAt)
-
-	cursor := ""
-	converge := func() {
-		for page := 0; page < 10; page++ {
-			batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
-				OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
-			})
-			if err != nil {
-				t.Fatalf("converge page %d: %v", page, err)
-			}
-			if !available {
-				return
-			}
-			cursor = batch.NextCursor
-		}
-	}
-	converge()
+	clock := newTeamPollClock(fixture)
+	cursor := convergeTeams(t, ctx, fixture, "")
 
 	// Revoke the team's ONLY open repository: the same row (same valid_from,
 	// later updated_at) now carries a valid_to, leaving no open row.
 	revokedAt := time.Now().UTC()
 	seed(grantedAt, revokedAt, revokedAt)
 
-	found := false
-	excluded := false
-	for page := 0; page < 10; page++ {
+	how := pollTeamAfterChange(t, ctx, fixture, clock, cursor, revokedAt, func(slugs []string) bool { return !slices.Contains(slugs, "acme/only-repo") })
+	if how == "" {
+		t.Fatal("TEAM-GITHUB was never re-emitted without acme/only-repo after its only open repository was revoked, not even by the window pass -- the watermark regressed when the last open row dropped out of the aggregation")
+	}
+}
+
+// subTeamChangeBelowTheCursorWaitsForTheWindowPass pins how a team change
+// whose position is below the converged shared cursor (cursor.go: one Since
+// for every table) reaches the graph: no incremental page reads it, and the
+// next window pass, which re-reads the overlap below the cursor, does.
+func subTeamChangeBelowTheCursorWaitsForTheWindowPass(t *testing.T, ctx context.Context, fixture *ownershipFixture) {
+	seedResolvableRepo(t, ctx, fixture, fixture.orgID, "acme/below-cursor-repo")
+	seed := func(validTo any, updatedAt time.Time) {
+		if err := fixture.direct.Exec(ctx,
+			`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			fixture.orgID, "github", "TEAM-GITHUB", nil, "acme/below-cursor-repo", "exact", "native", uint8(1), uint16(1), int32(1), ownershipFirstSeen, validTo, updatedAt); err != nil {
+			t.Fatalf("seed team_repo_ownership: %v", err)
+		}
+	}
+	seed(nil, ownershipFirstSeen)
+	clock := newTeamPollClock(fixture)
+	cursor := convergeTeams(t, ctx, fixture, "")
+	since := decodeCursorPosition(t, cursor).Since
+	if !since.After(ownershipFirstSeen.Add(time.Second)) {
+		t.Fatalf("fixture: the converged cursor %v must be after the grant", since)
+	}
+	revokedAt := since.Add(-time.Second)
+	seed(revokedAt, revokedAt)
+	if teamEmittedWithin(t, ctx, fixture, &cursor, func(slugs []string) bool { return !slices.Contains(slugs, "acme/below-cursor-repo") }) {
+		t.Fatalf("an incremental page read a change stamped below the cursor (since %v, change %v)", since, revokedAt)
+	}
+	clock.advance(devhealthsource.DefaultWindowPassInterval + time.Minute)
+	if !teamEmittedWithin(t, ctx, fixture, &cursor, func(slugs []string) bool { return !slices.Contains(slugs, "acme/below-cursor-repo") }) {
+		t.Fatalf("the window pass did not read a change stamped 1 s below the cursor: a user keeps the revoked repository")
+	}
+}
+
+// teamPollClock is the source clock of a team poll: real time plus an offset
+// the poll moves forward to make the next window pass due.
+type teamPollClock struct {
+	mu     sync.Mutex
+	offset time.Duration
+}
+
+func newTeamPollClock(fixture *ownershipFixture) *teamPollClock {
+	c := &teamPollClock{}
+	fixture.source.SetClockForTest(func() time.Time {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		return time.Now().UTC().Add(c.offset)
+	})
+	return c
+}
+
+func (c *teamPollClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.offset += d
+}
+
+// teamPollPages bounds one phase of a poll. A phase ends early only on the
+// team or on "nothing available".
+const teamPollPages = 50
+
+func convergeTeams(t *testing.T, ctx context.Context, fixture *ownershipFixture, cursor string) string {
+	t.Helper()
+	for page := 0; page < teamPollPages; page++ {
 		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
 			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: cursor,
 		})
 		if err != nil {
-			t.Fatalf("post-revoke page %d: %v", page, err)
+			t.Fatalf("converge page %d: %v", page, err)
 		}
 		if !available {
-			break
+			return cursor
 		}
 		cursor = batch.NextCursor
+	}
+	t.Fatalf("the source did not converge in %d pages", teamPollPages)
+	return ""
+}
+
+// teamEmittedWithin pages from *cursor until TEAM-GITHUB is emitted with
+// slugs that satisfy want, or the source has nothing available.
+func teamEmittedWithin(t *testing.T, ctx context.Context, fixture *ownershipFixture, cursor *string, want func([]string) bool) bool {
+	t.Helper()
+	for page := 0; page < teamPollPages; page++ {
+		batch, available, err := fixture.source.NextProjectionBatch(ctx, contextfabric.ProjectionCheckpoint{
+			OrgID: fixture.orgID, Source: devhealthsource.TeamsProjectsSourceName, Cursor: *cursor,
+		})
+		if err != nil {
+			t.Fatalf("poll page %d: %v", page, err)
+		}
+		if !available {
+			return false
+		}
+		*cursor = batch.NextCursor
 		for _, e := range batch.Entities {
-			if e.Subject.CanonicalID != "team:TEAM-GITHUB" {
-				continue
-			}
-			found = true
-			excluded = true
-			for _, repo := range e.Authorization.RepositorySlugs {
-				if repo == "acme/only-repo" {
-					excluded = false
-				}
+			if e.Subject.CanonicalID == "team:TEAM-GITHUB" && want(e.Authorization.RepositorySlugs) {
+				return true
 			}
 		}
-		if found {
-			break
-		}
 	}
-	if !found {
-		t.Fatal("TEAM-GITHUB was never re-emitted after its only open repository was revoked -- the watermark regressed when the last open row dropped out of the aggregation")
+	return false
+}
+
+// pollTeamAfterChange is the deadline form of a "change is re-emitted" check:
+// incremental pages first, then, if they end with nothing available, one
+// window pass (the named deadline: DefaultWindowPassInterval on the source
+// clock). It returns how the change arrived ("incremental" or "window pass"),
+// or "" when it never did, and logs the cursor and change stamps either way.
+func pollTeamAfterChange(t *testing.T, ctx context.Context, fixture *ownershipFixture, clock *teamPollClock, cursor string, change time.Time, want func([]string) bool) string {
+	t.Helper()
+	since := decodeCursorPosition(t, cursor).Since
+	if teamEmittedWithin(t, ctx, fixture, &cursor, want) {
+		t.Logf("team change read on an incremental page (converged since %v, change %v)", since, change)
+		return "incremental"
 	}
-	if !excluded {
-		t.Fatal("TEAM-GITHUB was re-emitted but acme/only-repo is still in RepositorySlugs after revocation")
+	clock.advance(devhealthsource.DefaultWindowPassInterval + time.Minute)
+	if teamEmittedWithin(t, ctx, fixture, &cursor, want) {
+		t.Logf("team change read only by the window pass: no incremental page read it (converged since %v, change %v, change below cursor %t)", since, change, !change.After(since))
+		return "window pass"
 	}
+	t.Logf("team change never read (converged since %v, change %v, change below cursor %t)", since, change, !change.After(since))
+	return ""
 }
 
 // subTeamAuthorizationOwnershipJoinScopedToOneOrganization proves the
@@ -460,6 +501,7 @@ func TestOwnershipProducerAgainstRealClickHouse(t *testing.T) {
 		{"team authorization keeps an open assertion when a later row closes its duplicate", "30000000-0000-4000-8000-000000000009", subTeamAuthorizationKeepsAnOpenAssertionWhenALaterRowClosesItsDuplicate},
 		{"team authorization is refreshed by an ownership-only change", "30000000-0000-4000-8000-00000000000a", subTeamAuthorizationRefreshedByOwnershipOnlyChange},
 		{"team authorization is refreshed by revoking the last open repository", "30000000-0000-4000-8000-00000000000c", subTeamAuthorizationRefreshedByRevokingLastOpenRepository},
+		{"team change below the cursor waits for the window pass", "30000000-0000-4000-8000-000000013495", subTeamChangeBelowTheCursorWaitsForTheWindowPass},
 		{"team authorization ownership join is scoped to one organization", "30000000-0000-4000-8000-00000000000b", subTeamAuthorizationOwnershipJoinScopedToOneOrganization},
 		{"two id-space ownership rows for one project yield exactly one edge", "30000000-0000-4000-8000-00000000000d", subTwoIDSpaceRowsYieldExactlyOneEdge},
 		{"empty-key projects each keep their own edge", "30000000-0000-4000-8000-00000000000e", subEmptyKeyProjectsEachKeepTheirOwnEdge},
