@@ -214,14 +214,14 @@ WHERE org_id = $1 AND credential_id = $2
 	credential.RevokedAt = cloneTime(&now)
 	// CHAOS-12124: revoking a browser credential revokes its whole family. The
 	// family reason is member_revoked unless the caller names one (an
-	// organization revoke names org_deprovisioned); a named reason is also the
-	// revoked credential's own audit detail, as the memory store writes it.
+	// organization revoke names org_deprovisioned); a named reason is added to
+	// the revoked credential's own audit details, as the memory store does.
 	familyReason := storage.BrowserFamilyRevokeMemberRevoked
 	event := withRevocationDetails(credentialRevokedEvent(credential, input.ActorID, now), input)
 	browserFamily := credential.Provenance.ClientClass == string(storage.CredentialClientClassBrowser) && credential.Provenance.FamilyID != ""
 	if browserFamily && input.FamilyReason != "" {
 		familyReason = storage.BrowserFamilyRevokeReason(input.FamilyReason)
-		event.Metadata = map[string]any{"family_id": credential.Provenance.FamilyID, "family_revoke_reason": input.FamilyReason}
+		event.Metadata = storage.WithFamilyRevokeDetails(event.Metadata, credential.Provenance.FamilyID, input.FamilyReason)
 	}
 	if err := s.audit.record(ctx, tx, event); err != nil {
 		return contractsv1.ClientCredential{}, err
