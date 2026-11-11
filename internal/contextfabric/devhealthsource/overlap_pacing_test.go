@@ -273,8 +273,12 @@ func TestSourcesPauseBetweenWindowPassesByDefault(t *testing.T) {
 	}
 }
 
-// Pins the freshness bound of a team change: a stamp at or below the shared
-// cursor waits for the next window pass, at most one DefaultWindowPassInterval.
+// Pins the START bound of a team change: a row stamped 1 s below the shared
+// cursor is not read by the incremental page, and the first window pass that
+// starts at most DefaultWindowPassInterval after the last one ended reads it.
+// It holds only for a stamp at most defaultReprojectOverlap behind the
+// frontier (an older one waits for the hourly reconcile, reconcile.go), and
+// the row is visible only once that pass has walked, which can span ticks.
 func TestTeamChangeBoundIsOneWindowPass(t *testing.T) {
 	t.Parallel()
 	if DefaultWindowPassInterval > defaultReprojectOverlap {
