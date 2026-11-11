@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 84894571f40bb2c0cde0a48148a97551f62e4ae8790188b0f5dd7b20fe2a37d2
+# canonical-content-sha256: a2dd897c05058dd2f50c7e67ba9ab98f91c0d2d5d21fbbdaf995c52096add118
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1420,7 +1420,7 @@ paths:
             application/json:
               schema:
                 "$ref": "../jsonschema/v1/credential_revoke_organization_response.v1.schema.json"
-          description: "One batch of the organization's live credentials is revoked; each writes one credential_revoked audit row (actor type admin, the reason) and one revoked lifecycle event. Only a workload-class credential whose binding role is revoke is served; a disabled organization is served, a deleted one is 401, a live one is 409 organization_live (nothing revoked)."
+          description: "One batch of the organization's live credentials is revoked. The credential each revoke operation names gets one credential_revoked audit row (actor type admin, the reason; a browser credential's row also carries family_id and family_revoke_reason org_deprovisioned) and one revoked lifecycle event; a browser sibling revoked with its family gets the family cascade's row (actor type user, family_id, family_revoke_reason). An expired credential is never a revoke target; an expired browser credential that is a sibling in a revoked family is revoked with its family (the existing cascade). Only a workload-class credential whose binding role is revoke is served; a disabled organization is served; a deleted organization is 401 at authentication once the cached organization state holds the deletion; before that the fresh state read decides, and a deleted organization is then served only with organization_deleted; a live one is 409 organization_live (nothing revoked)."
         "400":
           "$ref": "#/components/responses/Error"
         "401":
