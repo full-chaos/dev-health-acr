@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
 const pacingInterval = 5 * time.Minute
@@ -269,5 +270,52 @@ func TestSourcesPauseBetweenWindowPassesByDefault(t *testing.T) {
 	}
 	if got := clickhouse.plan("").windowInterval; got != DefaultWindowPassInterval {
 		t.Errorf("the ClickHouse plan pauses %s, want %s", got, DefaultWindowPassInterval)
+	}
+}
+
+// Pins the freshness bound of a team change: a stamp at or below the shared
+// cursor waits for the next window pass, at most one DefaultWindowPassInterval.
+func TestTeamChangeBoundIsOneWindowPass(t *testing.T) {
+	t.Parallel()
+	if DefaultWindowPassInterval > defaultReprojectOverlap {
+		t.Fatalf("window pass interval %s exceeds the overlap %s: a stamp one overlap below the cursor could be missed", DefaultWindowPassInterval, defaultReprojectOverlap)
+	}
+	if DefaultWindowPassInterval > 5*time.Minute {
+		t.Fatalf("window pass interval %s: the documented bound is 5 minutes", DefaultWindowPassInterval)
+	}
+	r := newChurnRig(t, churnStart)
+	r.plan.windowInterval = DefaultWindowPassInterval
+	teams := &liveKeysetRows{}
+	r.plan.tables = append(r.plan.tables, entityTable{name: "team_ownership", query: func(ctx context.Context, _ contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
+		return fetch(ctx, teams, "", rowLimitBindings(orgID, cursor, limit), limit, scanRepositoryKeysetRow)
+	}})
+	r.land(50, churnStart.Add(-20*time.Minute), churnStart.Add(-time.Minute))
+	r.runTick() // paged read, then the first window pass; it ends in this call
+	passEnd := r.now
+	frontier, err := decodeCursor(r.cursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := r.pass(); p.walking || !p.nextStart.Equal(passEnd.Add(DefaultWindowPassInterval)) {
+		t.Fatalf("precondition: first pass should have ended with the next one due at %s; walking=%v nextStart=%s", passEnd.Add(DefaultWindowPassInterval), p.walking, p.nextStart)
+	}
+	key := r.key()
+	teams.rows = append(teams.rows, keysetRow{at: frontier.Since.Add(-time.Second), key: key})
+	// (ii) every tick before the next pass is due: the paged read does not see it.
+	for r.now.Add(churnTick).Before(passEnd.Add(DefaultWindowPassInterval)) {
+		r.advance()
+		r.runTick()
+		if at, ok := r.projected[key]; ok {
+			t.Fatalf("a team row 1 s below the cursor was read at tick %d, before the next window pass was due", at)
+		}
+	}
+	// (iii) the first pass due at or before one interval later reads it.
+	r.advance()
+	r.runTick()
+	if _, ok := r.projected[key]; !ok {
+		t.Fatalf("the window pass due at %s (end of last pass + %s) did not read a team row 1 s below the cursor", r.now.Format("15:04:05"), DefaultWindowPassInterval)
+	}
+	if waited := r.now.Sub(passEnd); waited > DefaultWindowPassInterval {
+		t.Fatalf("the team row was read %s after the last pass ended; want at most %s", waited, DefaultWindowPassInterval)
 	}
 }

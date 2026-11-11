@@ -910,6 +910,8 @@ scope, so an edge the backend lost is written again without a change in the
 groups log. Each page logs `project team ownership reconcile` at Info
 (`groups_re_derived`, `pass_complete`, `period`).
 
+**Team change freshness bound (CHAOS-13555).** A team ownership or membership change is visible in the graph within one window pass (5 minutes); the hourly reconcile is the backstop. The cursor is shared by all tables and compares strictly after (`sincePredicate` in `devhealthsource/tables.go`), so a team row stamped at or below the cursor is not read by the next incremental page; the next window pass (`overlapBatch` in `devhealthsource/overlap.go`) reads it. The pass starts at most `DefaultWindowPassInterval` (5 minutes) after the last one ended, and re-reads `defaultReprojectOverlap` (15 minutes) behind the frontier, so the interval is no longer than the overlap. `TestTeamChangeBoundIsOneWindowPass` pins this. A team-only window pass on every tick is a named option, not built.
+
 **Column-arm project edge retraction.** A work item has at most one open
 column-arm `BELONGS_TO_PROJECT` edge: the sink keeps only the edge the current
 column row asserts. Two cases retract every open column-arm edge of the work
