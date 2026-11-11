@@ -227,3 +227,67 @@ func TestParseApprovalDecisionMode(t *testing.T) {
 		t.Fatalf("unknown mode = %q, %v; want off and an error to log", got, err)
 	}
 }
+
+// pdpServing is a real pep client against a PDP that answers status and body.
+func pdpServing(t *testing.T, status int, body string) pep.Decider {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+	client, err := pep.New(pep.Config{BaseURL: server.URL, AllowPlainHTTP: true, HTTPClient: server.Client(), ClientService: "dev-health-acr-api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+// A-3 (c): a 200 that is not a decision document, and an allow bound to
+// another organization, are no decision: 503, never 403 and never an approval.
+func TestApprovalDecisions_aMalformedOrMisboundAllowIsUnavailable(t *testing.T) {
+	expires := time.Now().UTC().Add(30 * time.Second).Format(time.RFC3339)
+	for name, test := range map[string]struct {
+		body   string
+		reason string
+	}{
+		"malformed 200":                     {`{"allowed":true`, "pdp_malformed"},
+		"an allow for another organization": {fmt.Sprintf(`{"allowed":true,"decision_id":"dec_EXAMPLE0000000000000000001","expires_at":%q,"organization_id":"22222222-2222-2222-2222-222222222222","policy_revision":42,"principal_id":"prn_EXAMPLE0000000000000001","reason_code":"allowed_by_role","schema_version":"authorization_decision.v1"}`, expires), "pdp_mismatch"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			decisions, logs := newDecisions(t, ApprovalDecisionEnforce, pdpServing(t, http.StatusOK, test.body))
+
+			err := decisions.Check(context.Background(), approvalPrincipal(), []string{"*"})
+
+			if !errors.Is(err, ErrApprovalDecisionUnavailable) {
+				t.Fatalf("err = %v; want the 503 error", err)
+			}
+			if !strings.Contains(logs.String(), `"outcome":"unavailable","reason":"`+test.reason+`"`) {
+				t.Fatalf("no unavailable line with %s:\n%s", test.reason, logs.String())
+			}
+		})
+	}
+}
+
+// A-3 (d): shadow with no reference, or one that failed the pair check, asks
+// nothing, refuses nothing and records reference_missing with the reason.
+func TestApprovalDecisions_shadowWithoutAReferenceRecordsIt(t *testing.T) {
+	for fault, reason := range map[string]string{"": ApproverReferenceAbsent, ApproverReferencePair: ApproverReferencePair} {
+		t.Run(reason, func(t *testing.T) {
+			decider := &countingDecider{next: pepfake.New(allowRule(nil, deviceFlowTestOrgID))}
+			decisions, logs := newDecisions(t, ApprovalDecisionShadow, decider)
+			principal := approvalPrincipal()
+			principal.ApproverReference, principal.ApproverReferenceFault = "", fault
+
+			err := decisions.Check(context.Background(), principal, []string{"*"})
+
+			if err != nil || decider.calls != 0 {
+				t.Fatalf("err = %v calls = %d; want nil and 0", err, decider.calls)
+			}
+			if !strings.Contains(logs.String(), `"mode":"shadow","outcome":"reference_missing","reason":"`+reason+`"`) {
+				t.Fatalf("no reference_missing line with %s:\n%s", reason, logs.String())
+			}
+		})
+	}
+}

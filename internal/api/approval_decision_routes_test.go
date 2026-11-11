@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -8,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -59,6 +61,11 @@ func signApproverReference(t *testing.T, private ed25519.PrivateKey, now time.Ti
 
 func approvalDecisionApp(t *testing.T, decider pep.Decider) (*App, ed25519.PrivateKey, time.Time) {
 	t.Helper()
+	return approvalDecisionAppMode(t, auth.ApprovalDecisionEnforce, decider, nil)
+}
+
+func approvalDecisionAppMode(t *testing.T, mode auth.ApprovalDecisionMode, decider pep.Decider, logger *slog.Logger) (*App, ed25519.PrivateKey, time.Time) {
+	t.Helper()
 	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -70,7 +77,7 @@ func approvalDecisionApp(t *testing.T, decider pep.Decider) (*App, ed25519.Priva
 	if err != nil {
 		t.Fatal(err)
 	}
-	decisions, err := auth.NewApprovalDecisions(auth.ApprovalDecisionEnforce, decider, nil)
+	decisions, err := auth.NewApprovalDecisions(mode, decider, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,5 +216,34 @@ func TestApprovalDecisionRoute_previewNeverAsks(t *testing.T) {
 func TestApprovalDecisionRoute_consentDenyIs403(t *testing.T) {
 	if oauthConsentStatus[auth.OAuthConsentCodeDenied] != http.StatusForbidden {
 		t.Fatalf("consent access_denied status = %d; want 403", oauthConsentStatus[auth.OAuthConsentCodeDenied])
+	}
+}
+
+// A-3 (b): a replayed request assertion with a valid reference is refused
+// before the handler: the decision point is asked once, for the first request.
+func TestApprovalDecisionRoute_aReplayedAssertionAsksNothing(t *testing.T) {
+	decider := &routeDecider{next: allowOrg1(t)}
+	app, private, now := approvalDecisionApp(t, decider)
+	approval := startApproval(t, app)
+
+	first := approveWith(t, app, private, now, approval, "approval_replayed", true)
+	replay := approveWith(t, app, private, now, approval, "approval_replayed", true)
+
+	if first.Code != http.StatusOK || replay.Code == http.StatusOK || decider.calls != 1 {
+		t.Fatalf("first %d replay %d calls %d; want 200, a refusal and 1", first.Code, replay.Code, decider.calls)
+	}
+}
+
+// A-3 (e): with the check off, a request that carries the header is approved,
+// the decision point is never asked and no decision line is written.
+func TestApprovalDecisionRoute_offIgnoresTheHeader(t *testing.T) {
+	decider := &routeDecider{next: pepfake.New()}
+	logs := &bytes.Buffer{}
+	app, private, now := approvalDecisionAppMode(t, auth.ApprovalDecisionOff, decider, slog.New(slog.NewJSONHandler(logs, nil)))
+
+	response := approveWith(t, app, private, now, startApproval(t, app), "approval_off", true)
+
+	if response.Code != http.StatusOK || decider.calls != 0 || strings.Contains(logs.String(), "device approval decision") {
+		t.Fatalf("status %d calls %d logs %s; want 200, 0 and no decision line", response.Code, decider.calls, logs.String())
 	}
 }
