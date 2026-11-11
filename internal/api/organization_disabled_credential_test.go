@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -256,7 +258,9 @@ func TestOrganizationDisabled_oauthConsentAndExchangeAreRefused(t *testing.T) {
 }
 
 // DI: a disabled organization's browser family cannot refresh: invalid_grant
-// organization_disabled, no rotation, and the family is revoked.
+// organization_disabled, no rotation, and the family is revoked (one
+// credential_revoked audit row with family_revoke_reason org_deprovisioned and
+// one acr_credential.revoked outbox row).
 func TestOrganizationDisabled_browserRefreshRevokesTheFamily(t *testing.T) {
 	b := newOrgGoneBrowser(t)
 	b.ops.set(orgOpsDisabled)
@@ -271,6 +275,33 @@ func TestOrganizationDisabled_browserRefreshRevokesTheFamily(t *testing.T) {
 	}
 	if got := b.refresh.rotations.Load(); got != 0 {
 		t.Fatalf("RotateBrowserRefresh calls = %d, want 0", got)
+	}
+	// The harness holds one credential, the login's: the family revoke writes
+	// one audit row and one outbox row for it.
+	audit := b.app.runtime.Audit.(*memory.AuditStore)
+	var revoked []string
+	for _, event := range audit.Events() {
+		if event.Action == "credential_revoked" {
+			if event.Metadata["family_revoke_reason"] != "org_deprovisioned" {
+				t.Fatalf("credential_revoked audit metadata = %v, want family_revoke_reason org_deprovisioned", event.Metadata)
+			}
+			revoked = append(revoked, event.ResourceID)
+		}
+	}
+	if len(revoked) != 1 {
+		t.Fatalf("credential_revoked audit rows = %v, want one", revoked)
+	}
+	outboxRows := 0
+	for _, row := range audit.LifecycleOutbox() {
+		if row.EventType == "acr_credential.revoked" {
+			if row.AggregateID != revoked[0] {
+				t.Fatalf("acr_credential.revoked outbox row for %s, want %s", row.AggregateID, revoked[0])
+			}
+			outboxRows++
+		}
+	}
+	if outboxRows != 1 {
+		t.Fatalf("acr_credential.revoked outbox rows = %d, want 1", outboxRows)
 	}
 	b.ops.set(orgOpsLive)
 	if code := b.read(b.login.AccessToken); code != http.StatusUnauthorized {
@@ -351,5 +382,56 @@ func TestOrganizationDisabled_onBehalfRevokeStillServesTheRevokeWorkload(t *test
 				t.Fatalf("credential live = %v, want %v", got, tc.live)
 			}
 		})
+	}
+}
+
+// DL: a per-org workload row of a disabled or gone organization is refused at
+// exchange, read fresh, unless its role is revoke (the revoke must reach the
+// organization); a live organization is bound; an outage fails closed.
+func TestOrganizationDisabled_perOrgWorkloadRowIsRefusedExceptRevoke(t *testing.T) {
+	identity := authverify.SubjectIdentity{TrustDomain: "cluster.local", Namespace: "dev-health", ServiceAccountName: "worker", ServiceAccountUID: "uid-2"}
+	key := storage.WorkloadBindingKey{TrustDomain: identity.TrustDomain, Namespace: identity.Namespace, ServiceAccountName: identity.ServiceAccountName, ServiceAccountUID: identity.ServiceAccountUID}
+	for name, tc := range map[string]struct {
+		mode  orgOpsMode
+		role  string
+		bound bool
+		err   error
+		reads int32
+	}{
+		"read, disabled":   {orgOpsDisabled, "read", false, auth.ErrWorkloadOrgNotBound, 1},
+		"read, gone":       {orgOpsGone, "read", false, auth.ErrWorkloadOrgNotBound, 1},
+		"read, live":       {orgOpsLive, "read", true, nil, 1},
+		"read, 5xx":        {orgOpsServerError, "read", false, auth.ErrWorkloadOrgCheckUnavailable, 1},
+		"revoke, disabled": {orgOpsDisabled, "revoke", true, nil, 0},
+		"revoke, gone":     {orgOpsGone, "revoke", true, nil, 0},
+	} {
+		for _, selector := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s, selector %v", name, selector), func(t *testing.T) {
+				ops := newFakeOrgOps(t, tc.mode)
+				bindings := memory.NewWorkloadBindingStore()
+				bindings.Put(key, storage.WorkloadBinding{BindingID: "wlb_worker_" + tc.role, OrgID: orgGoneTestOrg, Role: tc.role, RepositoryScopes: []string{"*"}})
+				resolver, err := auth.NewGrantResolver(bindings, OrganizationPresenceFor(ops.client))
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx := context.Background()
+				if selector {
+					ctx = auth.WithWorkloadOrgSelector(ctx, orgGoneTestOrg)
+				}
+
+				grant, err := resolver.Resolve(ctx, identity)
+
+				if tc.bound {
+					if err != nil || grant.OrgID != orgGoneTestOrg || !equalStrings(grant.GrantedScopes, auth.RoleScopes(tc.role)) {
+						t.Fatalf("grant %+v, err %v; want the %s grant in the organization", grant, err, tc.role)
+					}
+				} else if !errors.Is(err, tc.err) {
+					t.Fatalf("grant %+v, err %v; want %v", grant, err, tc.err)
+				}
+				if got := ops.hits.Load(); got != tc.reads {
+					t.Fatalf("Dev Health reads = %d, want %d", got, tc.reads)
+				}
+			})
+		}
 	}
 }
