@@ -95,7 +95,7 @@ env:
   # RequireContainers); a job without it fails its container tests instead of
   # skipping them. test-workflow-contract.sh pins it.
   ACR_CONTAINER_TESTS: '1'
-  GO_VERSION: '1.27.3'
+  GO_VERSION: '1.27.4'
   GOFLAGS: -trimpath
 
 jobs:

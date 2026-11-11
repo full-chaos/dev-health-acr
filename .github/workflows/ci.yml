@@ -112,7 +112,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         if: github.event_name == 'pull_request'
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       - name: Select the unit and race shards this change reaches
         id: reach
@@ -187,7 +187,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: false
       - uses: ./.github/actions/go-modcache
         with: {mode: warm}
@@ -313,7 +313,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -343,7 +343,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -523,7 +523,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -723,7 +723,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -811,7 +811,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -1016,7 +1016,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -1124,7 +1124,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -1215,7 +1215,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -1293,7 +1293,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -1368,7 +1368,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -1443,7 +1443,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -1536,7 +1536,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -1612,7 +1612,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -1689,7 +1689,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -1769,7 +1769,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -1849,7 +1849,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -1913,7 +1913,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -1975,7 +1975,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -2044,7 +2044,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -2119,7 +2119,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -2190,7 +2190,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: ${{ runner.environment == 'github-hosted' }}
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -2258,7 +2258,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -2303,7 +2303,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
@@ -2512,7 +2512,7 @@ jobs:
         with: {persist-credentials: false}
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: true
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
@@ -2894,7 +2894,7 @@ jobs:
       # actions/setup-go v6.5.0
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: '1.27.3'
+          go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only; the self-hosted pool keeps its
