@@ -25,7 +25,7 @@ func (a *App) credentialLifecycleListHandler() http.Handler {
 	if a.runtime == nil || a.authenticator == nil {
 		return http.HandlerFunc(a.handleRuntimeUnavailable)
 	}
-	return a.authenticator.MiddlewareWithOrganizationCheck(auth.OrganizationCheckAdmitDisabled,
+	return a.authenticator.MiddlewareFor(false,
 		a.requireWorkloadClass(
 			a.authenticator.RequireScope(auth.ScopeCredentialLifecycleRead,
 				LimitMiddleware(a.limits, limits.RequestClassAuth, http.HandlerFunc(a.handleCredentialLifecycleList)))))

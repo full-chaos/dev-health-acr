@@ -1310,7 +1310,7 @@
         "acr_client_credential"
       ],
       "primary_validator": {
-        "description": "credentialLifecycleListHandler: Authenticator.MiddlewareFor(allowWebAssertions=FALSE) refuses an absent or malformed bearer and any web assertion before the credential lookup; requireWorkloadClass then refuses every credential whose row class is not workload (403 credential_class_refused); Authenticator.RequireScope(credential_lifecycle:read) admits only the reconcile workload binding role; all three run before the listing is read (CHAOS-11200).",
+        "description": "credentialLifecycleListHandler: Authenticator.MiddlewareFor(allowWebAssertions=FALSE) refuses an absent or malformed bearer and any web assertion before the credential lookup, and a credential of an organization Dev Health answers as deleted or disabled (401); requireWorkloadClass then refuses every credential whose row class is not workload (403 credential_class_refused); Authenticator.RequireScope(credential_lifecycle:read) admits only the reconcile workload binding role; all three run before the listing is read (CHAOS-11200).",
         "anchor": {
           "path": "internal/api/credential_lifecycle_list_route.go",
           "line": 24,
@@ -1353,7 +1353,7 @@
         "acr_client_credential"
       ],
       "primary_validator": {
-        "description": "credentialRevokeOnBehalfHandler: Authenticator.MiddlewareFor(allowWebAssertions=FALSE) refuses an absent or malformed bearer and any web assertion before the credential lookup; requireWorkloadClass then refuses every credential whose row class is not workload (403 credential_class_refused); RequireScope(credential_lifecycle:revoke), which only the revoke binding role carries, refuses every other workload (403 insufficient_scope). The handler then validates the closed credential_revoke_on_behalf_request.v1 body, and Service.RevokeOnBehalf revokes only an MCP-bound (oauth_user class) credential of the binding's organization, for an admin or for the credential's approving user; every other credential answers one 404.",
+        "description": "credentialRevokeOnBehalfHandler: Authenticator.MiddlewareWithOrganizationCheck(OrganizationCheckAdmitDisabled) refuses an absent or malformed bearer and any web assertion before the credential lookup, refuses a credential of an organization Dev Health answers as deleted (401) and admits one it answers as disabled; requireWorkloadClass then refuses every credential whose row class is not workload (403 credential_class_refused); RequireScope(credential_lifecycle:revoke), which only the revoke binding role carries, refuses every other workload (403 insufficient_scope). The handler then validates the closed credential_revoke_on_behalf_request.v1 body, and Service.RevokeOnBehalf revokes only an MCP-bound (oauth_user class) credential of the binding's organization, for an admin or for the credential's approving user; every other credential answers one 404.",
         "anchor": {
           "path": "internal/api/credential_revoke_on_behalf_route.go",
           "line": 24,

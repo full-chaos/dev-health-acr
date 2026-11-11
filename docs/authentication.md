@@ -343,9 +343,13 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
 - A disabled organization (Dev Health's 404 coded `acr_organization_disabled`:
   the organization exists and is disabled) is refused the same way, with audit
   reason `organization_disabled`, and is never read as gone: the organization
-  purge refuses it. The credential lifecycle routes a revoke workload uses
-  (`POST /internal/v1/credentials/{credential_id}/revoke` and the listing)
-  admit it, and the `live_orgs` revoke binding still binds it. A disabled
+  purge refuses it. Bearer calls are refused within the cache bound (30 s by
+  default after a known answer, as for a deleted organization), and at once
+  when the credential is revoked (`revoked_at` is checked before the
+  organization). The on-behalf revoke
+  (`POST /internal/v1/credentials/{credential_id}/revoke`) admits it and the
+  `live_orgs` revoke binding still binds it, so its credentials can be
+  revoked; the credential listing refuses it like any other route. A disabled
   answer is never cached; a reactivated organization is admitted on its next
   read.
 - Issuance reads the organization fresh: the device approval and the OAuth
