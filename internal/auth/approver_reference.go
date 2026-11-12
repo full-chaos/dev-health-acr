@@ -15,7 +15,7 @@ import (
 // assertion key for the two approval calls. acr checks it against the web
 // assertion of the same request and forwards only it to the policy decision
 // point (auth-service), which reads the approver's session live. Architecture:
-// web docs/auth-acr-device-approval.md; diagram docs/diagrams/device-approval.mmd.
+// docs/device-approval.md; diagram source device-approval-architecture.md beside this file.
 const (
 	ApproverReferenceHeader = "X-ACR-Approver-Reference"
 	// approverReferenceType is neither the web assertion's typ (JWT) nor an

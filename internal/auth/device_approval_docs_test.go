@@ -76,7 +76,7 @@ func TestDeviceApprovalPageHoldsTheSourceTables(t *testing.T) {
 		header  string
 		columns int
 		count   int
-	}{{"Token", 5, 9}, {"Key", 3, 3}, {"Setting", 5, 3}} {
+	}{{"Token", 5, 10}, {"Key", 3, 3}, {"Setting", 5, 5}} {
 		pageRows := tableRows(page, table.header, table.columns)
 		sourceRows := tableRows(source, table.header, table.columns)
 		if len(sourceRows) != table.count {

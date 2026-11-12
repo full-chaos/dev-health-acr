@@ -673,9 +673,9 @@ rows per statement.
 approval (`POST /api/v1/oauth/device_approval`) and a consent approve
 (`POST /authorize/consent`) ask the policy decision point in auth-service
 whether the approver may issue the credential. The architecture page, with the
-sequence and component diagrams and the table of every signed token, is web
-`docs/auth-acr-device-approval.md`; the diagram source here is
-[`docs/diagrams/device-approval.mmd`](diagrams/device-approval.mmd).
+sequence and component diagrams and the table of every signed token, is
+[`docs/device-approval.md`](device-approval.md) (its source is
+`internal/auth/device-approval-architecture.md`; the web repository holds the same diagrams and rows).
 
 - web sends a second token with the web assertion: `X-ACR-Approver-Reference`,
   an EdDSA JWT signed with the web assertion key, `typ` `web-approver+jwt`,
