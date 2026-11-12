@@ -156,7 +156,7 @@ func TestClientHasEntitlement_fails_closed_for_timeout_redirect_and_oversized_bo
 		handler func(chan<- struct{}) http.Handler
 	}{
 		{"stalled response", entitlements.Config{Timeout: time.Second}, func(started chan<- struct{}) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(started); <-r.Context().Done() })
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { close(started); abortAfterClientGivesUp(w, r) })
 		}},
 		{"redirect", entitlements.Config{}, func(chan<- struct{}) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, "/target", http.StatusFound) })

@@ -28,7 +28,7 @@ func TestOrganizationStateNowSeparatesLiveDisabledUnknownAndOutage(t *testing.T)
 		"other coded 404":     {respond(http.StatusNotFound, `{"code":"acr_organization_suspended"}`), 0, true},
 		"503 with the code":   {respond(http.StatusServiceUnavailable, disabledBody), 0, true},
 		"401 with the code":   {respond(http.StatusUnauthorized, disabledBody), 0, true},
-		"timeout":             {func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }, 0, true},
+		"timeout":             {abortAfterClientGivesUp, 0, true},
 		"404 body not JSON":   {respond(http.StatusNotFound, `<html></html>`), 0, true},
 		"404 code not string": {respond(http.StatusNotFound, `{"code":7}`), 0, true},
 	}

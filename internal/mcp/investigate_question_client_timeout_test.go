@@ -29,6 +29,9 @@ func waitBudgetBootstrap(t *testing.T, callTimeout, wait, hostedWork time.Durati
 				select {
 				case <-time.After(hostedWork):
 				case <-r.Context().Done():
+					// Abort: a return sends an implicit 200 that a client closing
+					// its TLS connection can still read.
+					panic(http.ErrAbortHandler)
 				}
 				return
 			}

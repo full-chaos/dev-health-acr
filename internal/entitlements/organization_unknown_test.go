@@ -24,6 +24,14 @@ func respond(status int, body string) http.HandlerFunc {
 	}
 }
 
+// abortAfterClientGivesUp holds the request until the client abandons it, then
+// aborts. Returning instead sends an implicit 200 with an empty body, which a
+// client closing its TLS connection can still read as a response.
+func abortAfterClientGivesUp(_ http.ResponseWriter, r *http.Request) {
+	<-r.Context().Done()
+	panic(http.ErrAbortHandler)
+}
+
 func serveClient(t *testing.T, handler http.Handler, overrides entitlements.Config) *entitlements.Client {
 	t.Helper()
 	server := httptest.NewTLSServer(handler)

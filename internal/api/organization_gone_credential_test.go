@@ -80,7 +80,10 @@ func newFakeOrgOps(t *testing.T, mode orgOpsMode) *fakeOrgOps {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{"detail":"Not found"}`))
 		case orgOpsTimeout:
+			// Abort, never return: a return sends an implicit 200 that a client
+			// closing its TLS connection can still read.
 			<-r.Context().Done()
+			panic(http.ErrAbortHandler)
 		}
 	}))
 	t.Cleanup(server.Close)
