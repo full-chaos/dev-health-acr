@@ -243,7 +243,7 @@ func (v *WebAssertionVerifier) logRepositoryScopeFault(r *http.Request, claims p
 	switch {
 	case len(scopes) == 0:
 	case len(scopes) == 1 && scopes[0] == "*":
-		scope, reason = "*", "organization-wide scope is only valid for credential issue on an organization-wide path"
+		scope, reason = "*", "organization-wide scope is only valid for credential issue on an organization-wide path or with a read route's exact read permissions"
 	default:
 		scope, reason, _ = webRepositoryScopeFault(scopes)
 	}
