@@ -763,6 +763,9 @@ const (
 	// OAuthConsentCodeDenied: the policy decision point does not let the
 	// approver issue this credential (CHAOS-13586); the request stays pending.
 	OAuthConsentCodeDenied = "access_denied"
+	// OAuthConsentCodeTooManyRepositories: the approval names more than
+	// contractsv1.MaxRepositoryScopes repositories (CHAOS-13562).
+	OAuthConsentCodeTooManyRepositories = "too_many_repositories"
 )
 
 // OAuthConsentRequest is what the web consent page shows before the signed-in
@@ -1007,6 +1010,8 @@ func consentDecisionError(err error) error {
 		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeOrganizationDisabled, false)
 	case errors.Is(err, ErrApprovalNotPermitted):
 		return oauthError(OAuthConsentCodeDenied, oauthvocab.OutcomeAccessDenied, false)
+	case errors.Is(err, ErrTooManyRepositories):
+		return oauthError(OAuthConsentCodeTooManyRepositories, oauthvocab.OutcomeTooManyRepositories, false)
 	case errors.Is(err, ErrInvalidDeviceFlow):
 		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidRequest, false)
 	case errors.Is(err, storage.ErrDeviceAuthorizationConflict):

@@ -23,6 +23,7 @@ var invalidRequestReasons = map[string]struct{}{
 	"invalid_idempotency_key": {}, // Idempotency-Key header missing, duplicated, out of bounds or not equal to the body key
 
 	WindowBeyondKindMaxReason: {}, // read_facts window wider than the kinds asked allow (details.max_days)
+	TooManyRepositoriesReason: {}, // device approval naming more than MaxRepositoryScopes repositories (details.max_repository_scopes)
 
 	ContextFabricSuppliedSynthesisReasonInputChanged:           {}, // supplied synthesis written from another input
 	ContextFabricSuppliedSynthesisReasonInterpretationRequired: {}, // supplied synthesis without a supplied interpretation

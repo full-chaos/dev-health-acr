@@ -22,8 +22,10 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/logsanitize"
 	"github.com/full-chaos/dev-health-acr/internal/oauthvocab"
+	"github.com/full-chaos/dev-health-acr/internal/reposlug"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -63,6 +65,21 @@ const OAuthRegisterPath = "/register"
 const OAuthDeviceAuthorizationPath = "/device_authorization"
 
 const oauthFormMaxBytes = 16 * 1024
+
+// oauthConsentBodyMaxBytes bounds the consent route's JSON body
+// (CHAOS-13562). An approve names up to contractsv1.MaxRepositoryScopes
+// repositories of up to reposlug.MaxSlugBytes each; the slack covers the rest
+// of the largest legal body: per repository two quotes and a comma, and
+// oauthConsentBodySlackBytes for the action, the handle, the member names and
+// the JSON punctuation. A repository key needs no JSON escape (its grammar is
+// ASCII letters, digits, '.', '_', '-' and '/'). A test builds that body and
+// pins it under the bound.
+const oauthConsentBodyMaxBytes = contractsv1.MaxRepositoryScopes*(reposlug.MaxSlugBytes+3) + oauthConsentBodySlackBytes
+
+// oauthConsentBodySlackBytes is the fixed part of the consent body: the
+// action and handle members (a handle is 43 bytes) and the punctuation, with
+// room to spare for insignificant whitespace.
+const oauthConsentBodySlackBytes = 1024
 
 // oauthAuthorizationServerMetadata is the RFC 8414 document.
 type oauthAuthorizationServerMetadata struct {
@@ -769,6 +786,9 @@ var oauthConsentStatus = map[string]int{
 	auth.OAuthConsentCodeExpired:   http.StatusGone,
 	auth.OAuthConsentCodeDenied:    http.StatusForbidden,
 	auth.OAuthConsentCodeCompleted: http.StatusConflict,
+	// CHAOS-13562: the approval names more repositories than one credential
+	// may hold.
+	auth.OAuthConsentCodeTooManyRepositories: http.StatusBadRequest,
 }
 
 // handleOAuthConsent serves the web consent page. The route wrapper admits
@@ -776,13 +796,17 @@ var oauthConsentStatus = map[string]int{
 // and the repositories an approval grants come from the web, never the
 // browser that holds the handle.
 func (a *App) handleOAuthConsent(w http.ResponseWriter, r *http.Request) {
-	request, ok := decodeOAuthConsentBody(w, r)
+	request, ok, tooLarge := decodeOAuthConsentBody(w, r)
 	step := oauthvocab.StepConsent
 	if ok && request.Action == oauthConsentActionPreview {
 		step = oauthvocab.StepConsentPreview
 	}
 	if !ok {
-		writeOAuthJSON(w, http.StatusBadRequest, oauthErrorBody{Error: auth.OAuthConsentCodeInvalid})
+		refusal := oauthErrorBody{Error: auth.OAuthConsentCodeInvalid}
+		if tooLarge {
+			refusal.ErrorDescription = oauthConsentBodyTooLargeDescription
+		}
+		writeOAuthJSON(w, http.StatusBadRequest, refusal)
 		a.emitOAuthStep(r, step, oauthvocab.OutcomeInvalidRequest, "", http.StatusBadRequest)
 		return
 	}
@@ -832,29 +856,36 @@ func (a *App) handleOAuthConsent(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// oauthConsentBodyTooLargeDescription is the error_description of a consent
+// body over oauthConsentBodyMaxBytes (CHAOS-13562).
+const oauthConsentBodyTooLargeDescription = "body_too_large"
+
 // decodeOAuthConsentBody reads one JSON object with a known action; approve
-// must name repositories, preview and deny must not.
-func decodeOAuthConsentBody(w http.ResponseWriter, r *http.Request) (oauthConsentRequestBody, bool) {
-	var request oauthConsentRequestBody
+// must name repositories, preview and deny must not. tooLarge reports a body
+// over oauthConsentBodyMaxBytes.
+func decodeOAuthConsentBody(w http.ResponseWriter, r *http.Request) (request oauthConsentRequestBody, ok, tooLarge bool) {
 	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
-		return request, false
+		return oauthConsentRequestBody{}, false, false
 	}
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, oauthFormMaxBytes))
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, oauthConsentBodyMaxBytes))
+	if maxBytes := (*http.MaxBytesError)(nil); errors.As(err, &maxBytes) {
+		return oauthConsentRequestBody{}, false, true
+	}
 	if err != nil || !uniqueTopLevelJSONKeys(raw) {
-		return oauthConsentRequestBody{}, false
+		return oauthConsentRequestBody{}, false, false
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil || decoder.More() {
-		return oauthConsentRequestBody{}, false
+		return oauthConsentRequestBody{}, false, false
 	}
 	switch request.Action {
 	case oauthConsentActionApprove:
-		return request, len(request.RepositoryScopes) > 0
+		return request, len(request.RepositoryScopes) > 0, false
 	case oauthConsentActionPreview, oauthConsentActionDeny:
-		return request, request.RepositoryScopes == nil
+		return request, request.RepositoryScopes == nil, false
 	default:
-		return oauthConsentRequestBody{}, false
+		return oauthConsentRequestBody{}, false, false
 	}
 }
 

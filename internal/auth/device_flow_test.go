@@ -110,7 +110,7 @@ func TestDeviceFlow_PreviewFiltersHintsWithoutUsingThemAsAuthorization(t *testin
 	require.Equal(t, []string{"full-chaos/dev-health-acr"}, preview.RepositoryHints)
 
 	approved, err := fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
-		Principal: deviceApprovalPrincipal("full-chaos/dev-health-acr", "full-chaos/other"),
+		Principal: deviceApprovalPrincipal("full-chaos/other"),
 		UserCode:  started.UserCode, RepositoryScopes: []string{"full-chaos/other"},
 	})
 	require.NoError(t, err)
@@ -236,7 +236,10 @@ func TestDeviceFlow_Approve_persistsOrganizationWideGrantEvenWithRepositoryHints
 	require.ErrorIs(t, duplicateErr, storage.ErrDeviceAuthorizationConflict)
 }
 
-func TestDeviceFlow_Approve_acceptsExactRepositorySubsetBoundedByPrincipal(t *testing.T) {
+// CHAOS-13562: an assertion that carries the repository_scopes claim must
+// name the body's list; a subset is refused and leaves the request pending,
+// the equal list is approved.
+func TestDeviceFlow_Approve_requiresTheClaimToEqualTheBodyList(t *testing.T) {
 	// Given
 	fixture := newDeviceFlowFixture(t, deviceFlowRandom(5))
 	started, err := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{
@@ -244,16 +247,67 @@ func TestDeviceFlow_Approve_acceptsExactRepositorySubsetBoundedByPrincipal(t *te
 	})
 	require.NoError(t, err)
 	principal := deviceApprovalPrincipal("full-chaos/dev-health-acr", "full-chaos/dev-health-web")
-	selected := []string{"full-chaos/dev-health-acr"}
 
-	// When
-	approved, err := fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
-		Principal: principal, UserCode: started.UserCode, RepositoryScopes: selected,
+	// When a subset is approved
+	_, err = fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
+		Principal: principal, UserCode: started.UserCode, RepositoryScopes: []string{"full-chaos/dev-health-acr"},
 	})
 
-	// Then
+	// Then it is refused, and the equal list is approved
+	require.ErrorIs(t, err, ErrApprovalScopesDiffer)
+	require.ErrorIs(t, err, ErrInvalidDeviceFlow)
+	approved, err := fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
+		Principal: principal, UserCode: started.UserCode, RepositoryScopes: []string{"full-chaos/dev-health-web", "full-chaos/dev-health-acr"},
+	})
 	require.NoError(t, err)
-	require.Equal(t, selected, approved.AuthorizedRepositoryScopes)
+	require.Equal(t, []string{"full-chaos/dev-health-acr", "full-chaos/dev-health-web"}, approved.AuthorizedRepositoryScopes)
+}
+
+// CHAOS-13562: an assertion without the claim approves exactly the body's
+// list, bounded by contractsv1.MaxRepositoryScopes.
+func TestDeviceFlow_Approve_withoutTheClaimTakesTheBodyListUpToTheBound(t *testing.T) {
+	bodyPrincipal := func() storage.Principal {
+		principal := deviceApprovalPrincipal()
+		principal.RepositoryScopes = nil
+		principal.RepositoryScopesInBody = true
+		return principal
+	}
+	scopes := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("full-chaos/repo-%04d", i)
+		}
+		return out
+	}
+	for _, cell := range []struct {
+		count int
+		want  error
+	}{{1, nil}, {contractsv1.MaxRepositoryScopes, nil}, {contractsv1.MaxRepositoryScopes + 1, ErrTooManyRepositories}} {
+		fixture := newDeviceFlowFixture(t, deviceFlowRandom(byte(40+cell.count%200)))
+		started, err := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{})
+		require.NoError(t, err)
+		approved, err := fixture.flow.Approve(context.Background(), DeviceApprovalRequest{
+			Principal: bodyPrincipal(), UserCode: started.UserCode, RepositoryScopes: scopes(cell.count),
+		})
+		if cell.want != nil {
+			require.ErrorIs(t, err, cell.want, "%d repositories", cell.count)
+			require.ErrorIs(t, err, contractsv1.ErrTooManyRepositoryScopes)
+			continue
+		}
+		require.NoError(t, err, "%d repositories", cell.count)
+		require.Len(t, approved.AuthorizedRepositoryScopes, cell.count)
+	}
+	// A body-scoped principal that still carries scopes is malformed.
+	malformed := bodyPrincipal()
+	malformed.RepositoryScopes = []string{"full-chaos/repo-0000"}
+	fixture := newDeviceFlowFixture(t, deviceFlowRandom(39))
+	started, err := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{})
+	require.NoError(t, err)
+	_, err = fixture.flow.Approve(context.Background(), DeviceApprovalRequest{Principal: malformed, UserCode: started.UserCode, RepositoryScopes: []string{"full-chaos/repo-0000"}})
+	require.ErrorIs(t, err, ErrInvalidDeviceFlow)
+	// The preview needs the claim to filter the hints.
+	_, err = fixture.flow.Preview(context.Background(), DeviceApprovalPreviewRequest{Principal: bodyPrincipal(), UserCode: started.UserCode})
+	require.ErrorIs(t, err, ErrInvalidDeviceFlow)
 }
 
 func TestDeviceFlow_Approve_rejectsMalformedOrWidenedGrantAndLeavesPending(t *testing.T) {
@@ -377,3 +431,44 @@ func repeatedSeed(seed byte, count int) []byte {
 type readerError struct{ message string }
 
 func (e readerError) Read([]byte) (int, error) { return 0, errors.New(e.message) }
+
+// CHAOS-13562: the preview reads the grant from the body under the approval's
+// rule; a body without a list keeps the claim form.
+func TestDeviceFlow_Preview_takesTheGrantFromTheBody(t *testing.T) {
+	hints := []string{"full-chaos/dev-health-acr", "full-chaos/dev-health-web"}
+	claimLess := deviceApprovalPrincipal()
+	claimLess.RepositoryScopes = nil
+	claimLess.RepositoryScopesInBody = true
+	over := make([]string, contractsv1.MaxRepositoryScopes+1)
+	for i := range over {
+		over[i] = fmt.Sprintf("full-chaos/repo-%04d", i)
+	}
+	for i, cell := range []struct {
+		name      string
+		principal storage.Principal
+		body      []string
+		want      []string
+		wantErr   error
+	}{
+		{"claim-less, body names one", claimLess, []string{"full-chaos/dev-health-web"}, []string{"full-chaos/dev-health-web"}, nil},
+		{"claim equal to body", deviceApprovalPrincipal("full-chaos/dev-health-acr"), []string{"full-chaos/dev-health-acr"}, []string{"full-chaos/dev-health-acr"}, nil},
+		{"claim wider than body", deviceApprovalPrincipal("full-chaos/dev-health-acr", "full-chaos/dev-health-web"), []string{"full-chaos/dev-health-acr"}, nil, ErrApprovalScopesDiffer},
+		{"body over the bound", claimLess, over, nil, ErrTooManyRepositories},
+		{"body malformed", claimLess, []string{"not a slug"}, nil, ErrInvalidDeviceFlow},
+		{"no body list, claim", deviceApprovalPrincipal("full-chaos/dev-health-web"), nil, []string{"full-chaos/dev-health-web"}, nil},
+		{"no body list, no claim", claimLess, nil, nil, ErrInvalidDeviceFlow},
+	} {
+		t.Run(cell.name, func(t *testing.T) {
+			fixture := newDeviceFlowFixture(t, deviceFlowRandom(byte(60+i)))
+			started, err := fixture.flow.Start(context.Background(), DeviceAuthorizationHints{RepositoryHints: hints})
+			require.NoError(t, err)
+			preview, err := fixture.flow.Preview(context.Background(), DeviceApprovalPreviewRequest{Principal: cell.principal, UserCode: started.UserCode, RepositoryScopes: cell.body})
+			if cell.wantErr != nil {
+				require.ErrorIs(t, err, cell.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, cell.want, preview.RepositoryHints)
+		})
+	}
+}

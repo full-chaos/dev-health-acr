@@ -301,7 +301,7 @@ func ValidateDeviceAuthorizationGrant(grant DeviceAuthorizationGrant) error {
 }
 
 func ValidateDeviceAuthorizationHints(hints DeviceAuthorizationCreateInput) error {
-	if strings.TrimSpace(hints.OrganizationIDHint) != hints.OrganizationIDHint || utf8.RuneCountInString(hints.OrganizationIDHint) > 128 || len(hints.RepositoryHints) > 100 {
+	if strings.TrimSpace(hints.OrganizationIDHint) != hints.OrganizationIDHint || utf8.RuneCountInString(hints.OrganizationIDHint) > 128 || len(hints.RepositoryHints) > contractsv1.MaxRepositoryScopes {
 		return ErrInvalidDeviceAuthorization
 	}
 	seen := make(map[string]struct{}, len(hints.RepositoryHints))
