@@ -37,13 +37,13 @@ sequenceDiagram
     end
     W->>O: GET entitlement (user access token as Bearer)
     W->>A: POST /api/v1/oauth/device_approval (X-ACR-Web-Assertion, and on approve X-ACR-Approver-Reference)
-    Note over A: verifies the assertion and its jti once; pairs the approver reference with it
+    Note over A: verifies the assertion and its jti once, then pairs the approver reference with it
     A->>O: GET organization state (ACR credential, never cached)
     Note over A: its own approval checks
     opt ACR_DEVICE_APPROVAL_PDP shadow or enforce (approve only)
         A->>P: POST /v1/authorize acr.credential.issue (acr-api workload token as Bearer, approver reference as principal_reference)
-        Note over P: caller is acr-api; verifies the reference with the web key set; reads the session live
-        P-->>A: allow, or deny (enforce: 403, the grant stays pending; no decision: 503)
+        Note over P: caller is acr-api, verifies the reference with the web key set, reads the session live
+        P-->>A: allow, or deny (enforce: 403, the grant stays pending, or no decision: 503)
     end
     A-->>W: approved
     W-->>B: result
