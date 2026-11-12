@@ -56,7 +56,7 @@ services:
       ACR_AUTH_WORKLOAD_ALLOW_PLAIN_HTTP: "true"
       ACR_AUTH_WORKLOAD_ISSUER: ${AUTH_TOKEN_ISSUER_URL:?AUTH_TOKEN_ISSUER_URL is required}
       # CHAOS-11203: service_token (default) keeps the svc_acr_ token file; workload sends a workload token to go-api, which needs
-      # AUTH_ACCESS_TOKEN_ISSUER and AUTH_ACR_WORKLOAD_SUBJECT (the seeded acr-api prn_ id) on its side.
+      # AUTH_ACCESS_TOKEN_ISSUER and one live acr-api workload in its workload registry on its side.
       ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL: ${ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL:-service_token}
     volumes:
       - type: volume
