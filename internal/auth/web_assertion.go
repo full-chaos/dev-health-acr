@@ -76,19 +76,19 @@ type webAssertionHeader struct {
 }
 
 type parsedWebAssertionClaims struct {
-	Issuer           string      `json:"iss"`
-	Audience         string      `json:"aud"`
-	Subject          string      `json:"sub"`
-	OrganizationID   string      `json:"org_id"`
-	RepositoryScopes []string    `json:"repository_scopes"`
-	Permissions      []string    `json:"permissions"`
-	IssuedAt         json.Number `json:"iat"`
-	NotBefore        json.Number `json:"nbf"`
-	ExpiresAt        json.Number `json:"exp"`
-	JWTID            string      `json:"jti"`
-	Method           string      `json:"method"`
-	Path             string      `json:"path"`
-	BodySHA256       string      `json:"body_sha256"`
+	Issuer           string                 `json:"iss"`
+	Audience         string                 `json:"aud"`
+	Subject          string                 `json:"sub"`
+	OrganizationID   string                 `json:"org_id"`
+	RepositoryScopes webAssertionScopeClaim `json:"repository_scopes"`
+	Permissions      []string               `json:"permissions"`
+	IssuedAt         json.Number            `json:"iat"`
+	NotBefore        json.Number            `json:"nbf"`
+	ExpiresAt        json.Number            `json:"exp"`
+	JWTID            string                 `json:"jti"`
+	Method           string                 `json:"method"`
+	Path             string                 `json:"path"`
+	BodySHA256       string                 `json:"body_sha256"`
 	// SessionID and Impersonating are optional (CHAOS-12123): the web
 	// session the assertion was made in, and whether it impersonates. The web
 	// server derives both from its own session, never from the browser.
@@ -175,10 +175,13 @@ func (v *WebAssertionVerifier) Verify(r *http.Request) (storage.Principal, error
 		AuthenticationMethod: WebAssertionAuthenticationMethod,
 		Subject:              claims.Subject,
 		OrgID:                claims.OrganizationID,
-		RepositoryScopes:     normalizeWebRepositoryScopes(claims.RepositoryScopes),
-		Permissions:          normalizeWebPermissions(claims.Permissions),
-		SessionID:            strings.TrimSpace(claims.SessionID),
-		Impersonating:        claims.Impersonating,
+		RepositoryScopes:     normalizeWebRepositoryScopes(claims.RepositoryScopes.values),
+		// CHAOS-13562: an approval assertion without the claim takes its
+		// repositories from the body it binds (body_sha256, checked above).
+		RepositoryScopesInBody: !claims.RepositoryScopes.present,
+		Permissions:            normalizeWebPermissions(claims.Permissions),
+		SessionID:              strings.TrimSpace(claims.SessionID),
+		Impersonating:          claims.Impersonating,
 	}, nil
 }
 
@@ -217,7 +220,7 @@ func (v *WebAssertionVerifier) validClaims(claims parsedWebAssertionClaims, r *h
 		issuedAt > now.Add(webAssertionClockSkew).Unix() || notBefore > now.Add(webAssertionClockSkew).Unix() ||
 		expiresAt < now.Add(-webAssertionClockSkew).Unix() || expiresAt < issuedAt || expiresAt-issuedAt > int64(maxWebAssertionLifetime/time.Second) ||
 		claims.Method != r.Method || claims.Path != r.URL.EscapedPath() || r.URL.RawQuery != "" ||
-		!validWebRepositories(claims.RepositoryScopes, claims.Permissions, claims.Method, claims.Path) || !validWebPermissions(claims.Permissions) ||
+		!validWebRepositoryClaim(claims.RepositoryScopes, claims.Permissions, claims.Method, claims.Path) || !validWebPermissions(claims.Permissions) ||
 		(claims.SessionID != "" && !validWebAssertionID(claims.SessionID)) {
 		return false
 	}
@@ -232,19 +235,20 @@ func (v *WebAssertionVerifier) validClaims(claims parsedWebAssertionClaims, r *h
 // otherwise well-formed assertion fail, so the bare 401 has a cause in the log.
 // The claims are signature-verified by the time this runs.
 func (v *WebAssertionVerifier) logRepositoryScopeFault(r *http.Request, claims parsedWebAssertionClaims) {
-	if v.logger == nil || validWebRepositories(claims.RepositoryScopes, claims.Permissions, claims.Method, claims.Path) {
+	if v.logger == nil || validWebRepositoryClaim(claims.RepositoryScopes, claims.Permissions, claims.Method, claims.Path) {
 		return
 	}
+	scopes := claims.RepositoryScopes.values
 	scope, reason := "", "no repository scope"
 	switch {
-	case len(claims.RepositoryScopes) == 0:
-	case len(claims.RepositoryScopes) == 1 && claims.RepositoryScopes[0] == "*":
+	case len(scopes) == 0:
+	case len(scopes) == 1 && scopes[0] == "*":
 		scope, reason = "*", "organization-wide scope is only valid for credential issue on an organization-wide path"
 	default:
-		scope, reason, _ = webRepositoryScopeFault(claims.RepositoryScopes)
+		scope, reason, _ = webRepositoryScopeFault(scopes)
 	}
 	v.logger.WarnContext(r.Context(), "web assertion refused: invalid repository scope", "class", "web_assertion_repository_scope_invalid",
-		"scope", truncateLogValue(scope, 128), "reason", reason, "scope_count", len(claims.RepositoryScopes), "organization_id", claims.OrganizationID)
+		"scope", truncateLogValue(scope, 128), "reason", reason, "scope_count", len(scopes), "organization_id", claims.OrganizationID)
 }
 
 func truncateLogValue(value string, limit int) string {

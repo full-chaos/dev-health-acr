@@ -90,20 +90,25 @@ func TestDeviceAuthorizationRequestDecode_rejectsUnknownFieldsAndTrailingJSON(t 
 	}
 }
 
-func TestDeviceApprovalPreviewRequestDecode_rejectsRepositoryScopes(t *testing.T) {
+// CHAOS-13562: a preview may name its grant in the body; a null list is refused.
+func TestDeviceApprovalPreviewRequestDecode_takesRepositoryScopesAndRefusesNull(t *testing.T) {
+	var request DeviceApprovalRequest
+	if err := json.Unmarshal([]byte(`{"schema_version":"device_approval_preview_request.v1","user_code":"ABCDEFGH","repository_scopes":null}`), &request); err == nil {
+		t.Fatal("decoder accepted a preview request with a null repository_scopes")
+	}
 	for _, body := range []string{
-		`{"schema_version":"device_approval_preview_request.v1","user_code":"ABCDEFGH","repository_scopes":null}`,
+		`{"schema_version":"device_approval_preview_request.v1","user_code":"ABCDEFGH"}`,
 		`{"schema_version":"device_approval_preview_request.v1","user_code":"ABCDEFGH","repository_scopes":["example-org/widget-service"]}`,
 	} {
-		var request DeviceApprovalRequest
-		if err := json.Unmarshal([]byte(body), &request); err == nil {
-			t.Fatalf("decoder accepted preview-only request with repository scopes %s", body)
+		var preview DeviceApprovalRequest
+		if err := json.Unmarshal([]byte(body), &preview); err != nil {
+			t.Fatalf("decoder rejected valid preview request %s: %v", body, err)
 		}
-	}
-
-	var preview DeviceApprovalRequest
-	if err := json.Unmarshal([]byte(`{"schema_version":"device_approval_preview_request.v1","user_code":"ABCDEFGH"}`), &preview); err != nil {
-		t.Fatalf("decoder rejected valid preview request: %v", err)
+		previewRequest := DeviceApprovalPreviewRequest{SchemaVersion: preview.SchemaVersion, UserCode: preview.UserCode, RepositoryScopes: preview.RepositoryScopes}
+		if err := previewRequest.Validate(); err != nil {
+			t.Fatalf("validator rejected valid preview request %s: %v", body, err)
+		}
+		assertSchemaParity(t, "device_approval_preview_request.v1.schema.json", previewRequest)
 	}
 }
 

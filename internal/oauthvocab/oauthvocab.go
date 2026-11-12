@@ -97,6 +97,9 @@ const (
 	// OutcomeOrganizationDisabled: the refresh token's family, the approval or the redemption belongs to an
 	// organization Dev Health answers as disabled.
 	OutcomeOrganizationDisabled = "organization_disabled"
+	// OutcomeTooManyRepositories: a consent approval names more repositories
+	// than one credential may hold (contractsv1.MaxRepositoryScopes, CHAOS-13562).
+	OutcomeTooManyRepositories = "too_many_repositories"
 )
 
 // OutcomeVocabulary lists every outcome, ok first.
@@ -109,7 +112,7 @@ func OutcomeVocabulary() []string {
 		OutcomeResourceMismatch, OutcomeUnauthenticated, OutcomeAuthorizationPending, OutcomeSlowDown, OutcomeRateLimited, OutcomeUnavailable,
 		OutcomeSessionRequired, OutcomeImpersonating, OutcomeUnauthorizedClient, OutcomeRotationNotAllowed,
 		OutcomeGraceReplay, OutcomeReuseRevoked, OutcomeFamilyExpired, OutcomeFamilyRevoked, OutcomeUnsupportedTokenType,
-		OutcomeOrganizationUnknown, OutcomeOrganizationDisabled,
+		OutcomeOrganizationUnknown, OutcomeOrganizationDisabled, OutcomeTooManyRepositories,
 	}
 }
 

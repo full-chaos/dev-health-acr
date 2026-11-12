@@ -760,6 +760,9 @@ const (
 	OAuthConsentCodeExpired = "expired"
 	// OAuthConsentCodeCompleted: the request was already decided.
 	OAuthConsentCodeCompleted = "already_completed"
+	// OAuthConsentCodeTooManyRepositories: the approval names more than
+	// contractsv1.MaxRepositoryScopes repositories (CHAOS-13562).
+	OAuthConsentCodeTooManyRepositories = "too_many_repositories"
 )
 
 // OAuthConsentRequest is what the web consent page shows before the signed-in
@@ -1002,6 +1005,8 @@ func consentDecisionError(err error) error {
 		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeOrganizationUnknown, false)
 	case errors.Is(err, ErrApprovalOrganizationDisabled):
 		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeOrganizationDisabled, false)
+	case errors.Is(err, ErrTooManyRepositories):
+		return oauthError(OAuthConsentCodeTooManyRepositories, oauthvocab.OutcomeTooManyRepositories, false)
 	case errors.Is(err, ErrInvalidDeviceFlow):
 		return oauthError(OAuthConsentCodeInvalid, oauthvocab.OutcomeInvalidRequest, false)
 	case errors.Is(err, storage.ErrDeviceAuthorizationConflict):
