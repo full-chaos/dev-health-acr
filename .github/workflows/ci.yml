@@ -113,7 +113,7 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       - name: Select the unit and race shards this change reaches
         id: reach
         env:
@@ -341,7 +341,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only).
       # Restored after setup-go so its smaller cache is overlaid.
@@ -1010,7 +1010,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only).
       # Restored after setup-go so its smaller cache is overlaid.
@@ -1117,7 +1117,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only).
       # Restored after setup-go so its smaller cache is overlaid.
@@ -1359,7 +1359,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only).
       # Restored after setup-go so its smaller cache is overlaid.
@@ -1434,7 +1434,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only).
       # Restored after setup-go so its smaller cache is overlaid.
@@ -1527,7 +1527,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only).
       # Restored after setup-go so its smaller cache is overlaid.
@@ -1679,7 +1679,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only).
       # Restored after setup-go so its smaller cache is overlaid.
@@ -1759,7 +1759,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only).
       # Restored after setup-go so its smaller cache is overlaid.
@@ -1839,7 +1839,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only).
       # Restored after setup-go so its smaller cache is overlaid.
@@ -1903,7 +1903,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only).
       # Restored after setup-go so its smaller cache is overlaid.
@@ -1965,7 +1965,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only).
       # Restored after setup-go so its smaller cache is overlaid.
@@ -2034,7 +2034,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only).
       # Restored after setup-go so its smaller cache is overlaid.
@@ -2109,7 +2109,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only).
       # Restored after setup-go so its smaller cache is overlaid.
@@ -2180,7 +2180,7 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
       # and fails on a miss (hosted runners only).
       # Restored after setup-go so its smaller cache is overlaid.

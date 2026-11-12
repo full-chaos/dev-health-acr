@@ -306,14 +306,10 @@ check_main_runs_get_a_verdict() {
 check_go_cache() {
   local file="$1"
   local status=0
-  # A job whose runner is anything but a literal GitHub-hosted label (the
-  # CI_RACE_RUNNER variable, a matrix value, a label list) can land on the
-  # self-hosted pool, so every setup-go step in it sets
-  # `cache: ${{ runner.environment == 'github-hosted' }}`. On the pool GOCACHE
-  # is a hostPath shared by every concurrent runner and the arm64 cache key
-  # never matches the hosted one, so setup-go's post step tarred and uploaded
-  # the live shared mount on every job (plan: 17 s of work, 9m55s of post
-  # step). A job on a literal ubuntu-* label keeps the literal `cache: true`.
+  # CHAOS-13609: the self-hosted pool is retired; every job runs on a
+  # GitHub-hosted label, so every setup-go step keeps the literal
+  # `cache: true` (gomodcache alone keeps `cache: false`). A self-hosted label
+  # fails here and in check_runner_sources.
   # Every setup-go step must carry its own cache input: setup-go defaults it
   # to true, so an omitted input is the pool regression with no text to check.
   local job
@@ -321,7 +317,7 @@ check_go_cache() {
     local block
     block="$(job_block "$file" "$job")"
     if grep -qE 'runs-on: *\[self-hosted' <<<"$block"; then
-      printf 'job "%s" targets a self-hosted runner by label; route it through vars.CI_RACE_RUNNER instead\n' \
+      printf 'job "%s" targets a self-hosted runner by label; the self-hosted pool is retired, use a GitHub-hosted label\n' \
         "$job" >&2
       status=1
     fi
@@ -335,13 +331,7 @@ check_go_cache() {
     fi
     local cache_lines
     cache_lines="$(grep -E '^ +cache:' <<<"$block" || true)"
-    if grep -E '^ +runs-on:' <<<"$block" | grep -qvE '^ +runs-on: ubuntu-[A-Za-z0-9.-]+$'; then
-      if grep -vqF "cache: \${{ runner.environment == 'github-hosted' }}" <<<"$cache_lines"; then
-        printf 'job "%s" can run on the self-hosted pool, but its setup-go cache is not the runner.environment == github-hosted expression\n' \
-          "$job" >&2
-        status=1
-      fi
-    elif [ "$job" = gomodcache ]; then
+    if [ "$job" = gomodcache ]; then
       if grep -vqE '^ +cache: false$' <<<"$cache_lines"; then
         printf 'job "gomodcache" must keep setup-go cache: false; its own module cache is the go-modcache action, and a second saver would put a partial set back under the shared key\n' >&2
         status=1
@@ -803,27 +793,18 @@ check_pin_binds_checkout_ref() {
 # variable, with the documented `vars.X || 'default'` fallback form, never a
 # bare literal.
 check_race_runner_uses_variable() {
-  # Every race-family job reads the CI_RACE_RUNNER variable with a hosted
-  # fallback, except the legs measured over budget on the self-hosted pool,
-  # which are pinned to ubuntu-latest.
+  # CHAOS-13609: the self-hosted pool is retired (the CI_RACE_RUNNER variable
+  # is deleted). Every race-family job runs on the literal ubuntu-latest and
+  # names no CI_RACE_RUNNER; the five named jobs must exist.
   local file="$1" job status=0 block
-  local pinned=" race-devhealthfacts race-devhealthfacts-heavy race-devhealthsource-heavy "
   for job in race race-devhealthschema race-devhealthfacts race-devhealthfacts-heavy race-devhealthsource-heavy; do
     [ -n "$(job_block "$file" "$job")" ] || { printf 'no top-level "%s" job found in %s\n' "$job" "$file" >&2; status=1; }
   done
   while IFS= read -r job; do
     case "$job" in race|race-*) ;; *) continue ;; esac
     block="$(job_block "$file" "$job")"
-    if [[ "$pinned" == *" $job "* ]]; then
-      if ! grep -qxF '    runs-on: ubuntu-latest' <<<"$block" || grep -qE '^ +runs-on:.*CI_RACE_RUNNER' <<<"$block"; then
-        printf 'job "%s" must stay on ubuntu-latest: it exceeds its budget on the self-hosted pool\n' "$job" >&2
-        status=1
-      fi
-      continue
-    fi
-    if ! grep -qxF "$routed_runs_on" <<<"$block"; then
-      printf 'job "%s" does not set runs-on from the fork-guarded CI_RACE_RUNNER form with a '"'"'ubuntu-latest'"'"' fallback\n' \
-        "$job" >&2
+    if ! grep -qxF '    runs-on: ubuntu-latest' <<<"$block" || grep -qiE '^ +runs-on:.*CI_RACE_RUNNER' <<<"$block"; then
+      printf 'job "%s" must run on ubuntu-latest: the self-hosted pool is retired\n' "$job" >&2
       status=1
     fi
   done < <(list_jobs "$file")
@@ -842,31 +823,25 @@ workflow_files() {
 # fallback, so the variable stays the one kill switch for all of them. The
 # scripts job stays hosted: the pool image carries no shellcheck.
 check_routed_jobs_fork_guarded() {
-  # Every line outside a whole-line comment that names CI_RACE_RUNNER, in any
-  # form (a folded or multi-line runs-on, a matrix value, a job output, any
-  # case), is exactly the fork-guarded runs-on line: the repository is public,
-  # and a fork pull request on the pool runs untrusted code on the self-hosted
-  # host. No other workflow beside this one names the variable.
+  # CHAOS-13609: the self-hosted pool is retired. No line outside a
+  # whole-line comment names CI_RACE_RUNNER, in any form (a runs-on, a matrix
+  # value, a job output, any case), in this workflow or any workflow beside
+  # it: the repository is public, and a fork pull request routed to a
+  # self-hosted runner would run untrusted code on that host.
   local file="$1" status=0 line other
   while IFS= read -r line; do
-    if [ "$line" != "$routed_runs_on" ]; then
-      printf 'a line names CI_RACE_RUNNER outside the fork-guarded runs-on form: %s\n' "$line" >&2
-      status=1
-    fi
+    printf 'a line names CI_RACE_RUNNER; the self-hosted pool is retired: %s\n' "$line" >&2
+    status=1
   done < <(grep -iF 'CI_RACE_RUNNER' "$file" | grep -vE '^[[:space:]]*#')
   while IFS= read -r other; do
     if [ "$other" -ef "$file" ]; then
       continue
     fi
     if grep -iF 'CI_RACE_RUNNER' "$other" | grep -vE '^[[:space:]]*#' | grep -q .; then
-      printf 'workflow %s names CI_RACE_RUNNER; only %s may route to the pool\n' "$other" "$file" >&2
+      printf 'workflow %s names CI_RACE_RUNNER; the self-hosted pool is retired\n' "$other" >&2
       status=1
     fi
   done < <(workflow_files "$(dirname "$file")")
-  if ! grep -qxF "$routed_runs_on" "$file"; then
-    printf 'no job reaches the pool through the fork-guarded CI_RACE_RUNNER form\n' >&2
-    status=1
-  fi
   return "$status"
 }
 
@@ -1005,8 +980,8 @@ matrix_values() {
 
 # check_runner_sources: in this workflow and every workflow beside it,
 # whatever its triggers and whether or not it names CI_RACE_RUNNER, a job
-# runs on one GitHub-hosted label (quoted or not), on the fork-guarded line
-# (this workflow only), or on ${{ matrix.<key> }} where every value the matrix
+# runs on one GitHub-hosted label (quoted or not) (CHAOS-13609: the
+# fork-guarded pool line is retired), or on ${{ matrix.<key> }} where every value the matrix
 # gives <key> is a GitHub-hosted label. A list, a group/labels map, a folded
 # label, any other expression, self-hosted or a pool label fails. A job that
 # calls a reusable workflow calls one in this directory, which this check
@@ -1042,9 +1017,6 @@ check_runner_sources() {
       while IFS= read -r rec; do
         deeper="${rec%%$'\t'*}"
         line="${rec#*$'\t'}"
-        if [ "$wf" = "$file" ] && [ "$line" = "$routed_runs_on" ] && [ "$deeper" = 0 ]; then
-          continue
-        fi
         value="$(sed -E 's/^[[:space:]]*runs-on:[[:space:]]*//; s/[[:space:]]+#.*$//; s/[[:space:]]+$//' <<<"$line")"
         if [ "$deeper" = 1 ] || [ -z "$value" ]; then
           printf 'job "%s" in %s continues runs-on on the next lines (a list, a group/labels map or a folded label): only one hosted label on the runs-on line is allowed\n' "$job" "$wf" >&2
@@ -1076,7 +1048,7 @@ check_runner_sources() {
             status=1
           fi
         elif ! hosted_label "$value"; then
-          printf 'job "%s" in %s runs on "%s": only one GitHub-hosted label (ubuntu-*, macos-*, windows-*), the fork-guarded line or a matrix of hosted labels is allowed\n' "$job" "$wf" "$value" >&2
+          printf 'job "%s" in %s runs on "%s": only one GitHub-hosted label (ubuntu-*, macos-*, windows-*) or a matrix of hosted labels is allowed\n' "$job" "$wf" "$value" >&2
           status=1
         fi
       done < <(awk '
@@ -1108,9 +1080,8 @@ check_first_stage_runner_uses_variable() {
       status=1
       continue
     fi
-    # shellcheck disable=SC2016
-    if ! grep -qxF "$routed_runs_on" <<<"$block"; then
-      printf 'first-stage job "%s" does not run on the fork-guarded CI_RACE_RUNNER form with a '"'"'ubuntu-latest'"'"' fallback\n' "$job" >&2
+    if ! grep -qxF '    runs-on: ubuntu-latest' <<<"$block"; then
+      printf 'first-stage job "%s" does not run on ubuntu-latest (the self-hosted pool is retired)\n' "$job" >&2
       status=1
     fi
   done
@@ -2480,18 +2451,18 @@ modcache_stale_pin="$tmpdir/modcache-stale-pin.txt"
 sed 's/^gotest.tools\/gotestsum@.*/gotest.tools\/gotestsum@v0.0.1/' "$modcache_pins" > "$modcache_stale_pin"
 assert_check_fails 'a tool pin drifted from the Makefile' check_gomodcache_pins "$modcache_stale_pin"
 
-# (c1) a pool-routable job back on setup-go's own cache, and one on a plain
-# cache: false (a hosted run of that job would then throw its cache away).
+# (c1) CHAOS-13609: a hosted job back on the retired pool cache expression, and
+# a setup-go step with no cache input (setup-go would default it).
 routed_cache_true="$tmpdir/routed-cache-true.yml"
-awk -v want="cache: \${{ runner.environment == 'github-hosted' }}" '!done && index($0, want) { sub(/cache: .*/, "cache: true"); done=1 } { print }' \
+awk '!done && /^ +cache: true$/ { sub(/cache: true/, "cache: ${{ runner.environment == '"'"'github-hosted'"'"' }}"); done=1 } { print }' \
   "$workflow" > "$routed_cache_true"
 cmp -s "$workflow" "$routed_cache_true" && { printf 'NEGATIVE CONTROL SETUP FAILED: routed_cache_true did not change the workflow\n' >&2; exit 1; }
-assert_check_fails 'put a pool-routable job back on setup-go cache: true' check_go_cache "$routed_cache_true"
+assert_check_fails 'put a hosted job back on the retired pool cache expression' check_go_cache "$routed_cache_true"
 routed_cache_missing="$tmpdir/routed-cache-missing.yml"
-awk -v want="cache: \${{ runner.environment == 'github-hosted' }}" '!done && index($0, want) { done=1; next } { print }' \
+awk '!done && /^ +cache: true$/ { done=1; next } { print }' \
   "$workflow" > "$routed_cache_missing"
 cmp -s "$workflow" "$routed_cache_missing" && { printf 'NEGATIVE CONTROL SETUP FAILED: routed_cache_missing did not change the workflow\n' >&2; exit 1; }
-assert_check_fails 'dropped the cache input from a pool-routable setup-go step' check_go_cache "$routed_cache_missing"
+assert_check_fails 'dropped the cache input from a hosted setup-go step' check_go_cache "$routed_cache_missing"
 matrix_routed="$tmpdir/matrix-routed.yml"
 awk '
   /^  scripts:$/ { in_job=1 }
@@ -2500,7 +2471,7 @@ awk '
   { print }
 ' "$workflow" > "$matrix_routed"
 cmp -s "$workflow" "$matrix_routed" && { printf 'NEGATIVE CONTROL SETUP FAILED: matrix_routed did not change the workflow\n' >&2; exit 1; }
-assert_check_fails 'routed a cache: true job through a matrix runs-on' check_go_cache "$matrix_routed"
+assert_check_fails 'routed a hosted job through a matrix runs-on with no matrix' check_runner_sources "$matrix_routed"
 
 # (c2) point a job at the ARC pool again. The pool is gone; a job that targets
 # it would queue forever rather than fail, which is the worst shape of red --
@@ -2587,8 +2558,8 @@ awk '/Remove this job.s testcontainers by session id/ && !done { skip=3; done=1 
 cmp -s "$workflow" "$tc_reap_dropped" && { printf 'NEGATIVE CONTROL SETUP FAILED: tc_reap_dropped did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'dropped the testcontainers reap step from one job' check_testcontainers_session_reap "$tc_reap_dropped"
 
-# (c4) the race-runner pinning: a pinned heavy leg back on the variable, and
-# another race leg pinned to a hosted label.
+# (c4) CHAOS-13609: race legs stay on ubuntu-latest: a heavy leg back on the
+# retired pool variable, and another race leg moved off ubuntu-latest.
 pinned_routed="$tmpdir/pinned-routed.yml"
 awk -v routed="$routed_runs_on" '
   /^  race-devhealthfacts-heavy:$/ { in_job=1 }
@@ -2602,11 +2573,11 @@ other_pinned="$tmpdir/other-pinned.yml"
 awk '
   /^  race-factoracle:$/ { in_job=1 }
   in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-factoracle:$/ { in_job=0 }
-  in_job && /runs-on: .*vars\.CI_RACE_RUNNER/ { print "    runs-on: ubuntu-latest"; next }
+  in_job && /^    runs-on: ubuntu-latest$/ { print "    runs-on: ubuntu-24.04"; next }
   { print }
 ' "$workflow" > "$other_pinned"
 cmp -s "$workflow" "$other_pinned" && { printf 'NEGATIVE CONTROL SETUP FAILED: other_pinned did not change the workflow\n' >&2; exit 1; }
-assert_check_fails 'pinned a race leg that fits the pool to ubuntu-latest' check_race_runner_uses_variable "$other_pinned"
+assert_check_fails 'moved a race leg off ubuntu-latest' check_race_runner_uses_variable "$other_pinned"
 # (c5) a testcontainers job whose image prefix is set in a step-level env
 # and that carries no ryuk override, session id or reap step.
 step_env_tc="$tmpdir/step-env-tc.yml"
@@ -2630,11 +2601,11 @@ comment_routed="$tmpdir/comment-routed.yml"
 awk '
   /^  race-factoracle:$/ { in_job=1 }
   in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-factoracle:$/ { in_job=0 }
-  in_job && /^    runs-on: / { print "    # runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; print "    runs-on: ubuntu-latest"; next }
+  in_job && /^    runs-on: / { print "    # the pool is retired (CHAOS-13609)"; print "    runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; next }
   { print }
 ' "$workflow" > "$comment_routed"
 cmp -s "$workflow" "$comment_routed" && { printf 'NEGATIVE CONTROL SETUP FAILED: comment_routed did not change the workflow\n' >&2; exit 1; }
-assert_check_fails 'hardcoded a fitting race leg hosted and left the routed form in a comment' check_race_runner_uses_variable "$comment_routed"
+assert_check_fails 'put a race leg back on the unguarded pool variable form beside a comment' check_race_runner_uses_variable "$comment_routed"
 quoted_step_env="$tmpdir/quoted-step-env.yml"
 cat "$workflow" > "$quoted_step_env"
 cat >> "$quoted_step_env" <<'YAML'
@@ -2684,23 +2655,24 @@ awk '!done && /^  race:$/ { print; print "    services:"; print "      redis:"; 
 cmp -s "$workflow" "$service_beside" && { printf 'NEGATIVE CONTROL SETUP FAILED: service_beside did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'declared a service container in a job with the post-reap census' check_testcontainers_session_reap "$service_beside"
 
-# (c6) the fork guard: one routed job back on the unguarded variable form.
+# (c6) CHAOS-13609: no job names the retired pool variable, guarded or not.
 unguarded="$tmpdir/unguarded.yml"
-awk -v want="$routed_runs_on" '!done && $0 == want { print "    runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; done=1; next } { print }' \
+awk '!done && /^    runs-on: ubuntu-latest$/ { print "    runs-on: ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; done=1; next } { print }' \
   "$workflow" > "$unguarded"
 cmp -s "$workflow" "$unguarded" && { printf 'NEGATIVE CONTROL SETUP FAILED: unguarded did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'routed a job to CI_RACE_RUNNER without the fork guard' check_routed_jobs_fork_guarded "$unguarded"
 guard_dropped="$tmpdir/guard-dropped.yml"
-sed 's/github.event.pull_request.head.repo.full_name == github.repository/true/' "$workflow" > "$guard_dropped"
+awk -v routed="$routed_runs_on" '!done && /^    runs-on: ubuntu-latest$/ { print routed; done=1; next } { print }' "$workflow" > "$guard_dropped"
 cmp -s "$workflow" "$guard_dropped" && { printf 'NEGATIVE CONTROL SETUP FAILED: guard_dropped did not change the workflow\n' >&2; exit 1; }
-assert_check_fails 'replaced the same-repository condition with true' check_routed_jobs_fork_guarded "$guard_dropped"
+assert_check_fails 'put the retired fork-guarded pool line back on a job' check_routed_jobs_fork_guarded "$guard_dropped"
+assert_check_fails 'put the retired fork-guarded pool line back on a job (runner sources)' check_runner_sources "$guard_dropped"
 negated_guard="$tmpdir/negated-guard.yml"
-awk -v want="$routed_runs_on" '!done && $0 == want { print "    runs-on: ${{ (github.event_name != '"'"'pull_request'"'"' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; done=1; next } { print }' \
+awk '!done && /^    runs-on: ubuntu-latest$/ { print "    runs-on: ${{ (github.event_name != '"'"'pull_request'"'"' || github.event.pull_request.head.repo.full_name == github.repository) && vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; done=1; next } { print }' \
   "$workflow" > "$negated_guard"
 cmp -s "$workflow" "$negated_guard" && { printf 'NEGATIVE CONTROL SETUP FAILED: negated_guard did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'routed a job with the guard that trusts every event other than pull_request' check_routed_jobs_fork_guarded "$negated_guard"
 folded_runs_on="$tmpdir/folded-runs-on.yml"
-awk -v want="$routed_runs_on" '!done && $0 == want { print "    runs-on: >-"; print "      ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; done=1; next } { print }' \
+awk '!done && /^    runs-on: ubuntu-latest$/ { print "    runs-on: >-"; print "      ${{ vars.CI_RACE_RUNNER || '"'"'ubuntu-latest'"'"' }}"; done=1; next } { print }' \
   "$workflow" > "$folded_runs_on"
 cmp -s "$workflow" "$folded_runs_on" && { printf 'NEGATIVE CONTROL SETUP FAILED: folded_runs_on did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'routed a job through a folded runs-on without the fork guard' check_routed_jobs_fork_guarded "$folded_runs_on"
@@ -2722,24 +2694,31 @@ cp "$workflow" "$other_dir/ci.yml"
 # shellcheck disable=SC2016
 printf 'jobs:\n  probe:\n    runs-on: ${{ vars.CI_RACE_RUNNER }}\n' > "$other_dir/side.yml"
 assert_check_fails 'routed a job of another workflow file through the variable' check_routed_jobs_fork_guarded "$other_dir/ci.yml"
+# CHAOS-13609: no workflow routes to the pool now, so check_routed_workflow_triggers
+# is exercised on a copy that routes one job through the retired fork-guarded line
+# (a copy every other check above rejects); that copy must itself pass it.
+routed_base="$tmpdir/routed-base.yml"
+awk -v routed="$routed_runs_on" '!done && /^    runs-on: ubuntu-latest$/ { print routed; done=1; next } { print }' "$workflow" > "$routed_base"
+cmp -s "$workflow" "$routed_base" && { printf 'NEGATIVE CONTROL SETUP FAILED: routed_base did not change the workflow\n' >&2; exit 1; }
+check_routed_workflow_triggers "$routed_base" || { printf 'NEGATIVE CONTROL SETUP FAILED: the routed copy does not pass the trigger check\n' >&2; exit 1; }
 for trigger in 'pull_request_target:' 'workflow_dispatch:' 'issue_comment:'; do
   extra_trigger="$tmpdir/extra-trigger.yml"
-  awk -v t="  $trigger" '!done && /^"on":$/ { print; print t; done=1; next } { print }' "$workflow" > "$extra_trigger"
-  cmp -s "$workflow" "$extra_trigger" && { printf 'NEGATIVE CONTROL SETUP FAILED: extra_trigger did not change the workflow\n' >&2; exit 1; }
+  awk -v t="  $trigger" '!done && /^"on":$/ { print; print t; done=1; next } { print }' "$routed_base" > "$extra_trigger"
+  cmp -s "$routed_base" "$extra_trigger" && { printf 'NEGATIVE CONTROL SETUP FAILED: extra_trigger did not change the workflow\n' >&2; exit 1; }
   assert_check_fails "added the $trigger trigger to a workflow that routes to the pool" check_routed_workflow_triggers "$extra_trigger"
 done
 wide_push="$tmpdir/wide-push.yml"
-sed 's/^    branches: \[main\]$/    branches: [main, '"'"'release\/**'"'"']/' "$workflow" > "$wide_push"
-cmp -s "$workflow" "$wide_push" && { printf 'NEGATIVE CONTROL SETUP FAILED: wide_push did not change the workflow\n' >&2; exit 1; }
+sed 's/^    branches: \[main\]$/    branches: [main, '"'"'release\/**'"'"']/' "$routed_base" > "$wide_push"
+cmp -s "$routed_base" "$wide_push" && { printf 'NEGATIVE CONTROL SETUP FAILED: wide_push did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'widened the push trigger past main in a workflow that routes to the pool' check_routed_workflow_triggers "$wide_push"
 flow_on="$tmpdir/flow-on.yml"
-awk '/^"on":$/ { print "\"on\": [push, pull_request, workflow_dispatch]"; skip=1; next } skip && /^[^[:space:]]/ { skip=0 } skip { next } { print }' "$workflow" > "$flow_on"
-cmp -s "$workflow" "$flow_on" && { printf 'NEGATIVE CONTROL SETUP FAILED: flow_on did not change the workflow\n' >&2; exit 1; }
+awk '/^"on":$/ { print "\"on\": [push, pull_request, workflow_dispatch]"; skip=1; next } skip && /^[^[:space:]]/ { skip=0 } skip { next } { print }' "$routed_base" > "$flow_on"
+cmp -s "$routed_base" "$flow_on" && { printf 'NEGATIVE CONTROL SETUP FAILED: flow_on did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'replaced the trigger map with a flow list in a workflow that routes to the pool' check_routed_workflow_triggers "$flow_on"
 for filter in "paths-ignore: ['**']" "branches: [main]" "paths: ['docs/**']"; do
   pr_filter="$tmpdir/pr-filter.yml"
-  awk -v f="    $filter" '!done && /^  pull_request:$/ { print; print f; done=1; next } { print }' "$workflow" > "$pr_filter"
-  cmp -s "$workflow" "$pr_filter" && { printf 'NEGATIVE CONTROL SETUP FAILED: pr_filter did not change the workflow\n' >&2; exit 1; }
+  awk -v f="    $filter" '!done && /^  pull_request:$/ { print; print f; done=1; next } { print }' "$routed_base" > "$pr_filter"
+  cmp -s "$routed_base" "$pr_filter" && { printf 'NEGATIVE CONTROL SETUP FAILED: pr_filter did not change the workflow\n' >&2; exit 1; }
   assert_check_fails "added a pull_request filter ($filter) to a workflow that routes to the pool" check_routed_workflow_triggers "$pr_filter"
 done
 computed_vars="$tmpdir/computed-vars.yml"
@@ -3492,42 +3471,43 @@ sed "s|grep -Eq '\^\[0-9a-f\]{40}\$'|grep -Eq '^[a-z0-9]+\$' # [0-9a-f]{40}|" \
 assert_check_fails 'loosened the pin regex while leaving a decoy [0-9a-f]{40} in a comment' \
   check_pin_requires_full_sha "$pin_decoy_comment"
 
-# (s) revert the `race` job's runs-on to a hardcoded label -- the exact
-# regression this check exists to catch (the OOM'ing default silently
-# returning).
+# (s) CHAOS-13609: the `race` job back on the retired fork-guarded pool line.
 race_runner_hardcoded="$tmpdir/race-runner-hardcoded.yml"
-awk '
+awk -v routed="$routed_runs_on" '
   /^  race:$/ { in_race=1 }
   in_race && /^  [A-Za-z0-9_-]+:/ && !/^  race:$/ { in_race=0 }
-  in_race && /runs-on: .*vars\.CI_RACE_RUNNER/ {
-    print "    runs-on: ubuntu-latest"
+  in_race && /^    runs-on: ubuntu-latest$/ {
+    print routed
     next
   }
   { print }
 ' "$workflow" > "$race_runner_hardcoded"
-assert_check_fails 'reverted the race job'"'"'s runs-on to a hardcoded ubuntu-latest' \
+cmp -s "$workflow" "$race_runner_hardcoded" && { printf 'NEGATIVE CONTROL SETUP FAILED: race_runner_hardcoded did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'put the race job back on the retired pool line' \
   check_race_runner_uses_variable "$race_runner_hardcoded"
 
-# (t) same revert, but on the isolated-scope twin only -- proves the check
-# reads both jobs rather than being satisfied once either one is right.
+# (t) same, on the isolated-scope twin only -- proves the check reads every
+# race job rather than being satisfied once one is right.
 isolated_runner_hardcoded="$tmpdir/isolated-runner-hardcoded.yml"
-awk '
+awk -v routed="$routed_runs_on" '
   /^  race-devhealthschema:$/ { in_job=1 }
   in_job && /^  [A-Za-z0-9_-]+:/ && !/^  race-devhealthschema:$/ { in_job=0 }
-  in_job && /runs-on: .*vars\.CI_RACE_RUNNER/ {
-    print "    runs-on: ubuntu-latest"
+  in_job && /^    runs-on: ubuntu-latest$/ {
+    print routed
     next
   }
   { print }
 ' "$workflow" > "$isolated_runner_hardcoded"
-assert_check_fails 'reverted the race-devhealthschema job'"'"'s runs-on to a hardcoded ubuntu-latest' \
+cmp -s "$workflow" "$isolated_runner_hardcoded" && { printf 'NEGATIVE CONTROL SETUP FAILED: isolated_runner_hardcoded did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'put the race-devhealthschema job back on the retired pool line' \
   check_race_runner_uses_variable "$isolated_runner_hardcoded"
 
-# (u) keep the fallback shape but rename the variable, which would silently
-# read a different (or nonexistent) repo variable at runtime.
+# (u) a race job on another repository variable with a hosted fallback: any
+# variable-driven runs-on can reach a self-hosted runner again.
 race_runner_wrong_var="$tmpdir/race-runner-wrong-var.yml"
-sed 's/vars\.CI_RACE_RUNNER/vars.CI_RUNNER_RACE/g' "$workflow" > "$race_runner_wrong_var"
-assert_check_fails 'renamed the CI_RACE_RUNNER variable in the runs-on expression' \
+awk '/^  race:$/ { in_race=1 } in_race && /^  [A-Za-z0-9_-]+:/ && !/^  race:$/ { in_race=0 } in_race && /^    runs-on: ubuntu-latest$/ { print "    runs-on: ${{ vars.CI_RUNNER_RACE || '"'"'ubuntu-latest'"'"' }}"; next } { print }' "$workflow" > "$race_runner_wrong_var"
+cmp -s "$workflow" "$race_runner_wrong_var" && { printf 'NEGATIVE CONTROL SETUP FAILED: race_runner_wrong_var did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'routed the race job through another repository variable' \
   check_race_runner_uses_variable "$race_runner_wrong_var"
 
 # (w) CHAOS-9950: a heavy job loses its plan gate; verify stops reading plan.
@@ -3548,16 +3528,16 @@ sed 's/if \[ "\$heavy" = false \] && \[ "\$result" = skipped \]/if [ "$heavy" = 
 cmp -s "$workflow" "$verify_skip_polarity" && { printf 'polarity mutation did not apply\n' >&2; exit 1; }
 assert_check_fails 'verify allows skipped heavy lanes when heavy=true' check_verify_reads_plan "$verify_skip_polarity"
 
-# (v0) a first-stage job back on a hardcoded hosted label.
+# (v0) CHAOS-13609: a first-stage job back on the retired pool line.
 first_stage_hardcoded="$tmpdir/first-stage-hardcoded.yml"
-awk '
+awk -v routed="$routed_runs_on" '
   /^  plan:$/ { in_job=1 }
   in_job && /^  [A-Za-z0-9_-]+:/ && !/^  plan:$/ { in_job=0 }
-  in_job && /runs-on: .*vars\.CI_RACE_RUNNER/ { print "    runs-on: ubuntu-latest"; next }
+  in_job && /^    runs-on: ubuntu-latest$/ { print routed; next }
   { print }
 ' "$workflow" > "$first_stage_hardcoded"
 cmp -s "$workflow" "$first_stage_hardcoded" && { printf 'NEGATIVE CONTROL SETUP FAILED: first_stage_hardcoded did not change the workflow\n' >&2; exit 1; }
-assert_check_fails 'put the plan job back on a hardcoded ubuntu-latest' \
+assert_check_fails 'put the plan job back on the retired pool line' \
   check_first_stage_runner_uses_variable "$first_stage_hardcoded"
 
 # (v) drop race-devhealthfacts's `needs: mirror-preflight` while leaving its
