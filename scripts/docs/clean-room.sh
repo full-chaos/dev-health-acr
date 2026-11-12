@@ -7,15 +7,13 @@ mode=""
 compose_file=""
 overlay_file=""
 cluster="${ACR_KIND_CLUSTER:-}"
-kustomize_cluster="${ACR_KUSTOMIZE_CLUSTER:-}"
 
 usage() {
   cat >&2 <<'EOF'
-usage: clean-room.sh --mode compose|helm|kustomize|mcp [options]
+usage: clean-room.sh --mode compose|helm|mcp [options]
 
 compose options: --compose <root-compose.yml> --overlay <acr.compose.yml>
 helm options: --cluster <kind-cluster>
-kustomize options: --cluster <kind-cluster>
 EOF
 }
 
@@ -51,7 +49,6 @@ while [ "$#" -gt 0 ]; do
     --cluster)
       [ "$#" -ge 2 ] || { usage; exit 2; }
       cluster="$2"
-      kustomize_cluster="$2"
       shift 2
       ;;
     -h|--help)
@@ -88,14 +85,6 @@ case "$mode" in
     kind get clusters | grep -Fx "$cluster" >/dev/null || skip "Kind cluster is unavailable: $cluster"
     bash "$repo_root/scripts/e2e/kind-fixture.sh" verify --name "$cluster"
     exec bash "$repo_root/scripts/e2e/kind-helm.sh" --cluster "$cluster" --scenario lifecycle
-    ;;
-  kustomize)
-    [ -n "$kustomize_cluster" ] || { printf 'error: --cluster or ACR_KUSTOMIZE_CLUSTER is required\n' >&2; exit 2; }
-    require_commands docker kind kubectl helm openssl htpasswd curl git jq
-    docker info >/dev/null 2>&1 || skip 'Docker daemon is unavailable; Kustomize clean-room was not run'
-    kind get clusters | grep -Fx "$kustomize_cluster" >/dev/null || skip "Kind cluster is unavailable: $kustomize_cluster"
-    bash "$repo_root/scripts/e2e/kind-fixture.sh" verify --name "$kustomize_cluster"
-    exec bash "$repo_root/scripts/e2e/kind-kustomize.sh" --cluster "$kustomize_cluster" --scenario lifecycle
     ;;
   mcp)
     require_commands go

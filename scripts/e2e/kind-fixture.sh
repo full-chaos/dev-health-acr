@@ -1183,8 +1183,8 @@ write_exports() {
   local name="$1" sd="$2"
   local gw_ns="${NS_GW}" cdir; cdir="${sd}/certs"
   cat >"${sd}/exports.env" <<EOF
-# Deterministic references exported for Helm (Todo 19) and Kustomize (Todo 20)
-# consumers. Sourced by kind-helm.sh / kind-kustomize.sh.
+# Deterministic references exported for Helm (Todo 19) consumers.
+# Sourced by kind-helm.sh.
 ACR_KIND_CLUSTER="${name}"
 ACR_KIND_CONTEXT="kind-${name}"
 ACR_E2E_DEPS_NAMESPACE="${NS_DEPS}"

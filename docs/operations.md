@@ -2180,12 +2180,6 @@ bash deploy/kubernetes/acr/scripts/apply.sh --overlay staging \
 bash deploy/kubernetes/acr/scripts/wait.sh --overlay staging
 ```
 
-Validate the equivalent Kind lifecycle with:
-
-```bash
-bash scripts/docs/clean-room.sh --mode kustomize --cluster "$ACR_KUSTOMIZE_CLUSTER"
-```
-
 The Kustomize apply helper runs `acr-migrate` before it applies the API
 Deployment. It references existing runtime, migration, entitlement, CA, and
 registry-pull Secrets. It does not create a database, Gateway, or Gateway
@@ -2945,7 +2939,6 @@ bash scripts/docs/verify.sh
 bash scripts/clients/clean-room.sh --release-dir .tmp/context-fabric-release --clients opencode,claude-code,codex,cursor
 bash scripts/docs/clean-room.sh --mode compose --compose ../compose.yml --overlay deploy/compose/acr.compose.yml
 bash scripts/docs/clean-room.sh --mode helm --cluster "$ACR_KIND_CLUSTER"
-bash scripts/docs/clean-room.sh --mode kustomize --cluster "$ACR_KUSTOMIZE_CLUSTER"
 bash scripts/docs/clean-room.sh --mode mcp
 ```
 
