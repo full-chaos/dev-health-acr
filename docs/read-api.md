@@ -52,7 +52,8 @@ is accepted by ACR.
 
 The header must have `alg=EdDSA`, `typ=JWT`, and a known `kid`. Claims require
 the exact configured issuer/audience; a nonempty `sub`, `org_id`, and `jti`;
-explicit normalized repository slugs; and `context:read`, `evidence:read`, or
+explicit normalized repository slugs, or the lone organization-wide
+`["*"]`; and `context:read`, `evidence:read`, or
 the device-approval-only `credential:issue` permission. `iat` and `nbf` allow at most five seconds of
 clock skew, while `exp` is capped to 30 seconds after `iat`. The assertion binds
 the exact uppercase HTTP method, escaped path without a query string, and the
@@ -60,6 +61,16 @@ base64url-without-padding SHA-256 digest of the exact request body. The ACR
 web server must derive the organization, subject, and repository scopes from
 its authenticated server session before signing; ACR converts those scopes into
 the normal `Principal.RepositoryScopes` and still calls `AuthorizeRepository`.
+
+A lone `["*"]` (every repository of the signed `org_id`) is accepted in two
+cases only. With exactly `credential:issue` on `POST` to the device approval,
+`/authorize/consent` and `/authorize/first-party`. And on the read routes with
+exactly the permission set web sends there (CHAOS-13612): `GET capabilities`
+with `context:read` and `evidence:read`, `POST context-packets` with
+`context:read`, and `GET evidence/{evidence_ref_id}` (one non-empty escaped
+path segment, not `.` or `..`) with `evidence:read`. Any other permission set,
+method or path, `["*"]` mixed with names, and an empty list are refused `401`
+with the Warn log class `web_assertion_repository_scope_invalid`.
 
 The verifier reads the local JWKS for every assertion, so removing a `kid`
 revokes future use immediately; the 30-second maximum lifetime bounds any
