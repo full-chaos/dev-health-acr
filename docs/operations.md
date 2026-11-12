@@ -910,6 +910,8 @@ scope, so an edge the backend lost is written again without a change in the
 groups log. Each page logs `project team ownership reconcile` at Info
 (`groups_re_derived`, `pass_complete`, `period`).
 
+**Team change freshness bound (CHAOS-13555).** The window pass of the teams and projects source (`windowTables` in `devhealthsource/teams_projects.go`, built by `teamsProjectsTablesFor`) re-reads `teams`, `projects`, `project_membership_presence`, `work_item_team_attributions`, `team_project_ownership` and `team_repo_ownership`. The cursor is shared by all tables and compares strictly after (`sincePredicate` in `devhealthsource/tables.go`), so a row of these tables stamped at or below the cursor is not read by the next incremental page. The next window pass (`overlapBatch` in `devhealthsource/overlap.go`) reads it only if its stamp is at most `defaultReprojectOverlap` (15 minutes) behind the frontier. A pass STARTS at most `DefaultWindowPassInterval` (5 minutes) after the last one ended, so the interval is no longer than the overlap. The row is visible after that start plus the time the pass takes to walk, which can span several ticks. An older stamp is not read by the window pass. For team rows and project -> team groups the hourly reconcile (`teamOwnershipReconcilePeriod` and `projectTeamOwnershipReconcilePeriod` in `devhealthsource/reconcile.go`) is the backstop. `TestTeamChangeBoundIsOneWindowPass` pins the start bound and the interval <= overlap relation only. A team-only window pass on every tick is a named option, not built.
+
 **Column-arm project edge retraction.** A work item has at most one open
 column-arm `BELONGS_TO_PROJECT` edge: the sink keeps only the edge the current
 column row asserts. Two cases retract every open column-arm edge of the work
@@ -2496,8 +2498,7 @@ The chart key is `config.entitlement.credential` (`service_token` or `workload`;
   (at most 300 s), so a short outage does not stop calls.
 - Counter `acr_entitlement_credential_total{class,outcome}` (docs/observability.md): `class=service_token` reaching zero is the signal that `svc_acr_`
   use by acr has ended (W11-18).
-- Dark by default. go-api accepts the workload token only with `AUTH_ACCESS_TOKEN_ISSUER` set and one live `acr-api` workload in its workload registry (it no longer reads an
-  `AUTH_ACR_WORKLOAD_SUBJECT` pin); until the flip leaf (W9-11) sets those and `authWorkloadClient` for acr, leave the flag unset. The Compose overlay below passes the
+- Dark by default. go-api accepts the workload token only with `AUTH_ACCESS_TOKEN_ISSUER` set and one live `acr-api` workload in its workload registry (it reads no pinned subject); until the flip leaf (W9-11) sets those and `authWorkloadClient` for acr, leave the flag unset. The Compose overlay below passes the
   flag through (default `service_token`) for the dev-stack proof.
 
 ### CHAOS-11198: the credential lifecycle outbox publisher

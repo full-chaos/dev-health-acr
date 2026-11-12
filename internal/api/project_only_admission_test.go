@@ -442,6 +442,7 @@ func TestAnOverLimitInventoryIsATypedLimitationNotAnOutage(t *testing.T) {
 	}{
 		{"projects", `{"detail":"Service unavailable","code":"acr_access_project_scope_over_limit"}`, "project_scope_over_limit", true},
 		{"repositories", `{"detail":"Service unavailable","code":"acr_access_repository_scope_over_limit"}`, "repository_scope_over_limit", true},
+		{"read listing over its cap", `{"detail":"Service unavailable","code":"acr_access_repository_allowlist_too_large"}`, "repository_allowlist_too_large", true},
 		{"a plain 503", `{"detail":"Service unavailable"}`, "status", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {

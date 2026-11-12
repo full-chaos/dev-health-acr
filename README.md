@@ -45,6 +45,7 @@ docs/adr/                     Architecture decisions
 docs/                         PRD, threat model, versioning, implementation notes
 docs/implementation-backlog.md  Linear issue reinterpretation and critical path
 docs/service-shell.md          `acr-api` configuration and operational behavior
+docs/device-approval.md         Device approval: sequence and token diagrams, ACR checks
 ```
 
 ## Contract versions

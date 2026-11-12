@@ -135,6 +135,7 @@ func (a *App) handleDeviceCodeToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Flow and token diagrams: internal/auth/device-approval-architecture.md (public page: docs/device-approval.md)
 func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 	var request contractsv1.DeviceApprovalRequest
 	if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil {

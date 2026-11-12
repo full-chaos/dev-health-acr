@@ -12,6 +12,8 @@ const (
 	// limitation, not an outage.
 	reasonProjectScopeOverLimit    = "project_scope_over_limit"
 	reasonRepositoryScopeOverLimit = "repository_scope_over_limit"
+	// The read-listing cap (ops CHAOS-13561): the same typed limitation.
+	reasonRepositoryAllowlistTooLarge = "repository_allowlist_too_large"
 )
 
 var errUnknownField = errors.New("unknown response field")
@@ -39,7 +41,7 @@ func RejectionReason(err error) string {
 // not an outage. RejectionReason names which inventory.
 func AccessScopeOverLimit(err error) bool {
 	switch RejectionReason(err) {
-	case reasonProjectScopeOverLimit, reasonRepositoryScopeOverLimit:
+	case reasonProjectScopeOverLimit, reasonRepositoryScopeOverLimit, reasonRepositoryAllowlistTooLarge:
 		return true
 	}
 	return false
