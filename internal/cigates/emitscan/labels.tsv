@@ -12,3 +12,4 @@ internal/hostedmetrics/hostedmetrics.go	QueryEmbedFallback	cause	closed vocabula
 internal/hostedmetrics/hostedmetrics.go	RequirementOutcome	outcome	closed vocabulary through bucket()
 internal/hostedmetrics/hostedmetrics.go	ToolCall	result_class,status,tool	closed vocabularies through bucket() and StatusClass()
 third-party:otelhttp	http.server.*	http.request.method,http.response.status_code,http.route,network.protocol.name,network.protocol.version,url.scheme	the otelhttp server instruments, filtered to these keys by the allow-list view in otelexport; a key outside the set is dropped before export
+internal/auth/approval_decision.go	Check	mode,outcome	closed approval decision mode and outcome constants

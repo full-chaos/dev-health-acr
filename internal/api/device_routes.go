@@ -205,6 +205,10 @@ func (a *App) writeDeviceApprovalError(w http.ResponseWriter, r *http.Request, e
 			"reason", reason,
 			"request_id", RequestID(r.Context()))
 	}
+	if errors.Is(err, auth.ErrApprovalNotPermitted) {
+		writeError(w, r, http.StatusForbidden, contractsv1.ErrorCodeAccessDenied, "The approval is not permitted", false, nil)
+		return
+	}
 	if errors.Is(err, auth.ErrInvalidDeviceFlow) || errors.Is(err, storage.ErrDeviceAuthorizationNotFound) || errors.Is(err, storage.ErrDeviceAuthorizationExpired) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
 		return
@@ -227,6 +231,10 @@ func deviceApprovalRefusalReason(err error) string {
 		return oauthvocab.OutcomeOrganizationUnknown
 	case errors.Is(err, auth.ErrApprovalOrganizationDisabled):
 		return oauthvocab.OutcomeOrganizationDisabled
+	case errors.Is(err, auth.ErrApprovalNotPermitted):
+		return oauthvocab.OutcomeAccessDenied
+	case errors.Is(err, auth.ErrApprovalDecisionUnavailable):
+		return oauthvocab.OutcomeUnavailable
 	}
 	return ""
 }

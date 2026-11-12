@@ -74,6 +74,9 @@ type DeviceFlowOptions struct {
 	// Organizations is read fresh before an approval and before a redemption: a gone or disabled organization gets
 	// neither, and an unreadable answer fails closed. Nil (local entitlement mode) checks nothing.
 	Organizations OrganizationPresence
+	// ApprovalDecisions asks the policy decision point about the approver once per approval, after every local
+	// check and before the approval is stored (CHAOS-13586). Nil asks nothing.
+	ApprovalDecisions *ApprovalDecisions
 }
 
 type DeviceFlowService struct {
@@ -84,6 +87,7 @@ type DeviceFlowService struct {
 	randomMu          sync.Mutex
 	oauthDeviceGrants OAuthDeviceGrantLookup
 	organizations     OrganizationPresence
+	approvals         *ApprovalDecisions
 }
 
 type DeviceAuthorizationStart struct {
@@ -167,7 +171,7 @@ func NewDeviceFlowService(store storage.DeviceAuthorizationStore, credentials *S
 	}
 	return &DeviceFlowService{
 		store: store, credentials: credentials, now: options.Now, random: options.Random,
-		oauthDeviceGrants: options.OAuthDeviceGrants, organizations: organizations,
+		oauthDeviceGrants: options.OAuthDeviceGrants, organizations: organizations, approvals: options.ApprovalDecisions,
 	}, nil
 }
 
@@ -327,6 +331,10 @@ func (s *DeviceFlowService) approveUserCodeHash(ctx context.Context, principal s
 		}
 	} else if hasRepositoryWildcard(repositories) || !repositoriesWithinGrant(principalRepositories, repositories) {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
+	}
+	// The approver decision (CHAOS-13586; web docs/auth-acr-device-approval.md): last, before the approval is stored.
+	if err := s.approvals.Check(ctx, principal, repositories); err != nil {
+		return storage.DeviceAuthorization{}, err
 	}
 	record, err = s.store.Approve(ctx, userCodeHash, storage.DeviceAuthorizationGrant{
 		OrgID:                         principal.OrgID,

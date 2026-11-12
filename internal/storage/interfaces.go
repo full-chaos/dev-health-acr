@@ -98,6 +98,13 @@ type Principal struct {
 	// for every other authentication.
 	SessionID     string
 	Impersonating bool
+	// ApproverReference is the web approver reference (CHAOS-13586) that came
+	// with a web assertion and passed the pair check, the one token an
+	// approval forwards to the policy decision point; empty otherwise, with
+	// ApproverReferenceFault naming why (closed set, for the log).
+	ApproverReference      string
+	ApproverReferenceFault string
+
 	// RepositoryScopesInBody marks a web assertion that left out the
 	// repository_scopes claim (CHAOS-13562): RepositoryScopes is empty and
 	// the approval it signs takes its repositories from the body the

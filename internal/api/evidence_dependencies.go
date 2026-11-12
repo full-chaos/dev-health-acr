@@ -89,6 +89,9 @@ type Dependencies struct {
 	Runtime              *RuntimeDependencies
 	ClientIP             auth.ClientIPResolver
 	WebAssertions        *auth.WebAssertionVerifier
+	// ApprovalDecisions is the approver check of a device or consent approval
+	// (CHAOS-13586); nil asks nothing.
+	ApprovalDecisions *auth.ApprovalDecisions
 	// MCPHop is the acr-mcp hop check (CHAOS-12094); nil requires none.
 	MCPHop *auth.MCPHopPolicy
 	// WebAssertionReplays is the shared used-id record the hosted runtime
@@ -226,7 +229,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		if deps.Runtime.OAuth != nil {
 			oauthDeviceGrants = deps.Runtime.OAuth.Store
 		}
-		deviceFlow, err = auth.NewDeviceFlowService(deps.Runtime.DeviceAuthorizations, credentialService, auth.DeviceFlowOptions{Now: deps.Now, OAuthDeviceGrants: oauthDeviceGrants, Organizations: organizationPresence(deps.Runtime.Entitlements)})
+		deviceFlow, err = auth.NewDeviceFlowService(deps.Runtime.DeviceAuthorizations, credentialService, auth.DeviceFlowOptions{Now: deps.Now, OAuthDeviceGrants: oauthDeviceGrants, Organizations: organizationPresence(deps.Runtime.Entitlements), ApprovalDecisions: deps.ApprovalDecisions})
 		if err != nil {
 			return nil, err
 		}

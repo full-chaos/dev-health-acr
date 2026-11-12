@@ -21,6 +21,9 @@ func newHostedTestApp(t *testing.T, provider CapabilitiesProvider, hooks *observ
 	return newHostedTestAppWithWebAssertions(t, provider, hooks, scopes, entitlements, store, nil)
 }
 
+// hostedTestApprovalDecisions is the approver check the hosted test app wires (CHAOS-13586); nil asks nothing.
+var hostedTestApprovalDecisions *auth.ApprovalDecisions
+
 func newHostedTestAppWithWebAssertions(t *testing.T, provider CapabilitiesProvider, hooks *observability.Hooks, scopes []string, entitlements EntitlementProvider, store storage.EvidenceStore, webAssertions *auth.WebAssertionVerifier) (*App, string) {
 	return newHostedTestAppWithUsageTelemetry(t, provider, hooks, scopes, entitlements, store, webAssertions, nil)
 }
@@ -62,6 +65,7 @@ func newHostedTestAppWithUsageTelemetry(t *testing.T, provider CapabilitiesProvi
 	})
 	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
 		Capabilities: provider, Observability: hooks, Limits: manager, Now: func() time.Time { return now }, WebAssertions: webAssertions, UsageTelemetry: usageTelemetry,
+		ApprovalDecisions: hostedTestApprovalDecisions,
 		Runtime: &RuntimeDependencies{
 			Credentials: credentials, Audit: audit, Entitlements: entitlements, Assembler: assembler, Evidence: store,
 			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device", DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(func() time.Time { return now })),

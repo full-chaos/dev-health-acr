@@ -276,3 +276,4 @@ R9	internal/runtime/hosted/postgres_purge.go	oauthPurgeFunc	unresolvable key: at
 R9	internal/runtime/hosted/postgres_purge.go	packetPurgeSlogObserver	unresolvable key: attrs	1	the key is a variable, an slog.Attr value or a forwarded argument list, not a constant; the redactor applies where the logger is built with telemetryscrub.Handler
 R9	internal/telemetryscrub/telemetryscrub.go	handler.WithAttrs	unresolvable key: out	1	a handler wrapper forwards the attributes or the group name it was given to the handler it wraps; the keys were read where the logger was built
 R9	internal/telemetryscrub/telemetryscrub.go	handler.WithGroup	unresolvable key: name	1	a handler wrapper forwards the attributes or the group name it was given to the handler it wraps; the keys were read where the logger was built
+R2	internal/auth/approval_decision.go	Check	variable value	1	mode and outcome are the closed approval decision mode and outcome constants (approval_decision.go)

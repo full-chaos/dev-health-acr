@@ -171,7 +171,7 @@ func (v *WebAssertionVerifier) Verify(r *http.Request) (storage.Principal, error
 			OrgID:                claims.OrganizationID,
 		}, ErrWebAssertionReplay
 	}
-	return storage.Principal{
+	return v.attachApproverReference(r, raw, claims, storage.Principal{
 		AuthenticationMethod: WebAssertionAuthenticationMethod,
 		Subject:              claims.Subject,
 		OrgID:                claims.OrganizationID,
@@ -182,7 +182,7 @@ func (v *WebAssertionVerifier) Verify(r *http.Request) (storage.Principal, error
 		Permissions:            normalizeWebPermissions(claims.Permissions),
 		SessionID:              strings.TrimSpace(claims.SessionID),
 		Impersonating:          claims.Impersonating,
-	}, nil
+	}), nil
 }
 
 // keyInTimeBound applies the per-key retire_after: a key verifies only while

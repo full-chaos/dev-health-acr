@@ -1121,7 +1121,7 @@
         "acr_web_assertion"
       ],
       "primary_validator": {
-        "description": "deviceApprovalHandler requires X-ACR-Web-Assertion EXACTLY (exactly one header) AND explicitly rejects if Authorization is ALSO present, at the route-wrapper level itself (in addition to the same check inside authenticateWebAssertion) -- a double belt-and-braces enforcement of the CHAOS-3271 double-header rejection pattern. RequireScope(credential:issue).",
+        "description": "deviceApprovalHandler requires X-ACR-Web-Assertion EXACTLY (exactly one header) AND explicitly rejects if Authorization is ALSO present, at the route-wrapper level itself (in addition to the same check inside authenticateWebAssertion) -- a double belt-and-braces enforcement of the CHAOS-3271 double-header rejection pattern. RequireScope(credential:issue). With ACR_DEVICE_APPROVAL_PDP shadow or enforce (CHAOS-13586) an approval also reads the optional X-ACR-Approver-Reference (web approver reference, typ web-approver+jwt, aud auth-service, req = SHA-256 of this request's X-ACR-Web-Assertion; internal/auth/approver_reference.go) and forwards only it to the policy decision point (internal/auth/approval_decision.go); enforce answers a deny or a missing reference 403 access_denied and a decision failure 503. It is not a second credential: the route still accepts only acr_web_assertion.",
         "anchor": {
           "path": "internal/api/device_routes.go",
           "line": 259,
@@ -1512,7 +1512,7 @@
         "acr_web_assertion"
       ],
       "primary_validator": {
-        "description": "deviceApprovalHandler (the same wrapper as device_approval) requires X-ACR-Web-Assertion EXACTLY (exactly one header) and rejects if Authorization is also present, then RequireScope(credential:issue): only the web, acting for its signed-in user, can read or decide a request; the browser that holds the handle cannot.",
+        "description": "deviceApprovalHandler (the same wrapper as device_approval) requires X-ACR-Web-Assertion EXACTLY (exactly one header) and rejects if Authorization is also present, then RequireScope(credential:issue): only the web, acting for its signed-in user, can read or decide a request; the browser that holds the handle cannot. With ACR_DEVICE_APPROVAL_PDP shadow or enforce (CHAOS-13586) an approve also reads the optional X-ACR-Approver-Reference and forwards only it to the policy decision point, as on device_approval; enforce answers a deny or a missing reference 403 access_denied (consent error access_denied) and a decision failure 503.",
         "anchor": {
           "path": "internal/api/device_routes.go",
           "line": 259,

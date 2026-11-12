@@ -784,6 +784,7 @@ type oauthConsentDecisionBody struct {
 var oauthConsentStatus = map[string]int{
 	auth.OAuthConsentCodeInvalid:   http.StatusBadRequest,
 	auth.OAuthConsentCodeExpired:   http.StatusGone,
+	auth.OAuthConsentCodeDenied:    http.StatusForbidden,
 	auth.OAuthConsentCodeCompleted: http.StatusConflict,
 	// CHAOS-13562: the approval names more repositories than one credential
 	// may hold.
