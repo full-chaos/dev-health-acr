@@ -48,7 +48,7 @@ func TestOrganizationKnownSeparatesTheCodedNotFoundFromAnOutage(t *testing.T) {
 		"uncoded 404":    {respond(http.StatusNotFound, `{"detail":"Not found"}`), false, "status"},
 		"503":            {respond(http.StatusServiceUnavailable, unknownBody), false, "status"},
 		"500":            {respond(http.StatusInternalServerError, ``), false, "status"},
-		"timeout":        {func(w http.ResponseWriter, r *http.Request) { <-r.Context().Done() }, false, "transport"},
+		"timeout":        {abortAfterClientGivesUp, false, "transport"},
 		"200 not schema": {respond(http.StatusOK, `{}`), false, "decode"},
 	}
 	for name, tc := range cases {
