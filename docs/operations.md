@@ -2498,8 +2498,7 @@ The chart key is `config.entitlement.credential` (`service_token` or `workload`;
   (at most 300 s), so a short outage does not stop calls.
 - Counter `acr_entitlement_credential_total{class,outcome}` (docs/observability.md): `class=service_token` reaching zero is the signal that `svc_acr_`
   use by acr has ended (W11-18).
-- Dark by default. go-api accepts the workload token only with `AUTH_ACCESS_TOKEN_ISSUER` set and one live `acr-api` workload in its workload registry (it no longer reads an
-  `AUTH_ACR_WORKLOAD_SUBJECT` pin); until the flip leaf (W9-11) sets those and `authWorkloadClient` for acr, leave the flag unset. The Compose overlay below passes the
+- Dark by default. go-api accepts the workload token only with `AUTH_ACCESS_TOKEN_ISSUER` set and one live `acr-api` workload in its workload registry (it reads no pinned subject); until the flip leaf (W9-11) sets those and `authWorkloadClient` for acr, leave the flag unset. The Compose overlay below passes the
   flag through (default `service_token`) for the dev-stack proof.
 
 ### CHAOS-11198: the credential lifecycle outbox publisher
