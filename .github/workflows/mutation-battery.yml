@@ -28,8 +28,7 @@
 # scripts/battery/ out of a 63011dec checkout that has no such directory -- and
 # it is the normal case, not an edge one.
 #
-# Hosted runners only. SELF_HOSTED_RUNNERS is disabled fleet-wide and the ARC
-# pool is gone, so there is no runner-label pair here to keep in sync.
+# Hosted runners only.
 name: Mutation battery
 
 on:
