@@ -73,7 +73,7 @@
   "find_name_kinds_max": 8,
   "find_query_max_runes": 256,
   "find_list_scan_max": 2000,
-  "granted_repositories_max": 200
+  "granted_repositories_max": 256
  },
  "versions": {
   "contract": "acr-data.v1",

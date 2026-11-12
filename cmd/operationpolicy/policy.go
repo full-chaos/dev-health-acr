@@ -36,6 +36,10 @@ const pageSize = 200
 // idListMax bounds client id lists (ops binds 500 or 1000 ids silently).
 const idListMax = 200
 
+// repoIDListMax bounds a repository id list: the forced grant list of a
+// restricted caller must fit it, so it is the grant bound.
+const repoIDListMax = dr.MaxGrantedRepositories
+
 var (
 	repository = &dr.SubjectConversion{Kind: dr.SubjectKindRepository, AcrPrefix: "repository:", OpsForm: "bare_uuid"}
 	team       = &dr.SubjectConversion{Kind: dr.SubjectKindTeam, AcrPrefix: "team:", OpsForm: "bare_id"}
@@ -45,7 +49,7 @@ var (
 	forcedFalse  = variableDecl{Source: dr.SourceForced, ForcedValue: json.RawMessage("false")}
 	client       = variableDecl{}
 
-	repoIDs = variableDecl{MaxItems: idListMax, Subject: repository}
+	repoIDs = variableDecl{MaxItems: repoIDListMax, Subject: repository}
 	teamIDs = variableDecl{MaxItems: idListMax, Subject: team}
 	teamID  = variableDecl{Subject: team}
 )

@@ -1181,7 +1181,7 @@
           "default": "null",
           "allowed": true,
           "source": "client",
-          "max_items": 200,
+          "max_items": 256,
           "subject": {
             "kind": "repository",
             "acr_prefix": "repository:",
@@ -1367,7 +1367,7 @@
           "default": "null",
           "allowed": true,
           "source": "client",
-          "max_items": 200,
+          "max_items": 256,
           "subject": {
             "kind": "repository",
             "acr_prefix": "repository:",
@@ -2655,7 +2655,7 @@
           "default": "null",
           "allowed": true,
           "source": "client",
-          "max_items": 200,
+          "max_items": 256,
           "subject": {
             "kind": "repository",
             "acr_prefix": "repository:",
@@ -6886,7 +6886,7 @@
           "default": "null",
           "allowed": true,
           "source": "client",
-          "max_items": 200,
+          "max_items": 256,
           "subject": {
             "kind": "repository",
             "acr_prefix": "repository:",
@@ -8541,7 +8541,7 @@
           "default": "null",
           "allowed": true,
           "source": "client",
-          "max_items": 200,
+          "max_items": 256,
           "subject": {
             "kind": "repository",
             "acr_prefix": "repository:",
@@ -8818,7 +8818,7 @@
           "default": "null",
           "allowed": true,
           "source": "client",
-          "max_items": 200,
+          "max_items": 256,
           "subject": {
             "kind": "repository",
             "acr_prefix": "repository:",
@@ -9239,7 +9239,7 @@
           "default": "null",
           "allowed": true,
           "source": "client",
-          "max_items": 200,
+          "max_items": 256,
           "subject": {
             "kind": "repository",
             "acr_prefix": "repository:",

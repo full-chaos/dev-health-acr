@@ -523,7 +523,7 @@ func TestClampsConstraintsAndAcrSetValues(t *testing.T) {
 		{"capacityForecast", map[string]any{"input": map[string]any{"simulations": 10001}}, directread.RefusalVariableOutOfRange},
 		{"capacityForecast", map[string]any{"input": map[string]any{"workScopeId": "w"}}, directread.RefusalVariableNotAllowed},
 		{"compoundingRisk", map[string]any{"filter": map[string]any{"breakout": "REPO", "teamIds": []any{opTeamT}}}, directread.RefusalVariableNotAllowed},
-		{"compoundingRisk", map[string]any{"filter": map[string]any{"repoIds": make([]any, 201)}}, directread.RefusalVariableOutOfRange},
+		{"compoundingRisk", map[string]any{"filter": map[string]any{"repoIds": make([]any, 257)}}, directread.RefusalVariableOutOfRange},
 		{"workGraphEdges", map[string]any{"filters": map[string]any{"allowScopedPartial": true}}, directread.RefusalVariableNotAllowed},
 		{"catalogValues", map[string]any{"dimension": "AUTHOR"}, directread.RefusalPersonScopeNotServed},
 	}
