@@ -59,9 +59,13 @@ credentials:
   migration:
     existingSecret: acr-migration-credentials
     postgresDsnKey: ACR_POSTGRES_MIGRATION_DSN
-  entitlementToken:
-    existingSecret: "<entitlement-token-secret>"
-    key: token
+
+# The entitlement client sends acr-api's workload token from auth-service.
+authWorkloadClient:
+  enabled: true
+  exchangeURL: "<auth-service-internal-origin>"
+  allowPlainHTTP: true
+  issuer: "<auth-service-token-issuer-url>"
 
 deployment:
   replicaCount: 2

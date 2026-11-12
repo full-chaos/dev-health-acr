@@ -27,4 +27,7 @@ data:
   ACR_ENABLE_EPISODE_WRITEBACK: "false"
   ACR_DEV_HEALTH_ENTITLEMENT_URL: http://ops.dev-health.internal:8091
   ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT: 5s
-  ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /var/run/acr/entitlement/token
+  ACR_AUTH_WORKLOAD_EXCHANGE_URL: http://auth-service.dev-health.internal:8097
+  ACR_AUTH_WORKLOAD_ALLOW_PLAIN_HTTP: "true"
+  ACR_AUTH_WORKLOAD_ISSUER: https://auth.dev-health.internal
+  ACR_AUTH_WORKLOAD_SUBJECT_FILE: /var/run/secrets/dev-health/auth-workload/token

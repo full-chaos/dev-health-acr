@@ -1415,9 +1415,8 @@ The variables above configure the **deployment-default** provider. An
 organization configures its own provider/base URL/model/fallback/credential in
 the Dev Health settings store (the web AI Setup > BYO LLM page); acr reads it
 from ops' internal `GET /api/v1/internal/acr/orgs/{org_id}/llm-config` with the
-entitlement credential (`ACR_DEV_HEALTH_ENTITLEMENT_URL` and
-`ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`; the credential needs scope
-`llm_config:read`), whenever a Dev Health entitlement client is configured, and
+entitlement client (`ACR_DEV_HEALTH_ENTITLEMENT_URL` and the
+`ACR_AUTH_WORKLOAD_*` client; it sends acr-api's workload token), whenever a Dev Health entitlement client is configured, and
 exposes no write route. acr holds no BYO store and no settings encryption key.
 Without the client (local/dev) there is no per-organization source: the
 platform model answers every organization and start-up logs one INFO line.
@@ -2163,10 +2162,9 @@ the absolute Dev Health Web approval page (for example,
 that omits this runtime-required value.
 
 Development and test renders select the offline local entitlement provider when
-`config.entitlement.url`, `credentials.entitlementToken`, and
-`config.entitlementCaBundle` are all omitted. This is the default in
-`values-development.yaml` and the local Kind Helm driver. Supplying a complete
-URL and token Secret reference selects the remote provider instead. Staging and
+`config.entitlement.url` and `config.entitlementCaBundle` are both omitted. This is the default in
+`values-development.yaml` and the local Kind Helm driver. Supplying the URL and
+`authWorkloadClient` selects the remote provider instead. Staging and
 production reject local or partial entitlement configuration before rendering;
 their remote startup and request-time checks remain fail closed.
 
@@ -2334,7 +2332,7 @@ the stream is drained and verify the projector env has no such variable.
 
 ### Purging a deleted organization
 
-`acr-projector purge --org <uuid>` removes everything ACR holds for an organization that has left Dev Health: every FalkorDB graph of the organization at any epoch (found by scanning the existing graph keys, so an orphan epoch above the recorded one is dropped too) and the org-keyed Postgres rows (the Context Fabric tables, credentials, workload bindings, device authorizations, packet snapshots and episodes). Run it as a one-off Job with the same environment as `rebuild`, plus `ACR_DEV_HEALTH_ENTITLEMENT_URL` and `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`, and `ACR_POSTGRES_PURGE_DSN` (or `ACR_POSTGRES_PURGE_DSN_FILE`): the purge connects as its own database role (`acr_purge` by convention), never as the runtime role, and refuses to run without that DSN. The role's privileges are exactly the purge's statements (declared in `internal/dbacl/purge_grants.go`, checked against the SQL the purge runs). For each credential it deletes that was live (not revoked, not past its expiry) the purge also writes one `revoked` row (actor `system`, no reference, with the credential's revision 1 first when the stream has none) to `acr.credential_lifecycle_outbox` in the same transaction, so the role also holds SELECT and INSERT on that table and never updates or deletes it. A purge that fails on a credential with an empty scope list (no event can describe it) stops that organization's purge: revoke that credential (revoked_at set, so it is terminal and gets no event), then rerun the purge. The lifecycle tick skips such a credential too: it logs one warning per tick with the count (`skipped`), names no credential, and the retention delete keeps the row until it is revoked. To find them, run read-only: `SELECT credential_id, org_id FROM acr.client_credentials WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now()) AND scopes = '[]'::jsonb;`. On Kubernetes, put the DSN in a Secret, name it in `credentials.purge.existingSecret`, and the grant Job gives the role its privileges; on compose, set `ACR_PURGE_DB_USER` and `ACR_PURGE_DB_PASSWORD` in the environment `docker compose` reads (the `acr-db-init` and `acr-db-acl` services pass them on; the role must differ from the runtime, migration and admin roles, and `acr-db-init` refuses it otherwise), and give the one-off `acr-projector purge` run `ACR_POSTGRES_PURGE_DSN`. The purge role must not be the runtime role.
+`acr-projector purge --org <uuid>` removes everything ACR holds for an organization that has left Dev Health: every FalkorDB graph of the organization at any epoch (found by scanning the existing graph keys, so an orphan epoch above the recorded one is dropped too) and the org-keyed Postgres rows (the Context Fabric tables, credentials, workload bindings, device authorizations, packet snapshots and episodes). Run it as a one-off Job with the same environment as `rebuild`, plus `ACR_DEV_HEALTH_ENTITLEMENT_URL` and the `ACR_AUTH_WORKLOAD_*` client, and `ACR_POSTGRES_PURGE_DSN` (or `ACR_POSTGRES_PURGE_DSN_FILE`): the purge connects as its own database role (`acr_purge` by convention), never as the runtime role, and refuses to run without that DSN. The role's privileges are exactly the purge's statements (declared in `internal/dbacl/purge_grants.go`, checked against the SQL the purge runs). For each credential it deletes that was live (not revoked, not past its expiry) the purge also writes one `revoked` row (actor `system`, no reference, with the credential's revision 1 first when the stream has none) to `acr.credential_lifecycle_outbox` in the same transaction, so the role also holds SELECT and INSERT on that table and never updates or deletes it. A purge that fails on a credential with an empty scope list (no event can describe it) stops that organization's purge: revoke that credential (revoked_at set, so it is terminal and gets no event), then rerun the purge. The lifecycle tick skips such a credential too: it logs one warning per tick with the count (`skipped`), names no credential, and the retention delete keeps the row until it is revoked. To find them, run read-only: `SELECT credential_id, org_id FROM acr.client_credentials WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now()) AND scopes = '[]'::jsonb;`. On Kubernetes, put the DSN in a Secret, name it in `credentials.purge.existingSecret`, and the grant Job gives the role its privileges; on compose, set `ACR_PURGE_DB_USER` and `ACR_PURGE_DB_PASSWORD` in the environment `docker compose` reads (the `acr-db-init` and `acr-db-acl` services pass them on; the role must differ from the runtime, migration and admin roles, and `acr-db-init` refuses it otherwise), and give the one-off `acr-projector purge` run `ACR_POSTGRES_PURGE_DSN`. The purge role must not be the runtime role.
 
 1. `purge --org <uuid> --dry-run` prints row counts (cascaded OAuth rows included), the number of graphs it would drop, and the `org_key`. It changes nothing.
 2. `purge --org <uuid> --confirm-hash <org_key>` runs the purge in one Postgres transaction after the graphs are dropped.
@@ -2483,23 +2481,24 @@ exchange runs at start, no readiness check depends on it, and an auth-service ou
 for every exchange, so a rotated projected token is used without a restart. The chart opens no egress to
 auth-service in this change. CHAOS-11203 is the first caller (next section).
 
-### CHAOS-11203: the entitlement and llm-config client sends a workload token
+### CHAOS-11203 / CHAOS-13600: the entitlement and llm-config client sends a workload token
 
-`ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL` picks the credential every call of the Dev Health entitlement client carries (health, entitlement,
-llm-config and principal access, in acr-api and in `acr-projector purge`): `service_token` (the default; not a rollback value, see below) reads the
-`svc_acr_` token from `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE` as before; `workload` asks the auth workload client for a token for the audience
-`dev-health-api` (no scope: go-api's internal acr routes carry no action) and sends it. Any other value stops the start; the error never echoes it.
-The chart key is `config.entitlement.credential` (`service_token` or `workload`; unset keeps the token Secret). With `workload` the token Secret is optional and, when unset, no token volume or init container is rendered. Set it there, not in `deployment.extraEnv` (the render fails if both are set).
+Every call of the Dev Health entitlement client (health, entitlement, llm-config and principal access, in acr-api and in
+`acr-projector purge`) carries a workload token for the audience `dev-health-api` (no scope: go-api's internal acr routes carry no action)
+from the `ACR_AUTH_WORKLOAD_*` client. It is the one credential (CHAOS-13600 removed the service token mode).
+`ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL` may be unset or `workload`; any other value stops the start, and the error never echoes it. The token
+file setting of the removed service token credential is ignored: the start goes on and logs one Warn line that names it. The chart key is
+`config.entitlement.credential` (`""` or `workload`); set it there, not in `deployment.extraEnv` (the render fails if both are set). `config.entitlement.url` needs `authWorkloadClient.enabled`.
 
-- `workload` needs `ACR_DEV_HEALTH_ENTITLEMENT_URL` and the `ACR_AUTH_WORKLOAD_*` client. A token file that stays set is not an error and is
-  never opened in this mode. The flag is not a rollback: `service_token` against a current ops build stops acr-api at start (the ops server refuses the `svc_acr_` class with `401` on the health route, so the start-time readiness check fails). The rollback is the image rollback (`helm rollback` to the previous revision; rehearsed 143 -> 142 -> 143, fcdev RECORD-11241-1 sha256 `d955471080f1`, row A1). Not rehearsed: `acr-projector` 143 -> 142, and a rollback while go-api is down. Removing the `service_token` mode is open (CHAOS-13548).
+- A remote entitlement origin needs the `ACR_AUTH_WORKLOAD_*` client. The rollback is the image rollback (`helm rollback` to the previous
+  revision; rehearsed 143 -> 142 -> 143, fcdev RECORD-11241-1 sha256 `d955471080f1`, row A1). Not rehearsed: `acr-projector` 143 -> 142,
+  and a rollback while go-api is down.
 - There is no runtime fallback. When no token can be minted (auth-service down, subject file unreadable) the call is not sent and fails closed as
-  an unavailable entitlement; `svc_acr_` never goes out in `workload` mode. The auth-service client keeps a token until just before its expiry
-  (at most 300 s), so a short outage does not stop calls.
-- Counter `acr_entitlement_credential_total{class,outcome}` (docs/observability.md): `class=service_token` reaching zero is the signal that `svc_acr_`
-  use by acr has ended (W11-18).
-- Dark by default. go-api accepts the workload token only with `AUTH_ACCESS_TOKEN_ISSUER` set and one live `acr-api` workload in its workload registry (it reads no pinned subject); until the flip leaf (W9-11) sets those and `authWorkloadClient` for acr, leave the flag unset. The Compose overlay below passes the
-  flag through (default `service_token`) for the dev-stack proof.
+  an unavailable entitlement. The auth-service client keeps a token until just before its expiry (at most 300 s), so a short outage does not
+  stop calls. The start-up entitlement check needs one token: acr-api does not start without a working exchange.
+- Counter `acr_entitlement_credential_total{class,outcome}` (docs/observability.md) counts the calls.
+- go-api accepts the workload token only with `AUTH_ACCESS_TOKEN_ISSUER` set and one live `acr-api` workload in its workload registry (it reads
+  no pinned subject).
 
 ### CHAOS-11198: the credential lifecycle outbox publisher
 

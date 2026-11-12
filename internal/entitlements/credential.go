@@ -10,20 +10,14 @@ import (
 const workloadAudience = "dev-health-api"
 
 const (
-	credentialServiceToken = "service_token"
-	credentialWorkload     = "workload"
-	outcomeSent            = "sent"
-	outcomeTokenFailed     = "token_unavailable"
+	credentialWorkload = "workload"
+	outcomeSent        = "sent"
+	outcomeTokenFailed = "token_unavailable"
 )
 
-// authorize sets the one Authorization header of a call. With a workload source it mints a token and, when it cannot,
-// returns false with nothing set: the call is not sent and the service token is never a fallback.
+// authorize sets the one Authorization header of a call: a workload token it mints. When it cannot, it returns false
+// with nothing set and the call is not sent.
 func (c *Client) authorize(ctx context.Context, request *http.Request) bool {
-	if c.workload == nil {
-		request.Header.Set("Authorization", "Bearer "+c.token)
-		c.record(ctx, credentialServiceToken, outcomeSent)
-		return true
-	}
 	token, err := c.workload.Token(request.Context(), workloadAudience)
 	if err != nil || token == "" {
 		c.record(ctx, credentialWorkload, outcomeTokenFailed)

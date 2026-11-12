@@ -147,4 +147,5 @@ func requirementOutcomeVocabulary() []string {
 func logStarting(logger *slog.Logger, info version.Info, cfg config.Config, lookup func(string) (string, bool)) {
 	attributes := append([]any{"version", info.Version, "commit", info.Commit, "build_date", info.Date}, cfg.SafeAttributes()...)
 	logger.Info("starting acr-api", append(attributes, embedprovider.StartupAttributes(lookup)...)...)
+	config.WarnRetiredEntitlementSettings(logger, lookup)
 }

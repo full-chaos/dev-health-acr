@@ -272,13 +272,11 @@
         },
         "entitlement": {
           "type": "object",
-          "additionalProperties": true,
+          "additionalProperties": false,
           "properties": {
             "url": { "type": "string" },
             "timeout": { "type": "string" },
-            "tokenMountPath": { "type": "string" },
-            "tokenFileName": { "type": "string" },
-            "credential": { "type": "string", "enum": ["", "service_token", "workload"] }
+            "credential": { "type": "string", "enum": ["", "workload"] }
           }
         },
         "postgresCaBundle": {
@@ -372,14 +370,6 @@
           "properties": {
             "existingSecret": { "type": "string" },
             "postgresDsnKey": { "type": "string" }
-          }
-        },
-        "entitlementToken": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "existingSecret": { "type": "string" },
-            "key": { "type": "string" }
           }
         },
         "rotationRevision": { "type": ["string", "integer"] }

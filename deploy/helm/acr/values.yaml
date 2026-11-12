@@ -94,17 +94,10 @@ config:
   entitlement:
     url: ""
     timeout: "5s"
-    # Mount path for the entitlement bearer token file sourced from an existing
-    # Secret (see credentials.entitlementToken).
-    tokenMountPath: /var/run/acr/entitlement
-    tokenFileName: token
-    # ""/service_token: acr-api sends the service token read from the file and
-    # credentials.entitlementToken.existingSecret is required. workload: acr-api
-    # sends its auth workload token (needs authWorkloadClient.enabled), never
-    # reads the file, and the token Secret is optional (when set it is still
-    # mounted but never opened). Setting service_token against a current ops
-    # build stops acr-api at start; it is not a rollback. Roll back with
-    # helm rollback. Set it here, not in deployment.extraEnv.
+    # acr-api sends its auth workload token on every entitlement call, so a url
+    # needs authWorkloadClient.enabled. "" and workload are the same credential;
+    # workload also renders ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL. Set it here,
+    # not in deployment.extraEnv.
     credential: ""
   # Optional PEM CA bundles mounted from existing Secrets (references only).
   postgresCaBundle:
@@ -191,11 +184,6 @@ credentials:
   purge:
     existingSecret: ""
     postgresDsnKey: ACR_POSTGRES_PURGE_DSN
-  # Bearer token used to authenticate to the Dev Health Ops entitlement service. Optional when
-  # config.entitlement.credential=workload.
-  entitlementToken:
-    existingSecret: ""
-    key: token
   # Bump this opaque revision whenever a referenced Secret's CONTENT is rotated
   # (name unchanged). Helm cannot observe external Secret content, so changing
   # this value forces the API and migration pods to roll onto the new material.
@@ -861,9 +849,10 @@ workloadTokenExchange:
 
 # CHAOS-11195: acr-api as a CLIENT of the auth-service workload-token exchange (RFC 8693). Off by default: off
 # renders nothing. On, acr-api gets a projected ServiceAccount token (audience dev-health-workload-exchange,
-# 600 s, read-only mount) and builds its exchange client at start from these values; it makes no exchange at
-# start and no readiness check depends on it. Calls arrive with later work. Distinct from workloadTokenExchange,
-# where acr is the exchange SERVER for its own consumers.
+# 600 s, read-only mount) and builds its exchange client at start from these values. Required with
+# config.entitlement.url: every entitlement call sends a workload token, so the start-up entitlement check fails
+# when no token can be exchanged. Distinct from workloadTokenExchange, where acr is the exchange SERVER for its
+# own consumers.
 authWorkloadClient:
   enabled: false
   # auth-service's origin (scheme, host, port): https, or http with allowPlainHTTP for a cluster-internal Service.

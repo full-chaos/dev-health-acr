@@ -5,8 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -117,42 +115,10 @@ func TestWorkloadCredentialSendsTheMintedTokenOnEveryCall(t *testing.T) {
 	}
 }
 
-func TestWorkloadCredentialNeverOpensTheTokenFile(t *testing.T) {
-	server, seen := allRoutesServer(t)
-	source := &fakeTokenSource{token: fakeWorkloadToken}
-	// A path that does not exist: a read would fail New, and a read of a real file would leak its value.
-	missing := filepath.Join(t.TempDir(), "no-such-svc-token")
-	client, err := entitlements.New(clientConfig(t, server, entitlements.Config{Workload: source, TokenFile: missing}))
-	if err != nil {
-		t.Fatalf("New with a token file set in workload mode: %v", err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	if _, err := os.Stat(missing); err == nil {
-		t.Fatal("the test file exists")
-	}
-	file := writeToken(t, testToken)
-	client2, err := entitlements.New(clientConfig(t, server, entitlements.Config{Workload: source, TokenFile: file}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client2.Close() })
-	if err := os.Remove(file); err != nil {
-		t.Fatal(err)
-	}
-	if err := client2.Check(context.Background()); err != nil {
-		t.Fatalf("Check: %v", err)
-	}
-	for _, request := range seen() {
-		if strings.Contains(request.authorization, testToken) {
-			t.Fatalf("the service token reached the server: %q", request.authorization)
-		}
-	}
-}
-
 func TestWorkloadCredentialFailsClosedWhenNoTokenCanBeMinted(t *testing.T) {
 	server, seen := allRoutesServer(t)
 	source := &fakeTokenSource{err: errors.New("exchange unavailable")}
-	client, err := entitlements.New(clientConfig(t, server, entitlements.Config{Workload: source, TokenFile: writeToken(t, testToken)}))
+	client, err := entitlements.New(clientConfig(t, server, entitlements.Config{Workload: source}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,36 +154,9 @@ func TestWorkloadCredentialObservesEachCall(t *testing.T) {
 	source.err = errors.New("down")
 	source.mu.Unlock()
 	callAllFive(t, client)
-	legacy, err := entitlements.New(clientConfig(t, server, entitlements.Config{Observe: observe}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = legacy.Close() })
-	if err := legacy.Check(context.Background()); err != nil {
-		t.Fatal(err)
-	}
 	mu.Lock()
 	defer mu.Unlock()
-	if counts["workload/sent"] != 5 || counts["workload/token_unavailable"] != 3 || counts["service_token/sent"] != 1 || len(counts) != 3 {
+	if counts["workload/sent"] != 5 || counts["workload/token_unavailable"] != 3 || len(counts) != 2 {
 		t.Fatalf("counts = %v", counts)
-	}
-}
-
-func TestServiceTokenCredentialIsUnchangedWithoutAWorkloadSource(t *testing.T) {
-	server, seen := allRoutesServer(t)
-	client, err := entitlements.New(clientConfig(t, server, entitlements.Config{}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = client.Close() })
-	for i, err := range callAllFive(t, client) {
-		if err != nil {
-			t.Fatalf("call %d: %v", i, err)
-		}
-	}
-	for _, request := range seen() {
-		if request.authorization != "Bearer "+testToken {
-			t.Fatalf("%s sent %q", request.path, request.authorization)
-		}
 	}
 }

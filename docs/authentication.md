@@ -744,9 +744,8 @@ handler:
 
 `GET /api/v1/internal/acr/orgs/{org_id}/principals/{approving_user_id}/access[?sid=<session id>]`
 
-with the service credential (`svc_acr_`, scope `principal_access:read`; a
-credential without that scope gets 403 from Dev Health, which acr-api answers
-503). `sid` is sent for the browser class only: its credential's bound session
+with acr-api's workload token (audience `dev-health-api`; a refused token gets
+401 or 403 from Dev Health, which acr-api answers 503). `sid` is sent for the browser class only: its credential's bound session
 (`session_id`). OAuth user and native device credentials are row-only (no
 session), and still get the membership, impersonation, flag and scope checks.
 There is no cache across calls; inside one request the read is reused. The

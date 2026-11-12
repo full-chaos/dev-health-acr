@@ -49,23 +49,19 @@ func newEntitlement(cfg config.Config, deps entitlementDeps) (entitlementChecker
 			return nil, errors.New("entitlement proxy configuration is invalid")
 		}
 	}
+	exchange, err := authworkload.Build(cfg.AuthWorkload, deps.logger)
+	if err != nil {
+		return nil, err
+	}
+	if exchange == nil {
+		return nil, errors.New("the workload entitlement credential needs the auth workload client (ACR_AUTH_WORKLOAD_*)")
+	}
 	remote := entitlements.Config{
-		BaseURL: baseURL, TokenFile: cfg.DevHealthEntitlementTokenFile, Timeout: cfg.DevHealthEntitlementTimeout,
+		BaseURL: baseURL, Workload: exchange, Timeout: cfg.DevHealthEntitlementTimeout,
 		MaxResponseBytes: cfg.DevHealthEntitlementMaxResponseBytes, ProxyURL: proxyURL, CACertPath: cfg.DevHealthEntitlementCACertPath,
 	}
 	if deps.metrics != nil {
 		remote.Observe = deps.metrics.EntitlementCredential
-	}
-	if cfg.EntitlementCredential() == config.EntitlementCredentialWorkload {
-		exchange, err := authworkload.Build(cfg.AuthWorkload, deps.logger)
-		if err != nil {
-			return nil, err
-		}
-		if exchange == nil {
-			return nil, errors.New("the workload entitlement credential needs the auth workload client (ACR_AUTH_WORKLOAD_*)")
-		}
-		// The token file stays named in the config for a rollback, but this credential never reads it.
-		remote.Workload, remote.TokenFile = exchange, ""
 	}
 	client, err := entitlements.New(remote)
 	if err != nil {

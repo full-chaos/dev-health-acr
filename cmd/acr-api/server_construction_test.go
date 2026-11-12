@@ -180,15 +180,17 @@ func TestConfig_rejects_local_composition_in_production(t *testing.T) {
 func developmentServeConfig(t *testing.T) config.Config {
 	t.Helper()
 	for key, value := range map[string]string{
-		"ACR_ENVIRONMENT":                       "development",
-		"ACR_CLICKHOUSE_DSN":                    "clickhouse://configured",
-		"ACR_POSTGRES_DSN":                      "postgres://configured",
-		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
-		"ACR_EVIDENCE_ID_ACTIVE_KID":            "current",
-		"ACR_EVIDENCE_ID_KEYS":                  "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
-		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "https://ops.example.test",
-		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
-		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
+		"ACR_ENVIRONMENT":                "development",
+		"ACR_CLICKHOUSE_DSN":             "clickhouse://configured",
+		"ACR_POSTGRES_DSN":               "postgres://configured",
+		"ACR_POSTGRES_CONNECTION_KIND":   "direct",
+		"ACR_EVIDENCE_ID_ACTIVE_KID":     "current",
+		"ACR_EVIDENCE_ID_KEYS":           "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+		"ACR_DEV_HEALTH_ENTITLEMENT_URL": "https://ops.example.test",
+		"ACR_AUTH_WORKLOAD_EXCHANGE_URL": "https://auth-service.example.test",
+		"ACR_AUTH_WORKLOAD_ISSUER":       "https://auth.example.test",
+		"ACR_AUTH_WORKLOAD_SUBJECT_FILE": "/var/run/secrets/dev-health/auth-workload/token",
+		"ACR_DEVICE_VERIFICATION_URL":    "https://verify.example.test/device",
 	} {
 		t.Setenv(key, value)
 	}
@@ -202,16 +204,18 @@ func developmentServeConfig(t *testing.T) config.Config {
 func validServeConfig(t *testing.T) config.Config {
 	t.Helper()
 	for key, value := range map[string]string{
-		"ACR_ENVIRONMENT":                       "test",
-		"ACR_REQUIRE_BACKING_STORES":            "true",
-		"ACR_CLICKHOUSE_DSN":                    "clickhouse://configured",
-		"ACR_POSTGRES_DSN":                      "postgres://configured",
-		"ACR_EVIDENCE_ID_ACTIVE_KID":            "current",
-		"ACR_EVIDENCE_ID_KEYS":                  "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
-		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "https://ops.example.test",
-		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
-		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
-		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
+		"ACR_ENVIRONMENT":                "test",
+		"ACR_REQUIRE_BACKING_STORES":     "true",
+		"ACR_CLICKHOUSE_DSN":             "clickhouse://configured",
+		"ACR_POSTGRES_DSN":               "postgres://configured",
+		"ACR_EVIDENCE_ID_ACTIVE_KID":     "current",
+		"ACR_EVIDENCE_ID_KEYS":           "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+		"ACR_DEV_HEALTH_ENTITLEMENT_URL": "https://ops.example.test",
+		"ACR_AUTH_WORKLOAD_EXCHANGE_URL": "https://auth-service.example.test",
+		"ACR_AUTH_WORKLOAD_ISSUER":       "https://auth.example.test",
+		"ACR_AUTH_WORKLOAD_SUBJECT_FILE": "/var/run/secrets/dev-health/auth-workload/token",
+		"ACR_DEVICE_VERIFICATION_URL":    "https://verify.example.test/device",
+		"ACR_POSTGRES_CONNECTION_KIND":   "direct",
 	} {
 		t.Setenv(key, value)
 	}

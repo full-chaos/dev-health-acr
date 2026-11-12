@@ -2,35 +2,31 @@
 
 ## Overview
 
-`acr-api` can exchange its deployment identity for short-lived workload tokens.
+`acr-api` exchanges its deployment identity for short-lived workload tokens.
 It uses these tokens to call the ops server and to publish credential lifecycle
 events to auth-service. The two uses have separate switches.
 
-## Credential choice
+## Credential
 
-`ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL` selects the credential for the Dev Health
-entitlement client. This client calls health, entitlement, model configuration,
-and principal access routes.
+The Dev Health entitlement client sends a workload token for audience
+`dev-health-api` on every call. This client calls health, entitlement, model
+configuration, and principal access routes. The workload token is the one
+credential: there is no other mode and no runtime fallback.
 
-| Value | Credential |
-| --- | --- |
-| `service_token` (default) | Read the service credential from `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`. Example form: `svc_acr_<redacted>`. |
-| `workload` | Request a workload token for audience `dev-health-api`. |
+A remote entitlement origin (`ACR_DEV_HEALTH_ENTITLEMENT_URL`) requires the
+workload client settings below. `ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL` may be
+unset or `workload`; any other value, the old service token credential value
+included, stops startup with a message that names the setting, never the value.
+The token file setting of the removed service token credential is ignored: the
+start goes on and logs one Warn line that names the setting. `acr-projector
+purge` applies the same rules.
 
-Use chart key `config.entitlement.credential`. An empty chart value keeps the
-default. Set the value here, not in `deployment.extraEnv`. The chart rejects
-both sources together.
-
-Workload mode requires `ACR_DEV_HEALTH_ENTITLEMENT_URL` and the workload client
-settings below. It never opens the service token file, even if the file remains
-mounted. It never sends a `svc_acr_` credential. There is no runtime fallback.
 If no usable workload token exists, the client sends no request and fails
-closed with an unavailable entitlement. An invalid credential choice stops
-startup.
+closed with an unavailable entitlement.
 
-The chart permits `credentials.entitlementToken.existingSecret` to remain set
-in workload mode for rollback. If it is empty, the chart omits the token volume
-and its init container.
+In the chart, `config.entitlement.url` requires `authWorkloadClient.enabled`.
+`config.entitlement.credential` may be empty or `workload`; set it there, not
+in `deployment.extraEnv`. The chart rejects both sources together.
 
 ## Workload client settings
 
@@ -54,9 +50,11 @@ a ServiceAccount token with audience `dev-health-workload-exchange` and lifetime
 
 The client caches workload tokens within their usable lifetime, at most 300 s.
 It refreshes before expiry and can use a still-usable cached token during a
-short exchange outage. It never sends an expired token. It makes no exchange
-at startup. Readiness does not depend on an exchange. An auth-service outage
-does not stop `acr-api`.
+short exchange outage. It never sends an expired token. Building the client
+makes no exchange, but the start-up entitlement check sends one call, so
+`acr-api` does not start without a working exchange. `/readyz` does not depend
+on an exchange. An auth-service outage after start does not stop `acr-api`;
+entitlement calls fail closed until a token can be exchanged again.
 
 ## Credential lifecycle outbox and publisher
 
@@ -116,10 +114,10 @@ Warnings carry `held` or `stopped_by`. The logs do not include event bodies,
 aggregate identifiers, credentials, tokens, or response text.
 
 Counter `acr_entitlement_credential_total` measures entitlement client calls,
-not publisher events. Its labels are `class` (`service_token`, `workload`,
-`other`) and `outcome` (`sent`, `token_unavailable`, `other`). A workload call
-that cannot obtain a token records `token_unavailable`. `acr-projector purge`
-uses the same credential choice but does not record this counter.
+not publisher events. Its labels are `class` (`workload`, `other`) and
+`outcome` (`sent`, `token_unavailable`, `other`). A call that cannot obtain a
+token records `token_unavailable`. `acr-projector purge` sends the same
+credential but does not record this counter.
 
 The runtime role has `SELECT` and `INSERT` on the outbox. When the publisher is
 configured, it also needs `UPDATE (published_at)` and `DELETE`. It has no
@@ -134,25 +132,6 @@ remain in `acr.client_credentials`. A terminal event is not required.
 The reaper never removes individual revisions from a retained aggregate.
 It logs deleted `aggregates` and `rows` counts. A failed run deletes nothing.
 
-## Migration from `svc_acr_`
-
-1. Prepare the server side first. Confirm that the ops server build accepts
-   workload tokens. The ops server uses the workload registry to select the
-   single live `acr-api` workload with organization `NULL` and audience
-   `dev-health-api`. Configure its trusted issuer and the auth-service exchange.
-   Configure the ACR workload client. Note the current `acr-api` image and
-   chart revision: they are the rollback target (see Rollback).
-2. Set `ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=workload`, or set chart key
-   `config.entitlement.credential=workload`. Roll out `acr-api`.
-3. Watch `acr_entitlement_credential_total` across all `acr-api` instances.
-   Wait until the call rate for `class=service_token` is zero while workload
-   calls succeed. A cumulative counter does not decrease to zero. Check that
-   `class=workload,outcome=token_unavailable` does not increase. Check the
-   credential choice for any separate `acr-projector purge` runs too.
-4. Stop mounting the service token file. In the chart, clear
-   `credentials.entitlementToken.existingSecret` and roll out the change.
-5. Ask the ops operator to revoke the old credentials. Revocation is final.
-
 ## Rollback
 
 The rollback is the image rollback. Run `helm rollback` of the acr release to
@@ -161,23 +140,7 @@ rehearsal 143 -> 142 -> 143 passed (row A1, fcdev RECORD-11241-1, sha256
 `d955471080f1`, run `run-a1v3-1`): revoked credentials stayed revoked, a removed
 member stayed refused, and `/readyz` returned 200 after each step.
 
-Do not use the flag as a rollback. Setting
-`ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=service_token` (or chart key
-`config.entitlement.credential=service_token`) against a current ops build
-stops `acr-api` at start with exit 1 and the message
-`initialize hosted runtime: initial entitlement readiness check: Dev Health
-entitlement service unavailable`. Current ops builds refuse the class with a
-uniform `401` on all four internal ACR routes, including the health route that
-the start check calls. `acr` serves nothing until the flag is set back to
-`workload` and `acr-api` is rolled out (rehearsal row A2: `/readyz` returned
-200 at the first poll after that).
-
 Not rehearsed: `acr-projector` 143 -> 142, and a rollback while go-api is down.
-Whether the `service_token` mode should be removed from `acr-api` is open
-(CHAOS-13548).
-
-Never reactivate a revoked or expired credential. Rotation does not restore it.
-Current ops builds have no command that mints a new `svc_acr_` credential. To go back, use an ops build that still accepts the class and a credential that is still valid.
 
 To stop the publisher, unset `ACR_AUTH_PROJECTION_URL`. In the chart, clear
 `authWorkloadClient.projectionURL`. Outbox writes continue. Unpublished rows
@@ -186,7 +149,7 @@ also stops while the URL is unset.
 
 ## Source of facts
 
-- Credential choice and labels: [entitlement configuration](../internal/config/entitlement.go), [request authorization](../internal/entitlements/credential.go), and [metric instruments](../internal/hostedmetrics/hostedmetrics.go).
+- Credential and labels: [entitlement configuration](../internal/config/entitlement.go), [request authorization](../internal/entitlements/credential.go), and [metric instruments](../internal/hostedmetrics/hostedmetrics.go).
 - Workload client: [configuration](../internal/config/auth_workload.go) and [client construction](../internal/authworkload/authworkload.go). The pinned `github.com/full-chaos/dev-health-go/workloadtoken` dependency implements the token cache; [go.mod](../go.mod) pins its version.
 - Publisher: [configuration](../internal/config/auth_projection.go), [HTTP client](../internal/authprojection/client.go), [delivery policy](../internal/authprojection/publisher.go), and [background loop](../internal/runtime/hosted/credential_outbox_publisher.go).
 - Outbox writes: [transaction sink](../internal/storage/postgres/outbox.go), [credential writers](../internal/storage/postgres/credentials_audit.go), [browser refresh](../internal/storage/postgres/browser_refresh.go), [device redemption](../internal/storage/postgres/device_authorization_redeem.go), [device acknowledgement](../internal/storage/postgres/device_authorization_ack.go), and [lifecycle tick](../internal/storage/postgres/lifecycle_tick.go).

@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -38,24 +37,6 @@ func TestClientHasEntitlement_uses_fixed_path_and_bounded_cache(t *testing.T) {
 	// Then
 	if firstErr != nil || secondErr != nil || thirdErr != nil || !first || !second || !third || calls != 2 {
 		t.Fatalf("results = %t/%t/%t, calls = %d; want cached then expired", first, second, third, calls)
-	}
-}
-
-func TestClientNew_rejects_insecure_token_file_permissions(t *testing.T) {
-	// Given
-	server := httptest.NewTLSServer(http.NotFoundHandler())
-	defer server.Close()
-	config := newClientConfigForBoundaryTest(t, server)
-	if err := os.Chmod(config.TokenFile, 0o644); err != nil {
-		t.Fatalf("Chmod() error = %v", err)
-	}
-
-	// When
-	_, err := New(config)
-
-	// Then
-	if err == nil || strings.Contains(err.Error(), config.TokenFile) {
-		t.Fatalf("New() error = %v; want redacted permission failure", err)
 	}
 }
 
@@ -96,6 +77,12 @@ func TestCache_evicts_oldest_entry_at_capacity(t *testing.T) {
 	}
 }
 
+type boundaryTokenSource struct{}
+
+func (boundaryTokenSource) Token(context.Context, string, ...string) (string, error) {
+	return "boundary-test-token", nil
+}
+
 func newClientForBoundaryTest(t *testing.T, server *httptest.Server) *Client {
 	t.Helper()
 	client, err := New(newClientConfigForBoundaryTest(t, server))
@@ -116,16 +103,12 @@ func newClientConfigForBoundaryTest(t *testing.T, server *httptest.Server) Confi
 	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw}), 0o600); err != nil {
 		t.Fatalf("WriteFile(CA) error = %v", err)
 	}
-	tokenFile := filepath.Join(directory, "token")
-	if err := os.WriteFile(tokenFile, []byte("boundary-test-token"), 0o600); err != nil {
-		t.Fatalf("WriteFile(token) error = %v", err)
-	}
 	baseURL, err := url.Parse(server.URL)
 	if err != nil {
 		t.Fatalf("url.Parse() error = %v", err)
 	}
 	return Config{
-		BaseURL: baseURL, TokenFile: tokenFile, CACertPath: caFile, Timeout: time.Second,
+		BaseURL: baseURL, Workload: boundaryTokenSource{}, CACertPath: caFile, Timeout: time.Second,
 		MaxResponseBytes: 2048, PositiveCacheTTL: 30 * time.Second,
 		NegativeCacheTTL: time.Second, CacheCapacity: 2,
 	}

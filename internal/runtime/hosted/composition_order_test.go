@@ -228,7 +228,7 @@ func testRuntimeConfig(t *testing.T) config.Config {
 	class := config.ClassLimitConfig{Window: time.Minute, Requests: 60}
 	return config.Config{
 		Environment: "test", RequireBackingStores: true, ClickHouseDSN: "clickhouse://configured", PostgresDSN: "postgres://configured",
-		DevHealthEntitlementURL: "https://ops.example.test", DevHealthEntitlementTokenFile: "token", EvidenceIDActiveKID: "current",
+		DevHealthEntitlementURL: "https://ops.example.test", EvidenceIDActiveKID: "current",
 		DeviceVerificationURL: "https://verify.example.test/device",
 		EvidenceIDKeys:        map[string][]byte{"current": []byte("01234567890123456789012345678901")},
 		MaxItems:              30, MaxOutputTokens: 4000, MaxSerializedBytes: 262144, RequestsPerMinute: 60,

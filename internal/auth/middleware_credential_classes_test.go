@@ -263,7 +263,7 @@ func (s *lookupCountingStore) FindByTokenHash(ctx context.Context, hash string) 
 	return s.CredentialStore.FindByTokenHash(ctx, hash)
 }
 
-// svc_acr_ is the credential acr presents to ops (ops validates it on /api/v1/internal/acr/*); acr never accepts it.
+// svc_acr_ was the credential acr presented to ops before the workload token (CHAOS-13600); acr never accepts it.
 // A well-formed lookalike (the prefix and a 32-byte secret) is refused at the head like any non-fcacr_ bearer: 401, no
 // store lookup, the wrapped handler not reached. The endpoint-profile rows therefore list no internal_svc_acr_token.
 func TestMiddlewareRefusesTheOpsServiceCredentialSvcAcr(t *testing.T) {

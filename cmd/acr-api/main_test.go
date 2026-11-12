@@ -71,7 +71,9 @@ func TestServeFailsClosedWhenPostgresIsUnavailable(t *testing.T) {
 	t.Setenv("ACR_EVIDENCE_ID_KEYS", "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=")
 	t.Setenv("ACR_DEV_HEALTH_ENTITLEMENT_URL", "https://ops.example.test")
 	t.Setenv("ACR_DEVICE_VERIFICATION_URL", "https://verify.example.test/device")
-	t.Setenv("ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE", "/run/secrets/ops-token")
+	t.Setenv("ACR_AUTH_WORKLOAD_EXCHANGE_URL", "https://auth-service.example.test")
+	t.Setenv("ACR_AUTH_WORKLOAD_ISSUER", "https://auth.example.test")
+	t.Setenv("ACR_AUTH_WORKLOAD_SUBJECT_FILE", "/var/run/secrets/dev-health/auth-workload/token")
 	t.Setenv("ACR_POSTGRES_CONNECTION_KIND", "direct")
 
 	err := serve(nil)

@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -229,8 +228,6 @@ func TestClientNew_enforces_transport_file_and_cache_boundaries(t *testing.T) {
 	}{
 		{"rejects unsupported URL scheme", entitlements.Config{BaseURL: mustURL(t, "ftp://example.invalid")}},
 		{"rejects unsupported proxy", entitlements.Config{ProxyURL: mustURL(t, "socks5://127.0.0.1:8080")}},
-		{"rejects missing token file", entitlements.Config{TokenFile: filepath.Join(t.TempDir(), "missing")}},
-		{"rejects token with newline", entitlements.Config{TokenFile: writeToken(t, "bad\nshape\n")}},
 		{"rejects too-short cache TTL", entitlements.Config{PositiveCacheTTL: 24 * time.Hour}},
 		{"rejects oversized cache", entitlements.Config{CacheCapacity: 1025}},
 	} {
@@ -247,6 +244,15 @@ func TestClientNew_enforces_transport_file_and_cache_boundaries(t *testing.T) {
 	}
 }
 
+func TestClientNew_requires_a_workload_token_source(t *testing.T) {
+	server := newTLSServer(t, http.StatusOK, `{"schema_version":"acr_entitlement.v1","org_id":"org-1","agent_context_runtime":true}`)
+	config := clientConfig(t, server, entitlements.Config{})
+	config.Workload = nil
+	if _, err := entitlements.New(config); err == nil || !strings.Contains(err.Error(), "workload token source is required") {
+		t.Fatalf("New() error = %v; want the workload source refusal", err)
+	}
+}
+
 func TestClient_accepts_plain_HTTP_for_private_service_origin(t *testing.T) {
 	// Given
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -258,7 +264,7 @@ func TestClient_accepts_plain_HTTP_for_private_service_origin(t *testing.T) {
 	defer server.Close()
 	client, err := entitlements.New(entitlements.Config{
 		BaseURL:          mustURL(t, server.URL),
-		TokenFile:        writeToken(t, testToken),
+		Workload:         &fakeTokenSource{token: testToken},
 		Timeout:          time.Second,
 		MaxResponseBytes: 2048,
 		PositiveCacheTTL: time.Minute,

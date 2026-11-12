@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/entitlements"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statictoken"
 )
 
 func realClient(t *testing.T, handler http.HandlerFunc) *entitlements.Client {
@@ -30,15 +31,11 @@ func realClient(t *testing.T, handler http.HandlerFunc) *entitlements.Client {
 	if err := os.WriteFile(caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	tokenFile := filepath.Join(dir, "token")
-	if err := os.WriteFile(tokenFile, []byte("test-token\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	baseURL, err := url.Parse(server.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := entitlements.New(entitlements.Config{BaseURL: baseURL, TokenFile: tokenFile, CACertPath: caFile, Timeout: time.Second, MaxResponseBytes: 2048, PositiveCacheTTL: time.Minute, NegativeCacheTTL: time.Second, CacheCapacity: 2})
+	client, err := entitlements.New(entitlements.Config{BaseURL: baseURL, Workload: statictoken.Source("workload-standin-token"), CACertPath: caFile, Timeout: time.Second, MaxResponseBytes: 2048, PositiveCacheTTL: time.Minute, NegativeCacheTTL: time.Second, CacheCapacity: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
