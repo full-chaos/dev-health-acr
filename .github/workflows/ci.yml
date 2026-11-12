@@ -77,7 +77,7 @@ jobs:
   # `verify` accepts those skips ONLY from these outputs, ONLY when
   # reach_mode=reached, and ONLY on a pull_request event.
   plan:
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     outputs:
       heavy: ${{ steps.decide.outputs.heavy }}
       reach_mode: ${{ steps.reach.outputs.reach_mode }}
@@ -113,7 +113,7 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       - name: Select the unit and race shards this change reaches
         id: reach
         env:
@@ -151,11 +151,10 @@ jobs:
   # the race -- mirror-images.yml still runs on its own schedule independent
   # of this workflow -- it makes the failure legible and immediate rather
   # than nine confusing ones.
-  # This job used to be a v1.6 `-hosted`/`-self-hosted` pair gated on the
-  # SELF_HOSTED_RUNNERS repo variable. The ARC pool is gone, so the pair is
+  # This job used to be a v1.6 hosted/pool runner pair. The ARC pool is gone, so the pair is
   # collapsed to this single hosted job and every consumer needs it directly.
   mirror-preflight:
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -193,8 +192,6 @@ jobs:
         with: {mode: warm}
 
   scripts:
-    # Hosted on purpose: the CI_RACE_RUNNER pool image (ops docker/arc-runner,
-    # on actions/runner) has no shellcheck, which most steps here run.
     runs-on: ubuntu-latest
     needs:
       - gomodcache
@@ -316,8 +313,8 @@ jobs:
           go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -326,7 +323,7 @@ jobs:
       - name: Test the run queue report
         run: scripts/ci/test-run-queue-report.sh
   lint:
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     needs:
       - gomodcache
     steps:
@@ -344,10 +341,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -391,8 +388,8 @@ jobs:
   # docs/design/context-fabric-architecture-diagrams.md only covers content
   # drift, not render-breaking syntax). Go-less and hosted-only on purpose:
   # mermaid-cli's Puppeteer/Chromium dependency has no published linux-arm64
-  # build for many Chrome-for-Testing releases, so routing this to the
-  # self-hosted arm64 pool risks a false failure from a missing platform
+  # build for many Chrome-for-Testing releases, so routing this to an
+  # arm64 runner risks a false failure from a missing platform
   # build, not a real diagram defect. scripts/docs/verify-mermaid.sh does the
   # actual extraction/render/assert-nonzero-count work and takes --root for
   # scripts/docs/test-verify-mermaid.sh's negative-control fixture; the
@@ -437,7 +434,7 @@ jobs:
   # GOFLAGS=-timeout=25m) still failed with 3 internal/sidecar
   # CodeGraph-guard test failures ("codegraph index missing" / a
   # writable-managed-root assertion) not seen on hosted -- looks like an
-  # environment difference in the self-hosted checkout (permissions/
+  # environment difference in the pool checkout (permissions/
   # ownership, or an absent index the hosted runner has some other way of
   # providing), not a concurrency artifact and not something this lane
   # chased further. Per chris's routing ruling (pool stays at 8 runners,
@@ -491,7 +488,7 @@ jobs:
     runs-on: ubuntu-latest
     # mirror-preflight is a single job again (the ARC pool is gone), so a
     # plain `needs:` is correct: the default skip-cascade now does the right
-    # thing. While it was a `-hosted`/`-self-hosted` pair this job carried an
+    # thing. While it was a hosted/pool pair this job carried an
     # explicit `if:` instead, because exactly one leg ran and the cascade
     # would otherwise have skipped this job along with the leg that never ran.
     needs:
@@ -526,8 +523,8 @@ jobs:
           go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -726,8 +723,8 @@ jobs:
           go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -814,8 +811,8 @@ jobs:
           go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -996,11 +993,7 @@ jobs:
         shard: [1, 2, 3, 4]
         exclude: ${{ fromJSON(needs.plan.outputs.race_skip) }}
     name: race (shard ${{ matrix.shard }} of 4)
-    # The CI_RACE_RUNNER repo variable routes the race shards to the
-    # self-hosted pool on trusted runs only (a pull request from this
-    # repository or a push); a fork pull request, or the variable unset,
-    # runs on ubuntu-latest.
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     env:
       # CHAOS-4855: see the identical env on the unit job above -- the race
       # shards run the same testcontainers-backed suite, partitioned.
@@ -1017,10 +1010,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -1109,15 +1102,14 @@ jobs:
   # Hosted, like every lane. This job kept an explicit `name:` because the
   # check reported to a PR ("race (devhealthschema, isolated scope)") differs
   # from its job key; that is now the only reason for the override, the
-  # `-self-hosted` twin it used to share the name with having been removed.
+  # pool twin it used to share the name with having been removed.
   race-devhealthschema:
     name: race (devhealthschema, isolated scope)
-    # Same CI_RACE_RUNNER contract as the `race` job above.
     needs:
       - gomodcache
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthschema')
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1125,10 +1117,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -1169,7 +1161,7 @@ jobs:
   # shard-rebalance fix separates it from. It runs alone, here, under its
   # own explicit timeout budget instead.
   #
-  # Same CI_RACE_RUNNER contract as the `race` job above. Unlike
+  # Unlike
   # race-devhealthschema, this suite is testcontainers-backed (real
   # ClickHouse), so it needs the same GHCR login and mirror-registry redirect
   # env (see below) as the `race` job uses -- devhealthfacts has no
@@ -1197,7 +1189,6 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts')
-    # Hosted only: this leg exceeds its budget on the self-hosted pool (6 x 8 CPUs).
     runs-on: ubuntu-latest
     # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
     # artifact of this job, so a trip prints each test's change against main.
@@ -1218,8 +1209,8 @@ jobs:
           go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -1275,7 +1266,6 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-heavy')
-    # Hosted only: this leg exceeds its budget on the self-hosted pool (6 x 8 CPUs).
     runs-on: ubuntu-latest
     # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
     # artifact of this job, so a trip prints each test's change against main.
@@ -1296,8 +1286,8 @@ jobs:
           go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -1351,7 +1341,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-mid')
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
     # artifact of this job, so a trip prints each test's change against main.
     permissions:
@@ -1369,10 +1359,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -1426,7 +1416,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-fourth')
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
     # artifact of this job, so a trip prints each test's change against main.
     permissions:
@@ -1444,10 +1434,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -1519,7 +1509,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource')
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
     # artifact of this job, so a trip prints each test's change against main.
     permissions:
@@ -1537,10 +1527,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -1594,7 +1584,6 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource-heavy')
-    # Hosted only: this leg exceeds its budget on the self-hosted pool (6 x 8 CPUs).
     runs-on: ubuntu-latest
     # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
     # artifact of this job, so a trip prints each test's change against main.
@@ -1615,8 +1604,8 @@ jobs:
           go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -1672,7 +1661,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource-mid')
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
     # artifact of this job, so a trip prints each test's change against main.
     permissions:
@@ -1690,10 +1679,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -1752,7 +1741,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthsource-fourth')
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
     # artifact of this job, so a trip prints each test's change against main.
     permissions:
@@ -1770,10 +1759,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -1838,7 +1827,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-factoracle')
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1850,10 +1839,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -1902,7 +1891,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-mcp')
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1914,10 +1903,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -1964,7 +1953,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-contracts-v1')
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -1976,10 +1965,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -2027,7 +2016,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-api')
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # CHAOS-12667: actions: read lets the race-baseline step fetch main's last
     # race-json artifact of this job, so the guard prints each test's change.
     permissions:
@@ -2045,10 +2034,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -2102,7 +2091,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-api-heavy')
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # CHAOS-12667: actions: read lets the race-baseline step fetch main's last
     # race-json artifact of this job, so the guard prints each test's change.
     permissions:
@@ -2120,10 +2109,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -2179,7 +2168,7 @@ jobs:
       - mirror-preflight
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-factoracle-heavy')
-    runs-on: ${{ (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CI_RACE_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     env:
       TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
       TESTCONTAINERS_RYUK_DISABLED: 'true'
@@ -2191,10 +2180,10 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: '1.27.4'
-          cache: ${{ runner.environment == 'github-hosted' }}
+          cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -2261,8 +2250,8 @@ jobs:
           go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -2306,8 +2295,8 @@ jobs:
           go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
@@ -2835,7 +2824,7 @@ jobs:
     # `success` -- there is no longer any job allowed to report `skipped` and
     # still pass. That was the v1.6 runner-routing pair contract: each of
     # mirror-preflight/scripts/build/race-devhealthschema existed twice, a
-    # `-hosted` and a `-self-hosted` key sharing one `name:`, exactly one of
+    # `-hosted` and a pool key sharing one `name:`, exactly one of
     # which ran while the other reported `skipped`. The ARC pool those pairs
     # existed to reach is gone, so the pairs, their mutually exclusive `if:`
     # gates, and the aggregator logic that tolerated a `skipped` member are
@@ -2897,8 +2886,8 @@ jobs:
           go-version: '1.27.4'
           cache: true
       # Module cache: one gomodcache job fills it, every consumer restores it
-      # and fails on a miss (hosted runners only; the self-hosted pool keeps its
-      # own disk). Restored after setup-go so its smaller cache is overlaid.
+      # and fails on a miss (hosted runners only).
+      # Restored after setup-go so its smaller cache is overlaid.
       - uses: ./.github/actions/go-modcache
         if: ${{ runner.environment == 'github-hosted' }}
         with: {mode: restore}
