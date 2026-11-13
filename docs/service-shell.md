@@ -56,8 +56,7 @@ The default listen address is `127.0.0.1:8080` (dictation 811: loopback-only, so
 | `ACR_EVIDENCE_ID_ACTIVE_KID` / `ACR_EVIDENCE_ID_ACTIVE_KID_FILE` | empty | Active evidence-ID signing key identifier |
 | `ACR_EVIDENCE_ID_KEYS` / `ACR_EVIDENCE_ID_KEYS_FILE` | empty | Comma-separated evidence-ID key material |
 | `ACR_DEV_HEALTH_ENTITLEMENT_URL` | empty | Dev Health entitlement/health service HTTP(S) origin |
-| `ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE` | empty | Path to the bearer token file used to authenticate to the entitlement service |
-| `ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL` | `service_token` | `service_token` sends the token file; `workload` sends a workload token from the `ACR_AUTH_WORKLOAD_*` client (the token file is then never opened). Another value stops the start. Chart key: `config.entitlement.credential` |
+| `ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL` | empty | Unset or `workload`: the entitlement client sends a workload token from the `ACR_AUTH_WORKLOAD_*` client, the one credential. Another value stops the start. The token file setting of the removed service token credential is ignored with one Warn line at start. Chart key: `config.entitlement.credential` |
 | `ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT` | `5s` | Per-request timeout for entitlement and health checks |
 | `ACR_DEV_HEALTH_ENTITLEMENT_MAX_RESPONSE_BYTES` | `16384` | Maximum bytes read from an entitlement response body |
 | `ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL` | empty | Optional explicit HTTP(S) proxy for entitlement requests; no credentials permitted |
@@ -79,10 +78,9 @@ every environment. ClickHouse likewise follows its explicit DSN: native port
 optional CA bundle keeps certificate verification enabled when TLS is selected.
 The client keeps up to 8 warm connections (8 open, 8 idle, 30 minute lifetime) in both the API and the projector, so a statement over a high-latency link does not pay a new TCP and TLS handshake.
 
-Entitlement provider selection is automatic. A complete
-`ACR_DEV_HEALTH_ENTITLEMENT_URL` plus
-`ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE` selects the remote provider. Omitting
-both selects an offline allow-all provider only in `development` and `test`;
+Entitlement provider selection is automatic. `ACR_DEV_HEALTH_ENTITLEMENT_URL`
+plus the `ACR_AUTH_WORKLOAD_*` client selects the remote provider. Omitting
+the URL selects an offline allow-all provider only in `development` and `test`;
 that provider still accepts only a non-empty organization and the
 `agent_context_runtime`, `acr_service_model` and `platform_model_fallback`
 keys, and grants all three. The remote response (`acr_entitlement.v1`)

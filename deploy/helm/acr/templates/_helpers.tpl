@@ -264,9 +264,6 @@ enforces that the migration DSN is not the runtime DSN reference.
 {{- $c := .Values.credentials -}}
 {{- $runtimeSecret := include "acr.requireSecretName" (dict "name" ($c.runtime.existingSecret | default "") "label" "invalid-secret-ref" "field" "credentials.runtime.existingSecret") -}}
 {{- $migrationSecret := include "acr.requireSecretName" (dict "name" ($c.migration.existingSecret | default "") "label" "invalid-secret-ref" "field" "credentials.migration.existingSecret") -}}
-{{- if include "acr.entitlementTokenMounted" . -}}
-{{- $_ := include "acr.requireSecretName" (dict "name" ($c.entitlementToken.existingSecret | default "") "label" "invalid-secret-ref" "field" "credentials.entitlementToken.existingSecret") -}}
-{{- end -}}
 {{- $runtimeKey := $c.runtime.postgresDsnKey | default "ACR_POSTGRES_DSN" -}}
 {{- $migrationKey := $c.migration.postgresDsnKey | default "ACR_POSTGRES_MIGRATION_DSN" -}}
 {{- if and (eq $runtimeSecret $migrationSecret) (eq $runtimeKey $migrationKey) -}}
@@ -494,7 +491,7 @@ remote token or CA inputs.
 {{- $v := .Values.config.entitlement.credential -}}
 {{- if kindIs "string" $v -}}{{- $v -}}
 {{- else if not (kindIs "invalid" $v) -}}
-{{- fail (printf "entitlement-credential: config.entitlement.credential must be a string (\"\", service_token or workload), got %s" (kindOf $v)) -}}
+{{- fail (printf "entitlement-credential: config.entitlement.credential must be a string (\"\" or workload), got %s" (kindOf $v)) -}}
 {{- end -}}
 {{- end -}}
 
@@ -502,39 +499,27 @@ remote token or CA inputs.
 {{- if eq (include "acr.entitlementCredential" .) "workload" -}}true{{- end -}}
 {{- end -}}
 
-{{/* The token Secret is mounted unless workload mode runs with no token Secret. */}}
-{{- define "acr.entitlementTokenMounted" -}}
-{{- if and (include "acr.remoteEntitlement" .) (or (not (include "acr.entitlementWorkload" .)) (.Values.credentials.entitlementToken.existingSecret | default "")) -}}true{{- end -}}
-{{- end -}}
-
 {{- define "acr.validateEntitlementOrigin" -}}
 {{- $credential := include "acr.entitlementCredential" . -}}
-{{- if not (has $credential (list "" "service_token" "workload")) -}}
-{{- fail (printf "entitlement-credential: config.entitlement.credential %q must be one of \"\", service_token or workload" $credential) -}}
+{{- if not (has $credential (list "" "workload")) -}}
+{{- fail (printf "entitlement-credential: config.entitlement.credential %q must be \"\" or workload (the service token credential was removed; acr-api sends its auth workload token)" $credential) -}}
 {{- end -}}
 {{- $url := .Values.config.entitlement.url | default "" -}}
 {{- $environment := .Values.config.environment -}}
-{{- $tokenSecret := .Values.credentials.entitlementToken.existingSecret | default "" -}}
 {{- $caSecret := .Values.config.entitlementCaBundle.existingSecret | default "" -}}
 {{- if $url -}}
 {{- if not (regexMatch "^https?://[^/@?#]+$" $url) -}}
 {{- fail (printf "entitlement-origin: config.entitlement.url %q must be an HTTP(S) origin only (http or https scheme, host[:port], no userinfo, path, query, or fragment)" $url) -}}
 {{- end -}}
-{{- if and (include "acr.entitlementWorkload" .) (not .Values.authWorkloadClient.enabled) -}}
-{{- fail "entitlement-workload: config.entitlement.credential=workload requires authWorkloadClient.enabled=true" -}}
-{{- end -}}
-{{- if and (not $tokenSecret) (not (include "acr.entitlementWorkload" .)) -}}
-{{- fail "entitlement-partial: credentials.entitlementToken.existingSecret is required when config.entitlement.url is set" -}}
+{{- if not .Values.authWorkloadClient.enabled -}}
+{{- fail "entitlement-workload: config.entitlement.url requires authWorkloadClient.enabled=true (the entitlement client sends a workload token)" -}}
 {{- end -}}
 {{- else -}}
 {{- if include "acr.entitlementWorkload" . -}}
 {{- fail "entitlement-workload: config.entitlement.credential=workload requires config.entitlement.url" -}}
 {{- end -}}
 {{- if or (eq $environment "staging") (eq $environment "production") -}}
-{{- fail (printf "entitlement-remote-required: config.entitlement.url and credentials.entitlementToken.existingSecret are required in %s" $environment) -}}
-{{- end -}}
-{{- if $tokenSecret -}}
-{{- fail "entitlement-partial: credentials.entitlementToken.existingSecret must be empty when local entitlement is selected" -}}
+{{- fail (printf "entitlement-remote-required: config.entitlement.url and authWorkloadClient are required in %s" $environment) -}}
 {{- end -}}
 {{- if $caSecret -}}
 {{- fail "entitlement-partial: config.entitlementCaBundle.existingSecret must be empty when local entitlement is selected" -}}
@@ -559,7 +544,6 @@ content (which Helm cannot observe directly).
 {{- $c := .Values.credentials -}}
 runtime={{ $c.runtime.existingSecret | default "" }}:{{ $c.runtime.postgresDsnKey | default "" }}:{{ $c.runtime.clickhouseDsnKey | default "" }}:{{ $c.runtime.poolerAdminDsnKey | default "" }}:{{ $c.runtime.evidenceIdActiveKidKey | default "" }}:{{ $c.runtime.evidenceIdKeysKey | default "" }}
 migration={{ $c.migration.existingSecret | default "" }}:{{ $c.migration.postgresDsnKey | default "" }}:{{ $c.migration.poolerAdminDsnKey | default "" }}
-entitlement={{ $c.entitlementToken.existingSecret | default "" }}:{{ $c.entitlementToken.key | default "" }}
 pullSecrets={{ range .Values.imagePullSecrets }}{{ .name | default "" }},{{ end }}
 rotationRevision={{ $c.rotationRevision | default "" }}
 {{- end -}}

@@ -1,8 +1,9 @@
 # Private ACR Kubernetes overlays
 
 These manifests deploy only ACR API resources into a caller-owned namespace.
-They reference existing runtime, migration, entitlement, and registry-pull
-Secrets. The base uses plaintext private-service transports; an operator overlay
+They reference existing runtime, migration, and registry-pull Secrets; acr-api
+calls the entitlement service with a workload token it exchanges for its
+projected ServiceAccount token (`ACR_AUTH_WORKLOAD_*`). The base uses plaintext private-service transports; an operator overlay
 may select TLS DSNs/origins and add the corresponding CA projections. The base
 does not create Secrets, a Gateway, a Gateway controller, a database, or an MCP
 workload. The hosted `acr-mcp` workload is an opt-in Component

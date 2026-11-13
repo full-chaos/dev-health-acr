@@ -352,7 +352,6 @@ type Config struct {
 	TrustedProxyCIDRs                    []string
 	CORSAllowedOrigins                   []string // CHAOS-12086: exact browser origins for CORS; empty answers none (cors.go)
 	DevHealthEntitlementURL              string
-	DevHealthEntitlementTokenFile        string
 	DevHealthEntitlementCredential       string
 	DevHealthEntitlementTimeout          time.Duration
 	DevHealthEntitlementMaxResponseBytes int64
@@ -487,6 +486,9 @@ func load(lookup lookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if err := CheckEntitlementCredentialSettings(lookup); err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		Environment:                    environment,
@@ -499,7 +501,6 @@ func load(lookup lookupEnv) (Config, error) {
 		TrustedProxyCIDRs:              stringListValue(lookup, "ACR_TRUSTED_PROXY_CIDRS"),
 		CORSAllowedOrigins:             stringListValue(lookup, CORSAllowedOriginsEnv),
 		DevHealthEntitlementURL:        stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_URL", ""),
-		DevHealthEntitlementTokenFile:  stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE", ""),
 		DevHealthEntitlementProxyURL:   stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL", ""),
 		DevHealthEntitlementCACertPath: stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE", ""),
 		DevHealthEntitlementCredential: strings.TrimSpace(stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL", "")),

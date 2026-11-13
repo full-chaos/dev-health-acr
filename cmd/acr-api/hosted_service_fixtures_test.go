@@ -2,14 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"github.com/full-chaos/dev-health-acr/internal/chfixture/startterm"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -174,31 +175,62 @@ func (f *postgresFixture) Stop(ctx context.Context) error {
 	return f.stopErr
 }
 
+// entitlementFixture is the Dev Health entitlement service and the auth-service workload-token exchange acr-api calls.
+// The exchange (plain HTTP, as in a cluster) mints a workload token per request; the entitlement service (TLS) accepts
+// only a token it minted since the last RotateToken.
 type entitlementFixture struct {
-	server    *httptest.Server
-	baseURL   string
-	caPath    string
-	token     string
-	tokenPath string
-	tokenMu   sync.RWMutex
-	stopOnce  sync.Once
+	server      *httptest.Server
+	exchange    *httptest.Server
+	baseURL     string
+	exchangeURL string
+	caPath      string
+	subjectPath string
+	token       string
+	tokenMu     sync.RWMutex
+	accepted    map[string]bool
+	stopOnce    sync.Once
 }
+
+const entitlementFixtureIssuer = "https://auth.example.test"
 
 func TestEntitlementFixture_rotates_accepted_token_bytes(t *testing.T) {
 	// Given
 	fixture := newEntitlementFixture(t)
-	oldToken := fixture.token
+	oldToken := entitlementFixtureMint(t, fixture)
 
 	// When
-	newToken := fixture.RotateToken(t)
+	fixture.RotateToken(t)
+	newToken := entitlementFixtureMint(t, fixture)
 
 	// Then
+	if oldToken == newToken {
+		t.Fatal("the exchange minted the same token twice")
+	}
 	if entitlementFixtureStatus(t, fixture, oldToken) != http.StatusUnauthorized {
 		t.Fatal("old entitlement token remained accepted after rotation")
 	}
 	if entitlementFixtureStatus(t, fixture, newToken) != http.StatusOK {
 		t.Fatal("rotated entitlement token was not accepted")
 	}
+	if entitlementFixtureStatus(t, fixture, randomFixtureSecret(t)) != http.StatusUnauthorized {
+		t.Fatal("a token the exchange never minted was accepted")
+	}
+}
+
+func entitlementFixtureMint(t *testing.T, fixture *entitlementFixture) string {
+	t.Helper()
+	response, err := http.PostForm(fixture.exchangeURL+"/internal/v1/token/exchange", url.Values{"audience": {"dev-health-api"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var answer struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&answer); err != nil || answer.AccessToken == "" {
+		t.Fatalf("exchange answer: %v", err)
+	}
+	return answer.AccessToken
 }
 
 func entitlementFixtureStatus(t *testing.T, fixture *entitlementFixture, token string) int {
@@ -218,8 +250,21 @@ func entitlementFixtureStatus(t *testing.T, fixture *entitlementFixture, token s
 
 func newEntitlementFixture(t *testing.T) *entitlementFixture {
 	t.Helper()
-	token := randomFixtureSecret(t)
-	fixture := &entitlementFixture{token: token, tokenPath: writeRestrictedFixture(t, "entitlement-token", []byte(token))}
+	enc := base64.RawURLEncoding
+	subject := enc.EncodeToString([]byte(`{"alg":"RS256"}`)) + "." + enc.EncodeToString([]byte(`{"sub":"acr-api"}`)) + "." + enc.EncodeToString([]byte("sig"))
+	fixture := &entitlementFixture{accepted: map[string]bool{}, subjectPath: writeRestrictedFixture(t, "workload-subject", []byte(subject))}
+	fixture.exchange = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if err := request.ParseForm(); err != nil {
+			http.Error(w, "bad form", http.StatusBadRequest)
+			return
+		}
+		token := fixture.mint(t, request.PostForm.Get("audience"))
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := fmt.Fprintf(w, `{"access_token":%q,"token_type":"Bearer","issued_token_type":"urn:ietf:params:oauth:token-type:jwt","expires_in":300}`, token); err != nil {
+			t.Error(err)
+		}
+	}))
+	fixture.exchangeURL = fixture.exchange.URL
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
 		if !fixture.acceptsAuthorization(request.Header.Get("Authorization")) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -247,42 +292,39 @@ func newEntitlementFixture(t *testing.T) *entitlementFixture {
 	return fixture
 }
 
+// mint returns a workload-token.v1 shaped token for audience (the client checks the shape and claims, not the
+// signature) and adds it to the accepted set.
+func (f *entitlementFixture) mint(t *testing.T, audience string) string {
+	enc := base64.RawURLEncoding
+	now := time.Now().Unix()
+	claims := fmt.Sprintf(`{"iss":%q,"aud":%q,"sub":"prn_AAAAAAAAAAAAAAAAAAAAAA","principal_type":"workload","jti":%q,"iat":%d,"nbf":%d,"exp":%d}`,
+		entitlementFixtureIssuer, audience, randomFixtureSecret(t), now-5, now-5, now+295)
+	token := enc.EncodeToString([]byte(`{"alg":"EdDSA","typ":"workload+jwt","kid":"fixture"}`)) + "." + enc.EncodeToString([]byte(claims)) + "." + enc.EncodeToString(make([]byte, 64))
+	f.tokenMu.Lock()
+	defer f.tokenMu.Unlock()
+	f.accepted[token] = true
+	f.token = token
+	return token
+}
+
 func (f *entitlementFixture) acceptsAuthorization(value string) bool {
 	f.tokenMu.RLock()
 	defer f.tokenMu.RUnlock()
-	return value == "Bearer "+f.token
+	token, ok := strings.CutPrefix(value, "Bearer ")
+	return ok && f.accepted[token]
 }
 
-func (f *entitlementFixture) RotateToken(t *testing.T) string {
+// RotateToken refuses every token minted so far; acr-api's cached token is refused until it exchanges again.
+func (f *entitlementFixture) RotateToken(t *testing.T) {
 	t.Helper()
-	rotated := randomFixtureSecret(t)
-	directory := filepath.Dir(f.tokenPath)
-	temporary, err := os.CreateTemp(directory, ".entitlement-token-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		t.Fatal(err)
-	}
-	if _, err := temporary.WriteString(rotated); err != nil {
-		temporary.Close()
-		t.Fatal(err)
-	}
-	if err := temporary.Close(); err != nil {
-		t.Fatal(err)
-	}
 	f.tokenMu.Lock()
 	defer f.tokenMu.Unlock()
-	if err := os.Rename(temporaryPath, f.tokenPath); err != nil {
-		t.Fatal(err)
-	}
-	f.token = rotated
-	return rotated
+	f.accepted = map[string]bool{}
 }
 
 func (f *entitlementFixture) Stop() {
-	f.stopOnce.Do(f.server.Close)
+	f.stopOnce.Do(func() {
+		f.server.Close()
+		f.exchange.Close()
+	})
 }

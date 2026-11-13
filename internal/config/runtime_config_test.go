@@ -41,7 +41,6 @@ func TestLoad_selects_local_entitlement_without_remote_configuration_in_developm
 			values := completeRuntimeEnvironment()
 			values["ACR_ENVIRONMENT"] = environment
 			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_URL")
-			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE")
 			if environment == "development" {
 				values["ACR_POSTGRES_DSN"] = "postgres://configured?sslmode=verify-full"
 			}
@@ -57,7 +56,7 @@ func TestLoad_selects_local_entitlement_without_remote_configuration_in_developm
 	}
 }
 
-func TestLoad_selects_remote_entitlement_when_URL_and_token_are_complete(t *testing.T) {
+func TestLoad_selects_remote_entitlement_when_URL_and_auth_workload_client_are_complete(t *testing.T) {
 	values := completeRuntimeEnvironment()
 
 	cfg, err := load(mapLookup(values))
@@ -69,24 +68,17 @@ func TestLoad_selects_remote_entitlement_when_URL_and_token_are_complete(t *test
 	}
 }
 
-func TestLoad_rejects_partial_remote_entitlement_configuration(t *testing.T) {
-	tests := []struct {
-		name   string
-		remove string
-	}{
-		{name: "missing URL", remove: "ACR_DEV_HEALTH_ENTITLEMENT_URL"},
-		{name: "missing token", remove: "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE"},
+func TestLoad_rejects_remote_entitlement_without_the_auth_workload_client(t *testing.T) {
+	values := completeRuntimeEnvironment()
+	for name := range values {
+		if strings.HasPrefix(name, "ACR_AUTH_WORKLOAD_") {
+			delete(values, name)
+		}
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			values := completeRuntimeEnvironment()
-			delete(values, test.remove)
 
-			_, err := load(mapLookup(values))
-			if err == nil || !strings.Contains(err.Error(), "must be configured together") {
-				t.Fatalf("load() error = %v, want partial entitlement rejection", err)
-			}
-		})
+	_, err := load(mapLookup(values))
+	if err == nil || !strings.Contains(err.Error(), "ACR_AUTH_WORKLOAD_* must be configured") {
+		t.Fatalf("load() error = %v, want the auth workload client required", err)
 	}
 }
 
@@ -97,7 +89,6 @@ func TestLoad_rejects_local_entitlement_in_staging_and_production(t *testing.T) 
 			values["ACR_ENVIRONMENT"] = environment
 			values["ACR_POSTGRES_DSN"] = "postgres://configured?sslmode=verify-full"
 			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_URL")
-			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE")
 
 			_, err := load(mapLookup(values))
 			if err == nil || !strings.Contains(err.Error(), "remote entitlement configuration is required") {
@@ -112,7 +103,6 @@ func TestLoad_rejects_remote_only_entitlement_options_in_local_mode(t *testing.T
 		t.Run(field, func(t *testing.T) {
 			values := completeRuntimeEnvironment()
 			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_URL")
-			delete(values, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE")
 			values[field] = "configured"
 
 			_, err := load(mapLookup(values))
@@ -340,16 +330,18 @@ func TestLoad_rejectsInvalidClickHouseMaxBytesToRead(t *testing.T) {
 
 func completeRuntimeEnvironment() map[string]string {
 	return map[string]string{
-		"ACR_ENVIRONMENT":                       "test",
-		"ACR_REQUIRE_BACKING_STORES":            "true",
-		"ACR_CLICKHOUSE_DSN":                    "clickhouse://configured",
-		"ACR_POSTGRES_DSN":                      "postgres://configured",
-		"ACR_EVIDENCE_ID_ACTIVE_KID":            "current",
-		"ACR_EVIDENCE_ID_KEYS":                  "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
-		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "https://ops.example.test",
-		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
-		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
-		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
+		"ACR_ENVIRONMENT":                "test",
+		"ACR_REQUIRE_BACKING_STORES":     "true",
+		"ACR_CLICKHOUSE_DSN":             "clickhouse://configured",
+		"ACR_POSTGRES_DSN":               "postgres://configured",
+		"ACR_EVIDENCE_ID_ACTIVE_KID":     "current",
+		"ACR_EVIDENCE_ID_KEYS":           "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+		"ACR_DEV_HEALTH_ENTITLEMENT_URL": "https://ops.example.test",
+		"ACR_AUTH_WORKLOAD_EXCHANGE_URL": "https://auth-service.example.test",
+		"ACR_AUTH_WORKLOAD_ISSUER":       "https://auth.example.test",
+		"ACR_AUTH_WORKLOAD_SUBJECT_FILE": "/var/run/secrets/dev-health/auth-workload/token",
+		"ACR_DEVICE_VERIFICATION_URL":    "https://verify.example.test/device",
+		"ACR_POSTGRES_CONNECTION_KIND":   "direct",
 	}
 }
 

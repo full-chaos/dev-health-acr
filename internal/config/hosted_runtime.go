@@ -370,7 +370,6 @@ func (c Config) SafeAttributes() []any {
 		"evidence_id_key_count", len(c.EvidenceIDKeys),
 		"trusted_proxy_count", len(c.TrustedProxyCIDRs),
 		"dev_health_entitlement_configured", c.DevHealthEntitlementURL != "",
-		"dev_health_entitlement_token_file_configured", c.DevHealthEntitlementTokenFile != "",
 		"web_assertions_configured", c.WebAssertionJWKSFile != "",
 		"device_verification_configured", c.DeviceVerificationURL != "",
 		"oauth_configured", c.OAuthConfigured(),

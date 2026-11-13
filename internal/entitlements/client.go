@@ -55,7 +55,6 @@ const (
 // upstream response bodies through errors.
 type Client struct {
 	baseURL  *url.URL
-	token    string
 	workload TokenSource
 	observe  func(ctx context.Context, credential, outcome string)
 	timeout  time.Duration
@@ -69,8 +68,8 @@ type Client struct {
 	llmConfigs *llmConfigCache
 }
 
-// New parses all untrusted configuration and token-file data before accepting
-// a client. It never permits environment proxy settings.
+// New parses all untrusted configuration before accepting a client. It never
+// permits environment proxy settings.
 func New(config Config) (*Client, error) {
 	config = config.withDefaults()
 	if err := config.validate(); err != nil {
@@ -78,20 +77,12 @@ func New(config Config) (*Client, error) {
 	}
 	config.BaseURL = cloneURL(config.BaseURL)
 	config.ProxyURL = cloneURL(config.ProxyURL)
-	token := ""
-	if config.Workload == nil {
-		var err error
-		if token, err = readToken(config.TokenFile); err != nil {
-			return nil, err
-		}
-	}
 	transport, err := newTransport(config)
 	if err != nil {
 		return nil, err
 	}
 	return &Client{
 		baseURL:    config.BaseURL,
-		token:      token,
 		workload:   config.Workload,
 		observe:    config.Observe,
 		timeout:    config.Timeout,
@@ -342,18 +333,6 @@ func certificatePool(path string) (*x509.CertPool, error) {
 		return nil, errors.New("Dev Health entitlement CA bundle is invalid")
 	}
 	return pool, nil
-}
-
-func readToken(path string) (string, error) {
-	contents, err := readRestrictedFile(path, 8<<10)
-	if err != nil {
-		return "", errors.New("Dev Health entitlement token file is invalid")
-	}
-	token := strings.TrimSuffix(string(contents), "\n")
-	if token == "" || strings.ContainsAny(token, "\r\n") {
-		return "", errors.New("Dev Health entitlement token file is invalid")
-	}
-	return token, nil
 }
 
 func rejectRedirect(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }

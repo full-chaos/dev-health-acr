@@ -2,7 +2,6 @@ package hosted
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,11 +16,8 @@ import (
 // client stopped satisfying the reader, the read would turn off silently in
 // production, so this pins the composed state, not only the type assertion.
 func TestTheRemoteEntitlementClientIsThePerCallAccessReader(t *testing.T) {
-	tokenFile := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenFile, []byte("svc_acr_test_token\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	remote, err := newEntitlement(config.Config{Environment: "production", DevHealthEntitlementURL: "https://ops.example.test", DevHealthEntitlementTokenFile: tokenFile}, entitlementDeps{})
+	remote, err := newEntitlement(config.Config{Environment: "production", DevHealthEntitlementURL: "https://ops.example.test",
+		AuthWorkload: config.AuthWorkloadConfig{ExchangeURL: "https://auth.example.test", Issuer: "https://auth.example.test", SubjectFile: filepath.Join(t.TempDir(), "subject")}}, entitlementDeps{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +86,7 @@ func TestOpenComposesTheAccessReadAndRefusesToStartWithoutOneInRemoteMode(t *tes
 
 	events = nil
 	request = testBuildRequest(t, &events, "")
-	request.config.DevHealthEntitlementURL, request.config.DevHealthEntitlementTokenFile = "", ""
+	request.config.DevHealthEntitlementURL = ""
 	if request.config.EntitlementMode() != config.EntitlementModeLocal {
 		t.Fatal("precondition: the test configuration is local entitlement mode")
 	}

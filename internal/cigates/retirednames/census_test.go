@@ -15,17 +15,22 @@ import (
 
 // retiredNames maps a name to the decision that retired it.
 var retiredNames = map[string]*regexp.Regexp{
-	"AUTH_ACR_WORKLOAD_SUBJECT (go-api reads the acr-api workload from the registry, CHAOS-13177)": regexp.MustCompile(`AUTH_ACR_WORKLOAD_SUBJECT`),
-	"internal_service_credentials (table retired, CHAOS-11245)":                                    regexp.MustCompile(`\binternal_service_credentials\b`),
-	"dho service-credentials (verbs removed, ops CHAOS-13170)":                                     regexp.MustCompile(`\bservice-credentials\b`),
-	"servicecredcli / servicecred store (ops CHAOS-11245)":                                         regexp.MustCompile(`servicecredcli|internal/auth/servicecred\b`),
-	"e2e service-token helpers (retired with svc_acr_ minting)":                                    regexp.MustCompile(`mint_ops_service_token|ops-probe-token`),
+	"AUTH_ACR_WORKLOAD_SUBJECT (go-api reads the acr-api workload from the registry, CHAOS-13177)":      regexp.MustCompile(`AUTH_ACR_WORKLOAD_SUBJECT`),
+	"internal_service_credentials (table retired, CHAOS-11245)":                                         regexp.MustCompile(`\binternal_service_credentials\b`),
+	"dho service-credentials (verbs removed, ops CHAOS-13170)":                                          regexp.MustCompile(`\bservice-credentials\b`),
+	"servicecredcli / servicecred store (ops CHAOS-11245)":                                              regexp.MustCompile(`servicecredcli|internal/auth/servicecred\b`),
+	"e2e service-token helpers (retired with svc_acr_ minting)":                                         regexp.MustCompile(`mint_ops_service_token|ops-probe-token`),
+	"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE (service token entitlement credential removed, CHAOS-13600)": regexp.MustCompile(`ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`),
+	"service_token entitlement credential value (removed, CHAOS-13600)":                                 regexp.MustCompile(`\bservice_token\b`),
 }
 
 // allowed is the exact-path allowlist: a listed path may name a retired name because it bans it.
 var allowed = map[string]bool{
 	"scripts/e2e/test-compose.sh":                  true,
 	"internal/cigates/retirednames/census_test.go": true,
+	// The Warn site of the ignored token file setting and the refusal of the removed credential value, and its test.
+	"internal/config/entitlement.go":                 true,
+	"internal/config/entitlement_credential_test.go": true,
 }
 
 func repoRoot(t *testing.T) string {
@@ -110,11 +115,13 @@ func TestNoRetiredNameInTree(t *testing.T) {
 
 func TestEveryRetiredNameIsDetected(t *testing.T) {
 	planted := map[string]string{
-		"AUTH_ACR_WORKLOAD_SUBJECT":    "set AUTH_ACR_WORKLOAD_SUBJECT=prn_1",
-		"internal_service_credentials": "select * from internal_service_credentials",
-		"dho service-credentials":      "dho service-credentials list",
-		"servicecredcli / servicecred": "import internal/auth/servicecred",
-		"e2e service-token helpers":    "mint_ops_service_token",
+		"AUTH_ACR_WORKLOAD_SUBJECT":             "set AUTH_ACR_WORKLOAD_SUBJECT=prn_1",
+		"internal_service_credentials":          "select * from internal_service_credentials",
+		"dho service-credentials":               "dho service-credentials list",
+		"servicecredcli / servicecred":          "import internal/auth/servicecred",
+		"e2e service-token helpers":             "mint_ops_service_token",
+		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /var/run/acr/entitlement/token",
+		"service_token entitlement":             "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=service_token",
 	}
 	for prefix, line := range planted {
 		matched := false
@@ -127,7 +134,7 @@ func TestEveryRetiredNameIsDetected(t *testing.T) {
 			t.Errorf("planted line for %q was not detected", prefix)
 		}
 	}
-	for _, kept := range []string{"internal_service_credential_audits", "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE", "svc_acr_"} {
+	for _, kept := range []string{"internal_service_credential_audits", "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=workload", "a_service_token_b", "svc_acr_"} {
 		if got := scanText("x", []byte(kept)); len(got) != 0 {
 			t.Errorf("%q is live and must not match: %v", kept, got)
 		}

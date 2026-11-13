@@ -100,9 +100,6 @@ data:
   {{- if include "acr.entitlementWorkload" . }}
   ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL: "workload"
   {{- end }}
-  {{- if include "acr.entitlementTokenMounted" . }}
-  ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: {{ printf "%s/%s" (.Values.config.entitlement.tokenMountPath | trimSuffix "/") .Values.config.entitlement.tokenFileName | quote }}
-  {{- end }}
   {{- end }}
   {{- if .Values.config.postgresCaBundle.existingSecret }}
   ACR_POSTGRES_CA_BUNDLE: "/var/run/acr/postgres-ca/ca.crt"
