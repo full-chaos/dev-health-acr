@@ -21,9 +21,8 @@ import (
 
 // The class ids below are a copy of the class_id values in the ops-owned
 // contracts/auth/v1/credential-classes.json at the dev-health-ops commit named
-// in ci/ops-contract.pin (8137953ba7684c6d63c56b1086f10aa575c4fd50; file sha256
-// 92b70da8ff009964..., 38 classes). acr does not vendor that file. The gate in
-// ci/checkendpointprofiles compares this table with the pinned file in both
+// in ci/ops-contract.pin (4d2810dccf9d6236fa65f0fe1f763257bb96363a, 41 classes). acr does not vendor that
+// file. The gate in ci/checkendpointprofiles compares this table with the pinned file in both
 // directions, so a pin bump that adds, removes or renames a class fails CI until
 // this table follows.
 //
@@ -140,6 +139,9 @@ func otherClassRows() []guardRow {
 		row("license_key", b64(`{"org":"`+m("license_key")+`"}`)+"."+b64("sig")),
 		row("infrastructure_deployment_credentials", "postgres"+"://svc:"+m("infrastructure_deployment_credentials")+"@db.invalid:5432/app"),
 		row("effective_principal_envelope", jwtShaped("EdDSA", m("effective_principal_envelope"))),
+		row("oauth_authorization_code", "fcoac_"+padded43(m("oauth_authorization_code"))),
+		row("oauth_consent_csrf_token", "fcocs_"+padded43(m("oauth_consent_csrf_token"))),
+		row("service_account_token", b64(`{"alg":"EdDSA","typ":"sa+jwt"}`)+"."+b64(`{"sub":"`+m("service_account_token")+`"}`)+"."+b64("sig-"+m("service_account_token"))),
 	}
 	return rows
 }
@@ -255,8 +257,8 @@ func TestClientCredentialShapeGuardRefusesEveryOtherClassBeforeSend(t *testing.T
 			t.Fatalf("row %q is shaped like the accepted class", row.name)
 		}
 	}
-	if got, want := len(otherClassRows()), 37; got != want {
-		t.Fatalf("other-class rows = %d, want %d (38 ops classes at the pin minus the accepted one)", got, want)
+	if got, want := len(otherClassRows()), 40; got != want {
+		t.Fatalf("other-class rows = %d, want %d (41 ops classes at the pin minus the accepted one)", got, want)
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
