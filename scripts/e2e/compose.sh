@@ -28,7 +28,7 @@ NGINX_IMAGE="nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3
 usage() { printf 'usage: %s --compose <root-compose.yml> --overlay <acr.compose.yml> --project <acr-e2e-name> [--scenario happy|existing-volume|missing-ops-token|invalid-ca|revoked-acr-token|clickhouse-read-denied|migration-failure|bootstrap-rotation]\n' "$0" >&2; }
 die() { printf '[compose-e2e] FAIL: %s\n' "$*" >&2; exit 1; }
 note() { printf '[compose-e2e] %s\n' "$*" >&2; }
-redact_log() { sed -E -e 's/(fcacr|fcwlb)_[[:alnum:]_-]+/REDACTED/g' -e 's#(postgresql?|clickhouse)://[^[:space:]]+#REDACTED_DSN#g'; }
+redact_log() { sed -E -e 's/(fcacr|svc_acr|fcwlb)_[[:alnum:]_-]+/REDACTED/g' -e 's#(postgresql?|clickhouse)://[^[:space:]]+#REDACTED_DSN#g'; }
 
 parse_args() {
   while [[ $# -gt 0 ]]; do

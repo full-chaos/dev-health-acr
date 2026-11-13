@@ -33,6 +33,10 @@ var allowed = map[string]bool{
 	"internal/config/entitlement.go":                 true,
 	"internal/config/entitlement_credential_test.go": true,
 	// Refusal cells: each presents a svc_acr_ bearer on purpose to prove acr refuses it.
+	// Redaction/leak detection of a retired token: a retired token can still exist in the wild, so these keep matching it.
+	"scripts/e2e/fullstack-opencode.sh":                          true,
+	"tests/fullstack/assertrun/redact.go":                        true,
+	"tests/fullstack/assertrun/redact_test.go":                   true,
 	"scripts/e2e/compose.sh":                                     true,
 	"internal/auth/middleware_credential_classes_test.go":        true,
 	"internal/api/public_routes_foreign_tokens_test.go":          true,
