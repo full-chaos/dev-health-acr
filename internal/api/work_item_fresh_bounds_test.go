@@ -46,6 +46,9 @@ func serveFreshTupleRequest(t *testing.T, f *freshTupleProducerFixture, body con
 		t.Fatal(err)
 	}
 	assertResponseOwnerGateFree(t, f.gate)
+	// The served words are composed on read and never stored: this result is
+	// compared with the stored document and measured without them.
+	result.VocabularyLabels = nil
 	return result
 }
 

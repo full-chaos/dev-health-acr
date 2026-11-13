@@ -267,16 +267,6 @@ func TestAppConfigThreadsTheCompletionDistributionSwitch(t *testing.T) {
 	}
 }
 
-// CHAOS-12416: the switch reaches the app both doors read it from.
-func TestAppConfigThreadsTheVocabularyLabelsSwitch(t *testing.T) {
-	for _, enabled := range []bool{true, false} {
-		got := appConfig(config.Config{ContextFabricVocabularyLabelsEnabled: enabled}, "test-version")
-		if got.ContextFabricVocabularyLabelsEnabled != enabled {
-			t.Fatalf("appConfig(...).ContextFabricVocabularyLabelsEnabled = %v, want %v", got.ContextFabricVocabularyLabelsEnabled, enabled)
-		}
-	}
-}
-
 // CHAOS-12582: the sankey switch reaches the app both doors read it from;
 // without it they removed every stored sankey.
 func TestAppConfigThreadsTheInvestmentSankeySwitch(t *testing.T) {

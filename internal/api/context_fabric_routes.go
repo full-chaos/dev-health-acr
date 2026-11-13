@@ -260,7 +260,7 @@ func (a *App) serveContextFabricInvestigationResult(w http.ResponseWriter, r *ht
 	callerBytes := int64(request.Options.MaxSerializedBytes)
 	answer = a.withoutDisabledRenderShapes(answer)
 	wordsBound := a.investigationWordsBound(answer, callerBytes, collectedSynthesisInput())
-	result, wordsTier := contextfabric.ServeVocabularyLabels(answer, a.config.ContextFabricVocabularyLabelsEnabled, wordsBound)
+	result, wordsTier := contextfabric.ServeVocabularyLabels(answer, wordsBound)
 	itemCounts := contextFabricResultItemCounts(result)
 	encoded, measuredBytes, sizeErr := marshalContextFabricResponse(result)
 	if sizeErr != nil {
@@ -335,7 +335,7 @@ func (a *App) serveContextFabricInvestigationResult(w http.ResponseWriter, r *ht
 		}
 		// The canonical document stands over the caller's bound, so the words
 		// are measured on the projection, which sheds them if it must.
-		labeled, _ := contextfabric.ServeVocabularyLabels(answer, a.config.ContextFabricVocabularyLabelsEnabled, 0)
+		labeled, _ := contextfabric.ServeVocabularyLabels(answer, 0)
 		projection, projectionEncoded, projectionBytes, budget, projectedTier, fits := a.projectToCallerOption(labeled, answer, request.Options)
 		wordsTier = projectedTier
 		if !fits {

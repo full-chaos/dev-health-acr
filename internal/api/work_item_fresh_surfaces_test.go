@@ -133,6 +133,8 @@ func assertFreshTupleMCPParity(t *testing.T, fixture *freshTupleProducerFixture,
 		// every other projected field must still equal the fresh producer.
 		projection.Limitations = append(slices.Clone(projection.Limitations), contractsv1.ContextFabricFactScopeUnexpandedLimitation)
 	}
+	// The served words are composed on read; the fresh producer result has none.
+	mcpResult.VocabularyLabels = nil
 	if !bytes.Equal(freshTupleJSON(t, projection), freshTupleJSON(t, answerprojection.Project(mcpResult, answerprojection.Budget{}))) {
 		t.Fatalf("real MCP result differs through the shared projection: fresh=%s served=%s", freshTupleJSON(t, projection), freshTupleJSON(t, answerprojection.Project(mcpResult, answerprojection.Budget{})))
 	}

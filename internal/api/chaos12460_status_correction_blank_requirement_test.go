@@ -211,7 +211,6 @@ func newBlankRowApp(t *testing.T, writer blankRowWriter, draft cf.InvestigationS
 	}
 	app, token := newParityHostedAppWithLogs(t, engine, store, limits.ResourceBudget{MaxItems: 500, MaxTokens: 1 << 20, MaxBytes: 1 << 24}, logs)
 	app.config.ServerCompletenessAuthorityEnabled, app.config.ServerCompletenessAuthoritySymmetricEnabled = authority, symmetric
-	app.config.ContextFabricVocabularyLabelsEnabled = true
 	app.config.MaxSerializedBytes, app.config.MaxItems = v1.ContextFabricSerializedBytesMax, 500
 	serveAsNarrowedUser(t, app)
 	return &blankRowApp{app: app, token: token, store: store, logs: logs}

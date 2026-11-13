@@ -431,13 +431,12 @@ therefore restate each `answer_status:*` word and the note from the projection's
 state, by the same function. Every other word is copied as served.
 
 **Rollout.** The result root is `additionalProperties:false`, and ask-dev treats a
-validation failure as an upstream failure. So the field is additive and optional
-but NOT safe on an old pin: emitting it early fails every answer. An existing
-deploy order cannot protect `main`, because acr and web roll separately. So
-`ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED` (default off) gates the map, and a
-follow-up ticket removes the flag once every consumer's pin is deployed. Off serves
-no map. The stamped source words are served in both states, because those fields
-are on every pin. So is the legend of a driver series: `render_shapes`
+validation failure as an upstream failure, so the field is NOT safe on a consumer
+pin that does not carry it. It was served behind a flag until every consumer's pin
+was deployed; the flag is now removed and the map is always served. A consumer must
+carry `vocabulary_labels` in its vendored schema before it talks to an acr that
+serves the map. The stamped source words never depended on it, and neither did the
+legend of a driver series: `render_shapes`
 is saved with the result, so a stored row's `series.label` would keep the signal
 token, and `ServeVocabularyLabels` restates it from the `ranking_signal` word at
 every door. A fresh result carries the same word from `SelectRenderShapes`. The

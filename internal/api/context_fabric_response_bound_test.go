@@ -272,6 +272,18 @@ func marshaledSize(t *testing.T, v any) int64 {
 	return int64(len(encoded))
 }
 
+// servedMeasuredBytes is what the route measures and charges for a result: the
+// document with the words it now always serves.
+func servedMeasuredBytes(t *testing.T, result contextfabric.InvestigationResult) int64 {
+	t.Helper()
+	labeled, _ := contextfabric.ServeVocabularyLabels(result, 0)
+	_, size, err := marshalContextFabricResponse(labeled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return size
+}
+
 func assertErrorDetailsDiscloseMeasurement(t *testing.T, body []byte, wantMinBytes int64) {
 	t.Helper()
 	var envelope contractsv1.ErrorEnvelope
@@ -320,7 +332,7 @@ var usageProbeSubject = limits.Subject{OrgID: callerOrgID, CredentialID: "usage_
 // (team-lead ruling, CHAOS-4355 codex R2).
 func TestContextFabricInvestigationRouteRowsBearingResultFitsProductionResponseBudget(t *testing.T) {
 	result := threeRollupProjectStatusResult("result_4355_post")
-	measuredBytes := marshaledSize(t, result)
+	measuredBytes := servedMeasuredBytes(t, result)
 	estimatedTokens := (measuredBytes + 3) / 4
 	t.Logf("measured encoded result: %d bytes (~%d estimated tokens); ACR_MAX_OUTPUT_TOKENS=%d (~%d bytes, NOT enforced on this path), ACR_MAX_SERIALIZED_BYTES=%d",
 		measuredBytes, estimatedTokens, productionMaxOutputTokens, productionMaxOutputTokens*4, productionMaxSerializedBytes)
@@ -378,7 +390,7 @@ func TestContextFabricInvestigationRouteRowsBearingResultFitsProductionResponseB
 // why the org usage window must still grow.
 func TestContextFabricInvestigationResultRouteRowsBearingResultFitsProductionResponseBudget(t *testing.T) {
 	result := storedNamingItsInterpreter(threeRollupProjectStatusResult("result_4355_get"))
-	measuredBytes := marshaledSize(t, result)
+	measuredBytes := servedMeasuredBytes(t, result)
 	estimatedTokens := (measuredBytes + 3) / 4
 	store := memoryinvestigation.NewStore()
 	seeded := seedResult3355(t, store, callerOrgID, result)

@@ -36,10 +36,6 @@ type AppConfig struct {
 	// config.Config.ServerCompletenessAuthoritySymmetricEnabled's own doc
 	// comment, for the same by-id route reason immediately above.
 	ServerCompletenessAuthoritySymmetricEnabled bool
-	// ContextFabricVocabularyLabelsEnabled mirrors
-	// config.Config.ContextFabricVocabularyLabelsEnabled: both doors that
-	// serve a result read it (contextfabric.ServeVocabularyLabels).
-	ContextFabricVocabularyLabelsEnabled bool
 	// ContextFabricInvestmentTreemapEnabled mirrors
 	// config.Config.ContextFabricInvestmentTreemapEnabled: both doors that
 	// serve a result read it (contextfabric.WithoutDisabledRenderShapes).

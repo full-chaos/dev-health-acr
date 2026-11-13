@@ -305,13 +305,6 @@ contextFabric:
   # only constructs the falkorgraph adapter when both
   # EnableContextFabricInvestigations and falkorgraph.Configured() hold.
   readsEnabled: false
-  # CHAOS-12416: serves the vocabulary_labels map on every answer. An existing
-  # deploy order cannot protect main: the result root is
-  # additionalProperties:false and acr and web roll separately, so a consumer
-  # on a pin without the field fails every answer that holds the map. Keep
-  # false until every consumer's pin is deployed. A follow-up ticket removes
-  # the flag then. See docs/operations.md.
-  vocabularyLabelsEnabled: false
   # CHAOS-12521: serves the investment_theme_share treemap. selected_by is a
   # closed enum, so keep false until web's and ask-dev's pins hold the rule.
   investmentTreemapEnabled: false

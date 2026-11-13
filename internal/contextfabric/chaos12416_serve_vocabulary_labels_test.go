@@ -197,7 +197,7 @@ func wordRows() []wordRow {
 
 func serveWords(t *testing.T, result InvestigationResult) map[string]string {
 	t.Helper()
-	served, tier := ServeVocabularyLabels(result, true, 0)
+	served, tier := ServeVocabularyLabels(result, 0)
 	if tier != contractsv1.ContextFabricVocabularyLabelsFull {
 		t.Fatalf("nothing bounded this document, yet it reached tier %q", tier)
 	}
@@ -262,7 +262,7 @@ func TestAnUnknownValueTakesTheGenericPath(t *testing.T) {
 		t.Fatalf("map = %v, want none", got)
 	}
 	encoded, err := json.Marshal(func() InvestigationResult {
-		served, _ := ServeVocabularyLabels(result, true, 0)
+		served, _ := ServeVocabularyLabels(result, 0)
 		return served
 	}())
 	if err != nil {
@@ -286,8 +286,8 @@ func servedFixture() InvestigationResult {
 }
 
 func TestComposingTwiceChangesNothing(t *testing.T) {
-	once, _ := ServeVocabularyLabels(servedFixture(), true, 0)
-	twice, _ := ServeVocabularyLabels(once, true, 0)
+	once, _ := ServeVocabularyLabels(servedFixture(), 0)
+	twice, _ := ServeVocabularyLabels(once, 0)
 	if !reflect.DeepEqual(once, twice) {
 		t.Fatalf("second serve changed the document:\n once %+v\ntwice %+v", once, twice)
 	}
@@ -301,7 +301,7 @@ func TestTheInputDocumentIsNotRewritten(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	served, _ := ServeVocabularyLabels(stored, true, 0)
+	served, _ := ServeVocabularyLabels(stored, 0)
 	if served.VocabularyLabels == nil || served.Coverage.Sources[0].StateLabel == stored.Coverage.Sources[0].StateLabel {
 		t.Fatalf("the copy carries no words, so this proves nothing: %+v", served.Coverage.Sources)
 	}
@@ -314,46 +314,52 @@ func TestTheInputDocumentIsNotRewritten(t *testing.T) {
 	}
 }
 
-// A stored row reads today's word, from the structured state, and the flag does
-// not gate it: the fields are on every pin.
-func TestSourceWordsAreStampedInBothFlagStates(t *testing.T) {
-	for _, enabled := range []bool{true, false} {
-		served, tier := ServeVocabularyLabels(servedFixture(), enabled, 0)
-		if tier.Shed() {
-			t.Fatalf("enabled=%v: tier %q with no bound", enabled, tier)
-		}
-		first, second := served.Coverage.Sources[0], served.Coverage.Sources[1]
-		if first.Label != "Canonical facts — blockers" || first.StateLabel != "partly included" {
-			t.Errorf("enabled=%v: stored source reads %q / %q", enabled, first.Label, first.StateLabel)
-		}
-		if second.Label != "Relationship graph" || second.StateLabel != "available" {
-			t.Errorf("enabled=%v: source with no stored word reads %q / %q", enabled, second.Label, second.StateLabel)
-		}
+// A stored row reads today's word, from the structured state.
+func TestSourceWordsAreStamped(t *testing.T) {
+	served, tier := ServeVocabularyLabels(servedFixture(), 0)
+	if tier.Shed() {
+		t.Fatalf("tier %q with no bound", tier)
+	}
+	first, second := served.Coverage.Sources[0], served.Coverage.Sources[1]
+	if first.Label != "Canonical facts — blockers" || first.StateLabel != "partly included" {
+		t.Errorf("stored source reads %q / %q", first.Label, first.StateLabel)
+	}
+	if second.Label != "Relationship graph" || second.StateLabel != "available" {
+		t.Errorf("source with no stored word reads %q / %q", second.Label, second.StateLabel)
 	}
 }
 
 func TestAnEmptySourceListStaysAnEmptyList(t *testing.T) {
 	result := servedFixture()
 	result.Coverage.Sources = []contractsv1.ContextFabricSourceObservation{}
-	served, _ := ServeVocabularyLabels(result, true, 0)
+	served, _ := ServeVocabularyLabels(result, 0)
 	if served.Coverage.Sources == nil {
 		t.Fatal("an empty list came back nil: the contract requires the array")
 	}
 }
 
-// Off serves no map, whatever the document held. Nothing stores one, but the
-// validator admits it, and a flag that is off must keep it off the wire.
-func TestOffServesNoMap(t *testing.T) {
+// CHAOS-12458: the map is served with no flag. A word the document already held
+// is replaced by the one the service composes, never kept.
+func TestTheMapIsServedWithNoFlagAndReplacesAnInputWord(t *testing.T) {
 	result := servedFixture()
 	result.VocabularyLabels = map[string]string{"answer_status:complete": "a word from elsewhere"}
-	served, tier := ServeVocabularyLabels(result, false, 0)
-	if served.VocabularyLabels != nil || tier != contractsv1.ContextFabricVocabularyLabelsOff {
-		t.Fatalf("off served %v (tier %q)", served.VocabularyLabels, tier)
+	served, tier := ServeVocabularyLabels(result, 0)
+	if tier != contractsv1.ContextFabricVocabularyLabelsFull {
+		t.Fatalf("tier %q, want the full map with no bound", tier)
 	}
-	on, _ := ServeVocabularyLabels(result, true, 0)
-	if on.VocabularyLabels["answer_status:complete"] != "Full answer" {
-		t.Fatalf("on kept a word it did not compose: %v", on.VocabularyLabels)
+	if served.VocabularyLabels["answer_status:complete"] != "Full answer" {
+		t.Fatalf("served kept a word it did not compose: %v", served.VocabularyLabels)
 	}
+}
+
+// stampedOnly is the served document with every word but the map: the document
+// the ladder falls back to.
+func stampedOnly(result InvestigationResult) InvestigationResult {
+	result.VocabularyLabels = nil
+	result.RenderShapes = withDriverSeriesWords(result.RenderShapes)
+	result = ReaderEvidenceLabels(result)
+	result = withReaderSubjectText(result)
+	return withStampedSourceWords(result)
 }
 
 func encodedSize(t *testing.T, result InvestigationResult) int64 {
@@ -382,11 +388,10 @@ func TestABoundShedsTheMapByTierThenTheStampedWords(t *testing.T) {
 		full   = contractsv1.ContextFabricVocabularyLabelsFull
 		status = contractsv1.ContextFabricVocabularyLabelsStatusOnly
 		none   = contractsv1.ContextFabricVocabularyLabelsNone
-		off    = contractsv1.ContextFabricVocabularyLabelsOff
 	)
 	bare := correctedFixture()
-	stamped, _ := ServeVocabularyLabels(bare, false, 0)
-	labeled, _ := ServeVocabularyLabels(bare, true, 0)
+	stamped := stampedOnly(bare)
+	labeled, _ := ServeVocabularyLabels(bare, 0)
 	statusOnly := stamped
 	statusOnly.VocabularyLabels = contractsv1.ContextFabricStatusVocabularyLabels(labeled.VocabularyLabels)
 	bareBytes, stampedBytes, statusBytes, labeledBytes := encodedSize(t, bare), encodedSize(t, stamped), encodedSize(t, statusOnly), encodedSize(t, labeled)
@@ -394,24 +399,21 @@ func TestABoundShedsTheMapByTierThenTheStampedWords(t *testing.T) {
 		t.Fatalf("the fixture must grow at each step: %d %d %d %d", bareBytes, stampedBytes, statusBytes, labeledBytes)
 	}
 	for name, row := range map[string]struct {
-		enabled bool
-		bound   int64
-		want    int64
-		tier    contractsv1.ContextFabricVocabularyLabelsTier
+		bound int64
+		want  int64
+		tier  contractsv1.ContextFabricVocabularyLabelsTier
 	}{
-		"exactly the full map":           {true, labeledBytes, labeledBytes, full},
-		"one byte short of the full map": {true, labeledBytes - 1, statusBytes, status},
-		"exactly the status words":       {true, statusBytes, statusBytes, status},
-		"one byte short of them":         {true, statusBytes - 1, stampedBytes, none},
-		"exactly the stamped document":   {true, stampedBytes, stampedBytes, none},
-		"one byte short of the stamps":   {true, stampedBytes - 1, bareBytes, none},
-		"nothing fits: the input stands": {true, bareBytes - 1, bareBytes, none},
-		"no bound":                       {true, 0, labeledBytes, full},
-		"off, the stamps fit":            {false, stampedBytes, stampedBytes, off},
-		"off, the stamps do not fit":     {false, stampedBytes - 1, bareBytes, off},
+		"exactly the full map":           {labeledBytes, labeledBytes, full},
+		"one byte short of the full map": {labeledBytes - 1, statusBytes, status},
+		"exactly the status words":       {statusBytes, statusBytes, status},
+		"one byte short of them":         {statusBytes - 1, stampedBytes, none},
+		"exactly the stamped document":   {stampedBytes, stampedBytes, none},
+		"one byte short of the stamps":   {stampedBytes - 1, bareBytes, none},
+		"nothing fits: the input stands": {bareBytes - 1, bareBytes, none},
+		"no bound":                       {0, labeledBytes, full},
 	} {
 		t.Run(name, func(t *testing.T) {
-			served, tier := ServeVocabularyLabels(bare, row.enabled, row.bound)
+			served, tier := ServeVocabularyLabels(bare, row.bound)
 			if got := encodedSize(t, served); got != row.want || tier != row.tier {
 				t.Fatalf("served %d bytes at tier %q, want %d at %q", got, tier, row.want, row.tier)
 			}
@@ -423,7 +425,7 @@ func TestABoundShedsTheMapByTierThenTheStampedWords(t *testing.T) {
 				}) {
 					t.Fatalf("the status tier holds %v", served.VocabularyLabels)
 				}
-			case none, off:
+			case none:
 				if served.VocabularyLabels != nil {
 					t.Fatalf("tier %q holds a map: %v", row.tier, served.VocabularyLabels)
 				}
@@ -437,11 +439,11 @@ func TestABoundShedsTheMapByTierThenTheStampedWords(t *testing.T) {
 func TestNoStatusWordMeansNoStatusTier(t *testing.T) {
 	result := servedFixture()
 	result.Status = "a_future_status"
-	labeled, _ := ServeVocabularyLabels(result, true, 0)
+	labeled, _ := ServeVocabularyLabels(result, 0)
 	if labeled.VocabularyLabels == nil {
 		t.Fatal("the fixture needs another word, or this proves nothing")
 	}
-	served, tier := ServeVocabularyLabels(result, true, encodedSize(t, labeled)-1)
+	served, tier := ServeVocabularyLabels(result, encodedSize(t, labeled)-1)
 	if tier != contractsv1.ContextFabricVocabularyLabelsNone || served.VocabularyLabels != nil {
 		t.Fatalf("tier %q map %v, want none", tier, served.VocabularyLabels)
 	}

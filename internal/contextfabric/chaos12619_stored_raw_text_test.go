@@ -63,7 +63,7 @@ func TestAStoredResultServesItsGraphTextInReaderWords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	served, _ := ServeVocabularyLabels(stored, false, 0)
+	served, _ := ServeVocabularyLabels(stored, 0)
 	for name, got := range map[string][2]string{
 		"committed work item":    {served.SubjectResolution.Committed[0].Label, "CHAOS-2320"},
 		"committed pull request": {served.SubjectResolution.Committed[1].Label, "PR #5063"},
@@ -108,8 +108,8 @@ func TestAStoredResultServesItsGraphTextInReaderWords(t *testing.T) {
 func TestAResultWithNoRawTextServesUnchanged(t *testing.T) {
 	t.Parallel()
 	result := storedRawTextResult(t)
-	served, _ := ServeVocabularyLabels(result, false, 0)
-	again, _ := ServeVocabularyLabels(served, false, 0)
+	served, _ := ServeVocabularyLabels(result, 0)
+	again, _ := ServeVocabularyLabels(served, 0)
 	if !reflect.DeepEqual(again.SubjectResolution, served.SubjectResolution) || !reflect.DeepEqual(again.Paths, served.Paths) || !reflect.DeepEqual(again.Drivers, served.Drivers) || !reflect.DeepEqual(again.ClaimedFacts, served.ClaimedFacts) {
 		t.Fatalf("a served copy changed when served again")
 	}

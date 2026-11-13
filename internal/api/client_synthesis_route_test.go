@@ -917,7 +917,27 @@ func TestClientSynthesisAnswerFloorCoversTheSmallestServedAnswer(t *testing.T) {
 	if recorder.Code != http.StatusOK || bundle == nil {
 		t.Fatalf("status = %d", recorder.Code)
 	}
-	if beside := recorder.Body.Len() - len(bundle.Input); beside > contextfabric.ClientSynthesisAnswerFloorBytes {
+	// The words shed before the answer does, so the floor is held to the answer
+	// without them: take the map and the stamped source words off the envelope
+	// and subtract what they measured.
+	envelope := decodeEnvelope(t, recorder)
+	served, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if envelope.VocabularyLabels == nil {
+		t.Fatal("the served answer carries no words: this measured nothing")
+	}
+	envelope.VocabularyLabels = nil
+	envelope.Coverage.Sources = slices.Clone(envelope.Coverage.Sources)
+	for i := range envelope.Coverage.Sources {
+		envelope.Coverage.Sources[i].Label, envelope.Coverage.Sources[i].StateLabel = "", ""
+	}
+	bare, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beside := recorder.Body.Len() - (len(served) - len(bare)) - len(bundle.Input); beside > contextfabric.ClientSynthesisAnswerFloorBytes {
 		t.Errorf("a served answer takes %d bytes beside its input, above the floor %d", beside, contextfabric.ClientSynthesisAnswerFloorBytes)
 	}
 }
