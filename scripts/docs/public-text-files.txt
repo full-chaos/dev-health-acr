@@ -1,0 +1,2 @@
+# Pages that reach readers outside the team; scripts/docs/verify-public-text.sh scans each one.
+docs/acr-api-workload-token.md
