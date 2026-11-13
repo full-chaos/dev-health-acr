@@ -67,8 +67,8 @@ No `zep-go` request or response type is allowed in public Context Fabric contrac
   and the losing side's canonical metadata (aliases, provider IDs) is
   silently overwritten rather than merged. This is not a defect to be fixed
   in the adapter -- Zep's attribute model has no CAS primitive to build one
-  on -- it is a documented precondition on the caller. **The the projection-pipeline work
-  projection worker must serialize `ApplyProjectionBatch` calls per
+  on -- it is a documented precondition on the caller. **The projection
+  worker must serialize `ApplyProjectionBatch` calls per
   organization** (e.g. one in-flight batch per org at a time across all
   sources); it must not run multiple sources' batches for the same org
   concurrently. See `ProjectionBackend`'s doc comment in

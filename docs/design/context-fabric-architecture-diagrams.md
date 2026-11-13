@@ -1526,7 +1526,7 @@ pending trial-case validation" as of 17:42 PDT — **not yet in
 `context_fabric_types.go` on `main`**.
 
 **Correction (flagged by the team-subject work stream, not fixed in this PR — out of this
-work stream's scope): the paragraph above is now stale.** the status-category work stream's's the status-category fact-kind work
+work stream's scope): the paragraph above is now stale.** The status-category work stream's fact-kind work
 PR #298 (`internal/contextfabric/chaos4347_status_category_composition.go`)
 merged as `1e9815c7`, ahead of this page's own cited baseline `569f0f39`.
 It does not touch the 1:1 `contextFabricDriverCategoryFactKind` map itself,

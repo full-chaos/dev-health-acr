@@ -49,6 +49,15 @@ def counts(block):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--dir":
+        import os
+        for root, _, files in sorted(os.walk(sys.argv[2])):
+            for name in sorted(files):
+                if name.endswith(".md"):
+                    for i, b in enumerate(blocks(open(os.path.join(root, name)).read()), 1):
+                        n, e = counts(b)
+                        print(f"{name}\t{i}\tnodes={n}\tedges={e}")
+        return
     ref = sys.argv[1] if len(sys.argv) > 1 else None
     if ref:
         names = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", ref, "docs"], text=True).split()

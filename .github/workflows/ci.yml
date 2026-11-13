@@ -412,6 +412,18 @@ jobs:
         run: scripts/docs/test-verify-mermaid.sh
       - name: Run the offline docs gate (claims, links including docs/runbooks and docs/release-notes) and its planted fixtures
         run: scripts/docs/test-verify.sh
+      - name: Shellcheck the mermaid structure check
+        run: shellcheck -x scripts/docs/verify-mermaid-structure.sh scripts/docs/test-verify-mermaid-structure.sh
+      - name: Prove the mermaid structure check ignores a label edit and rejects a dropped edge
+        run: scripts/docs/test-verify-mermaid-structure.sh
+      # A pull request titled as a sweep is a text-only change: every diagram keeps its node and edge counts.
+      - name: Keep mermaid node and edge counts on a text sweep
+        if: github.event_name == 'pull_request' && contains(github.event.pull_request.title, 'sweep')
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          scripts/docs/verify-mermaid-structure.sh "$BASE_SHA"
       - name: Shellcheck the public-text check
         run: shellcheck -x scripts/docs/verify-public-text.sh scripts/docs/test-verify-public-text.sh
       - name: Scan the listed public pages for internal text, and prove the check rejects every planted class and an empty list

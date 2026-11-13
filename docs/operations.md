@@ -2030,11 +2030,11 @@ Workbench's own launch script uses 500s/490s, a 10s margin) rather than
 the bare minimum the validator accepts.
 
 **Change that made gpt-5.6-luna the sole generative model update: the production default is now `gpt-5.6-luna` alone, no
-fallback.** The the generative-trial work five-arm generative trial measured `gpt-5.6-luna`
+fallback.** The five-arm generative trial measured `gpt-5.6-luna`
 alone as equal-or-better than the `gpt-5-nano` + `gpt-5.6-luna` fallback chain
 described below (1/30 strict vs. 0/30 strict) at roughly 2.4x fewer tokens
 per corpus run (82K vs. 193K); `gpt-5-nano` was the weakest interpreter and
-the dominant source of fact-parameter rejections. The the model-runtime (BYO-LLM) work measurements
+the dominant source of fact-parameter rejections. The model-runtime measurements
 and the "fallback is required" conclusion immediately below predate that
 trial and are kept for historical context, not as the current recommendation.
 
@@ -2613,7 +2613,7 @@ not know the cluster's real apiserver ClusterIP at author time, so a
 tighter rule is not generically possible.
 
 **This is a documented bypass SHAPE, not a proven working fix -- do not
-read "the rule renders" as "TokenReview is reachable."** The the panel-harness workload-credential change
+read "the rule renders" as "TokenReview is reachable."** The panel-harness
 live P6 A/B/A run found this exact rule PRESENT and RFC 8693 `TokenReview`
 STILL timed out on that kind+Calico cluster; only deleting the ENTIRE
 NetworkPolicy (not just this rule) restored a 200. Root cause is

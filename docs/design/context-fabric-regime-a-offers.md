@@ -175,7 +175,7 @@ and the two differ in both directions:
 To count clarification disclosures read `cf_structure_needs_disclosed`; to count class-gate
 decisions read this. Neither is the other's denominator.
 
-**The replay harness reads through the same gate.** The the replay-harness wiring frozen-interpretation replay
+**The replay harness reads through the same gate.** The frozen-interpretation replay
 harness computes `wired_structure_needs_would_disclose` from `ResolveSubjects`' raw
 `StructureOfferMaterial`. `GateOffersByFamily` is therefore **exported**, for the same reason
 `StructureNeedsWouldDisclose` is: the harness calls the one function production calls (on the
