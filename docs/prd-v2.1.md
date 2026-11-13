@@ -4,7 +4,6 @@
 **Date:** July 10, 2026  
 **Supersedes:** PRD v2 recommendations and the v1 full-vision framing  
 **Linear project:** Dev Health Agent Context Runtime  
-**Tracking issue:** CHAOS-2898
 
 ## 1. Thesis
 

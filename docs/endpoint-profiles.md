@@ -1,4 +1,4 @@
-# ACR endpoint auth profiles (CHAOS-3273 Wave 0)
+# ACR endpoint auth profiles (the endpoint-auth-profile work Wave 0)
 
 Companion to [`authentication.md`](authentication.md) (client credential
 shape, scopes, repository authorization, sidecar loading, rate limiting)
@@ -38,10 +38,10 @@ log in through (`/.well-known/oauth-authorization-server`, `/authorize`,
 `authentication.md`); the remaining 14 are behind
 `Authenticator.MiddlewareFor` in one of its two shapes (including the OAuth
 consent route `/authorize/consent` and the first-party authorize
-`/authorize/first-party` (CHAOS-12568), web assertion only, like
+`/authorize/first-party`, web assertion only, like
 `device_approval`), or the bearer-only `selfLifecycleHandler`.
 
-## The single-dispatch guarantee (the CHAOS-3271-class answer for acr)
+## The single-dispatch guarantee (the single-dispatch work-class answer for acr)
 
 Unlike ops (separate `OrgIdMiddleware`/`ImpersonationMiddleware` layers
 that can each independently observe a credential) and web (`proxy.ts`
@@ -64,7 +64,7 @@ inventory; nothing else to flag here as a cross-cutting finding.
 
 Each `reachable_validators[]` entry carries two booleans, `earlier_auth_gate`
 and `foreign_class_validator` (the ops schema split of the old
-`reachable_but_not_owner`, CHAOS-13624). Every acr entry is an intended
+`reachable_but_not_owner`, the reachable-but-not-owner split). Every acr entry is an intended
 validator, so both are `false`. `foreign_class_validator: true` is the defect
 count to watch; `earlier_auth_gate: true` records defence in depth, not a defect.
 
@@ -76,14 +76,14 @@ is confirmed-consistent with web's actual call sites, not a gap.
 
 ## Which classes a row lists, and its selector
 
-A row's `accepted_credential_classes` lists the classes the route validates **at the head**. On the bearer routes that is `acr_client_credential`, plus `acr_web_assertion` where the route accepts the web assertion header; the three routes with both name the selector `class_disambiguator: dedicated_header / X-ACR-Web-Assertion` (the header acr's dispatch reads first). `acr_workload_identity_exchange` is not a presented class there: a credential it issues is an ordinary `fcacr_` credential and is presented as `acr_client_credential`. `internal_svc_acr_token` is the credential acr presented to ops before the workload token; acr never validates it, so no acr row lists it. `POST /api/v1/oauth/token` is the one route that accepts the exchange class: its two grants carry their credential in the body and `handleDeviceToken` picks the handler by the request Content-Type, so its row names `class_disambiguator: content_type / application/x-www-form-urlencoded` (the marker of the token exchange): a form-encoded request is the RFC 8693 token exchange; any other Content-Type, or none, is the device-code grant. Rule and vocabulary are ops-owned (CHAOS-10561).
+A row's `accepted_credential_classes` lists the classes the route validates **at the head**. On the bearer routes that is `acr_client_credential`, plus `acr_web_assertion` where the route accepts the web assertion header; the three routes with both name the selector `class_disambiguator: dedicated_header / X-ACR-Web-Assertion` (the header acr's dispatch reads first). `acr_workload_identity_exchange` is not a presented class there: a credential it issues is an ordinary `fcacr_` credential and is presented as `acr_client_credential`. `internal_svc_acr_token` is the credential acr presented to ops before the workload token; acr never validates it, so no acr row lists it. `POST /api/v1/oauth/token` is the one route that accepts the exchange class: its two grants carry their credential in the body and `handleDeviceToken` picks the handler by the request Content-Type, so its row names `class_disambiguator: content_type / application/x-www-form-urlencoded` (the marker of the token exchange): a form-encoded request is the RFC 8693 token exchange; any other Content-Type, or none, is the device-code grant. Rule and vocabulary are ops-owned.
 
 ## `authverify` anchor — the `acr_workload_identity_exchange` subject-token validator
 
 L0's `credential-classes.json` left this class with a stated gap: *"The
 subject-token (k8s SA JWT) validator lives in
 github.com/full-chaos/dev-health-go/authverify, a fourth repo outside this
-lane's assigned read set."* CHAOS-3273's scope was widened by ruling to
+lane's assigned read set."* the endpoint-auth-profile work's scope was widened by ruling to
 include `dev-health-go`, READ-ONLY. This section closes that gap.
 
 **Endpoint:** `POST /api/v1/oauth/token` (`internal/api/app.go:87`) —
@@ -95,7 +95,7 @@ RFC 8693 grant.
 **Pinned anchor: `acr`'s consumer pin is `dev-health-go v0.5.5`**
 (`go.mod:5`). The dev-health-go checkout's working tree is neither
 consumer's pin — anchored via
-`git -C /Users/chris/projects/full-chaos/dev-health-go show v0.5.5:authverify/k8s_token_review.go`
+`git -C <checkout>/dev-health-go show v0.5.5:authverify/k8s_token_review.go`
 (and `authverify/workload_exchange.go`), per the lane brief's pinned-tag
 rule.
 
@@ -158,7 +158,7 @@ keys quotas on the stable `WorkloadBindingID` rather than the (roughly
 re-exchange.
 
 **Divergence between v0.6.1 (ops's pin) and v0.5.5 (acr's pin):**
-`git -C /Users/chris/projects/full-chaos/dev-health-go diff v0.5.5 v0.6.1 -- authverify/`
+`git -C <checkout>/dev-health-go diff v0.5.5 v0.6.1 -- authverify/`
 returns **zero lines of diff** — the entire `authverify` package is
 byte-identical between the two pinned tags. No divergence to report for
 this class. (Note, not independently verified in this pass: dev-health-go's
@@ -250,7 +250,7 @@ name:
   layer (documented as a binding precondition in `AGENTS.md`, not
   re-traced into `internal/contextfabric/pginvestigation` here).
 
-## Row addressing: symbol, not line (CHAOS-7128, CHAOS-7245)
+## Row addressing: symbol, not line
 
 The acr gate (`ci/checkendpointprofiles`) matches a row to its route by
 `source.file` + `method` + `route`, and every anchor -- `primary_validator`,
@@ -289,8 +289,8 @@ the function's own call is not counted as a second site.
 This check is lexical, not a control-flow proof: a direct call in the anchored
 function's body counts whatever branch it sits in, so a call under a condition
 that can never hold (or one the function returns before reaching) is not
-caught. That is the same CHAOS-4780 class as the reachability limits below;
-CHAOS-7280 carries this one too.
+caught. That is the same the reachability-limit class class as the reachability limits below;
+Reachability follow-up carries this one too.
 
 Anchors are plain function and method declarations. A generic function
 declaration (`func f[T any]` with its parameter list) is not supported as an anchor: its marker
@@ -388,9 +388,9 @@ the named scope is the right one, that the credential classes a row lists are
 the ones the guard accepts, or that the row's `primary_validator` anchor is the
 guard protecting this route. Proofs for the rules are the seeded fixtures in
 `ci/checkendpointprofiles/main_test.go` (`TestWrapperChain*`), including the two
-CHAOS-4780 constructions on `GET /api/v1/agent-context/capabilities`.
+Reachability-limit class constructions on `GET /api/v1/agent-context/capabilities`.
 
-What this does not prove (CHAOS-4780, reachability is out of scope for this
+What this does not prove (the reachability-limit class, reachability is out of scope for this
 gate):
 
 - A row anchored at a shared definition shows that the definition exists, not
@@ -410,15 +410,15 @@ gate):
   route fails if that call is removed or renamed, but moving the call to another
   function in the same file, one the route no longer uses, is not caught. Binding
   a marker to the handler builder needs a new row field, which is a schema and
-  scope change; it is tracked as CHAOS-7280 (CHAOS-4780 class), not done here.
+  scope change; it is tracked as the reachability follow-up (the reachability-limit class class), not done here.
 - A mint call in an `issued_credential` anchor is bound to its function, but
   whether that function is reached, or whether control flow reaches the call
   inside it, is not judged either (see the lexical-check paragraph above).
 
-## Wave 11 diff against Wave 0 (CHAOS-11251)
+## Wave 11 diff against Wave 0
 
-Wave 0 is acr #370, merge `52aff32dac9b`: 16 rows. This inventory, regenerated against
-`19b902ce8bd9`, has 38 rows: 25 added, 3 removed,
+Wave 0 is acr #370: 16 rows. This inventory, regenerated against
+the current main, has 38 rows: 25 added, 3 removed,
 13 changed, 0 unchanged. Each line names the commit that made the change; the
 commit's pull request and ticket are the reason. The regeneration itself changed only the
 header (`generated_at`, `source_commit`) and the advisory `line` / `line_end` hints (row
@@ -428,31 +428,31 @@ addressing is by symbol, see above); no row's claim changed.
 
 | Row | Classification | Commit |
 | --- | --- | --- |
-| `GET /.well-known/oauth-authorization-server` | public | 6b8ce29d #634 CHAOS-6184 |
-| `GET /authorize` | public | 6b8ce29d #634 CHAOS-6184 |
-| `POST /authorize/consent` | protected | 6b8ce29d #634 CHAOS-6184 |
-| `POST /register` | public | 6b8ce29d #634 CHAOS-6184 |
-| `POST /token` | public | 6b8ce29d #634 CHAOS-6184 |
-| `POST /device_authorization` | public | 71798c68 #643 CHAOS-6233 |
-| `GET /api/v1/context-fabric/data/catalog` | protected | 30a797c9 #689 CHAOS-7100 |
-| `POST /api/v1/context-fabric/data/facts` | protected | 30a797c9 #689 CHAOS-7100 |
-| `POST /api/v1/context-fabric/data/operations` | protected | 30a797c9 #689 CHAOS-7100 |
-| `POST /api/v1/context-fabric/data/subjects` | protected | 30a797c9 #689 CHAOS-7100 |
-| `POST /api/v1/context-fabric/data/relationships` | protected | 409fab51 #696 CHAOS-7074 |
-| `POST /api/v1/context-fabric/data/graphql` | protected | 6fc07dbe #729 CHAOS-7075 |
-| `POST /api/v1/auth/credentials/self/ack` | protected | 42555114 #936 CHAOS-3198 |
-| `GET /api/v1/context-fabric/investigations/submissions/{submission_id}` | protected | fe596b77 #1754 CHAOS-11913 |
-| `DELETE /api/v1/context-fabric/threads/{thread_id}` | protected | 771aef3e #1777 CHAOS-11948 |
-| `GET /api/v1/context-fabric/threads` | protected | 771aef3e #1777 CHAOS-11948 |
-| `GET /api/v1/context-fabric/threads/{thread_id}` | protected | 771aef3e #1777 CHAOS-11948 |
-| `POST /revoke` | public | de732556 #1786 CHAOS-12124 |
-| `GET /api/v1/context-fabric/investigations/submissions/{submission_id}/events` | protected | c82dfab9 #1793 CHAOS-11949 |
-| `POST /api/v1/context-fabric/investigations/submissions/{submission_id}/cancel` | protected | c82dfab9 #1793 CHAOS-11949 |
-| `GET /api/v1/context-fabric/investigations/feedback/{result_id}` | protected | 1818784e #1792 CHAOS-11950 |
-| `POST /api/v1/context-fabric/investigations/feedback/{result_id}` | protected | 1818784e #1792 CHAOS-11950 |
-| `GET /internal/v1/credentials/lifecycle` | protected | d10929aa #1923 CHAOS-11200 |
-| `POST /authorize/first-party` | protected | 8b285c9c #1927 CHAOS-12568 |
-| `POST /internal/v1/credentials/{credential_id}/revoke` | protected | e14ecd26 #2028 CHAOS-12971 |
+| `GET /.well-known/oauth-authorization-server` | public | 6b8ce29d #634 the hosted-MCP OAuth login work |
+| `GET /authorize` | public | 6b8ce29d #634 the hosted-MCP OAuth login work |
+| `POST /authorize/consent` | protected | 6b8ce29d #634 the hosted-MCP OAuth login work |
+| `POST /register` | public | 6b8ce29d #634 the hosted-MCP OAuth login work |
+| `POST /token` | public | 6b8ce29d #634 the hosted-MCP OAuth login work |
+| `POST /device_authorization` | public | 71798c68 #643 the device-authorization-grant work |
+| `GET /api/v1/context-fabric/data/catalog` | protected | 30a797c9 #689 the data:read scope work |
+| `POST /api/v1/context-fabric/data/facts` | protected | 30a797c9 #689 the data:read scope work |
+| `POST /api/v1/context-fabric/data/operations` | protected | 30a797c9 #689 the data:read scope work |
+| `POST /api/v1/context-fabric/data/subjects` | protected | 30a797c9 #689 the data:read scope work |
+| `POST /api/v1/context-fabric/data/relationships` | protected | 409fab51 #696 the read_relationships change |
+| `POST /api/v1/context-fabric/data/graphql` | protected | 6fc07dbe #729 the graphql_query change |
+| `POST /api/v1/auth/credentials/self/ack` | protected | 42555114 #936 the device-token recovery change |
+| `GET /api/v1/context-fabric/investigations/submissions/{submission_id}` | protected | fe596b77 #1754 the submission-status change |
+| `DELETE /api/v1/context-fabric/threads/{thread_id}` | protected | 771aef3e #1777 the Ask Dev conversation-storage work |
+| `GET /api/v1/context-fabric/threads` | protected | 771aef3e #1777 the Ask Dev conversation-storage work |
+| `GET /api/v1/context-fabric/threads/{thread_id}` | protected | 771aef3e #1777 the Ask Dev conversation-storage work |
+| `POST /revoke` | public | de732556 #1786 the browser refresh grant |
+| `GET /api/v1/context-fabric/investigations/submissions/{submission_id}/events` | protected | c82dfab9 #1793 the Ask Dev run-lease work |
+| `POST /api/v1/context-fabric/investigations/submissions/{submission_id}/cancel` | protected | c82dfab9 #1793 the Ask Dev run-lease work |
+| `GET /api/v1/context-fabric/investigations/feedback/{result_id}` | protected | 1818784e #1792 the Ask Dev feedback-storage work |
+| `POST /api/v1/context-fabric/investigations/feedback/{result_id}` | protected | 1818784e #1792 the Ask Dev feedback-storage work |
+| `GET /internal/v1/credentials/lifecycle` | protected | d10929aa #1923 the credential reconciliation list |
+| `POST /authorize/first-party` | protected | 8b285c9c #1927 the first-party authorize change |
+| `POST /internal/v1/credentials/{credential_id}/revoke` | protected | e14ecd26 #2028 the MCP credential revoke change |
 
 ### Removed
 
@@ -468,16 +468,16 @@ Fields whose content changed, line hints (`source.line`, anchor `line` / `line_e
 
 | Row | Fields changed since Wave 0 | Commits |
 | --- | --- | --- |
-| `GET /healthz` | `primary_validator` | 494e0893 #525 CHAOS-5652; fb5d020e #1529 CHAOS-10126 |
-| `GET /readyz` | `primary_validator` | 494e0893 #525 CHAOS-5652; fb5d020e #1529 CHAOS-10126 |
-| `GET /api/v1/agent-context/capabilities` | `accepted_credential_classes`, `class_disambiguator`, `gaps`, `primary_validator`, `reachable_validators` | 494e0893 #525 CHAOS-5652; 1d4fe7af #741 CHAOS-7245; 6462f016 #1086 CHAOS-9292; fb5d020e #1529 CHAOS-10126; 5f7a91b3 #1607 CHAOS-10561 |
-| `POST /api/v1/agent-context/context-packets` | `accepted_credential_classes`, `class_disambiguator`, `gaps`, `primary_validator`, `reachable_validators` | 494e0893 #525 CHAOS-5652; 1d4fe7af #741 CHAOS-7245; fb5d020e #1529 CHAOS-10126; 5f7a91b3 #1607 CHAOS-10561 |
-| `GET /api/v1/agent-context/evidence/{evidence_ref_id}` | `accepted_credential_classes`, `class_disambiguator`, `gaps`, `primary_validator`, `reachable_validators` | 494e0893 #525 CHAOS-5652; 1d4fe7af #741 CHAOS-7245; fb5d020e #1529 CHAOS-10126; 5f7a91b3 #1607 CHAOS-10561 |
-| `POST /api/v1/agent-context/episodes` | `accepted_credential_classes`, `gaps`, `primary_validator` | 494e0893 #525 CHAOS-5652; fb5d020e #1529 CHAOS-10126; 5f7a91b3 #1607 CHAOS-10561 |
-| `POST /api/v1/context-fabric/investigations` | `accepted_credential_classes`, `primary_validator`, `reachable_validators`, `token_shape` | 494e0893 #525 CHAOS-5652; 1d4fe7af #741 CHAOS-7245; 5f7a91b3 #1607 CHAOS-10561; 479a986a #2029 CHAOS-12109 |
-| `GET /api/v1/context-fabric/investigations/{result_id}` | `accepted_credential_classes`, `primary_validator`, `reachable_validators`, `token_shape` | 494e0893 #525 CHAOS-5652; 1d4fe7af #741 CHAOS-7245; 5f7a91b3 #1607 CHAOS-10561; 479a986a #2029 CHAOS-12109 |
-| `POST /api/v1/oauth/device_authorization` | `gaps`, `issued_credential`, `primary_validator` | 494e0893 #525 CHAOS-5652; 1d4fe7af #741 CHAOS-7245; fb5d020e #1529 CHAOS-10126 |
-| `POST /api/v1/oauth/token` | `class_disambiguator`, `gaps`, `issued_credential`, `primary_validator` | 494e0893 #525 CHAOS-5652; 71798c68 #643 CHAOS-6233; 1d4fe7af #741 CHAOS-7245; fb5d020e #1529 CHAOS-10126; 5f7a91b3 #1607 CHAOS-10561 |
-| `POST /api/v1/oauth/device_approval` | `gaps`, `primary_validator`, `reachable_validators` | 494e0893 #525 CHAOS-5652; 1d4fe7af #741 CHAOS-7245; fb5d020e #1529 CHAOS-10126 |
-| `POST /api/v1/auth/credentials/self/rotate` | `accepted_credential_classes`, `gaps`, `primary_validator` | 494e0893 #525 CHAOS-5652; fb5d020e #1529 CHAOS-10126; 5f7a91b3 #1607 CHAOS-10561 |
-| `POST /api/v1/auth/credentials/self/revoke` | `accepted_credential_classes`, `gaps`, `primary_validator` | 494e0893 #525 CHAOS-5652; fb5d020e #1529 CHAOS-10126; 5f7a91b3 #1607 CHAOS-10561 |
+| `GET /healthz` | `primary_validator` | 494e0893 #525 the primary-validator anchoring fix; fb5d020e #1529 the endpoint-profile advisory-null change |
+| `GET /readyz` | `primary_validator` | 494e0893 #525 the primary-validator anchoring fix; fb5d020e #1529 the endpoint-profile advisory-null change |
+| `GET /api/v1/agent-context/capabilities` | `accepted_credential_classes`, `class_disambiguator`, `gaps`, `primary_validator`, `reachable_validators` | 494e0893 #525 the primary-validator anchoring fix; 1d4fe7af #741 the marker-anchored endpoint-profile change; 6462f016 #1086 the capabilities request class; fb5d020e #1529 the endpoint-profile advisory-null change; 5f7a91b3 #1607 the endpoint-profile class-listing change |
+| `POST /api/v1/agent-context/context-packets` | `accepted_credential_classes`, `class_disambiguator`, `gaps`, `primary_validator`, `reachable_validators` | 494e0893 #525 the primary-validator anchoring fix; 1d4fe7af #741 the marker-anchored endpoint-profile change; fb5d020e #1529 the endpoint-profile advisory-null change; 5f7a91b3 #1607 the endpoint-profile class-listing change |
+| `GET /api/v1/agent-context/evidence/{evidence_ref_id}` | `accepted_credential_classes`, `class_disambiguator`, `gaps`, `primary_validator`, `reachable_validators` | 494e0893 #525 the primary-validator anchoring fix; 1d4fe7af #741 the marker-anchored endpoint-profile change; fb5d020e #1529 the endpoint-profile advisory-null change; 5f7a91b3 #1607 the endpoint-profile class-listing change |
+| `POST /api/v1/agent-context/episodes` | `accepted_credential_classes`, `gaps`, `primary_validator` | 494e0893 #525 the primary-validator anchoring fix; fb5d020e #1529 the endpoint-profile advisory-null change; 5f7a91b3 #1607 the endpoint-profile class-listing change |
+| `POST /api/v1/context-fabric/investigations` | `accepted_credential_classes`, `primary_validator`, `reachable_validators`, `token_shape` | 494e0893 #525 the primary-validator anchoring fix; 1d4fe7af #741 the marker-anchored endpoint-profile change; 5f7a91b3 #1607 the endpoint-profile class-listing change; 479a986a #2029 the web-assertion refusal change |
+| `GET /api/v1/context-fabric/investigations/{result_id}` | `accepted_credential_classes`, `primary_validator`, `reachable_validators`, `token_shape` | 494e0893 #525 the primary-validator anchoring fix; 1d4fe7af #741 the marker-anchored endpoint-profile change; 5f7a91b3 #1607 the endpoint-profile class-listing change; 479a986a #2029 the web-assertion refusal change |
+| `POST /api/v1/oauth/device_authorization` | `gaps`, `issued_credential`, `primary_validator` | 494e0893 #525 the primary-validator anchoring fix; 1d4fe7af #741 the marker-anchored endpoint-profile change; fb5d020e #1529 the endpoint-profile advisory-null change |
+| `POST /api/v1/oauth/token` | `class_disambiguator`, `gaps`, `issued_credential`, `primary_validator` | 494e0893 #525 the primary-validator anchoring fix; 71798c68 #643 the device-authorization-grant work; 1d4fe7af #741 the marker-anchored endpoint-profile change; fb5d020e #1529 the endpoint-profile advisory-null change; 5f7a91b3 #1607 the endpoint-profile class-listing change |
+| `POST /api/v1/oauth/device_approval` | `gaps`, `primary_validator`, `reachable_validators` | 494e0893 #525 the primary-validator anchoring fix; 1d4fe7af #741 the marker-anchored endpoint-profile change; fb5d020e #1529 the endpoint-profile advisory-null change |
+| `POST /api/v1/auth/credentials/self/rotate` | `accepted_credential_classes`, `gaps`, `primary_validator` | 494e0893 #525 the primary-validator anchoring fix; fb5d020e #1529 the endpoint-profile advisory-null change; 5f7a91b3 #1607 the endpoint-profile class-listing change |
+| `POST /api/v1/auth/credentials/self/revoke` | `accepted_credential_classes`, `gaps`, `primary_validator` | 494e0893 #525 the primary-validator anchoring fix; fb5d020e #1529 the endpoint-profile advisory-null change; 5f7a91b3 #1607 the endpoint-profile class-listing change |

@@ -79,9 +79,9 @@ tests, with no environment gate; `cmd/acr-api`'s hosted fixture runs the
 same way but only under `make hosted-integration`
 (`ACR_HOSTED_INTEGRATION=1`), CI's own separate job. The image tag and the
 minimum accepted `SELECT version()` floor are one constant,
-`internal/chfixture` (CHAOS-4549, ruled 2026-08-29 "26"): CI runs against
+`internal/chfixture` (ruled 2026-08-29 "26"): CI runs against
 the same major.minor line as prod (26.7+; prod floats on `latest`,
-CHAOS-4519) instead of an old engine two majors behind. The portability
+Engine-version change) instead of an old engine two majors behind. The portability
 contract that old floor used to enforce as a side effect — every
 `JOIN ... ON` clause is a plain column-equality conjunction, never `OR`, a
 function-predicate, or a bare literal — is enforced statically instead, by
@@ -163,7 +163,7 @@ defaults to `operator`) and the reason. An unknown id exits non-zero with
 The steps, the checks and the numbers measured in a drill are in the
 [credential revoke runbook](runbooks/credential-revoke.md).
 
-### Context Fabric projection worker (`acr-projector`, CHAOS-3753)
+### Context Fabric projection worker (`acr-projector`)
 
 `cmd/acr-projector` is a dedicated binary, independently deployed and scaled
 from `acr-api`, that runs `internal/contextfabric/projectionrun.Coordinator`
@@ -292,9 +292,9 @@ self-hosted and needs no external credential at all (ADR 0009);
 matching FalkorDB's own no-auth default. Both `cmd/acr-projector` and
 `cmd/acr-api`'s hosted runtime composition construct a `falkorgraph.Adapter`
 from this same env contract; Helm's `contextFabric.falkor.*` values wire
-both the projector and `acr-api` Deployments the same way (CHAOS-3774).
+both the projector and `acr-api` Deployments the same way.
 
-**Local Compose bring-up (CHAOS-4192): always pass `--env-file ops/.env`
+**Local Compose bring-up: always pass `--env-file ops/.env`
 to every `docker compose` command that starts or recreates `acr-projector`
 or `acr-api`.** Without it, any `${VAR:-}`-style substitution in a local
 `compose.override.yml` (e.g. `ACR_CONTEXT_FABRIC_EMBED_API_KEY:
@@ -307,14 +307,14 @@ credential blank, and the only symptom was `embedded:0` on every
 projection batch -- every organization's existing vectors cleared,
 one batch at a time, with no error and no failed health check. This class
 is now also guarded in code (`internal/contextfabric/embedprovider`'s
-`ACR_CONTEXT_FABRIC_EMBED_ALLOW_NO_CREDENTIAL`, CHAOS-4192): a configured
+`ACR_CONTEXT_FABRIC_EMBED_ALLOW_NO_CREDENTIAL`, the blank-embed-credential guard): a configured
 embedder with a blank credential now fails loudly at startup instead of
 silently degrading, but a correct `--env-file` is still what makes the
 credential resolve to the real value in the first place, and this class
 also affects `acr-api`'s `ACR_CONTEXT_FABRIC_MODEL_API_KEY` the same way
 (no code-level guard added there in this pass).
 
-**CHAOS-4147 item 3 / CHAOS-4259: a TRANSIENT embed failure (a network
+**Graph-cutover rehearsal item 3 / the embed-retry change: a TRANSIENT embed failure (a network
 blip, a rate limit, one bad tick) no longer clears vectors on the first
 try.** `embedProjectionBatch` bounds a short retry
 (`ACR_CONTEXT_FABRIC_FALKOR_EMBED_FAILURE_MAX_RETRIES`, default `2`, with
@@ -334,14 +334,14 @@ default in every real deployment (`ConfigFromEnv` applies the `2`/`200ms`/`5`
 defaults above whenever the corresponding env var is unset) -- unset does
 NOT mean disabled. Only a `Config` literal built directly, bypassing
 `ConfigFromEnv` entirely (the shape most existing unit tests use), gets the
-zero value and stays byte-identical to pre-CHAOS-4259 behavior (no retry,
+zero value and stays byte-identical to pre-embed-retry-change behavior (no retry,
 no escalation); no shipped composition root does this.
 
 If you maintain the workspace root's own `compose.override.yml` (untracked
 local config, outside every repo, so it carries no durable comment of its
 own): its `falkordb` service's volume must mount at the SAME path the
 image's `FALKORDB_DATA_PATH` writes to -- see `deploy/compose/acr.compose.yml`'s
-own `acr_falkordb_data` volume comment (CHAOS-4055) for the exact path and
+own `acr_falkordb_data` volume comment for the exact path and
 copy it verbatim, do not shorten or guess it. Mounting at any other path
 (a plausible-looking `/data`, for instance) is a **silent persistence
 no-op**: the vendored image's `run.sh` entrypoint never writes there, so
@@ -354,7 +354,7 @@ the override file itself is not committed anywhere.
 Reads (`internal/contextfabric.GraphReader`,
 the investigation endpoint) are a completely independent enablement:
 `ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED` (`config.GraphReadsEnabledEnvVar`),
-wired by CHAOS-3755's hosted composition
+wired by the fact-planning work's hosted composition
 (`internal/runtime/hosted.buildContextFabricInvestigator`). Set it to `true`
 alongside the same graph backend configuration above to register `POST
 /api/v1/context-fabric/investigations`; leave it `false` (the default) and
@@ -362,7 +362,7 @@ the route stays registered but returns 503 (`api.handleRuntimeUnavailable`)
 for every request. Answering also needs a model provider, which is a third
 independent enablement — see the next section.
 
-**Single-flight per organization** (the CHAOS-3753 acceptance amendment):
+**Single-flight per organization** (the projection-pipeline work acceptance amendment):
 the coordinator holds a PostgreSQL advisory lock
 (`projectionrun.PostgresOrgLocker`, `pg_try_advisory_lock`) for an
 organization's entire multi-source projection pass, so concurrent
@@ -389,7 +389,7 @@ runs regardless of `ACR_CONTEXT_FABRIC_PROJECTION_ENABLED` (an operator
 invoking it has already made that call) but still needs Postgres, ClickHouse,
 and a configured graph backend to do anything.
 
-**Build-aside-and-swap (CHAOS-3898 S2a-2), opt-in:** the description above
+**Build-aside-and-swap (the graph-lifecycle design S2a-2), opt-in:** the description above
 is the LEGACY path — `PurgeOrganization` in place, then an incremental
 replay over subsequent ticks with the graph briefly empty. Setting
 `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED=true` (on **both** `acr-api`
@@ -407,7 +407,7 @@ refuses a garbage value loudly):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED` | `false` | Master switch. `false` (both binaries) is byte-identical to pre-CHAOS-3898 behavior. |
+| `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED` | `false` | Master switch. `false` (both binaries) is byte-identical to pre-graph-lifecycle-design behavior. |
 | `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_LEASE` | `1m` | KeyResolver's per-organization cache TTL (bounded at 10m). |
 | `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_REQUEST_DEADLINE` | `30s` | The enforced per-investigation-request deadline the drain-bound argument depends on — keep this **>=** `ACR_REQUEST_TIMEOUT` (`acr-api`'s own actual enforced request deadline; `acr-projector` cannot read it directly, being a separate process). |
 | `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_GRACE_WINDOW` | `24h` | How long a flipped-away epoch is retained before it becomes eligible for retirement. |
@@ -437,7 +437,7 @@ build aborted` signal. Nothing rebuilds on its own: run
 running binary. A guard that could not read the epoch's checkpoint rows does
 not abort; that build stays open and is retried on the next tick.
 
-**A rebuild is REQUIRED after deploying CHAOS-3781** (`devhealthsource`
+**A rebuild is REQUIRED after deploying the historical-time-axis work** (`devhealthsource`
 `ClickHouseSourceVersion` v3 → v4). Every producer now emits a valid-time
 window (`valid_from` / `valid_to`) derived from its source row's own
 interval columns, and the graph read side admits by that window when a
@@ -459,7 +459,7 @@ answer, but only from canonical fact sources; the graph half contributes
 whatever unbounded elements it holds, disclosed in the answer's coverage as
 `context-fabric:graph-validity-windows`.
 
-**A rebuild is likewise REQUIRED after deploying CHAOS-3833 phase 2**
+**A rebuild is likewise REQUIRED after deploying the embed-text v2 change phase 2**
 (`ClickHouseSourceVersion` v4 → v5, `TeamsProjectsSourceVersion` v1 → v2,
 embed composition tag `t1` → `t2`). The producers emit the embed-text v2
 fields (ticket-key aliases, PR body heads, joined PR titles, pipeline
@@ -476,7 +476,7 @@ phase 1 must be fully drained BEFORE this deploy). Run
 organization; the rebuild reprojects and re-embeds in one pass.
 
 **Work-item project membership is a roll step, not a deploy step
-(CHAOS-12226).** `ACR_CONTEXT_FABRIC_PROJECT_WORK_ITEM_PROJECT_MEMBERSHIP_ENABLED`
+.** `ACR_CONTEXT_FABRIC_PROJECT_WORK_ITEM_PROJECT_MEMBERSHIP_ENABLED`
 (helm `contextFabric.projector.workItemProjectMembershipEnabled`, default
 `false`) makes each work item state its current project membership, read from
 its own project link (`project_membership_presence`, resolved to exactly one
@@ -493,12 +493,12 @@ approved roll) is therefore: set the flag, then run
 `acr-projector rebuild --org <organization-id>` for every projected
 organization; the rebuild reads every table from zero, so every work item gets
 its current set. The same flag makes each pull request state the union of the
-sets of the issues linked to it by `work_graph_issue_pr` rows (CHAOS-12308),
+sets of the issues linked to it by `work_graph_issue_pr` rows,
 with the weakest contributing link tier in `property_project_membership_tier`,
 and adds `pull_requests_project_membership`, which re-emits a pull request when
 a link row of it, a linked issue or a linked issue's membership input moves.
 The refresh follows the project catalog by content, not by its stamp
-(CHAOS-12410): a project sync that changes no `(provider, id, project_key)`
+: a project sync that changes no `(provider, id, project_key)`
 re-emits no subject, and one that does re-states every subject of the
 organization once, because the digest on the cursor cannot name the project
 that changed. `projects.last_synced` keeps its meaning, and the ownership cursor
@@ -521,7 +521,7 @@ the same roll:** while the flag is off, membership changes are not followed,
 and every later work-item write removes the value, so a value written while it
 was on can be stale for a work item not written since.
 
-**CHAOS-12468 needs no rebuild and bumps no source version, on purpose.** Two
+**Raw-id hiding change needs no rebuild and bumps no source version, on purpose.** Two
 edges used to label a pull request's end with its canonical id, so a node they
 created and an edge's `fact` could hold that id. The writers are fixed, and the
 read turns what is already stored into `PR #<number>`: the word comes from the
@@ -530,7 +530,7 @@ projection in every organization until an operator rebuild, so this is not a
 missed bump. The next bump for any other reason deletes
 `internal/contextfabric/falkorgraph/raw_pull_request_label.go`.
 
-**The project-only scope has a fixed roll order (CHAOS-12301).** acr with the
+**The project-only scope has a fixed roll order.** acr with the
 `project_scope` decoder goes live in production first; only then does ops turn on
 `ACR_ACCESS_PROJECT_SCOPE`. The reverse order fails closed: an older acr refuses
 the unknown field, so every user-class call in an organization with no repository
@@ -540,7 +540,7 @@ it a project-only caller reads its projects and no work item. A `503` with reaso
 `project_scope_over_limit` or `repository_scope_over_limit` in `principal access
 read refused` is an inventory above 100, not an outage.
 
-**A rebuild is likewise REQUIRED after deploying CHAOS-3835**
+**A rebuild is likewise REQUIRED after deploying the CI-run embed-skip change**
 (embed composition tag `t2` → `t3`, the T5 id-only skip decision —
 `isPureIdentifierSubject`, `id_only.go`). **This deploy does NOT bump
 `ClickHouseSourceVersion` or `TeamsProjectsSourceVersion`** — unlike every
@@ -568,7 +568,7 @@ stays lexical-only **indefinitely**, not just until the next tick. Run
 `acr-projector rebuild --org <organization-id>` for every vector-enabled
 organization after this deploy; the persisted `embed_retrieval_identity`
 reuse dimension stops stored answers from being reused across the tag
-change in the meantime, the same mechanism as CHAOS-3833 phase 2 above.
+change in the meantime, the same mechanism as the embed-text v2 change phase 2 above.
 
 Expect the rebuild to report **fewer embedded subjects than before**, plus
 a nonzero id-only skip count (`RecordVectorProjection`'s `skippedIDOnly`
@@ -581,19 +581,19 @@ data: those rows keep their ordinary lexical `search_text` and stay fully
 reachable by exact and fulltext retrieval; only the (previously noisy)
 vector is withheld.
 
-**This SAME CHAOS-3835 rebuild is also REQUIRED for CHAOS-3834's
+**This SAME the CI-run embed-skip change rebuild is also REQUIRED for the per-identity retrieval-policy change's
 calibrated `efRuntime=200` to take effect.** HNSW `efRuntime` is read
 ONLY from the vector index's `CREATE OPTIONS` clause (verified live
 against the pinned FalkorDB module — there is no per-query knob at all):
 `ensureVectorIndex` applies a calibrated `RetrievalPolicy.EfRuntime` only
 when it CREATES a brand-new index, never against one that already exists.
-An organization whose index was built before CHAOS-3834's calibrated
+An organization whose index was built before the per-identity retrieval-policy change's calibrated
 table entry shipped **keeps server-default ANN behavior (`efRuntime=10`)
 even after `RetrievalPolicyVersion` bumps to `rp3` and every stored
 answer for that identity has been invalidated** — the version bump and
 the `t2`→`t3` composition change reach that organization immediately, but
-the ANN search breadth does not. CHAOS-3834 and CHAOS-3835 deploy
-together and share this ONE rebuild vehicle (CHAOS-3833's `t1`→`t2`
+the ANN search breadth does not. Per-identity retrieval-policy change and CI-run embed-skip change deploy
+together and share this ONE rebuild vehicle (the embed-text v2 change's `t1`→`t2`
 rebuild above carries the same efRuntime pickup too; this is not specific
 to the `t2`→`t3` step) — no separate `acr-projector rebuild --org`
 invocation is needed for efRuntime alone. `falkorgraph`'s bootstrap also
@@ -615,12 +615,12 @@ deployment shape falls back to the conservative, env-configured default
 by construction (see `retrievalPolicyTable`'s doc comment), and an
 explicit `ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR` still wins over the
 table's tau per-knob. The entry's constants are chris-ratified for the
-CHAOS-3834 T4 measurement program; the no-match/false-friend controls
+Per-identity retrieval-policy change T4 measurement program; the no-match/false-friend controls
 its precision actually depends on (hybrid ranking + corroboration) are
-the sequencing gate recorded on CHAOS-3834, tracked operationally rather
-than encoded as a second flag. **This key is `t4`-scoped** (re-keyed from `t3` by CHAOS-10031, `RetrievalPolicyVersion` rp5 → rp6, same inheritance: no calibration pair was built from a CI run) — it
+the sequencing gate recorded on the per-identity retrieval-policy change, tracked operationally rather
+than encoded as a second flag. **This key is `t4`-scoped** (re-keyed from `t3` by the CI-run embed exclusion, `RetrievalPolicyVersion` rp5 → rp6, same inheritance: no calibration pair was built from a CI run) — it
 INHERITS the original t2-measured tau/efRuntime values by an explicit
-decision recorded on CHAOS-3834 at CHAOS-3835 integration (T5's id-only
+decision recorded on the per-identity retrieval-policy change at the CI-run embed-skip change integration (T5's id-only
 skip changes no embedded text for any subject still embedded; it only
 removes whole subjects from the population), not a re-measurement. The
 pre-inheritance t2 key was dropped entirely — see
@@ -628,7 +628,7 @@ pre-inheritance t2 key was dropped entirely — see
 the full inheritance rationale and its validation plan (the post-rebuild
 oracle re-measure).
 
-**That post-rebuild re-measure ran 2026-08-17 (CHAOS-3834, lane-t4) and
+**That post-rebuild re-measure ran 2026-08-17 (lane-t4) and
 CONFIRMED the inheritance**: `CalibrateFromReport` at `TargetRecall=0.90`
 against a real t3-tagged post-rebuild oracle report recommended
 tau=0.2821294944901428, a 0.0179 delta from the shipped 0.30 — inside the
@@ -636,14 +636,14 @@ tau=0.2821294944901428, a 0.0179 delta from the shipped 0.30 — inside the
 `RetrievalPolicyVersion` bump. See `calibratedIdentityText3Large`'s doc
 comment for the full result, provenance caveat, and negative-gate note.
 
-**CHAOS-10031 (embed composition tag `t3` → `t4`): CI pipeline runs are no longer embedded.** `embedSkippedKinds` (`falkorgraph/vector_projection.go`) now lists `ci_pipeline_run` beside `organization`. CI-run nodes, stored fields, `search_text`, edges and exact lookup (the `run <id>` handle, by repository, PR or commit) are unchanged; only the vector is not written. Prod measurement that drove it: 167,212 CI-run vectors were 85% of all vectors (3072-d, about 3.8 GiB resident), and 0 of 88 subject resolutions in 30 days picked a CI run. The `t4` tag fails the read fence for `t3`-stamped vectors, same as the T5 step above, so a vector-enabled organization is lexical-only until `acr-projector rebuild --org`. An incremental projector run does **not** delete existing CI-run vectors (a skipped kind is never cleared); only the from-zero rebuild drops them. No `ClickHouseSourceVersion` or `TeamsProjectsSourceVersion` bump.
+**CI-run embed exclusion (embed composition tag `t3` → `t4`): CI pipeline runs are no longer embedded.** `embedSkippedKinds` (`falkorgraph/vector_projection.go`) now lists `ci_pipeline_run` beside `organization`. CI-run nodes, stored fields, `search_text`, edges and exact lookup (the `run <id>` handle, by repository, PR or commit) are unchanged; only the vector is not written. Prod measurement that drove it: 167,212 CI-run vectors were 85% of all vectors (3072-d, about 3.8 GiB resident), and 0 of 88 subject resolutions in 30 days picked a CI run. The `t4` tag fails the read fence for `t3`-stamped vectors, same as the T5 step above, so a vector-enabled organization is lexical-only until `acr-projector rebuild --org`. An incremental projector run does **not** delete existing CI-run vectors (a skipped kind is never cleared); only the from-zero rebuild drops them. No `ClickHouseSourceVersion` or `TeamsProjectsSourceVersion` bump.
 
-**A rebuild is likewise REQUIRED after deploying CHAOS-3916**
+**A rebuild is likewise REQUIRED after deploying the graph-cutover slice**
 (`ClickHouseSourceVersion` v5 → v6, `TeamsProjectsSourceVersion` v2 → v3).
-Unlike CHAOS-3833/3835 above this is not a text/embedding change — it
-closes CHAOS-3898's own gap: `queryProjects` (`teams_projects.go`) and
+Unlike the embed-text v2 change and CI-run embed-skip change above this is not a text/embedding change — it
+closes the graph-lifecycle design's own gap: `queryProjects` (`teams_projects.go`) and
 `queryWorkItemProjects` (`teams_projects_edges.go`, widened further by
-CHAOS-4108) mint `project.v2:<provider>:<id>`/`work_item.v2:...` canonical
+Project-id join fix) mint `project.v2:<provider>:<id>`/`work_item.v2:...` canonical
 ids via `identity.Derive` without either producer's own `SourceVersion`
 ever having been bumped for it, so an already-projected organization keeps
 mixed pre-`.v2` and post-`.v2` identities across ordinary incremental
@@ -657,13 +657,13 @@ prod cutover (which organizations, when) is a separate, chris-owned
 decision. Run `acr-projector rebuild --org <organization-id>` for every
 affected organization once that cutover is ruled.
 
-**A rebuild is likewise REQUIRED after deploying CHAOS-7119**
+**A rebuild is likewise REQUIRED after deploying the ownership-by-name change**
 (`TeamsProjectsSourceVersion` v12 → v13). The repository → team
 `OWNED_BY_TEAM` edge (`queryRepositoryTeams`, `teams_projects_edges.go`) now
 also projects `team_repo_ownership` rows whose `repo_id` is NULL, resolved by
 (provider, case-insensitive repository name) against `repos` with the same
 rule the fact reads use (`internal/contextfabric/ownershipresolve`, a port of
-ops teamscope `RepoCondition`, CHAOS-7073 K11). Those rows were omitted
+ops teamscope `RepoCondition`, the read_facts change K11). Those rows were omitted
 before, and their `updated_at` does not move on deploy, so an organization
 caught up under a v12 checkpoint would never re-read them: every tick is
 refused with `ErrProjectionSourceVersionChanged` (`rebuild_required`, graph
@@ -674,7 +674,7 @@ organization:
 acr-projector rebuild --org <organization-id>
 ```
 
-Venues: the bigboy venue's rebuild is part of the venue build (run it per
+Venues: the shared dev build host's rebuild is part of the venue build (run it per
 projected organization as above after the image with v13 is live); the prod
 rebuild is chris's (batched with the prod roll, not per changeset). After
 the rebuild the steady state is rebuild-free: a new ownership row, or a
@@ -683,9 +683,9 @@ on the ordinary incremental tick. Not changed by this deploy: a non-NULL
 `repo_id` with no `repos` row still projects to the orphaned-repository
 sentinel (the fact reads drop it; default pending a ruling), and the team
 node's `authorization_repositories` list still carried raw
-`repo_full_name` values at v13 (CHAOS-7130 changes that at v15, below).
+`repo_full_name` values at v13 (the team-authorization-list change changes that at v15, below).
 
-**A rebuild is likewise REQUIRED after deploying CHAOS-7130**
+**A rebuild is likewise REQUIRED after deploying the team-authorization-list change**
 (`TeamsProjectsSourceVersion` v14 → v15). The team node's
 `authorization_repositories` list is now DERIVED FROM the repository → team
 edge's own rows (`repositoryTeamsGroupedSQL`: per (provider, resolved
@@ -778,7 +778,7 @@ watermark:
   an identity claimant; edges projected before v20 still point at the retired
   team id.
 
-**Projection cursor space (CHAOS-7263).** The shared projection cursor
+**Projection cursor space.** The shared projection cursor
 (`devhealthsource`) is positioned on each row's INGEST time (the `last_synced`
 / `computed_at` stamp ops writes when it normalizes the row), not on the row's
 provider-stamped `updated_at`, so a row that lands after the cursor passed but
@@ -913,7 +913,7 @@ scope, so an edge the backend lost is written again without a change in the
 groups log. Each page logs `project team ownership reconcile` at Info
 (`groups_re_derived`, `pass_complete`, `period`).
 
-**Team change freshness bound (CHAOS-13555).** The window pass of the teams and projects source (`windowTables` in `devhealthsource/teams_projects.go`, built by `teamsProjectsTablesFor`) re-reads `teams`, `projects`, `project_membership_presence`, `work_item_team_attributions`, `team_project_ownership` and `team_repo_ownership`. The cursor is shared by all tables and compares strictly after (`sincePredicate` in `devhealthsource/tables.go`), so a row of these tables stamped at or below the cursor is not read by the next incremental page. The next window pass (`overlapBatch` in `devhealthsource/overlap.go`) reads it only if its stamp is at most `defaultReprojectOverlap` (15 minutes) behind the frontier. A pass STARTS at most `DefaultWindowPassInterval` (5 minutes) after the last one ended, so the interval is no longer than the overlap. The row is visible after that start plus the time the pass takes to walk, which can span several ticks. An older stamp is not read by the window pass. For team rows and project -> team groups the hourly reconcile (`teamOwnershipReconcilePeriod` and `projectTeamOwnershipReconcilePeriod` in `devhealthsource/reconcile.go`) is the backstop. `TestTeamChangeBoundIsOneWindowPass` pins the start bound and the interval <= overlap relation only. A team-only window pass on every tick is a named option, not built.
+**Team change freshness bound.** The window pass of the teams and projects source (`windowTables` in `devhealthsource/teams_projects.go`, built by `teamsProjectsTablesFor`) re-reads `teams`, `projects`, `project_membership_presence`, `work_item_team_attributions`, `team_project_ownership` and `team_repo_ownership`. The cursor is shared by all tables and compares strictly after (`sincePredicate` in `devhealthsource/tables.go`), so a row of these tables stamped at or below the cursor is not read by the next incremental page. The next window pass (`overlapBatch` in `devhealthsource/overlap.go`) reads it only if its stamp is at most `defaultReprojectOverlap` (15 minutes) behind the frontier. A pass STARTS at most `DefaultWindowPassInterval` (5 minutes) after the last one ended, so the interval is no longer than the overlap. The row is visible after that start plus the time the pass takes to walk, which can span several ticks. An older stamp is not read by the window pass. For team rows and project -> team groups the hourly reconcile (`teamOwnershipReconcilePeriod` and `projectTeamOwnershipReconcilePeriod` in `devhealthsource/reconcile.go`) is the backstop. `TestTeamChangeBoundIsOneWindowPass` pins the start bound and the interval <= overlap relation only. A team-only window pass on every tick is a named option, not built.
 
 **Column-arm project edge retraction.** A work item has at most one open
 column-arm `BELONGS_TO_PROJECT` edge: the sink keeps only the edge the current
@@ -961,7 +961,7 @@ single-flight/failure-isolation/backoff behavior are proved against real
 PostgreSQL (`testcontainers`) and fakes standing in for the graph backend
 and canonical source, following the same pattern.
 
-### Sizing FalkorDB (CHAOS-12447)
+### Sizing FalkorDB
 
 Size the memory limit from the graph. A limit below what the graph needs does
 not degrade: the kernel kills FalkorDB, and the reload plus the index build can
@@ -976,7 +976,7 @@ limit >= idle + (THREAD_COUNT x 25 MB) + 55 MB
   nothing reads it.
 - **THREAD_COUNT** defaults to the CPUs the container can see. A CPU limit does
   not lower it. Read it with `GRAPH.CONFIG GET THREAD_COUNT`.
-- **One node's edge read** stops at 5,000 rows (CHAOS-12451), so the 55 MB does
+- **One node's edge read** stops at 5,000 rows, so the 55 MB does
   not grow with the node. The rows are about 11 KB each while FalkorDB holds them.
 - **`RESULTSET_SIZE`** must stay above 5,000. The image sets 10,000. FalkorDB drops
   the rows past it with no error, so below 5,001 a cut read is not disclosed.
@@ -1007,13 +1007,13 @@ before its limit: one read of the largest node went past it.
 Raising `limits.memory` needs no rebuild, because FalkorDB reloads the graph from
 its dump. Re-measure after the graph grows, or when `THREAD_COUNT` changes.
 
-### FalkorDB durability: the append-only file (CHAOS-12650)
+### FalkorDB durability: the append-only file
 
 The in-release FalkorDB persists by RDB snapshots by default (`save 3600 1 300
 100 60 10000`). A non-graceful restart (an OOM kill, a SIGKILL, a node loss)
 reloads the last snapshot. Every write since that snapshot is lost, while the
 projector's checkpoint in Postgres has moved past it. The projector then resumes
-past writes the graph no longer holds. CHAOS-12630 makes the projector resume
+past writes the graph no longer holds. Watermark-resume change makes the projector resume
 from the graph's own watermark, so a loss heals; the append-only file (AOF) makes
 the loss rare. On a scratch FalkorDB of the chart's image, a SIGKILL 1.5 s after
 the last write kept 1,000 of 1,050 nodes with RDB only, and 1,050 of 1,050 with
@@ -1026,7 +1026,7 @@ by default, and a release with it off renders exactly as before.
   of `dump.rdb` when `appendonly` is on at startup. On a data dir that holds only
   `dump.rdb` it starts **empty** and writes an empty AOF base (executed: 1,000
   nodes, then 0). A plain `REDIS_ARGS="--appendonly yes"` on an existing graph
-  therefore wipes it, and the projector's divergence check (CHAOS-3882) then
+  therefore wipes it, and the projector's divergence check then
   rebuilds the graph from zero. The wrapper (`files/falkordb-start.sh`) turns AOF
   on at startup only when an AOF manifest exists, or when there is no dump. Over
   a `dump.rdb` alone it starts with AOF off. The `postStart` hook
@@ -1074,7 +1074,7 @@ by default, and a release with it off renders exactly as before.
   a local volume. On a network volume whose server sets mtimes with another
   clock, the comparison can be off by the skew between the two clocks.
 
-### Vocabulary labels on an answer (CHAOS-12416)
+### Vocabulary labels on an answer
 
 `ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED` (helm
 `contextFabric.vocabularyLabelsEnabled`, default `false`) serves the
@@ -1084,7 +1084,7 @@ value in that result, and the status correction sentence.
 **Why it is a flag.** An existing deploy order cannot protect `main`. The result
 root is `additionalProperties:false`, and acr and web roll separately, so a
 consumer on a pin that does not carry the field fails every answer that holds
-the map. CHAOS-12458 removes the flag once every consumer's pin is
+the map. Flag-removal follow-up removes the flag once every consumer's pin is
 deployed.
 
 | State | What is served |
@@ -1107,14 +1107,14 @@ carries the shape. Confirm web's and ask-dev's pins first, then set the flag.
 **Investment breakdown measures.** `ISSUE_SIZE` is a breakdown measure of all four
 investment operations through run_operation (`investmentBreakdown`,
 `investmentFull`, `investmentBreakdownTeam`, `investmentBreakdownRepository`;
-CHAOS-12948 widened the two ORG entries, which CHAOS-12691 had left on the shared
+ISSUE_SIZE admission widened the two ORG entries, which the breakdown work had left on the shared
 list). `CHURN_LOC` is on none. The contract is `contracts/mcp/operations.v1.json`,
 generated by `make contract-write`.
 
-**The work-item team breakdown.** `teamWorkItemBreakdown` (CHAOS-13001) is a
+**The work-item team breakdown.** `teamWorkItemBreakdown` is a
 served run_operation entry for the unrestricted caller: the InvestmentBreakdown
 document under its own ops registry name (`TeamWorkItemBreakdown`, ops
-`5c321277`, CHAOS-13017), asked for dimension `TEAM` and measure
+`5c321277`, the investment-breakdown fix), asked for dimension `TEAM` and measure
 `CYCLE_TIME_HOURS` with `batch.useInvestment` forced `false`. ops then reads the
 work-item path: completed work items joined to primary team attribution, keyed by
 team id (hours; for linear:CHAOS over 2026-08-06..2026-11-04, 15.81, against the
@@ -1150,7 +1150,7 @@ remove a stored sunburst.
 `ACR_CONTEXT_FABRIC_INVESTMENT_REPOSITORY_FROM_OPS_ENABLED` and
 `ACR_CONTEXT_FABRIC_INVESTMENT_TEAM_FROM_OPS_ENABLED` (chart:
 `contextFabric.investmentRepositoryFromOpsEnabled` and
-`investmentTeamFromOpsEnabled`, default `false`, CHAOS-12690) make the
+`investmentTeamFromOpsEnabled`, default `false`, the restricted-caller breakdown) make the
 repository and the team investment fact the ops answer of
 `investmentBreakdownRepository` and `investmentBreakdownTeam` (THEME and
 SUBCATEGORY under `ISSUE_SIZE`, plus `evidenceQualityStats`): ACR writes no SQL
@@ -1187,7 +1187,7 @@ b396b7d4, ops 9559a382, org 70d529e0, trailing 30 days, switches off then on):
   so.
 - A window is sent only as whole UTC days whose last day is over. A `range` window
   with an end at a UTC midnight is the same period as a `trailing` one (the mix
-  reads `to_ts < end` either way), so it is served (CHAOS-13059).
+  reads `to_ts < end` either way), so it is served.
 - A read asks ops for at most 10 repositories or teams (two calls each, three for
   a team with a prior window); the rest get `read_cap`.
 
@@ -1213,7 +1213,7 @@ flag. With the flag off, both doors that serve a result remove a stored
 quadrant and its served line.
 
 **The read fallback.** `ACR_CONTEXT_FABRIC_READ_FALLBACK_ENABLED` (chart:
-`contextFabric.readFallbackEnabled`, default `false`, CHAOS-13002) lets the model
+`contextFabric.readFallbackEnabled`, default `false`, the model-planned-reads change) lets the model
 plan which canonical fact kinds an answer reads when the question's fixed family
 cannot serve it: a ranking family asked for a judgment its attention measure
 cannot give, a ranking family whose listed kinds include no kind the ranking reads (the interpreter names the judgment kind only sometimes, so this test reads the listed kinds), or a listed kind that no capability serves for the member kind. The decision line names which test fired (`trigger`: `judgment_kind`, `ranking_inputs`, `judgment_kind_and_ranking_inputs` when both hold, `kind_unserved`, or `none`). The
@@ -1244,7 +1244,7 @@ does. A consumer takes its generic path for the words that are gone. The project
 sheds by the same tiers, before any row. Each shed logs `context fabric vocabulary labels shed`, with
 `surface` and `tier` (`status_only` or `none`).
 
-### Investigation event stream (CHAOS-11911)
+### Investigation event stream
 
 `ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED` (default `false`) lets
 `POST /api/v1/context-fabric/investigations` answer a request with
@@ -1303,7 +1303,7 @@ What an operator can rely on and see:
   stream's lock (a frame write can hold it up to the 30 s write deadline).
 
 
-### Ask Dev page context subject hints (CHAOS-12230)
+### Ask Dev page context subject hints
 
 Web sends the entities of the page an Ask Dev question is asked from as
 `requested_scope.subject_hints[]` with source `ask_dev_page_context`, each id
@@ -1336,7 +1336,7 @@ keyed by subject kind). The line carries no canonical id, label or question
 text. A rise in `label_fallback` or `unresolved` suggests web's ids no longer
 match acr's, or that the subject is not in the graph yet.
 
-### Ask Dev run lease (CHAOS-11949)
+### Ask Dev run lease
 
 `ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED` (helm `contextFabric.runLeaseEnabled`,
 default `false`; refused at start, and by the render, without
@@ -1346,8 +1346,8 @@ names `X-ACR-Submission-ID` under an ACR-owned lease. Design and diagram:
 
 Turn it on wherever Ask Dev runs. With it off, Stop has nothing to cancel: `POST
 .../cancel` answers 404 `run_lease_disabled`, the run goes on, and the answer
-appears after the user pressed Stop (CHAOS-12472). A production enable needs the
-production event stream flag first (CHAOS-11967).
+appears after the user pressed Stop. A production enable needs the
+production event stream flag first.
 
 - A disconnect does not cancel the run. The run writes every event to
   `acr.context_fabric_investigation_run_events` first; the client attaches
@@ -1381,7 +1381,7 @@ production event stream flag first (CHAOS-11967).
 - Rollback: turn the flag off. Runs already leased finish under their lease;
   new runs are connection-owned; attach and cancel answer 404.
 
-### Context Fabric model provider (BYO LLM, CHAOS-3770)
+### Context Fabric model provider (BYO LLM)
 
 The investigation endpoint interprets the question and synthesises the
 answer through `internal/contextfabric.ModelRuntime`. Hosted composition
@@ -1400,10 +1400,10 @@ new build.
 | `ACR_CONTEXT_FABRIC_MODEL_API_KEY` / `_FILE` | *(unset)* | Bearer credential, `KEY`/`KEY_FILE` convention (`config.SecretValue`). Required unless a base URL is set. |
 | `ACR_CONTEXT_FABRIC_MODEL_BASE_URL` | `https://api.openai.com/v1/` for an OpenAI-compatible provider; the provider's own public endpoint for `anthropic`, `gemini` and `qwen` | API root. Set this for BYO. For `anthropic` it is the root without `/v1` (the client posts to `<base>/v1/messages`). |
 | `ACR_CONTEXT_FABRIC_MODEL_PROVIDER` | `openai` | Provider namespace, recorded verbatim as `ModelExecutionReceipt.Provider` and in `model_identity`. It also picks the shared dev-health-go `llm` client: `anthropic` uses the native Messages API (it sends `ACR_CONTEXT_FABRIC_MODEL_MAX_OUTPUT_TOKENS` as its cap, and no interpretation seed); `gemini` uses Google's OpenAI-compatible endpoint without the seed (Gemini answers 400 to one); `qwen` uses Chat Completions (DashScope by default, or any compatible base URL such as Cloudflare Workers AI) with the seed folded into [0, 2^31). Every other name ("openai", a BYO gateway name) uses OpenAI-compatible Chat Completions with the seed. The same names apply to a per-organization config, which is read from the ops settings store. |
-| `ACR_CONTEXT_FABRIC_MODEL` | `gpt-5.6-luna` | Bare model id (no provider prefix). Ids containing `/`, e.g. `meta-llama/Llama-3.1-8B-Instruct`, are supported. Default changed from `gpt-5-nano` to `gpt-5.6-luna` in CHAOS-3855 — see the measurements below. |
-| `ACR_CONTEXT_FABRIC_MODEL_FALLBACK` | *(unset)* | Second, stronger model on the same provider, tried when the primary call fails or returns output that does not validate. Unset by default (a fallback is a second billable call). As of CHAOS-3855, no fallback is recommended for the default `gpt-5.6-luna` primary — see the measurements below. |
-| `ACR_CONTEXT_FABRIC_MODEL_PHRASING` | *(unset)* | Distinct model for the SECOND bounded offer-phrasing call (CHAOS-4171 PR2, `internal/contextfabric/chaos4171_offer_phrasing.go`), which rewrites each structure offer's presentation-facing wording under a closed-vocabulary guard. Unset shares the primary `ACR_CONTEXT_FABRIC_MODEL`; set to route phrasing to a smaller/cheaper model. |
-| `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` | `45s` | Bounds one generation attempt (`Config.validate`, 1s–2m, `internal/contextfabric/modelprovider/config.go`). A TUNING variable: it applies only once a provider is identified by one of `ACR_CONTEXT_FABRIC_MODEL_PROVIDER`/`_BASE_URL`/`ACR_CONTEXT_FABRIC_MODEL`/`_FALLBACK`/`_PHRASING`/`_API_KEY`. Setting it alone, with none of those, is ignored (a startup WARN names it) rather than opting the process into provider validation -- `modelprovider.Configured` does NOT treat a tuning-only variable as an opt-in signal (CHAOS-4986, superseding the CHAOS-3770 F5 decision for this subset; the 2026-09-03 prod crash loop this replaces set only this variable). If a deployment does set it alongside a provider identity variable, raising it changes the worst-case math in the retry-topology section below -- recompute `per_attempt`/`per_leg`/`worst_case` before also touching `ACR_REQUEST_TIMEOUT`; this change does not. |
+| `ACR_CONTEXT_FABRIC_MODEL` | `gpt-5.6-luna` | Bare model id (no provider prefix). Ids containing `/`, e.g. `meta-llama/Llama-3.1-8B-Instruct`, are supported. Default changed from `gpt-5-nano` to `gpt-5.6-luna` in the change that made gpt-5.6-luna the sole generative model — see the measurements below. |
+| `ACR_CONTEXT_FABRIC_MODEL_FALLBACK` | *(unset)* | Second, stronger model on the same provider, tried when the primary call fails or returns output that does not validate. Unset by default (a fallback is a second billable call). As of the change that made gpt-5.6-luna the sole generative model, no fallback is recommended for the default `gpt-5.6-luna` primary — see the measurements below. |
+| `ACR_CONTEXT_FABRIC_MODEL_PHRASING` | *(unset)* | Distinct model for the SECOND bounded offer-phrasing call (the offer-phrasing change PR2, `internal/contextfabric/chaos4171_offer_phrasing.go`), which rewrites each structure offer's presentation-facing wording under a closed-vocabulary guard. Unset shares the primary `ACR_CONTEXT_FABRIC_MODEL`; set to route phrasing to a smaller/cheaper model. |
+| `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` | `45s` | Bounds one generation attempt (`Config.validate`, 1s–2m, `internal/contextfabric/modelprovider/config.go`). A TUNING variable: it applies only once a provider is identified by one of `ACR_CONTEXT_FABRIC_MODEL_PROVIDER`/`_BASE_URL`/`ACR_CONTEXT_FABRIC_MODEL`/`_FALLBACK`/`_PHRASING`/`_API_KEY`. Setting it alone, with none of those, is ignored (a startup WARN names it) rather than opting the process into provider validation -- `modelprovider.Configured` does NOT treat a tuning-only variable as an opt-in signal (superseding the model-runtime (BYO-LLM) work F5 decision for this subset; the 2026-09-03 prod crash loop this replaces set only this variable). If a deployment does set it alongside a provider identity variable, raising it changes the worst-case math in the retry-topology section below -- recompute `per_attempt`/`per_leg`/`worst_case` before also touching `ACR_REQUEST_TIMEOUT`; this change does not. |
 | `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS` | `2` | Attempts `genkitruntime` makes per operation (1–3). A TUNING variable; see `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` above -- alone, with no provider identity variable set, it is ignored (logged) rather than opting in. |
 | `ACR_CONTEXT_FABRIC_MODEL_MAX_TRANSPORT_RETRIES` | *(retired)* | No longer used by model calls: they go through the shared dev-health-go `llm` client, which makes exactly one transport retry of a transient failure (rate limit, 5xx, timeout, transport) inside the attempt's own `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` deadline. Still validated (0–5) when set, and the service logs one startup WARN naming it ("context fabric model variable no longer has an effect"). The chart no longer renders it; remove it from any other deployment values. |
 | `ACR_CONTEXT_FABRIC_MODEL_MAX_OUTPUT_TOKENS` | `32768` | Output cap (1024–262144) a model call asks for where its client sends one: the Anthropic Messages API, which requires a cap. The OpenAI-compatible Chat Completions calls send no cap, as the Genkit transport did, so the server's own limit applies. A reply cut at a cap logs a Debug line "context fabric model reply hit the output cap". A TUNING variable. |
@@ -1412,7 +1412,7 @@ new build.
 | `ACR_CONTEXT_FABRIC_SYNTHESIS_MAX_INPUT_TOKENS` | `0` (off) | Caps the estimated input tokens of one synthesize prompt, for the platform model, its fallback and every per-organization BYO model alike. The estimate is the system prompt, the output schema and the encoded input, in bytes, divided by 3 and rounded up; it is an estimate, not a provider count, so a prompt denser than 3 bytes per token (non-Latin text, dense JSON) is undercounted and can exceed the cap by that ratio. An input over the cap is never sent: the facts are cut to fit (committed subjects kept), and the answer carries the bounded-input limitation and one `synthesis_input_bounded` coverage detail per fact kind (facts given of facts read). When no cut fits, the call ends as `model_input_size` with no model call. The cap bounds one prompt; one synthesize call sends the same prompt once per draw, so its estimated input is at most cap x (draws, at most 3, from `ACR_CONTEXT_FABRIC_SYNTHESIS_MAX_RESYNTHESIS_ATTEMPTS`, + 1 when a fallback model is set), plus cap for each transport retry the provider billed. The interpret call has its own cap, `ACR_CONTEXT_FABRIC_INTERPRET_MAX_INPUT_TOKENS`. With the cap on, the `context fabric synthesis input` line carries `input_token_estimate` and `input_token_cap`. Unset, blank or `0` is off (today's 512 KiB byte bound only). A positive value below `genkitruntime.MinSynthesisInputTokens` (about 11.9K tokens today: the prompt overhead plus the 8 KiB byte floor every model input keeps) is raised to that minimum with a warning, so a strict cap stays strict. A negative or non-numeric value logs a warning and stays off. |
 | `ACR_CONTEXT_FABRIC_INTERPRET_MAX_INPUT_TOKENS` | `0` (off) | Caps the estimated input tokens of one interpret prompt, for the platform model, its fallback and every per-organization BYO model alike. The estimate is the system prompt, the output schema and the encoded input, in bytes, divided by 3 and rounded up; it is an estimate, not a provider count, so a prompt denser than 3 bytes per token is undercounted by that ratio. An input over the cap is never sent and nothing is retried or redrawn: the call ends as `model_input_too_large` with no model call and no fallback call. The cap bounds one prompt; an input over it returns before any send, so the draw and retry multiplier never applies to it. An input within the cap is still sent once per draw and per retry, so one interpret call's estimated input is at most cap x (draws x attempts). Unset, blank or `0` is off (today's 512 KiB byte bound only). A positive value below `genkitruntime.MinInterpretInputTokens` (the prompt overhead plus the 8 KiB byte floor) is raised to that minimum with a warning. A negative or non-numeric value logs a warning and stays off. |
 
-### Per-organization BYO LLM (CHAOS-3775)
+### Per-organization BYO LLM
 
 The variables above configure the **deployment-default** provider. An
 organization configures its own provider/base URL/model/fallback/credential in
@@ -1424,7 +1424,7 @@ exposes no write route. acr holds no BYO store and no settings encryption key.
 Without the client (local/dev) there is no per-organization source: the
 platform model answers every organization and start-up logs one INFO line.
 The former `ACR_CONTEXT_FABRIC_ORG_LLM_CONFIG_SOURCE` setting was removed
-(CHAOS-12997) and is ignored; a deployment that still sets it gets one WARN. Per-request resolution: an organization with a configuration gets its
+ and is ignored; a deployment that still sets it gets one WARN. Per-request resolution: an organization with a configuration gets its
 own runtime; an organization with none falls through to the deployment
 default; an organization whose credential is broken (401/403 from its
 provider) gets a 503 scoped to that organization only — it never silently
@@ -1488,7 +1488,7 @@ draw that broke the output schema, or the validator rule that refused it. The
 log line `context fabric model reply failed the output schema` lists the
 failing JSON paths and rules, never a value.
 
-### Answer reuse (CHAOS-3782)
+### Answer reuse
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -1502,7 +1502,7 @@ serve a reference the caller can no longer see*, and it covers the whole
 payload, not only the answer's own citations -- a reused result is served
 whole.
 
-The evidence half first tries a direct read (CHAOS-12537): one keyed read of
+The evidence half first tries a direct read: one keyed read of
 the relationships between the endpoints of the edges the answer serves, sent
 through the walk's own edge and endpoint gates and its admission. When that
 read and the re-resolved subjects prove every reference, the answer is served
@@ -1547,7 +1547,7 @@ diagnosed from those counts, not from the outcome label alone: "demanded
 far more than was visible" and "authorization genuinely narrowed" are
 different problems that the label cannot separate.
 
-**Retrieval discriminators (CHAOS-3833).** Every reuse-participating row
+**Retrieval discriminators.** Every reuse-participating row
 additionally persists two conjunctive equality dimensions (migration `0014`):
 the **embed retrieval identity** (`<provider>/<model>#<composition tag>`, or
 the literal `none` when no embedder is configured) and the **retrieval policy
@@ -1581,7 +1581,7 @@ gate, prefix selector) must roll out in two phases:
    node-side identity stamp independently fails vectors closed to lexical
    until the prescribed `acr-projector rebuild --org` runs per organization.
 
-**Graph-epoch binding (CHAOS-3898 §2.1/§2.3).** Every reuse-participating row
+**Graph-epoch binding (the graph-lifecycle design §2.1/§2.3).** Every reuse-participating row
 additionally persists the organization's active graph-lifecycle epoch
 (migration `0021`, `graph_epoch`) — the epoch `contextfabric.
 ResolvedGraphBinding` resolved once, before the graph reads that produced the
@@ -1598,7 +1598,7 @@ organization defaults to epoch 0 (the legacy, unsuffixed graph key) until
 its first migration to the build-aside-and-swap pointer, so this dimension
 is inert for the whole fleet until that lands.
 
-### Ask Dev submissions and shared limits (CHAOS-11912, CHAOS-11914)
+### Ask Dev submissions and shared limits
 
 A create-investigation request that names `X-ACR-Submission-ID` is one user submit: it is admitted once (a record in `acr.context_fabric_investigation_submissions`), runs at most once, and its result is served to its principal only. Admission enforces three SHARED limits, decided in one PostgreSQL transaction serialized per organization, so they hold across every replica:
 
@@ -1610,16 +1610,16 @@ A create-investigation request that names `X-ACR-Submission-ID` is one user subm
 
 - A refusal is `429 concurrency_limited` (`details.limit` = `principal` or `org`, `Retry-After: 3`) or `429 allowance_exhausted` (`Retry-After` = the start of the next UTC month). Nothing is admitted or counted.
 - Not counted: a repeat of an admitted submission id (replay, in-progress, mismatch), a status read, a request without the header on the organization's own model, a refused admission. A run on the organization's own model counts to the two concurrency limits only.
-- **A create without `X-ACR-Submission-ID` (CHAOS-11997)** — MCP and API callers (org-bearer), ask-dev standalone — that runs on the deployment's model is admitted under a server-minted key (`acr-implicit-<hex>`) in the same transaction and against the same three shared limits, and is refused `429` the same way. The record is not repeatable and does not bind the result: the answer keeps organization-bearer reads by id. It is released (`done_unsaved`, completion `implicit_released`) when the run serves, abandoned when it fails, and swept at expiry if its pod dies. The final write is attempted up to 3 times in total. If the store still cannot record the end, the slot stays held until the record's expiry (run budget + 30 s): over-counted, never under-counted, and logged at Error. Its admission line is `outcome=admitted_implicit` with `platform_run=true`; its refusal lines carry `implicit=true`. The `acr-implicit-` prefix is an operator marker, not a reserved namespace: a client id may use it, under its own principal's key. With no submission store composed (not the hosted runtime), such a create runs uncounted and logs `outcome=store_unavailable`, `error_class=store_not_configured` at Warn.
+- **A create without `X-ACR-Submission-ID`** — MCP and API callers (org-bearer), ask-dev standalone — that runs on the deployment's model is admitted under a server-minted key (`acr-implicit-<hex>`) in the same transaction and against the same three shared limits, and is refused `429` the same way. The record is not repeatable and does not bind the result: the answer keeps organization-bearer reads by id. It is released (`done_unsaved`, completion `implicit_released`) when the run serves, abandoned when it fails, and swept at expiry if its pod dies. The final write is attempted up to 3 times in total. If the store still cannot record the end, the slot stays held until the record's expiry (run budget + 30 s): over-counted, never under-counted, and logged at Error. Its admission line is `outcome=admitted_implicit` with `platform_run=true`; its refusal lines carry `implicit=true`. The `acr-implicit-` prefix is an operator marker, not a reserved namespace: a client id may use it, under its own principal's key. With no submission store composed (not the hosted runtime), such a create runs uncounted and logs `outcome=store_unavailable`, `error_class=store_not_configured` at Warn.
 - **Residual:** a create without the header that runs on the organization's OWN model is still admitted to no shared limit (no record). It spends the organization's own budget, not the deployment's.
 - Counted and never refunded: an admitted platform run that then fails, including a `429 rate_limited` from the model or graph runtime (that 429 carries no `Retry-After`). Its record ends `abandoned` and frees its concurrency slot at once.
 - The monthly aggregate `acr.context_fabric_usage_monthly` is content-free (counts only). Retention and result deletion leave it unchanged (deleting submission records or results does not refund a run). The organization purge deletes the organization's rows, so no row keyed by a purged organization stays, and the write fence refuses a later write for it.
 - **Cost is not metered.** ACR records token counts per model call (`ModelExecutionReceipt.Usage`) but no price, so `cost_micro_usd` stays NULL and a USD ceiling cannot be enforced in ACR; it is reported only.
 - **The request rate limit is per replica.** `ACR_REQUESTS_PER_MINUTE` (`limits.Manager`) counts in process memory: with N `acr-api` replicas the effective ceiling is N times the configured value. The three limits above are the shared ones.
 - A sweeper on every replica (every 30 s) completes running records whose result was stored and abandons those past their budget plus 30 s, so a run lost with its pod frees its concurrency slot.
-- **Retention (CHAOS-11952, plan D-22), behind `ACR_ASK_DEV_RETENTION_ENABLED` (default off; off keeps every row and reads as before, and startup logs `context fabric retention sweep` with `outcome=disabled`).** Retention runs as the runtime role; no dedicated role (chris 2026-10-31, CHAOS-12244). When on, acr-api runs it on its own pool with no credential or DSN of its own: `internal/dbacl.RuntimeGrants` holds every privilege it needs (`RetentionPrivileges`), and `grant-runtime-acl` grants them with the rest of the runtime set. It runs a grant probe, and a retention job on every replica (every 5 minutes, 500 units a pass) removes the Ask Dev backing set: an expired thread (retention `0`: last turn + 24 h; `30`: + 30 days) whole; a deleted thread's content on the next pass (its content-free closure record stays until its expiry); a submission with no thread, with its result, 24 h after its admission. It keeps the usage aggregate, model receipts (sha256 input and output digests and the client `request_id`, until the organization purge) and results no record names (MCP, Workbench), and never removes a record whose run can still save (running, or abandoned until 1 hour past its deadline). A missing grant fails startup at the probe, whether or not anything is due. Setup and the enable order: CHAOS-12197. Log: one `context fabric retention sweep` line per pass with counts only: `outcome=removed` or `outcome=empty` at Info, and `outcome=failed` at Warn with the counts of the units the pass had already committed before it failed (CHAOS-12214; the error is the separate `ask dev retention tick failed` Warn line). Design: `docs/design/ask-dev-conversation-contract.md` §12.
+- **Retention (plan D-22), behind `ACR_ASK_DEV_RETENTION_ENABLED` (default off; off keeps every row and reads as before, and startup logs `context fabric retention sweep` with `outcome=disabled`).** Retention runs as the runtime role; no dedicated role (chris 2026-10-31). When on, acr-api runs it on its own pool with no credential or DSN of its own: `internal/dbacl.RuntimeGrants` holds every privilege it needs (`RetentionPrivileges`), and `grant-runtime-acl` grants them with the rest of the runtime set. It runs a grant probe, and a retention job on every replica (every 5 minutes, 500 units a pass) removes the Ask Dev backing set: an expired thread (retention `0`: last turn + 24 h; `30`: + 30 days) whole; a deleted thread's content on the next pass (its content-free closure record stays until its expiry); a submission with no thread, with its result, 24 h after its admission. It keeps the usage aggregate, model receipts (sha256 input and output digests and the client `request_id`, until the organization purge) and results no record names (MCP, Workbench), and never removes a record whose run can still save (running, or abandoned until 1 hour past its deadline). A missing grant fails startup at the probe, whether or not anything is due. Setup and the enable order: the retention design. Log: one `context fabric retention sweep` line per pass with counts only: `outcome=removed` or `outcome=empty` at Info, and `outcome=failed` at Warn with the counts of the units the pass had already committed before it failed (the error is the separate `ask dev retention tick failed` Warn line). Design: `docs/design/ask-dev-conversation-contract.md` §12.
 
-### Vector and semantic retrieval (CHAOS-3778)
+### Vector and semantic retrieval
 
 Vector retrieval is **opt-in and off by default**. It is enabled by setting a
 base URL; with none set, ACR never constructs an embedder, never creates a
@@ -1632,17 +1632,17 @@ byte-for-byte what it was before.
 | `ACR_CONTEXT_FABRIC_EMBED_PROVIDER` | *(required when enabled)* | A stable name for the endpoint, recorded verbatim in the embedder identity so a rebuild can tell vectors apart. Never checked for a specific vendor. |
 | `ACR_CONTEXT_FABRIC_EMBED_MODEL` | *(required when enabled)* | Bare embedding model id. |
 | `ACR_CONTEXT_FABRIC_EMBED_DIMENSION` | *(required when enabled)* | Vector width. Must match what the server returns **and** what the graph's vector index was built with — see the rebuild note below. |
-| `ACR_CONTEXT_FABRIC_EMBED_API_KEY` / `_FILE` | *(empty)* | Bearer credential. A loopback embedder (LM Studio/Ollama/TEI) genuinely needs none; the shape accommodates one so a hosted embedder is a configuration change only. **CHAOS-4192: a blank value here now fails startup loudly** when `ACR_CONTEXT_FABRIC_EMBED_BASE_URL` is set, unless `ACR_CONTEXT_FABRIC_EMBED_ALLOW_NO_CREDENTIAL` (below) is also set — see the incident note above. |
-| `ACR_CONTEXT_FABRIC_EMBED_ALLOW_NO_CREDENTIAL` | `false` | CHAOS-4192: explicit opt-in declaring this endpoint genuinely needs no credential (the loopback LM Studio/Ollama/TEI shape). Without it, a configured base URL with a blank `ACR_CONTEXT_FABRIC_EMBED_API_KEY` fails startup instead of silently constructing a broken embedder — **never inferred from the base URL's shape**, matching `ACR_CONTEXT_FABRIC_EMBED_ALLOW_INSECURE_BASE_URL`'s posture. |
+| `ACR_CONTEXT_FABRIC_EMBED_API_KEY` / `_FILE` | *(empty)* | Bearer credential. A loopback embedder (LM Studio/Ollama/TEI) genuinely needs none; the shape accommodates one so a hosted embedder is a configuration change only. **Blank-embed-credential guard: a blank value here now fails startup loudly** when `ACR_CONTEXT_FABRIC_EMBED_BASE_URL` is set, unless `ACR_CONTEXT_FABRIC_EMBED_ALLOW_NO_CREDENTIAL` (below) is also set — see the incident note above. |
+| `ACR_CONTEXT_FABRIC_EMBED_ALLOW_NO_CREDENTIAL` | `false` | Blank-embed-credential guard: explicit opt-in declaring this endpoint genuinely needs no credential (the loopback LM Studio/Ollama/TEI shape). Without it, a configured base URL with a blank `ACR_CONTEXT_FABRIC_EMBED_API_KEY` fails startup instead of silently constructing a broken embedder — **never inferred from the base URL's shape**, matching `ACR_CONTEXT_FABRIC_EMBED_ALLOW_INSECURE_BASE_URL`'s posture. |
 | `ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR` | `0.55` | Absolute cosine similarity below which a neighbour is **dropped, not scored**. See the hazard note below. |
 | `ACR_CONTEXT_FABRIC_EMBED_TIMEOUT` | `250ms` | Bounds one READ-path embeddings call (a single query text). |
-| `ACR_CONTEXT_FABRIC_EMBED_BATCH_TIMEOUT` | `5s` | CHAOS-3828: bounds one WRITE/PROJECTION-path embeddings call (up to `ACR_CONTEXT_FABRIC_EMBED_MAX_BATCH` texts), independently of the read-side timeout above. Before this existed, the projection path reused the 250ms read-side default for a 64-text request — timing out on every call against anything but a very fast warm local model, and clearing every batch's vectors as a result (indistinguishable from a genuine embedder outage). |
+| `ACR_CONTEXT_FABRIC_EMBED_BATCH_TIMEOUT` | `5s` | Embed-retry change: bounds one WRITE/PROJECTION-path embeddings call (up to `ACR_CONTEXT_FABRIC_EMBED_MAX_BATCH` texts), independently of the read-side timeout above. Before this existed, the projection path reused the 250ms read-side default for a 64-text request — timing out on every call against anything but a very fast warm local model, and clearing every batch's vectors as a result (indistinguishable from a genuine embedder outage). |
 | `ACR_CONTEXT_FABRIC_EMBED_MAX_BATCH` | `64` | Texts per request at projection time. |
-| `ACR_CONTEXT_FABRIC_EMBED_MAX_TEXT_RUNES` | `2000` | Runes of one node's search text that are embedded. **Semantic, immutable-per-corpus** (CHAOS-3833): the value is a component of the composition tag, so changing it fails every stored vector closed and requires the paired rebuild. Validation floor is 2,000 — the largest complete per-kind template — so the lexical and vector arms always index byte-identical text for templated kinds; a lower value fails startup loudly. |
+| `ACR_CONTEXT_FABRIC_EMBED_MAX_TEXT_RUNES` | `2000` | Runes of one node's search text that are embedded. **Semantic, immutable-per-corpus**: the value is a component of the composition tag, so changing it fails every stored vector closed and requires the paired rebuild. Validation floor is 2,000 — the largest complete per-kind template — so the lexical and vector arms always index byte-identical text for templated kinds; a lower value fails startup loudly. |
 | `ACR_CONTEXT_FABRIC_EMBED_MAX_TRANSPORT_RETRIES` | `0` | The SDK's own in-client retry loop. |
 | `ACR_CONTEXT_FABRIC_EMBED_PROVIDER_LOCALITY` | *(unset — `remote`)* | Where embedded text ends up: `local` (same trust zone) or `remote` (the provider is a NEW reader of the text, outside the graph's authorization scope). **An explicit declaration, never inferred from URL shape** — a loopback URL can front a tunnel, a non-loopback URL can be a same-host container. Unset means `remote`, so free-text bodies stay off until an operator affirmatively declares the endpoint local. Any other value fails startup. **Semantic when it changes the effective body gate** — pair the change with a rebuild. |
 | `ACR_CONTEXT_FABRIC_EMBED_INCLUDE_BODIES` | *(unset — follows locality)* | Whether free-text body heads (PR body, incident description) join the composed search text — BOTH retrieval arms, which always index identical text. Set explicitly to override the locality default; `true` with a remote locality is the recorded tenant opt-in for transmitting body text to a remote provider (pair it with the provider's data-usage/retention statement in your deployment docs). **Semantic, immutable-per-corpus**: a flip moves the composition tag and requires the paired rebuild. |
-| `ACR_CONTEXT_FABRIC_EMBED_PREFIX_FAMILY` | *(unset — `none`)* | Task-prefix pair some embedding models are trained to require (CHAOS-3836): closed vocabulary, `none` or `nomic`. `nomic` prepends `search_document: ` / `search_query: ` to the text **transmitted** to the model on the write and read paths respectively — the stored search text both retrieval arms share is never prefixed. **Explicit configuration, never inferred from the model id**; an unrecognized value fails startup. **Semantic, immutable-per-corpus**: the family is the `p…` component of the composition tag, so changing it fails stored vectors closed and requires the paired rebuild. |
+| `ACR_CONTEXT_FABRIC_EMBED_PREFIX_FAMILY` | *(unset — `none`)* | Task-prefix pair some embedding models are trained to require: closed vocabulary, `none` or `nomic`. `nomic` prepends `search_document: ` / `search_query: ` to the text **transmitted** to the model on the write and read paths respectively — the stored search text both retrieval arms share is never prefixed. **Explicit configuration, never inferred from the model id**; an unrecognized value fails startup. **Semantic, immutable-per-corpus**: the family is the `p…` component of the composition tag, so changing it fails stored vectors closed and requires the paired rebuild. |
 | `ACR_CONTEXT_FABRIC_EMBED_EXPECT_RESPONSE_MODEL` | *(unset)* | The model id the **server reports**, when it legitimately differs from the id sent. This *retargets* the serving-model check; it cannot disable it. Leave unset unless a provider is known to rename its own id. |
 | `ACR_CONTEXT_FABRIC_EMBED_ALLOW_INSECURE_BASE_URL` | `false` | Permits a plaintext `http://` base URL. Required for a loopback embedder. **Never set this for a base URL that leaves the trust boundary** — the credential travels as a bearer token. |
 
@@ -1668,7 +1668,7 @@ and answers lexically — it does not fail the request, and it does not silently
 drop and recreate the index. Recovery is the existing
 `acr-projector rebuild --org <org>`, which resets every source checkpoint and
 bumps the rebuild epoch (which also invalidates answer reuse). Until that runs,
-the organization is simply back to the pre-CHAOS-3778 lexical behaviour.
+the organization is simply back to the pre-vector-retrieval-work lexical behaviour.
 
 **Load exactly one embedding model on the embedder — this is a hard operational
 requirement, not a recommendation.** An OpenAI-compatible server is not obliged
@@ -1711,7 +1711,7 @@ retrieval saw less than it should have. The operator-facing detail is in
 telemetry (`RecordVectorRetrievalDegraded`), which is where you diagnose *which*
 of the causes above fired.
 
-**One cause is NOT a fault: a historical question (CHAOS-3781).** A question
+**One cause is NOT a fault: a historical question.** A question
 with an as-of or range time axis deliberately skips the vector mechanism,
 because a k-NN index cannot honour a validity window — `db.idx.vector.queryNodes`
 returns the top-k by distance and any temporal predicate is a post-filter over
@@ -1772,9 +1772,9 @@ durations only — never text, vectors, model output, or provider response bodie
 | `context_fabric: projection batch cleared stale vectors` | WARN | A projection batch cleared vectors it had invalidated (`embedded`, `cleared` counts) | **This is the mass-clear signal.** A sustained nonzero `cleared` count means a growing fraction of the corpus is vectorless. |
 | `context_fabric: projection batch embedded nodes` | DEBUG | Every healthy batch (`embedded`, `cleared` counts) | Steady-state progress; raise to DEBUG to measure re-embedding throughput. |
 | `context_fabric: projection tick failed; checkpoint held for replay` | ERROR | A projection tick failed, including one that failed to keep vector state reconcilable | The checkpoint is deliberately held. Sustained = an organization is stalled. Carries a bounded `failure_class`, never the underlying error text — see below. Counted by `acr_projection_pair_failures_total{failure_class}` (see `docs/observability.md`). |
-| `context_fabric: projection graph count check finished` | INFO | One graph-vs-source count check of one organization ran (default every 10 minutes per organization) | Carries `org_id_hash`, `instance` (random per projector process; replicas count independently) and `pass` (the organization's check sequence within that instance), `outcome` (`completed`, `cancelled` by timeout or shutdown, `failed` when a count read failed or a measurement could not be made, or `unknown` when a source's owned node counts cannot be compared yet), `sources_checked`, `sources_unknown` (sources not compared because no walk from zero has marked their owned nodes yet, CHAOS-12649: a graph built before the marker reads `unknown` until it is rebuilt), `kinds_compared`, `gap_count` (confirmed `graph_below_source` gaps), `days_compared` (kind and UTC day buckets of the rows' sync stamp whose source and graph counts were both read) and `day_gap_count` (confirmed `graph_below_source_on_day` gaps, CHAOS-12649), `relations_compared` (edge populations whose source and graph edge counts were both read), `edge_gap_count` (confirmed `graph_edges_below_source` gaps), `relations_deferred` (relation types the sources produce and do not measure yet), `error_count` (failed count reads and unmeasured sources or backends) and `duration_ms`. No line for an interval period means the check did not run. |
+| `context_fabric: projection graph count check finished` | INFO | One graph-vs-source count check of one organization ran (default every 10 minutes per organization) | Carries `org_id_hash`, `instance` (random per projector process; replicas count independently) and `pass` (the organization's check sequence within that instance), `outcome` (`completed`, `cancelled` by timeout or shutdown, `failed` when a count read failed or a measurement could not be made, or `unknown` when a source's owned node counts cannot be compared yet), `sources_checked`, `sources_unknown` (sources not compared because no walk from zero has marked their owned nodes yet, the owned-node counting change: a graph built before the marker reads `unknown` until it is rebuilt), `kinds_compared`, `gap_count` (confirmed `graph_below_source` gaps), `days_compared` (kind and UTC day buckets of the rows' sync stamp whose source and graph counts were both read) and `day_gap_count` (confirmed `graph_below_source_on_day` gaps), `relations_compared` (edge populations whose source and graph edge counts were both read), `edge_gap_count` (confirmed `graph_edges_below_source` gaps), `relations_deferred` (relation types the sources produce and do not measure yet), `error_count` (failed count reads and unmeasured sources or backends) and `duration_ms`. No line for an interval period means the check did not run. |
 | `context_fabric: graph_edges_below_source` | WARN | The graph holds fewer edges of one relation type (and arm) than its source asserts, beyond the tolerance (the larger of 3 and 2% of the source), at two checks in a row | Carries `source`, `relation_type`, `arm` (`transition` or `work_item_column` for `BELONGS_TO_PROJECT`, empty otherwise), `org_id_hash`, `source_count` (distinct edges the producer asserts), `graph_count` and `tolerance`. A graph with none of a relation the source holds is a gap with tolerance 0. A gap confirms only across two checks in a row that both measured it. |
-| `context_fabric: graph_below_source_on_day` | WARN | One UTC day of a kind's rows, by their sync stamp (`last_synced`, the column the projection walk pages on), holds fewer owned nodes in the graph than source rows, beyond the tolerance (the larger of 3 and 2% of that day's source rows), at two checks in a row (CHAOS-12649) | Carries `source`, `kind`, `day` (`YYYY-MM-DD`, UTC), `org_id_hash`, `source_count`, `graph_count` and `tolerance`. The walk loses contiguous ranges of the sync stamp, so a lost range is a short day even when the kind's total is inside its tolerance. A day the graph holds none of is a gap with tolerance 0. Kinds stamped: repository, work item, pull request, deployment, pull request review, CI run. |
+| `context_fabric: graph_below_source_on_day` | WARN | One UTC day of a kind's rows, by their sync stamp (`last_synced`, the column the projection walk pages on), holds fewer owned nodes in the graph than source rows, beyond the tolerance (the larger of 3 and 2% of that day's source rows), at two checks in a row | Carries `source`, `kind`, `day` (`YYYY-MM-DD`, UTC), `org_id_hash`, `source_count`, `graph_count` and `tolerance`. The walk loses contiguous ranges of the sync stamp, so a lost range is a short day even when the kind's total is inside its tolerance. A day the graph holds none of is a gap with tolerance 0. Kinds stamped: repository, work item, pull request, deployment, pull request review, CI run. |
 | `context_fabric: graph_count_unmeasured` | WARN | A count the check owes was not made: the backend reads no day counts while a source does (`scope=day`, `reason=backend_no_day_counts`), the backend reads no edge counts (`scope=edge`, `reason=backend_no_edge_counts`) or no node counts while a source reads them (`scope=node`, `reason=backend_no_node_counts`), a source with node counts reads no edge counts (`reason=source_no_edge_counts`), or a source did not return an edge count it declares (`reason=source_missing_edge_count`, with `relation_type` and `arm`) | Carries `scope`, `reason`, `org_id_hash` and, for a source, `source`. The check outcome is `failed`. A failed edge read is the existing `projection count check failed` line with `stage` `edge_source_count` or `edge_graph_count`. |
 | `context_fabric: observation traversal degraded` | WARN | Observation-to-entity traversal failed for some candidates | Unrelated to vectors; listed because it shares the sink. |
 
@@ -1788,7 +1788,7 @@ A sanitized log beside an unsanitized one provides no guarantee at all.
 of `canceled`, `checkpoint_conflict`, `organization_locked`,
 `rebuild_required`, `dependency_unavailable`, `dependency_rate_limited`,
 `query_budget_exceeded`, `invalid_result`, or `unclassified`.
-`query_budget_exceeded` (CHAOS-3848) is a canonical-source query that
+`query_budget_exceeded` is a canonical-source query that
 exceeded its own configured read budget (e.g. ClickHouse
 `max_bytes_to_read`/`max_result_rows` -- `ACR_CLICKHOUSE_MAX_BYTES_TO_READ`).
 Unlike `dependency_unavailable`, it is a PERMANENT condition for the current
@@ -1838,7 +1838,7 @@ vector retrieval effectively useless. Concretely: after a mass clear followed by
 embedder recovery, queries succeed over the *remaining* vectorized nodes and
 correctly report no mechanism degradation, while the missing fraction is visible
 only by reading the accumulated `cleared` counts. That detector is deliberately
-out of scope for CHAOS-3778 and is filed as follow-up work; until it exists,
+out of scope for the vector-retrieval work and is filed as follow-up work; until it exists,
 watch the `cleared` counts and the projection tick failures.
 
 **Degradation is expected and safe.** An embedder that is unreachable, cold, or
@@ -1880,7 +1880,7 @@ Two behaviours matter operationally, and they are opposites on purpose:
   and `RuntimeQuestionInterpreter`/`RuntimeAnswerSynthesizer` degrade every
   request to a clean 503 `upstream_unavailable` (`ErrModelUnavailable`).
   The route stays registered, authorized and audited, and the graph and
-  canonical-fact layers stay real and live. This is the CHAOS-3755
+  canonical-fact layers stay real and live. This is the fact-planning work
   behaviour, and it is regression-tested
   (`hosted.TestNewContextFabricModelRuntime_keepsTheCleanFiveOhThreeWithoutACredential`).
 - **A provider configured but mis-specified fails startup.** A bad URL, an
@@ -1932,7 +1932,7 @@ was measured end-to-end through the endpoint at **45–95s** against
 `gpt-5-nano`. Left at the default, every investigation returns 504 before
 the model answers, regardless of how well the model is doing.
 
-**The 180s figure this section previously gave was wrong** (CHAOS-3770 F6):
+**The 180s figure this section previously gave was wrong** (the model-runtime (BYO-LLM) work F6):
 it counted only `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` × `ACR_CONTEXT_FABRIC_MODEL_MAX_ATTEMPTS`
 × 2 operations, and ignored three factors the actual retry topology has:
 
@@ -1942,7 +1942,7 @@ it counted only `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` × `ACR_CONTEXT_FABRIC_MODEL_
   `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`/`_MAX_ATTEMPTS` as the primary — see
   `modelprovider.runtimeConfig`) only after every primary attempt has
   failed, and wait for it in-line before returning. With a fallback
-  configured (opt-in; not the default since CHAOS-3855 — see below) this
+  configured (opt-in; not the default since the change that made gpt-5.6-luna the sole generative model — see below) this
   roughly DOUBLES the worst case per operation, not zero: primary
   attempts, then fallback attempts.
 - **The transport retry runs inside `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT`.**
@@ -1968,7 +1968,7 @@ worst_case    = per_operation × 2   # interpret, then synthesize, sequentially
 ```
 
 With the documented defaults (`45s` timeout, `2` attempts): `per_attempt` =
-45s, `per_leg` = 2×45 = 90s. As of CHAOS-3855 the default deployment has no
+45s, `per_leg` = 2×45 = 90s. As of the change that made gpt-5.6-luna the sole generative model the default deployment has no
 fallback configured, so `per_operation` = 90, `worst_case` = 90×2 = **~180s**.
 If an operator opts a fallback back in, `per_operation` doubles to 180 and
 `worst_case` doubles to **~360s**. Size `ACR_REQUEST_TIMEOUT` above whichever applies to the
@@ -2013,7 +2013,7 @@ A model attempt that times out during synthesis, with its retries used, is not a
 
 In the Info `context fabric model decision` line, `attempt_outcomes` reads `timeout` for an attempt that ended on `ACR_CONTEXT_FABRIC_MODEL_TIMEOUT` with the request still live, and `cancelled` when the request's own context ended it. The terminal `outcome` stays `unavailable` in both cases.
 
-**`ACR_WRITE_TIMEOUT` must be raised alongside it (CHAOS-4330).** This is
+**`ACR_WRITE_TIMEOUT` must be raised alongside it.** This is
 `http.Server.WriteTimeout` — the wire-level deadline for writing the
 response — a completely different budget from `ACR_REQUEST_TIMEOUT`
 above, which only bounds the application-level handler. Raising
@@ -2029,20 +2029,20 @@ production silently — but size it with real headroom (the ask-dev
 Workbench's own launch script uses 500s/490s, a 10s margin) rather than
 the bare minimum the validator accepts.
 
-**CHAOS-3855 update: the production default is now `gpt-5.6-luna` alone, no
-fallback.** The CHAOS-3742 five-arm generative trial measured `gpt-5.6-luna`
+**Change that made gpt-5.6-luna the sole generative model update: the production default is now `gpt-5.6-luna` alone, no
+fallback.** The the generative-trial work five-arm generative trial measured `gpt-5.6-luna`
 alone as equal-or-better than the `gpt-5-nano` + `gpt-5.6-luna` fallback chain
 described below (1/30 strict vs. 0/30 strict) at roughly 2.4x fewer tokens
 per corpus run (82K vs. 193K); `gpt-5-nano` was the weakest interpreter and
-the dominant source of fact-parameter rejections. The CHAOS-3770 measurements
+the dominant source of fact-parameter rejections. The the model-runtime (BYO-LLM) work measurements
 and the "fallback is required" conclusion immediately below predate that
 trial and are kept for historical context, not as the current recommendation.
 
-**Migrating off the pre-CHAOS-3855 recommendation.** A deployment still
+**Migrating off the pre-change-that-made-gpt-5.6-luna-the-sole-generative-model recommendation.** A deployment still
 carrying the old recommendation sets only
 `ACR_CONTEXT_FABRIC_MODEL_FALLBACK=gpt-5.6-luna` and leaves
-`ACR_CONTEXT_FABRIC_MODEL` unset. Before CHAOS-3855 that resolved to
-`gpt-5-nano` primary / `gpt-5.6-luna` fallback; after CHAOS-3855,
+`ACR_CONTEXT_FABRIC_MODEL` unset. Before the change that made gpt-5.6-luna the sole generative model that resolved to
+`gpt-5-nano` primary / `gpt-5.6-luna` fallback; after the change that made gpt-5.6-luna the sole generative model,
 `ACR_CONTEXT_FABRIC_MODEL` defaults to `gpt-5.6-luna` too, so the same
 environment now names an identical primary and fallback. `Config.validate`
 fails loud on that (by design — a silent dedupe would hide a
@@ -2052,7 +2052,7 @@ different model` error until the operator **unsets
 fallback) or points it at a genuinely different model.
 
 **Model choice matters, and `gpt-5-nano` alone is not enough.** Measured
-live against `gpt-5-nano` (the CHAOS-3770 acceptance probes, both skipped
+live against `gpt-5-nano` (the model-runtime (BYO-LLM) work acceptance probes, both skipped
 unless `ACR_TEST_MODEL_API_KEY` is set —
 `go test ./internal/contextfabric/modelprovider -run Live` for the runtime
 and `go test ./internal/api -run LiveEndpoint` for the endpoint):
@@ -2065,7 +2065,7 @@ roughly one in three overstates it for real traffic.
 Every failure was a clean, correctly classified rejection, never a wrong
 answer: value-level closure rejects what it cannot bind to a canonical fact.
 So the failure mode is availability, not correctness — but at 2 in 33 the
-endpoint is unusable. As of CHAOS-3784, a synthesis-side claim-binding
+endpoint is unusable. As of the failure-class change, a synthesis-side claim-binding
 rejection like this one was `422 synthesis_rejected` (no `violated_bound`,
 since claim-binding is a business rule, not a length/count bound) and a
 provider/schema-level failure `502 upstream_invalid_output`. Today a failed
@@ -2086,7 +2086,7 @@ transport failure. With `ACR_CONTEXT_FABRIC_MODEL_FALLBACK=gpt-5.6-luna` the
 same endpoint answered **16 of 17**, at 45–95s per request. Set it in every
 deployment expected to answer. Each fallback is a second billable call and is
 recorded as `fallback_used` on the receipt; tracking that rate per model is
-the `ModelReceiptSink` evaluator's job (CHAOS-3756), and a sustained high
+the `ModelReceiptSink` evaluator's job, and a sustained high
 rate is the signal to promote the fallback to primary.
 
 The fallback raises the answer rate; it does not make it 1.0. One of those
@@ -2127,7 +2127,7 @@ materially better than 4 of 12**. The nano and fallback rows were also
 measured on v3.
 
 The standing recommendation above (`gpt-5-nano` with the `gpt-5.6-luna`
-fallback) is superseded as of CHAOS-3855: the CHAOS-3742 five-arm trial found
+fallback) is superseded as of the change that made gpt-5.6-luna the sole generative model: the generative-trial work five-arm trial found
 `gpt-5.6-luna` alone, with no fallback, an equal-or-better and materially
 cheaper production configuration — see the callout above. `gpt-5-mini`
 remains an open question worth settling against `gpt-5.6-luna` alone rather
@@ -2319,7 +2319,7 @@ replay after scale-up is the long part: production converged in about 75 min
 rebuild is the legacy in-place purge: graph reads are empty until replay
 ends. Warn users first.
 
-Older builds (before CHAOS-7171, acr #705, per-source drain budget since
+Older builds (before the per-source drain budget, acr #705, per-source drain budget since
 `97162d12`): one drain budget per tick was shared by all sources, so a large
 ClickHouse backlog starved `dev_health_teams_projects` to one page per tick
 after a rebuild. Workaround on those builds only: set
@@ -2346,21 +2346,21 @@ Write fence: from the moment the purge commits until the organization returns to
 
 ### Runtime database role grants
 
-The table privileges the runtime database role holds are declared once, in `internal/dbacl/runtime_grants.go`. Each row names the privileges and cites the runtime code that needs them. `acr-migrate grant-runtime-acl` (the Kubernetes path, run by the Helm pre-install and pre-upgrade Job) applies the declaration as idempotent `GRANT` statements and never revokes; the `runtime-acl` mode of `deploy/compose/acr-db-init.sh` carries a block generated from the same declaration (a test fails when they differ; `DBACL_WRITE=1 go test ./internal/dbacl` rewrites the block). Rows for optional features apply only when the feature is on: agent episodes when `ACR_ENABLE_EPISODE_WRITEBACK` is `true`, `DELETE` on browser token families when a first-party browser client is configured (`ACR_OAUTH_BROWSER_CLIENTS` or `ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS` not blank, CHAOS-12140), and `DELETE` on client credentials when either workload token exchange is configured (both `ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE` and `ACR_WORKLOAD_TRUST_DOMAIN` set) or a browser client is (the derived `credential_purge` row: both purge loops delete credential rows). The Job reads those from the chart values: `config.oauth.browserClients` and `config.oauth.devBrowserRedirectUris` (with `config.oauth.enabled`) render the two browser client settings for acr-api and for the Job alike, so a browser client set through `deployment.extraEnv` instead reaches acr-api only, and its startup then fails on the browser family purge's DELETE proof. Compose runs acr-api without the OAuth login, so it has no browser client and `acr-db-acl` grants none of these rows; `deploy/compose/acr-db-init.sh runtime-acl` grants them only when it is run with a browser client setting. A table that a migration creates must be declared or named as having no runtime access, or `TestRuntimeGrantDeclaration_coversEveryMigrationTable` fails. A refused grant shows in the credential-lookup and OAuth dependency logs as `db_table` beside the error class.
+The table privileges the runtime database role holds are declared once, in `internal/dbacl/runtime_grants.go`. Each row names the privileges and cites the runtime code that needs them. `acr-migrate grant-runtime-acl` (the Kubernetes path, run by the Helm pre-install and pre-upgrade Job) applies the declaration as idempotent `GRANT` statements and never revokes; the `runtime-acl` mode of `deploy/compose/acr-db-init.sh` carries a block generated from the same declaration (a test fails when they differ; `DBACL_WRITE=1 go test ./internal/dbacl` rewrites the block). Rows for optional features apply only when the feature is on: agent episodes when `ACR_ENABLE_EPISODE_WRITEBACK` is `true`, `DELETE` on browser token families when a first-party browser client is configured (`ACR_OAUTH_BROWSER_CLIENTS` or `ACR_OAUTH_DEV_BROWSER_REDIRECT_URIS` not blank), and `DELETE` on client credentials when either workload token exchange is configured (both `ACR_WORKLOAD_TOKEN_EXCHANGE_AUDIENCE` and `ACR_WORKLOAD_TRUST_DOMAIN` set) or a browser client is (the derived `credential_purge` row: both purge loops delete credential rows). The Job reads those from the chart values: `config.oauth.browserClients` and `config.oauth.devBrowserRedirectUris` (with `config.oauth.enabled`) render the two browser client settings for acr-api and for the Job alike, so a browser client set through `deployment.extraEnv` instead reaches acr-api only, and its startup then fails on the browser family purge's DELETE proof. Compose runs acr-api without the OAuth login, so it has no browser client and `acr-db-acl` grants none of these rows; `deploy/compose/acr-db-init.sh runtime-acl` grants them only when it is run with a browser client setting. A table that a migration creates must be declared or named as having no runtime access, or `TestRuntimeGrantDeclaration_coversEveryMigrationTable` fails. A refused grant shows in the credential-lookup and OAuth dependency logs as `db_table` beside the error class.
 
-### CHAOS-3916 production graph cutover runbook
+### Graph-cutover slice production graph cutover runbook
 
-This is the chris-owned cutover CHAOS-3916 itself deferred ("a separate,
-chris-owned decision" -- see the CHAOS-3916 paragraph above): enabling
+This is the chris-owned cutover the graph-cutover slice itself deferred ("a separate,
+chris-owned decision" -- see the graph-cutover slice paragraph above): enabling
 `ACR_CONTEXT_FABRIC_GRAPH_LIFECYCLE_ENABLED` in production for the first
 time, on an image that already carries `ClickHouseSourceVersion` v6,
-`TeamsProjectsSourceVersion` v6 (CHAOS-4193's presence-view read swap
-required a full rebuild under v4; CHAOS-4109's transition-history intervals
-required v5; CHAOS-4109's duplicate-ADD-continuation fast-follow requires
+`TeamsProjectsSourceVersion` v6 (the presence-view read swap's presence-view read swap
+required a full rebuild under v4; the as-of project-validity change's transition-history intervals
+required v5; the as-of project-validity change's duplicate-ADD-continuation fast-follow requires
 this current v6 -- each one a full rebuild, not an incremental catch-up
-under the prior version), and the CHAOS-4108 join-arm fix. Every
-pre-flight below was learned the hard way during CHAOS-3916's local/trial
-rehearsal (see CHAOS-4147) -- skipping one reproduces that incident at
+under the prior version), and the project-id join fix join-arm fix. Every
+pre-flight below was learned the hard way during the graph-cutover slice's local/trial
+rehearsal (see the graph-cutover rehearsal) -- skipping one reproduces that incident at
 production scale.
 
 **Mandatory pre-flights, in order, before triggering anything:**
@@ -2384,7 +2384,7 @@ production scale.
    which is exactly the failure mode this pre-flight exists to catch
    (an ephemeral debug container sharing the target's process namespace) to
    read the value the running process actually resolved at its own start
-   time. This is the CHAOS-4147 trap: `embedprovider.Configured()` checks
+   time. This is the graph-cutover rehearsal trap: `embedprovider.Configured()` checks
    only `ACR_CONTEXT_FABRIC_EMBED_BASE_URL` -- a set base URL with a
    blank/absent key constructs a fully "configured", silently-broken
    embedder that destroys every vector it touches on its first failed
@@ -2399,11 +2399,11 @@ production scale.
 3. **The lifecycle flag must be ON for EVERY reader of an organization --
    not just `acr-api`/`acr-projector` -- BEFORE that organization's first
    flip, and this is IRREVERSIBLE once the flip's grace window sweeps
-   (CHAOS-4147, second finding).** A flag-off reader (any harness, script,
+   (second finding).** A flag-off reader (any harness, script,
    or tool constructing its own falkorgraph client with a nil
    `EpochResolver`) resolves the bare, unsuffixed epoch-0 key
    (`graphKeyForEpoch`'s epoch<=0 branch is byte-identical to the
-   pre-CHAOS-3898 legacy key). The FIRST flip an organization ever does
+   pre-graph-lifecycle-design legacy key). The FIRST flip an organization ever does
    starts that epoch-0 key's grace clock; once grace expires, the retire
    executor's periodic sweep (`tryBeginRetire`/`DrainingRetirements`)
    issues a real `GRAPH.DELETE` against it. **The sweep only runs while an
@@ -2421,18 +2421,18 @@ production scale.
    organization -- including CI harnesses -- resolves epochs through the
    lifecycle-aware path before the first flip, not after.
 4. **The deployed image digest actually contains ClickHouse v6/TeamsProjects
-   v6 + CHAOS-4108.** Confirm the digest being promoted was built from a
+   v6 + the project-id join fix.** Confirm the digest being promoted was built from a
    commit at or after `TeamsProjectsSourceVersion =
    "devhealthsource.teams_projects.v6"` and `ClickHouseSourceVersion =
    "devhealthsource.clickhouse.v6"`
    (`internal/contextfabric/devhealthsource/{teams_projects,clickhouse}.go`)
-   and after PR #216 (CHAOS-4108's join-arm fix). An older digest re-creates
+   and after PR #216 (the project-id join fix's join-arm fix). An older digest re-creates
    exactly the mixed-format-edge hazard this ticket exists to close.
 5. **No CLI lever exists to supersede a completed-but-bad epoch during its
-   grace window (CHAOS-4147).** `acr-projector rebuild --org` refuses
+   grace window.** `acr-projector rebuild --org` refuses
    (silently, as a benign no-op) once a prior rebuild has already flipped
    for that organization -- `rollback --org` is the only lever inside the
-   grace window, and it reverts to the PRIOR epoch's data (pre-CHAOS-4108
+   grace window, and it reverts to the PRIOR epoch's data (pre-project-id-join-fix
    here). Get pre-flights 1-4 right BEFORE triggering `rebuild --org`; there
    is no clean in-window do-over if the embedder credential turns out to be
    wrong.
@@ -2441,7 +2441,7 @@ production scale.
    - `Subject.embedding IS NOT NULL` count is nonzero on the active epoch
      key, and any gap from total node count is accounted for by the
      documented `embedKindSkipped`/`isPureIdentifierSubject` skip
-     populations (CHAOS-3833/CHAOS-3835) -- not left unexplained.
+     populations -- not left unexplained.
    - Run one real `CALL db.idx.vector.queryNodes('Subject', 'embedding',
      k, <a live node's own embedding>)` KNN query and confirm a
      near-zero self-match distance plus semantically coherent neighbors.
@@ -2449,10 +2449,10 @@ production scale.
      with garbage; only an exercised query catches that.
    - Spot-check the census/project-anchor predicate (or an equivalent
      project-scoped read) against a known project pair to confirm the
-     CHAOS-4108 join-arm fix produced the expected edge counts.
+     Project-id join fix join-arm fix produced the expected edge counts.
    - Spot-check at least one ordinary, non-project-scoped read (e.g. a
      work item lookup) for coherent, well-formed output, and check for
-     duplicate `canonical_id`s org-wide -- the CHAOS-3916 ticket's own
+     duplicate `canonical_id`s org-wide -- the graph-cutover slice ticket's own
      failure mode ("mixed-format edges, duplicate nodes").
 
 **Rollback posture:** the build-aside-and-swap design retains the prior
@@ -2464,7 +2464,7 @@ prior epoch to roll back to), the only rollback is disabling the lifecycle
 flag application-wide, which reverts read/write to the legacy in-place
 path and leaves the just-built epoch orphaned until a future decision.
 
-### CHAOS-11195: acr-api as a client of the auth-service workload-token exchange
+### Workload-token client change: acr-api as a client of the auth-service workload-token exchange
 
 `authWorkloadClient.enabled=true` (default false; off renders byte-equal to before) gives acr-api a projected ServiceAccount token
 (`auth-workload-subject`, audience `dev-health-workload-exchange`, 600 s, mode 0400, read-only, no `subPath`) at
@@ -2476,19 +2476,19 @@ named by `ACR_AUTH_WORKLOAD_BOOTSTRAP_FILE` (exactly one of the two files). The 
 these variables with an explicit transport that never uses the environment proxy. A partial or invalid configuration stops the start; no
 exchange runs at start, no readiness check depends on it, and an auth-service outage does not stop acr-api. The subject file is read again
 for every exchange, so a rotated projected token is used without a restart. The chart opens no egress to
-auth-service in this change. CHAOS-11203 is the first caller (next section).
+auth-service in this change. Entitlement workload-token change is the first caller (next section).
 
-### CHAOS-11203 / CHAOS-13600: the entitlement and llm-config client sends a workload token
+### Entitlement workload-token change and service-token mode removal: the entitlement and llm-config client sends a workload token
 
 Every call of the Dev Health entitlement client (health, entitlement, llm-config and principal access, in acr-api and in
 `acr-projector purge`) carries a workload token for the audience `dev-health-api` (no scope: go-api's internal acr routes carry no action)
-from the `ACR_AUTH_WORKLOAD_*` client. It is the one credential (CHAOS-13600 removed the service token mode).
+from the `ACR_AUTH_WORKLOAD_*` client. It is the one credential (the service-token mode removal removed the service token mode).
 `ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL` may be unset or `workload`; any other value stops the start, and the error never echoes it. The token
 file setting of the removed service token credential is ignored: the start goes on and logs one Warn line that names it. The chart key is
 `config.entitlement.credential` (`""` or `workload`); set it there, not in `deployment.extraEnv` (the render fails if both are set). `config.entitlement.url` needs `authWorkloadClient.enabled`.
 
 - A remote entitlement origin needs the `ACR_AUTH_WORKLOAD_*` client. The rollback is the image rollback (`helm rollback` to the previous
-  revision; rehearsed 143 -> 142 -> 143, fcdev RECORD-11241-1 sha256 `d955471080f1`, row A1). Not rehearsed: `acr-projector` 143 -> 142,
+  revision; rehearsed 143 -> 142 -> 143 on a private Compose project at the production image pins). Not rehearsed: `acr-projector` 143 -> 142,
   and a rollback while go-api is down.
 - There is no runtime fallback. When no token can be minted (auth-service down, subject file unreadable) the call is not sent and fails closed as
   an unavailable entitlement. The auth-service client keeps a token until just before its expiry (at most 300 s), so a short outage does not
@@ -2497,10 +2497,10 @@ file setting of the removed service token credential is ignored: the start goes 
 - go-api accepts the workload token only with `AUTH_ACCESS_TOKEN_ISSUER` set and one live `acr-api` workload in its workload registry (it reads
   no pinned subject).
 
-### CHAOS-11198: the credential lifecycle outbox publisher
+### Credential-lifecycle publisher: the credential lifecycle outbox publisher
 
 `ACR_AUTH_PROJECTION_URL` (auth-service's origin, the shape of `ACR_AUTH_WORKLOAD_EXCHANGE_URL`; unset is off) starts a background publisher in
-every acr-api pod. It needs the auth workload client of CHAOS-11195 (`ACR_AUTH_WORKLOAD_*`): a URL with no client stops the start, and the error
+every acr-api pod. It needs the auth workload client of the workload-token client change (`ACR_AUTH_WORKLOAD_*`): a URL with no client stops the start, and the error
 names the variable, not its value. Starting makes no network call; an auth-service outage never stops acr-api or blocks a credential mutation,
 which only inserts outbox rows. The route (`POST /internal/v1/acr/credential-events`) and the token audience (`auth-service`) are fixed in `internal/authprojection`,
 not settings. The token request names the audience only: the workload token carries no scope or action claim (the action
@@ -2582,7 +2582,7 @@ and its `-out` refuses a file that exists. Keep the `credential=<id>` line it pr
 The rotation and revoke steps, with the numbers measured in a drill, are in the
 [workload rotation runbook](runbooks/workload-rotation.md).
 
-### CHAOS-4076: NetworkPolicy apiserver egress and in-release FalkorDB PodSecurity
+### NetworkPolicy change: NetworkPolicy apiserver egress and in-release FalkorDB PodSecurity
 
 **ServiceAccounts.** acr-api runs under its own ServiceAccount
 `<fullname>-api` (`templates/serviceaccount-api.yaml`): automount off, no
@@ -2596,7 +2596,7 @@ consumer empty or `default`; the chart fails closed otherwise and emits every na
 `kubectl get rolebinding,clusterrolebinding -A -o jsonpath='{range .items[*]}{.kind}{"/"}{.metadata.name}{"\t"}{range .subjects[?(@.kind=="ServiceAccount")]}{.namespace}{"/"}{.name}{" "}{end}{"\n"}{end}' | grep -E 'dev-health/dev-health-acr(-api)?( |$)'`
 -- the `-api` name must have no binding before the roll.
 
-Two chart-level constraints found during the CHAOS-4034 live P6 auth
+Two chart-level constraints found during the panel-harness workload-credential change live P6 auth
 validation run, both ratified (chris, 2026-08-23) rather than fixed, and
 recorded here so a future deployer does not re-open either as a bug.
 
@@ -2613,7 +2613,7 @@ not know the cluster's real apiserver ClusterIP at author time, so a
 tighter rule is not generically possible.
 
 **This is a documented bypass SHAPE, not a proven working fix -- do not
-read "the rule renders" as "TokenReview is reachable."** The CHAOS-4034
+read "the rule renders" as "TokenReview is reachable."** The the panel-harness workload-credential change
 live P6 A/B/A run found this exact rule PRESENT and RFC 8693 `TokenReview`
 STILL timed out on that kind+Calico cluster; only deleting the ENTIRE
 NetworkPolicy (not just this rule) restored a 200. Root cause is
@@ -2629,17 +2629,17 @@ apiserver IP does not match a hand-pinned `ipBlock` fails closed with no
 obvious cause.
 
 That chart change is `networkPolicy.egress.kubernetesAPIEndpoints`
-(CHAOS-13481): a list of `{cidr, port}`. When set, each entry renders one
+: a list of `{cidr, port}`. When set, each entry renders one
 egress rule (`ipBlock` /32 + TCP port) and the port-only rule is not
 rendered; an empty list (the default) renders exactly as before. Each
 `cidr` must be one IPv4 address as a /32; a missing or wider `cidr`, or a
 port outside 1-65535, fails the render. Name the apiserver **endpoint**
 (`kubectl get endpointslices -n default -l kubernetes.io/service-name=kubernetes`),
 not the `kubernetes` Service ClusterIP: on k3s (kube-router) the policy
-matches the packet after the Service DNAT. A bigboy k3s proof (2026-11-10,
+matches the packet after the Service DNAT. A k3s proof on the shared dev build host (2026-11-10,
 TokenReview from a pod with only that rule) showed `<ClusterIP>/32` port 443
 opens nothing and `<endpoint>/32` port 6443 opens the call. This also explains
-the CHAOS-4034 timeout above. The pinned address is the residual risk: if the
+the panel-harness workload-credential change timeout above. The pinned address is the residual risk: if the
 apiserver node address changes, the exchange fails closed (TokenReview refused)
 until the value is updated.
 
@@ -2954,6 +2954,6 @@ offline doctor, explicit context/evidence, update, uninstall, residue, and
 unrelated-config preservation for the four bundled packages. Unix/Linux/macOS
 are the exercised platforms. Cursor package/fixture validation is mandatory;
 native Cursor is conditional and reports its installed/not-installed state.
-Cursor Windows/NTFS lifecycle remains deferred to CHAOS-3058. No client guide
+Cursor Windows/NTFS lifecycle remains deferred to the Windows/NTFS lifecycle follow-up. No client guide
 claims a production release, credential storage, CodeGraph initialization, or
 default pre-plan/writeback.

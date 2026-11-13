@@ -1,4 +1,4 @@
-# Full-stack Context Fabric acceptance (CHAOS-3065)
+# Full-stack Context Fabric acceptance
 
 Status: **Implementation contract** — authoritative for `scripts/e2e/fullstack-opencode.sh`,
 `testdata/fullstack/v1/`, and `tests/fullstack/`.
@@ -25,8 +25,8 @@ OpenAI-compatible model so acceptance never depends on probabilistic generation.
 | Suite | Covers | Still valid |
 | --- | --- | --- |
 | `scripts/e2e/compose.sh` | isolated Compose lifecycle, migrations, credentials, ACL, direct MCP STDIO | yes |
-| `scripts/e2e/svs.sh` (CHAOS-2914) | API/MCP/browser cross-surface agreement, fail-closed negatives | yes |
-| `scripts/clients/test-real-clients.sh` (CHAOS-3010) | client install, registration, lifecycle, safety | yes |
+| `scripts/e2e/svs.sh` | API/MCP/browser cross-surface agreement, fail-closed negatives | yes |
+| `scripts/clients/test-real-clients.sh` | client install, registration, lifecycle, safety | yes |
 | **`scripts/e2e/fullstack-opencode.sh` (this)** | **a real OpenCode session driving the live stack, verified against a versioned oracle** | new |
 
 None of the existing suites may be relabelled as this gate.
@@ -58,7 +58,7 @@ contract-first rule, because ACR does not produce or consume it — the agent do
 
 ### 4.1 Canonical source
 
-`testdata/evaluation/v1` (CHAOS-2918) stays the source of truth for scenario semantics.
+`testdata/evaluation/v1` stays the source of truth for scenario semantics.
 `testdata/fullstack/v1/seed/clickhouse` is its **projection** into the current Dev Health
 ClickHouse schema. The manifest records the SHA-256 of every consumed corpus file, so a
 corpus edit that is not reflected in the projection fails preflight.
@@ -285,7 +285,7 @@ Two things preserve rigor on the markdown path, where the full JSON document is 
 An optional pinned local model (Ollama/llama.cpp, temperature 0) may run in a separate
 non-blocking profile using rubric checks. It never gates.
 
-### 6.2 Service mode: answering the engine's own model calls (CHAOS-12461)
+### 6.2 Service mode: answering the engine's own model calls
 
 The engine makes its own model calls (interpretation, synthesis, offer phrasing). They offer no
 tools, so the OpenCode script never answers them. A plan with a `service` section makes the
@@ -297,7 +297,7 @@ always answered by the OpenCode script, service section or not.
 off a real model. Wherever a Dev Health entitlement client is configured, the per-organization
 source (ops) answers first, and an organization that saved its own model configuration is sent
 to that organization's provider, base URL and credential. There is no setting to turn the source
-off any more (CHAOS-12997). Only an organization with no saved configuration falls through to the
+off any more. Only an organization with no saved configuration falls through to the
 oracle, and acr-api with no Dev Health entitlement client (local/dev) has no per-organization
 source at all. Run oracle questions as an organization that has saved no model configuration. The
 controls are in `internal/runtime/hosted/oracle_spend_guard_test.go`: with no entitlement client an
@@ -444,9 +444,9 @@ workflow from the reviewed ACR branch and pass the reviewed sibling ref explicit
 
 ```bash
 gh workflow run fullstack-acceptance.yml --repo full-chaos/dev-health-acr \
-  --ref feat/chaos-3096-acr-mcp-login \
+  --ref feat/acr-mcp-login \
   -f scenario=full \
-  -f web_ref=feat/chaos-3096-device-approval
+  -f web_ref=feat/device-approval
 ```
 
 Leaving `web_ref` empty preserves the sibling repository's default-branch checkout. The run
@@ -544,7 +544,7 @@ Request IDs, packet IDs, fixture IDs, image digests and repository SHAs are reta
 | Nightly / full | 001–005 | scripted (+ optional local smoke) | yes | schedule |
 | Release gate | 001–005 | scripted | yes | release; uses the built image and released `acr-mcp` archive |
 
-### 10.1 The dev-health-ops commit (CHAOS-11974)
+### 10.1 The dev-health-ops commit
 
 Every job that uses `dev-health/ops` checks it out through one composite action, `.github/actions/ops-checkout`:
 
@@ -563,7 +563,7 @@ Every job that uses `dev-health/ops` checks it out through one composite action,
 
 ## 11. Acceptance criteria map
 
-Where each of CHAOS-3065's acceptance criteria is enforced, so a reviewer can check the claim
+Where each of the full-stack acceptance gate's acceptance criteria is enforced, so a reviewer can check the claim
 rather than take it on trust.
 
 | Criterion | Enforced by |
@@ -640,7 +640,7 @@ its own, not deeply enough to catch a nested write inside a directory that alrea
 real boundary would need a container or a user namespace; that is a bigger change than this
 gate warranted.
 
-**A smoke run does not run the web agreement check (CHAOS-12057).** The check compares
+**A smoke run does not run the web agreement check.** The check compares
 `task-002-auth-refactor-branch` (`WEB_AGREEMENT_TASK`), which only the `full` profile runs. A
 `smoke` run with the web check on, such as a manual dispatch, still runs the device-login
 lifecycle. Before it grades any task, it reports the agreement check as NOT RUN: a `WARN` line and

@@ -16,9 +16,9 @@ generated request ID for correlation and these bounded dimensions:
   Operations: `health`, `readiness`, `capabilities`, `context`, `evidence`,
   `snapshot`, `episode`, `investigation`, `investigation_result`,
   `submission_status`, `submission_attach` and `submission_cancel` (a leased
-  run's attach and cancel, CHAOS-11949), `threads` (the Ask Dev conversation
+  run's attach and cancel, the Ask Dev run-lease work), `threads` (the Ask Dev conversation
   list), `thread` (one conversation's read or delete), `result_feedback` (the
-  Ask Dev answer feedback read or set, CHAOS-11950), `data_catalog`,
+  Ask Dev answer feedback read or set, the Ask Dev feedback-storage work), `data_catalog`,
   `data_subjects`, `data_facts`,
   `data_relationships`, `data_operations`, `data_graphql`, or `unknown`
 - `outcome`: `success`, `failure`, `denied`, `canceled`, or `unknown`
@@ -34,7 +34,7 @@ generated request ID for correlation and these bounded dimensions:
   request rate limit (`rate_limited`) and the shared Ask Dev admission
   refusals (`concurrency_limited`, `allowance_exhausted`).
 
-The Ask Dev conversation routes (CHAOS-11948) write one Info line per request,
+The Ask Dev conversation routes write one Info line per request,
 `context fabric thread`: `route` (`list`, `get`, `delete`), a closed `outcome`
 (`listed`, `read`, `closed`, `not_open`, `not_found`, `invalid_request`,
 `store_unavailable`, `gate_unavailable`, `invalid_record`, `owner_unknown`), and
@@ -46,7 +46,7 @@ A turn naming a deleted, expired or full conversation is refused on the
 admission line with outcome `refused_thread_closed` and a
 `thread_closed_reason`.
 
-The Ask Dev answer feedback route (CHAOS-11950) writes one line per request,
+The Ask Dev answer feedback route writes one line per request,
 `context fabric result feedback`: `route` (`get`, `set`) and a closed `outcome`
 (`read`, `set`, `invalid_request`, `not_served`, `not_owned`,
 `gate_unavailable`, `not_found`, `store_unavailable`, `invalid_record`); a
@@ -92,11 +92,11 @@ log line that already certifies the outcome, never on a second path.
 | `acr_graph_bootstrap_waits_total` | counter | `outcome` (`bootstrapped`, `took_over`, `other`) | acr-api and `acr-projector serve`, at the graph key's bootstrap gate: one count per writer that found the gate held by another writer and blocked on it (a writer that finds the gate free, including the one that runs the bootstrap, counts nothing); `bootstrapped` is a wait that ended with the key already bootstrapped, `took_over` a wait that ended after the holder failed so the waiter ran the bootstrap itself; `other` is the defensive bucket (not produced today) |
 | `acr_graph_bootstrap_wait_seconds` | histogram | `outcome` (`bootstrapped`, `took_over`, `other`) | same site as `acr_graph_bootstrap_waits_total`: seconds the waiter spent blocked on the gate. A waiter cannot time out and a cancelled context does not end the wait today (the gate is an uncancellable mutex), so this histogram is unbounded above by design: a stuck bootstrap shows as waits that never record, then one very large sample when it ends |
 | `acr_fact_read_aborts_total` | counter | `cause` | acr-api investigation failure line, fact read abort |
-| `acr_clickhouse_statement_near_memory_cap_total` | counter | none | acr-api and `acr-projector serve` WARN line (acr-projector rebuild and rollback log only, no counter) `clickhouse statement memory near cap` (statement hash, first words, peak and cap bytes; a statement the server refused at its own `max_memory_usage` counts too, with the cap as its peak and `peak_is_lower_bound=true`). A refusal by the server's TOTAL memory limit (code 241 "(total)") counts too, but writes `clickhouse server memory limit refused a statement` instead (statement hash, first words, the statement's observed `peak_bytes`, `statement_cap_bytes`), never the cap as its peak (CHAOS-12683) |
+| `acr_clickhouse_statement_near_memory_cap_total` | counter | none | acr-api and `acr-projector serve` WARN line (acr-projector rebuild and rollback log only, no counter) `clickhouse statement memory near cap` (statement hash, first words, peak and cap bytes; a statement the server refused at its own `max_memory_usage` counts too, with the cap as its peak and `peak_is_lower_bound=true`). A refusal by the server's TOTAL memory limit (code 241 "(total)") counts too, but writes `clickhouse server memory limit refused a statement` instead (statement hash, first words, the statement's observed `peak_bytes`, `statement_cap_bytes`), never the cap as its peak |
 | `acr_clickhouse_statement_peak_unobserved_total` | counter | none | acr-api and `acr-projector serve` WARN line (acr-projector rebuild and rollback log only, no counter) `clickhouse statement sent no peak memory value` (one per statement hash per process; the counter counts every statement) |
 | `acr_investigation_latency_seconds` | histogram | `status` (`error` when no answer was delivered, including a 413 from a response-size gate and an event stream that ends with `error{budget_refusal}` or no terminal) | acr-api investigation route |
-| `acr_investigation_events_dropped_total` | counter | `stage` (`interpreting`, `resolving_subjects`, `reading_facts`, `synthesizing`, `validating`, `other`) | acr-api investigation event stream (CHAOS-11910): one count per stage transition the request's sink did not send because its buffer was full, so the transition never reached the stream; the route records the counts after the run. The engine never waits on the stream writer; a production sink holds 32 transitions and a run makes at most 10, so the expected value is 0 and any count is a defect signal; `other` is the defensive bucket (not produced) |
-| `acr_entitlement_credential_total` | counter | `class` (`workload`, `other`), `outcome` (`sent`, `token_unavailable`, `other`) | acr-api (CHAOS-11203; `acr-projector purge` sends the same credential but records no counter): one count per call of the Dev Health entitlement client (health, entitlement and organization-unknown reads, llm-config, principal access). The workload token is the one credential (CHAOS-13600). `token_unavailable` is a call that was not sent because no token could be minted |
+| `acr_investigation_events_dropped_total` | counter | `stage` (`interpreting`, `resolving_subjects`, `reading_facts`, `synthesizing`, `validating`, `other`) | acr-api investigation event stream: one count per stage transition the request's sink did not send because its buffer was full, so the transition never reached the stream; the route records the counts after the run. The engine never waits on the stream writer; a production sink holds 32 transitions and a run makes at most 10, so the expected value is 0 and any count is a defect signal; `other` is the defensive bucket (not produced) |
+| `acr_entitlement_credential_total` | counter | `class` (`workload`, `other`), `outcome` (`sent`, `token_unavailable`, `other`) | acr-api (`acr-projector purge` sends the same credential but records no counter): one count per call of the Dev Health entitlement client (health, entitlement and organization-unknown reads, llm-config, principal access). The workload token is the one credential. `token_unavailable` is a call that was not sent because no token could be minted |
 
 The investigation failure line of a budget refusal (the 413 above) carries what
 was measured, for diagnosis without the response body: `budget_overrun` (`items`

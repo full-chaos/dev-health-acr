@@ -36,7 +36,7 @@ Every Context Fabric route (`/api/v1/context-fabric/*`: investigations, results,
 submissions and their events and cancel, feedback, threads, and the `data/*`
 reads) takes a validated credential only: a web assertion there is refused `401`
 `invalid_token` and the failure line carries the reason
-`web_assertion_not_accepted_on_route` (CHAOS-12109). Credential administration and episode write routes remain
+`web_assertion_not_accepted_on_route`. Credential administration and episode write routes remain
 bearer-only, except that device approval accepts a trusted web assertion carrying
 only `credential:issue` for its exact request-bound approval body. This is a
 trusted-assertion permission, never an `fcacr_` credential scope: the assertion
@@ -65,7 +65,7 @@ the normal `Principal.RepositoryScopes` and still calls `AuthorizeRepository`.
 A lone `["*"]` (every repository of the signed `org_id`) is accepted in two
 cases only. With exactly `credential:issue` on `POST` to the device approval,
 `/authorize/consent` and `/authorize/first-party`. And on the read routes with
-exactly the permission set web sends there (CHAOS-13612): `GET capabilities`
+exactly the permission set web sends there: `GET capabilities`
 with `context:read` and `evidence:read`, `POST context-packets` with
 `context:read`, and `GET evidence/{evidence_ref_id}` (one non-empty escaped
 path segment, not `.` or `..`) with `evidence:read`. Any other permission set,

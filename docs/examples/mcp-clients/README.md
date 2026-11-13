@@ -243,7 +243,7 @@ OpenCode, Claude Code, and Codex are required when their native commands are
 installed. Cursor package and fixture validation always runs; native Cursor
 runs only when `agent` is installed and reports `cursor_client=installed` or
 `cursor_client=not_installed`. Unix/Linux/macOS paths are exercised. Cursor's
-Windows/NTFS lifecycle is deferred to CHAOS-3058 and is not a blocker.
+Windows/NTFS lifecycle is deferred to the Windows/NTFS lifecycle follow-up and is not a blocker.
 
 Every client keeps the hosted packet authoritative. Hosted-only mode is
 supported; mixed mode can add evidence from an existing CodeGraph index, which

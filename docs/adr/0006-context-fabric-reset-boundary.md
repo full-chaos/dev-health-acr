@@ -2,7 +2,6 @@
 
 - Status: Accepted
 - Date: 2026-08-11
-- Linear: CHAOS-3742, CHAOS-3744, CHAOS-3745
 
 ## Context
 
