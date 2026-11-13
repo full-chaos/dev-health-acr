@@ -444,9 +444,9 @@ workflow from the reviewed ACR branch and pass the reviewed sibling ref explicit
 
 ```bash
 gh workflow run fullstack-acceptance.yml --repo full-chaos/dev-health-acr \
-  --ref feat/acr-mcp-login \
+  --ref <acr-branch> \
   -f scenario=full \
-  -f web_ref=feat/device-approval
+  -f web_ref=<reviewed-web-branch>
 ```
 
 Leaving `web_ref` empty preserves the sibling repository's default-branch checkout. The run

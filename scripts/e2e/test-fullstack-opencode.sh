@@ -256,7 +256,7 @@ jq -e '.["$schema"] and .properties.schema_version.const == "context_fabric_agen
 grep -Fq 'fullstack-opencode-e2e' "$root/docs/fullstack-acceptance.md" || fail 'the documented command is missing'
 grep -Fq 'None of the existing suites may be relabelled as this gate' "$root/docs/fullstack-acceptance.md" \
   || fail 'the documentation must distinguish this gate from the existing suites'
-grep -Fq -- '-f web_ref=feat/chaos-3096-device-approval' "$root/docs/fullstack-acceptance.md" \
+grep -Fq -- '-f web_ref=<reviewed-web-branch>' "$root/docs/fullstack-acceptance.md" \
   || fail 'the documented workflow dispatch must name the reviewed web ref'
 
 grep -Fq 'web_ref:' "$workflow" || fail 'workflow dispatch must accept a web_ref input'
