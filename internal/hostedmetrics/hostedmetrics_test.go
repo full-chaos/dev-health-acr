@@ -118,7 +118,7 @@ func TestEntitlementCredentialBucketsBothLabels(t *testing.T) {
 	instruments.EntitlementCredential(ctx, "workload", "sent")
 	instruments.EntitlementCredential(ctx, "workload", "token_unavailable")
 	instruments.EntitlementCredential(ctx, "a retired class", "sent")
-	instruments.EntitlementCredential(ctx, "svc_acr_a1b2", "a free text outcome")
+	instruments.EntitlementCredential(ctx, "retired_a1b2", "a free text outcome")
 	name := hostedmetrics.EntitlementCredentialName
 	want := map[string]int64{
 		name + "{class=workload,outcome=sent}":              2,

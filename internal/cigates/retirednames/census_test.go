@@ -21,6 +21,7 @@ var retiredNames = map[string]*regexp.Regexp{
 	"servicecredcli / servicecred store (ops CHAOS-11245)":                                              regexp.MustCompile(`servicecredcli|internal/auth/servicecred\b`),
 	"e2e service-token helpers (retired with svc_acr_ minting)":                                         regexp.MustCompile(`mint_ops_service_token|ops-probe-token`),
 	"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE (service token entitlement credential removed, CHAOS-13600)": regexp.MustCompile(`ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`),
+	"svc_acr_ credential prefix (retired with the ops service credential, CHAOS-13170; CHAOS-11249)":    regexp.MustCompile(`\bsvc_acr_`),
 	"service_token entitlement credential value (removed, CHAOS-13600)":                                 regexp.MustCompile(`\bservice_token\b`),
 }
 
@@ -31,6 +32,16 @@ var allowed = map[string]bool{
 	// The Warn site of the ignored token file setting and the refusal of the removed credential value, and its test.
 	"internal/config/entitlement.go":                 true,
 	"internal/config/entitlement_credential_test.go": true,
+	// Refusal cells: each presents a svc_acr_ bearer on purpose to prove acr refuses it.
+	// Redaction/leak detection of a retired token: a retired token can still exist in the wild, so these keep matching it.
+	"scripts/e2e/fullstack-opencode.sh":                          true,
+	"tests/fullstack/assertrun/redact.go":                        true,
+	"tests/fullstack/assertrun/redact_test.go":                   true,
+	"scripts/e2e/compose.sh":                                     true,
+	"internal/auth/middleware_credential_classes_test.go":        true,
+	"internal/api/public_routes_foreign_tokens_test.go":          true,
+	"internal/sidecar/credential_class_matrix_test.go":           true,
+	"internal/sidecar/api_client_credential_class_guard_test.go": true,
 }
 
 func repoRoot(t *testing.T) string {
@@ -122,6 +133,7 @@ func TestEveryRetiredNameIsDetected(t *testing.T) {
 		"e2e service-token helpers":             "mint_ops_service_token",
 		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: /var/run/acr/entitlement/token",
 		"service_token entitlement":             "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=service_token",
+		"svc_acr_ credential prefix":            `Authorization: Bearer svc_acr_abc`,
 	}
 	for prefix, line := range planted {
 		matched := false
@@ -134,7 +146,7 @@ func TestEveryRetiredNameIsDetected(t *testing.T) {
 			t.Errorf("planted line for %q was not detected", prefix)
 		}
 	}
-	for _, kept := range []string{"internal_service_credential_audits", "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=workload", "a_service_token_b", "svc_acr_"} {
+	for _, kept := range []string{"internal_service_credential_audits", "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=workload", "a_service_token_b", "internal_svc_acr_token", "svc_acr"} {
 		if got := scanText("x", []byte(kept)); len(got) != 0 {
 			t.Errorf("%q is live and must not match: %v", kept, got)
 		}

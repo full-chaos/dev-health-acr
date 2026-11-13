@@ -533,8 +533,7 @@ containers, volumes, credentials, or modified host configuration unless `E2E_DEB
 `context-packet.json`, `expanded-evidence/*.json`, `opencode-events.jsonl`,
 `agent-result.json`, `assertion-report.json`, `logs/*.log`, and `playwright/`.
 
-Redaction rules follow `redact_log` in `scripts/e2e/compose.sh`: no ACR (`fcacr_*`), Ops
-(`svc_acr_*`), model-provider or session tokens; DSNs and `Authorization` headers replaced.
+Redaction rules follow `redact_log` in `scripts/e2e/compose.sh`: no ACR (`fcacr_*`), model-provider or session tokens; DSNs and `Authorization` headers replaced.
 Request IDs, packet IDs, fixture IDs, image digests and repository SHAs are retained.
 
 ## 10. CI profiles
