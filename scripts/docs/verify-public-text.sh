@@ -11,7 +11,7 @@
 # not exist or a glob typo cannot read as a pass.
 #
 # Exact-context exemptions (a public pin is not internal text): a 64-hex digest right
-# after `@sha256:` (an OCI image reference) or on a line that says SHA-256 (a published
+# after `@sha256:` (an OCI image reference) or in the form SHA-256 `<digest>` (a published
 # asset checksum); the literal host names `host.docker.internal` and
 # `acr.internal.example`.
 #
@@ -64,7 +64,7 @@ classes=(
   'lane name~~(^|[^A-Za-z0-9])lane-[0-9]+~~'
   'run id~~run-[a-z0-9]+-[0-9]+~~'
   'record checksum~~`[0-9a-f]{12}`~~'
-  'sha256 digest~~(^|[^0-9A-Fa-f])[0-9a-f]{64}([^0-9A-Fa-f]|$)~~/[Ss][Hh][Aa]-256/d;s/@sha256:[0-9a-f]{64}//g'
+  'sha256 digest~~(^|[^0-9A-Fa-f])[0-9a-f]{64}([^0-9A-Fa-f]|$)~~s/[Ss][Hh][Aa]-256 `[0-9a-f]{64}`//g;s/@sha256:[0-9a-f]{64}//g'
   'local path~~(/var/lib/|/home/[a-z]|/Users/[A-Za-z]|/tmp/)~~'
   'internal host~~(bigboy|[A-Za-z0-9-]+\.internal([^A-Za-z0-9]|$))~~s/host\.docker\.internal//g;s/acr\.internal\.example//g'
 )

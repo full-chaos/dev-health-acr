@@ -27,12 +27,29 @@ def blocks(text):
     return out
 
 
+ARROWS = ("-->>", "--x", "-->", "->>", "-x", "->")
+
+
+def count_arrows(text):
+    """Count sequence-diagram arrows by scanning for the longest token at each position."""
+    n, i = 0, 0
+    while i < len(text):
+        for token in ARROWS:
+            if text.startswith(token, i):
+                n += 1
+                i += len(token)
+                break
+        else:
+            i += 1
+    return n
+
+
 def counts(block):
     first = next((l.strip() for l in block if l.strip()), "")
     if not re.match(r"^(flowchart|graph)\b", first):
         # sequence and other diagrams: unquoted text sits in the statements, so count statements and arrows
         stmts = [l for l in block if l.strip()]
-        return len(stmts), sum(len(re.findall(r"-->>|->>|--x|-x|-->|->", l.split(":", 1)[0])) for l in stmts)
+        return len(stmts), sum(count_arrows(l.split(":", 1)[0]) for l in stmts)
     body = []
     for line in block:
         line = re.sub(r'"[^"]*"', '""', line)

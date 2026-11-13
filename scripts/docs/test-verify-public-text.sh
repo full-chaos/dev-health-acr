@@ -25,6 +25,7 @@ for case_and_label in \
   'internal-host:internal host' \
   'lowercase-tracker-id:tracker id' \
   'sha256-digest:sha256 digest' \
+  'stray-sha256-line:sha256 digest' \
   'old-rollback:drill record name'; do
   fixture="${case_and_label%%:*}"
   label="${case_and_label#*:}"
