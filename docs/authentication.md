@@ -88,6 +88,8 @@ assertion without the claim.
 
 ## Lifecycle
 
+Operator runbooks: [revoke an ACR credential](runbooks/credential-revoke.md) and [rotate the acr-api workload credential](runbooks/workload-rotation.md).
+
 Credential services support create, list, rotate, and revoke operations. Rotation defaults to immediate cutover and may request a bounded overlap of no more than 15 minutes. Expired or revoked credentials return the generic `invalid_token` contract response so callers cannot enumerate credential state.
 
 Authorization is evaluated when middleware looks up the credential. A request authenticated before a revocation transaction commits may finish with its established principal; revocation does not cancel in-flight handlers. Every credential lookup that starts after the commit rejects the revoked token. This is the standard request-boundary model rather than continuous authorization during handler execution.

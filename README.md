@@ -46,6 +46,8 @@ docs/                         PRD, threat model, versioning, implementation note
 docs/implementation-backlog.md  Linear issue reinterpretation and critical path
 docs/service-shell.md          `acr-api` configuration and operational behavior
 docs/device-approval.md         Device approval: sequence and token diagrams, ACR checks
+docs/runbooks/                Operator runbooks: credential revoke, workload rotation
+docs/release-notes/           Release notes for drills and runbooks
 ```
 
 ## Contract versions
