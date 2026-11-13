@@ -114,6 +114,9 @@ func (a *App) handleDeviceCodeToken(w http.ResponseWriter, r *http.Request) {
 		}
 		var pollError *auth.DevicePollError
 		if errors.As(err, &pollError) {
+			if pollError.Outcome != "" {
+				a.logger.InfoContext(r.Context(), "device token refused", "reason", pollError.Outcome, "request_id", RequestID(r.Context()))
+			}
 			a.writeOAuthDeviceError(w, contractsv1.OAuthDeviceErrorCode(pollError.Kind), pollError.RetryAfter)
 			return
 		}
@@ -132,6 +135,7 @@ func (a *App) handleDeviceCodeToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Flow and token diagrams: internal/auth/device-approval-architecture.md (public page: docs/device-approval.md)
 func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 	var request contractsv1.DeviceApprovalRequest
 	if err := decodeJSONBody(w, r, a.config.MaxRequestBodyBytes, &request); err != nil {
@@ -147,16 +151,16 @@ func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if request.SchemaVersion == contractsv1.DeviceApprovalPreviewRequestSchema {
-		if request.RepositoryScopes != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, bodyFieldDetails("repository_scopes"))
-			return
-		}
-		previewRequest := contractsv1.DeviceApprovalPreviewRequest{SchemaVersion: request.SchemaVersion, UserCode: request.UserCode}
+		previewRequest := contractsv1.DeviceApprovalPreviewRequest{SchemaVersion: request.SchemaVersion, UserCode: request.UserCode, RepositoryScopes: request.RepositoryScopes}
 		if err := previewRequest.Validate(); err != nil {
-			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, schemaViolationDetails())
+			details := schemaViolationDetails()
+			if errors.Is(err, contractsv1.ErrTooManyRepositoryScopes) {
+				details = tooManyRepositoriesDetails()
+			}
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, details)
 			return
 		}
-		preview, err := a.deviceFlow.Preview(r.Context(), auth.DeviceApprovalPreviewRequest{Principal: principal, UserCode: previewRequest.UserCode})
+		preview, err := a.deviceFlow.Preview(r.Context(), auth.DeviceApprovalPreviewRequest{Principal: principal, UserCode: previewRequest.UserCode, RepositoryScopes: previewRequest.RepositoryScopes})
 		if err != nil {
 			a.logDevicePreviewFailure(r, err)
 			a.writeDeviceApprovalError(w, r, err)
@@ -171,7 +175,11 @@ func (a *App) handleDeviceApproval(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := request.Validate(); err != nil {
-		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, schemaViolationDetails())
+		details := schemaViolationDetails()
+		if errors.Is(err, contractsv1.ErrTooManyRepositoryScopes) {
+			details = tooManyRepositoriesDetails()
+		}
+		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, details)
 		return
 	}
 	if _, err := a.deviceFlow.Approve(r.Context(), auth.DeviceApprovalRequest{
@@ -191,17 +199,44 @@ func (a *App) writeDeviceApprovalError(w http.ResponseWriter, r *http.Request, e
 		writeError(w, r, http.StatusConflict, "device_authorization_conflict", "Device authorization is no longer pending", false, nil)
 		return
 	}
-	if errors.Is(err, auth.ErrImpersonatedApproval) {
-		// CHAOS-12123: the one refusal of this route named by its reason.
+	if reason := deviceApprovalRefusalReason(err); reason != "" {
+		// CHAOS-12123: the refusals of this route named by their reason.
 		a.logger.InfoContext(r.Context(), "device approval refused",
-			"reason", oauthvocab.OutcomeImpersonating,
+			"reason", reason,
 			"request_id", RequestID(r.Context()))
+	}
+	if errors.Is(err, auth.ErrApprovalNotPermitted) {
+		writeError(w, r, http.StatusForbidden, contractsv1.ErrorCodeAccessDenied, "The approval is not permitted", false, nil)
+		return
 	}
 	if errors.Is(err, auth.ErrInvalidDeviceFlow) || errors.Is(err, storage.ErrDeviceAuthorizationNotFound) || errors.Is(err, storage.ErrDeviceAuthorizationExpired) {
 		writeError(w, r, http.StatusBadRequest, "invalid_request", "Device approval request is invalid", false, nil)
 		return
 	}
 	a.writeDeviceDependencyError(w, r)
+}
+
+// tooManyRepositoriesDetails is the details of an approval naming more than
+// contractsv1.MaxRepositoryScopes repositories (CHAOS-13562).
+func tooManyRepositoriesDetails() map[string]any {
+	return map[string]any{"reason": contractsv1.TooManyRepositoriesReason, "max_repository_scopes": contractsv1.MaxRepositoryScopes}
+}
+
+// deviceApprovalRefusalReason is the oauthvocab outcome of a named approval refusal, or "".
+func deviceApprovalRefusalReason(err error) string {
+	switch {
+	case errors.Is(err, auth.ErrImpersonatedApproval):
+		return oauthvocab.OutcomeImpersonating
+	case errors.Is(err, auth.ErrApprovalOrganizationGone):
+		return oauthvocab.OutcomeOrganizationUnknown
+	case errors.Is(err, auth.ErrApprovalOrganizationDisabled):
+		return oauthvocab.OutcomeOrganizationDisabled
+	case errors.Is(err, auth.ErrApprovalNotPermitted):
+		return oauthvocab.OutcomeAccessDenied
+	case errors.Is(err, auth.ErrApprovalDecisionUnavailable):
+		return oauthvocab.OutcomeUnavailable
+	}
+	return ""
 }
 
 func (a *App) handleRotateSelfCredential(w http.ResponseWriter, r *http.Request) {
@@ -316,7 +351,15 @@ func (a *App) selfLifecycleHandler(next http.Handler) http.Handler {
 	if a.runtime == nil || a.authenticator == nil {
 		return http.HandlerFunc(a.handleRuntimeUnavailable)
 	}
-	return a.authenticator.Middleware(a.ProtectedHandler(limits.RequestClassAuth, next))
+	return a.authenticator.MiddlewareWithOrganizationCheck(auth.OrganizationCheckRequired, a.ProtectedHandler(limits.RequestClassAuth, next))
+}
+
+// selfRevokeHandler is selfLifecycleHandler without the organization check: revoking a gone organization's credential only removes it.
+func (a *App) selfRevokeHandler(next http.Handler) http.Handler {
+	if a.runtime == nil || a.authenticator == nil {
+		return http.HandlerFunc(a.handleRuntimeUnavailable)
+	}
+	return a.authenticator.MiddlewareWithOrganizationCheck(auth.OrganizationCheckSkipped, a.ProtectedHandler(limits.RequestClassAuth, next))
 }
 
 func (a *App) deviceRuntimeHandler(next http.Handler) http.Handler {

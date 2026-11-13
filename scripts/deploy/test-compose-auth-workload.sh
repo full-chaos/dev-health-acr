@@ -54,11 +54,8 @@ for pair in \
   jq -e --arg k "$key" --arg w "$want" '.services["acr-api"].environment[$k] == $w' "$work/overlay.json" >/dev/null \
     || fail "acr-api $key is not $want"
 done
-jq -e '.services["acr-api"].environment.ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL == "service_token"' "$work/overlay.json" >/dev/null \
-  || fail 'the overlay must keep the service token credential unless the flag is set'
-render overlay AUTH_TOKEN_ISSUER_URL="$issuer" ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=workload >"$work/overlay-workload.json" || fail 'overlay render with the flag failed'
-jq -e '.services["acr-api"].environment.ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL == "workload"' "$work/overlay-workload.json" >/dev/null \
-  || fail 'the flag must reach acr-api'
+jq -e '.services["acr-api"].environment | has("ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL") | not' "$work/overlay.json" >/dev/null \
+  || fail 'the overlay must not set the entitlement credential (workload is the only one; the e2e sets the entitlement URL)'
 jq -e '.services["acr-api"].volumes | map(select(.target == "/run/workload")) | length == 1
   and .[0].type == "volume" and .[0].source == "acr_workload_bootstrap" and .[0].read_only == true' \
   "$work/overlay.json" >/dev/null || fail 'acr-api must mount the credential volume read-only at /run/workload'

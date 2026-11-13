@@ -19,7 +19,8 @@ func FieldKeys(e Event) []string {
 // ByID is the generated lookup from Event.ID to its declaration -- generated
 // rather than hand-maintained so it can never drift from All.
 var ByID = map[string]Event{
-	"api.oauth_step": OAuthStep,
+	"api.credential_revoke_on_behalf":                                  CredentialRevokeOnBehalf,
+	"api.oauth_step":                                                   OAuthStep,
 	"contextfabric.anchor_binding_transition":                          AnchorBindingTransition,
 	"contextfabric.answer_display":                                     AnswerDisplay,
 	"contextfabric.answer_reuse_bypass":                                AnswerReuseBypass,
@@ -102,6 +103,7 @@ var ByID = map[string]Event{
 	"contextfabric.projected_rows_count":                               ProjectedRowsCount,
 	"contextfabric.pull_request_status_filter":                         PullRequestStatusFilter,
 	"contextfabric.question_family_resolution":                         QuestionFamilyResolution,
+	"contextfabric.read_fallback_decision":                             ReadFallbackDecision,
 	"contextfabric.read_requirement_population":                        ReadRequirementPopulation,
 	"contextfabric.remembered_window_axis":                             RememberedWindowAxis,
 	"contextfabric.render_shape_rule_skipped":                          RenderShapeRuleSkipped,
@@ -160,8 +162,12 @@ var ByID = map[string]Event{
 	"devhealthfacts.team_linked_mix_native_first":                      TeamLinkedMixNativeFirst,
 	"devhealthfacts.team_linked_mix_set":                               TeamLinkedMixSet,
 	"devhealthfacts.team_pr_link_state_native_first":                   TeamPRLinkStateNativeFirst,
+	"devhealthsource.table_read_drained":                               DevhealthsourceTableReadDrained,
+	"devhealthsource.table_read_not_new":                               DevhealthsourceTableReadNotNew,
+	"devhealthsource.table_read_page":                                  DevhealthsourceTableReadPage,
 	"genkitruntime.model_interpret_decision":                           ModelInterpretDecision,
 	"genkitruntime.model_phrase_decision":                              ModelPhraseDecision,
+	"genkitruntime.model_plan_reads_decision":                          ModelPlanReadsDecision,
 	"genkitruntime.model_synthesize_decision":                          ModelSynthesizeDecision,
 	"graphrank.alias_lookup":                                           AliasLookup,
 	"graphrank.anchor_kind_withheld":                                   AnchorKindWithheld,
@@ -209,6 +215,56 @@ var ByID = map[string]Event{
 	"mcp.http_serving":                                                 MCPHTTPServing,
 	"process.otel_export":                                              OTelExport,
 	"projectionrun.graph_count_check_finished":                         GraphCountCheckFinished,
+}
+
+// CredentialRevokeOnBehalfFields is api.credential_revoke_on_behalf's generated typed construction interface
+// (CHAOS-5516): one Go field per Field CredentialRevokeOnBehalf.Fields declares in spec.go.
+type CredentialRevokeOnBehalfFields struct {
+	RequestID string
+	ActorType string
+	Decision  string
+	Reason    string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every CredentialRevokeOnBehalfFields uniformly, set ONLY by NewCredentialRevokeOnBehalfFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewCredentialRevokeOnBehalfFields is the generated constructor for CredentialRevokeOnBehalfFields -- every
+// field CredentialRevokeOnBehalf.Fields declares is a required parameter.
+func NewCredentialRevokeOnBehalfFields(requestID string, actorType string, decision string, reason string) CredentialRevokeOnBehalfFields {
+	return CredentialRevokeOnBehalfFields{
+		RequestID:   requestID,
+		ActorType:   actorType,
+		Decision:    decision,
+		Reason:      reason,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewCredentialRevokeOnBehalfFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f CredentialRevokeOnBehalfFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns CredentialRevokeOnBehalf's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f CredentialRevokeOnBehalfFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"actor_type", contextfabric.SanitizeLogAttr(f.ActorType),
+		"decision", contextfabric.SanitizeLogAttr(f.Decision),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+	}
 }
 
 // OAuthStepFields is api.oauth_step's generated typed construction interface
@@ -4852,6 +4908,9 @@ type KindCarryFields struct {
 	RedeemedKind      string
 	SeedSource        string
 	ViaStoredAncestry bool
+	Visited           int
+	OtherEpochVisited int
+	WalkMs            int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every KindCarryFields uniformly, set ONLY by NewKindCarryFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -4865,7 +4924,7 @@ type KindCarryFields struct {
 
 // NewKindCarryFields is the generated constructor for KindCarryFields -- every
 // field KindCarry.Fields declares is a required parameter.
-func NewKindCarryFields(orgID string, outcome string, chainDepth int, carriedKind string, redeemedKind string, seedSource string, viaStoredAncestry bool) KindCarryFields {
+func NewKindCarryFields(orgID string, outcome string, chainDepth int, carriedKind string, redeemedKind string, seedSource string, viaStoredAncestry bool, visited int, otherEpochVisited int, walkMs int) KindCarryFields {
 	return KindCarryFields{
 		OrgID:             orgID,
 		Outcome:           outcome,
@@ -4874,6 +4933,9 @@ func NewKindCarryFields(orgID string, outcome string, chainDepth int, carriedKin
 		RedeemedKind:      redeemedKind,
 		SeedSource:        seedSource,
 		ViaStoredAncestry: viaStoredAncestry,
+		Visited:           visited,
+		OtherEpochVisited: otherEpochVisited,
+		WalkMs:            walkMs,
 		constructed:       true,
 	}
 }
@@ -4898,6 +4960,9 @@ func (f KindCarryFields) SlogArgs() []any {
 		"redeemed_kind", contextfabric.SanitizeLogAttr(f.RedeemedKind),
 		"seed_source", contextfabric.SanitizeLogAttr(f.SeedSource),
 		"via_stored_ancestry", f.ViaStoredAncestry,
+		"visited", f.Visited,
+		"other_epoch_visited", f.OtherEpochVisited,
+		"walk_ms", f.WalkMs,
 	}
 }
 
@@ -6588,6 +6653,65 @@ func (f QuestionFamilyResolutionFields) SlogArgs() []any {
 		"route_disposition", contextfabric.SanitizeLogAttr(f.RouteDisposition),
 		"route_switched", f.RouteSwitched,
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+	}
+}
+
+// ReadFallbackDecisionFields is contextfabric.read_fallback_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ReadFallbackDecision.Fields declares in spec.go.
+type ReadFallbackDecisionFields struct {
+	OrgID        string
+	Reason       string
+	Trigger      string
+	Outcome      string
+	PlannedKinds int
+	ErrorClass   string
+	Rejection    string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ReadFallbackDecisionFields uniformly, set ONLY by NewReadFallbackDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewReadFallbackDecisionFields is the generated constructor for ReadFallbackDecisionFields -- every
+// field ReadFallbackDecision.Fields declares is a required parameter.
+func NewReadFallbackDecisionFields(orgID string, reason string, trigger string, outcome string, plannedKinds int, errorClass string, rejection string) ReadFallbackDecisionFields {
+	return ReadFallbackDecisionFields{
+		OrgID:        orgID,
+		Reason:       reason,
+		Trigger:      trigger,
+		Outcome:      outcome,
+		PlannedKinds: plannedKinds,
+		ErrorClass:   errorClass,
+		Rejection:    rejection,
+		constructed:  true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewReadFallbackDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ReadFallbackDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ReadFallbackDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ReadFallbackDecisionFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"reason", contextfabric.SanitizeLogAttr(f.Reason),
+		"trigger", contextfabric.SanitizeLogAttr(f.Trigger),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"planned_kinds", f.PlannedKinds,
+		"error_class", contextfabric.SanitizeLogAttr(f.ErrorClass),
+		"rejection", contextfabric.SanitizeLogAttr(f.Rejection),
 	}
 }
 
@@ -8782,6 +8906,9 @@ type WindowCarryFields struct {
 	ChainDepth        int
 	SeedSource        string
 	ViaStoredAncestry bool
+	Visited           int
+	OtherEpochVisited int
+	WalkMs            int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every WindowCarryFields uniformly, set ONLY by NewWindowCarryFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -8795,13 +8922,16 @@ type WindowCarryFields struct {
 
 // NewWindowCarryFields is the generated constructor for WindowCarryFields -- every
 // field WindowCarry.Fields declares is a required parameter.
-func NewWindowCarryFields(orgID string, outcome string, chainDepth int, seedSource string, viaStoredAncestry bool) WindowCarryFields {
+func NewWindowCarryFields(orgID string, outcome string, chainDepth int, seedSource string, viaStoredAncestry bool, visited int, otherEpochVisited int, walkMs int) WindowCarryFields {
 	return WindowCarryFields{
 		OrgID:             orgID,
 		Outcome:           outcome,
 		ChainDepth:        chainDepth,
 		SeedSource:        seedSource,
 		ViaStoredAncestry: viaStoredAncestry,
+		Visited:           visited,
+		OtherEpochVisited: otherEpochVisited,
+		WalkMs:            walkMs,
 		constructed:       true,
 	}
 }
@@ -8824,6 +8954,9 @@ func (f WindowCarryFields) SlogArgs() []any {
 		"chain_depth", f.ChainDepth,
 		"seed_source", contextfabric.SanitizeLogAttr(f.SeedSource),
 		"via_stored_ancestry", f.ViaStoredAncestry,
+		"visited", f.Visited,
+		"other_epoch_visited", f.OtherEpochVisited,
+		"walk_ms", f.WalkMs,
 	}
 }
 
@@ -10383,6 +10516,210 @@ func (f TeamPRLinkStateNativeFirstFields) SlogArgs() []any {
 	}
 }
 
+// DevhealthsourceTableReadDrainedFields is devhealthsource.table_read_drained's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DevhealthsourceTableReadDrained.Fields declares in spec.go.
+type DevhealthsourceTableReadDrainedFields struct {
+	OrgID      string
+	Source     string
+	Table      string
+	Run        int
+	RowsTotal  int
+	Pages      int
+	Statements int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DevhealthsourceTableReadDrainedFields uniformly, set ONLY by NewDevhealthsourceTableReadDrainedFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDevhealthsourceTableReadDrainedFields is the generated constructor for DevhealthsourceTableReadDrainedFields -- every
+// field DevhealthsourceTableReadDrained.Fields declares is a required parameter.
+func NewDevhealthsourceTableReadDrainedFields(orgID string, source string, table string, run int, rowsTotal int, pages int, statements int) DevhealthsourceTableReadDrainedFields {
+	return DevhealthsourceTableReadDrainedFields{
+		OrgID:       orgID,
+		Source:      source,
+		Table:       table,
+		Run:         run,
+		RowsTotal:   rowsTotal,
+		Pages:       pages,
+		Statements:  statements,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDevhealthsourceTableReadDrainedFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DevhealthsourceTableReadDrainedFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DevhealthsourceTableReadDrained's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DevhealthsourceTableReadDrainedFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"source", contextfabric.SanitizeLogAttr(f.Source),
+		"table", contextfabric.SanitizeLogAttr(f.Table),
+		"run", f.Run,
+		"rows_total", f.RowsTotal,
+		"pages", f.Pages,
+		"statements", f.Statements,
+	}
+}
+
+// DevhealthsourceTableReadNotNewFields is devhealthsource.table_read_not_new's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DevhealthsourceTableReadNotNew.Fields declares in spec.go.
+type DevhealthsourceTableReadNotNewFields struct {
+	OrgID              string
+	Source             string
+	Table              string
+	Run                int
+	PageN              int
+	ConsumedRows       int
+	ConsumedNew        int
+	SharedPositionRows int
+	LastStamp          string
+	LastKeyDigest      string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DevhealthsourceTableReadNotNewFields uniformly, set ONLY by NewDevhealthsourceTableReadNotNewFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDevhealthsourceTableReadNotNewFields is the generated constructor for DevhealthsourceTableReadNotNewFields -- every
+// field DevhealthsourceTableReadNotNew.Fields declares is a required parameter.
+func NewDevhealthsourceTableReadNotNewFields(orgID string, source string, table string, run int, pageN int, consumedRows int, consumedNew int, sharedPositionRows int, lastStamp string, lastKeyDigest string) DevhealthsourceTableReadNotNewFields {
+	return DevhealthsourceTableReadNotNewFields{
+		OrgID:              orgID,
+		Source:             source,
+		Table:              table,
+		Run:                run,
+		PageN:              pageN,
+		ConsumedRows:       consumedRows,
+		ConsumedNew:        consumedNew,
+		SharedPositionRows: sharedPositionRows,
+		LastStamp:          lastStamp,
+		LastKeyDigest:      lastKeyDigest,
+		constructed:        true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDevhealthsourceTableReadNotNewFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DevhealthsourceTableReadNotNewFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DevhealthsourceTableReadNotNew's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DevhealthsourceTableReadNotNewFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"source", contextfabric.SanitizeLogAttr(f.Source),
+		"table", contextfabric.SanitizeLogAttr(f.Table),
+		"run", f.Run,
+		"page_n", f.PageN,
+		"consumed_rows", f.ConsumedRows,
+		"consumed_new", f.ConsumedNew,
+		"shared_position_rows", f.SharedPositionRows,
+		"last_stamp", contextfabric.SanitizeLogAttr(f.LastStamp),
+		"last_key_digest", contextfabric.SanitizeLogAttr(f.LastKeyDigest),
+	}
+}
+
+// DevhealthsourceTableReadPageFields is devhealthsource.table_read_page's generated typed construction interface
+// (CHAOS-5516): one Go field per Field DevhealthsourceTableReadPage.Fields declares in spec.go.
+type DevhealthsourceTableReadPageFields struct {
+	OrgID         string
+	Source        string
+	Table         string
+	Run           int
+	PageN         int
+	StatementRows int
+	StatementMore bool
+	ConsumedRows  int
+	ConsumedNew   int
+	ConsumedTotal int
+	Replay        bool
+	LastStamp     string
+	LastKeyDigest string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every DevhealthsourceTableReadPageFields uniformly, set ONLY by NewDevhealthsourceTableReadPageFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewDevhealthsourceTableReadPageFields is the generated constructor for DevhealthsourceTableReadPageFields -- every
+// field DevhealthsourceTableReadPage.Fields declares is a required parameter.
+func NewDevhealthsourceTableReadPageFields(orgID string, source string, table string, run int, pageN int, statementRows int, statementMore bool, consumedRows int, consumedNew int, consumedTotal int, replay bool, lastStamp string, lastKeyDigest string) DevhealthsourceTableReadPageFields {
+	return DevhealthsourceTableReadPageFields{
+		OrgID:         orgID,
+		Source:        source,
+		Table:         table,
+		Run:           run,
+		PageN:         pageN,
+		StatementRows: statementRows,
+		StatementMore: statementMore,
+		ConsumedRows:  consumedRows,
+		ConsumedNew:   consumedNew,
+		ConsumedTotal: consumedTotal,
+		Replay:        replay,
+		LastStamp:     lastStamp,
+		LastKeyDigest: lastKeyDigest,
+		constructed:   true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewDevhealthsourceTableReadPageFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f DevhealthsourceTableReadPageFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns DevhealthsourceTableReadPage's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f DevhealthsourceTableReadPageFields) SlogArgs() []any {
+	return []any{
+		"org_id", contextfabric.SanitizeLogAttr(f.OrgID),
+		"source", contextfabric.SanitizeLogAttr(f.Source),
+		"table", contextfabric.SanitizeLogAttr(f.Table),
+		"run", f.Run,
+		"page_n", f.PageN,
+		"statement_rows", f.StatementRows,
+		"statement_more", f.StatementMore,
+		"consumed_rows", f.ConsumedRows,
+		"consumed_new", f.ConsumedNew,
+		"consumed_total", f.ConsumedTotal,
+		"replay", f.Replay,
+		"last_stamp", contextfabric.SanitizeLogAttr(f.LastStamp),
+		"last_key_digest", contextfabric.SanitizeLogAttr(f.LastKeyDigest),
+	}
+}
+
 // ModelInterpretDecisionFields is genkitruntime.model_interpret_decision's generated typed construction interface
 // (CHAOS-5516): one Go field per Field ModelInterpretDecision.Fields declares in spec.go.
 type ModelInterpretDecisionFields struct {
@@ -10551,6 +10888,80 @@ func (f ModelPhraseDecisionFields) IsConstructed() bool { return f.constructed }
 // construction site inside this function's body -- the shape CHAOS-5544's
 // own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
 func (f ModelPhraseDecisionFields) SlogArgs() []any {
+	return []any{
+		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
+		"org_id_hash", contextfabric.SanitizeLogAttr(f.OrgIDHash),
+		"operation", contextfabric.SanitizeLogAttr(f.Operation),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"attempts", f.Attempts,
+		"model_id", contextfabric.SanitizeLogAttr(f.ModelID),
+		"model_version", contextfabric.SanitizeLogAttr(f.ModelVersion),
+		"prompt_version", contextfabric.SanitizeLogAttr(f.PromptVersion),
+		"attempts_total", f.AttemptsTotal,
+		"attempts_retried", f.AttemptsRetried,
+		"attempt_outcomes", contextfabric.SanitizeLogAttr(f.AttemptOutcomes),
+		"attempt_elapsed_ms", contextfabric.SanitizeLogAttr(f.AttemptElapsedMs),
+	}
+}
+
+// ModelPlanReadsDecisionFields is genkitruntime.model_plan_reads_decision's generated typed construction interface
+// (CHAOS-5516): one Go field per Field ModelPlanReadsDecision.Fields declares in spec.go.
+type ModelPlanReadsDecisionFields struct {
+	RequestID        string
+	OrgIDHash        string
+	Operation        string
+	Outcome          string
+	Attempts         int
+	ModelID          string
+	ModelVersion     string
+	PromptVersion    string
+	AttemptsTotal    int
+	AttemptsRetried  int
+	AttemptOutcomes  string
+	AttemptElapsedMs string
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every ModelPlanReadsDecisionFields uniformly, set ONLY by NewModelPlanReadsDecisionFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewModelPlanReadsDecisionFields is the generated constructor for ModelPlanReadsDecisionFields -- every
+// field ModelPlanReadsDecision.Fields declares is a required parameter.
+func NewModelPlanReadsDecisionFields(requestID string, orgIDHash string, operation string, outcome string, attempts int, modelID string, modelVersion string, promptVersion string, attemptsTotal int, attemptsRetried int, attemptOutcomes string, attemptElapsedMs string) ModelPlanReadsDecisionFields {
+	return ModelPlanReadsDecisionFields{
+		RequestID:        requestID,
+		OrgIDHash:        orgIDHash,
+		Operation:        operation,
+		Outcome:          outcome,
+		Attempts:         attempts,
+		ModelID:          modelID,
+		ModelVersion:     modelVersion,
+		PromptVersion:    promptVersion,
+		AttemptsTotal:    attemptsTotal,
+		AttemptsRetried:  attemptsRetried,
+		AttemptOutcomes:  attemptOutcomes,
+		AttemptElapsedMs: attemptElapsedMs,
+		constructed:      true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewModelPlanReadsDecisionFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f ModelPlanReadsDecisionFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns ModelPlanReadsDecision's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f ModelPlanReadsDecisionFields) SlogArgs() []any {
 	return []any{
 		"request_id", contextfabric.SanitizeLogAttr(f.RequestID),
 		"org_id_hash", contextfabric.SanitizeLogAttr(f.OrgIDHash),

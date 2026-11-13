@@ -51,26 +51,6 @@ spec:
             matchLabels:
               app.kubernetes.io/name: acr
               app.kubernetes.io/component: api
-      initContainers:
-        - name: prepare-entitlement-token
-          image: docker.io/library/busybox@sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028
-          command: ["sh", "-c", "umask 077 && cp /source/token /target/token"]
-          securityContext:
-            allowPrivilegeEscalation: false
-            privileged: false
-            readOnlyRootFilesystem: true
-            runAsNonRoot: true
-            runAsUser: 65532
-            capabilities:
-              drop: ["ALL"]
-            seccompProfile:
-              type: RuntimeDefault
-          volumeMounts:
-            - name: entitlement-token-source
-              mountPath: /source
-              readOnly: true
-            - name: entitlement-token
-              mountPath: /target
       containers:
         - name: acr-api
           image: acr-api
@@ -146,18 +126,19 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            - name: entitlement-token
-              mountPath: /var/run/acr/entitlement
+            - name: auth-workload-subject
+              mountPath: /var/run/secrets/dev-health/auth-workload
               readOnly: true
       volumes:
         - name: tmp
-          emptyDir: {}
-        - name: entitlement-token
           emptyDir:
             medium: Memory
-        - name: entitlement-token-source
-          secret:
-            secretName: acr-entitlement-token
-            items:
-              - key: token
-                path: token
+        # The subject of acr-api's workload-token exchange: the entitlement client sends the token it exchanges.
+        - name: auth-workload-subject
+          projected:
+            defaultMode: 256
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: dev-health-workload-exchange
+                  expirationSeconds: 600

@@ -907,3 +907,23 @@ func TestFallbackStillInvokedAndComposesCancelledWhenNeitherLegContactsProvider(
 		t.Fatalf("outcome = %q, want %q", got, "cancelled")
 	}
 }
+
+func (g *inCallCancelGenerator) PlanReads(context.Context, generationRequest) (planReadsOutput, contextfabric.ModelUsage, error) {
+	return planReadsOutput{}, contextfabric.ModelUsage{}, errors.New("inCallCancelGenerator.PlanReads is unused")
+}
+
+func (g *cancelAfterFirstAttemptGenerator) PlanReads(context.Context, generationRequest) (planReadsOutput, contextfabric.ModelUsage, error) {
+	return planReadsOutput{}, contextfabric.ModelUsage{}, errors.New("cancelAfterFirstAttemptGenerator.PlanReads is unused")
+}
+
+func (g *inCallCancelSynthesizeGenerator) PlanReads(context.Context, generationRequest) (planReadsOutput, contextfabric.ModelUsage, error) {
+	return planReadsOutput{}, contextfabric.ModelUsage{}, errors.New("inCallCancelSynthesizeGenerator.PlanReads is unused")
+}
+
+func (g *cancelThenInvalidInterpretGenerator) PlanReads(context.Context, generationRequest) (planReadsOutput, contextfabric.ModelUsage, error) {
+	return planReadsOutput{}, contextfabric.ModelUsage{}, errors.New("cancelThenInvalidInterpretGenerator.PlanReads is unused")
+}
+
+func (g *cancelThenInvalidSynthesizeGenerator) PlanReads(context.Context, generationRequest) (planReadsOutput, contextfabric.ModelUsage, error) {
+	return planReadsOutput{}, contextfabric.ModelUsage{}, errors.New("cancelThenInvalidSynthesizeGenerator.PlanReads is unused")
+}

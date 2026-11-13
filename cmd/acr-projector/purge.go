@@ -54,7 +54,9 @@ func purge(args []string) error {
 	if strings.TrimSpace(*org) == "" {
 		return errors.New("acr-projector purge requires --org")
 	}
-	entitlementClient, err := purgeEntitlementClient()
+	logger := slog.New(telemetryscrub.Handler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})))
+	telemetryscrub.InstallDefault(os.Stdout, cfg.LogLevel)
+	entitlementClient, err := purgeEntitlementClientFrom(os.LookupEnv, logger)
 	if err != nil {
 		return err
 	}
@@ -65,8 +67,6 @@ func purge(args []string) error {
 	if err := cfg.Validate(); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
-	logger := slog.New(telemetryscrub.Handler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: cfg.LogLevel})))
-	telemetryscrub.InstallDefault(os.Stdout, cfg.LogLevel)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -116,25 +116,17 @@ func purge(args []string) error {
 	return nil
 }
 
-func purgeEntitlementClient() (*entitlements.Client, error) {
-	return purgeEntitlementClientFrom(os.LookupEnv)
-}
-
-// purgeEntitlementClientFrom builds the entitlement client under the same ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL flag
-// acr-api reads: the purge must not keep a svc_acr_ caller once acr-api has left it. In workload mode the token file is
-// never read.
-func purgeEntitlementClientFrom(lookup func(string) (string, bool)) (*entitlements.Client, error) {
+// purgeEntitlementClientFrom builds the entitlement client with the workload credential acr-api sends, refuses the
+// entitlement settings acr-api refuses, and warns on the retired settings acr-api warns on.
+func purgeEntitlementClientFrom(lookup func(string) (string, bool), logger *slog.Logger) (*entitlements.Client, error) {
 	get := func(key string) string { v, _ := lookup(key); return strings.TrimSpace(v) }
-	rawURL, tokenFile := get("ACR_DEV_HEALTH_ENTITLEMENT_URL"), get("ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE")
-	credential := config.EntitlementCredential(get("ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL"))
-	switch credential {
-	case "", config.EntitlementCredentialServiceToken, config.EntitlementCredentialWorkload:
-	default:
-		return nil, errors.New("ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL must be service_token or workload")
+	config.WarnRetiredEntitlementSettings(logger, lookup)
+	if err := config.CheckEntitlementCredentialSettings(lookup); err != nil {
+		return nil, err
 	}
-	workload := credential == config.EntitlementCredentialWorkload
-	if rawURL == "" || (tokenFile == "" && !workload) {
-		return nil, errors.New("acr-projector purge requires ACR_DEV_HEALTH_ENTITLEMENT_URL and ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: it must ask Dev Health whether the organization still exists")
+	rawURL := get("ACR_DEV_HEALTH_ENTITLEMENT_URL")
+	if rawURL == "" {
+		return nil, errors.New("acr-projector purge requires ACR_DEV_HEALTH_ENTITLEMENT_URL and the auth workload client (ACR_AUTH_WORKLOAD_*): it must ask Dev Health whether the organization still exists")
 	}
 	baseURL, err := url.Parse(rawURL)
 	if err != nil {
@@ -146,20 +138,16 @@ func purgeEntitlementClientFrom(lookup func(string) (string, bool)) (*entitlemen
 			return nil, errors.New("ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL is invalid")
 		}
 	}
-	remote := entitlements.Config{BaseURL: baseURL, TokenFile: tokenFile, ProxyURL: proxyURL, CACertPath: get("ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE")}
-	if workload {
-		authCfg, err := config.LoadAuthWorkload(lookup)
-		if err != nil {
-			return nil, err
-		}
-		exchange, err := authworkload.Build(authCfg, slog.Default())
-		if err != nil {
-			return nil, err
-		}
-		if exchange == nil {
-			return nil, errors.New("the workload entitlement credential needs the auth workload client (ACR_AUTH_WORKLOAD_*)")
-		}
-		remote.Workload, remote.TokenFile = exchange, ""
+	authCfg, err := config.LoadAuthWorkload(lookup)
+	if err != nil {
+		return nil, err
 	}
-	return entitlements.New(remote)
+	exchange, err := authworkload.Build(authCfg, slog.Default())
+	if err != nil {
+		return nil, err
+	}
+	if exchange == nil {
+		return nil, errors.New("the workload entitlement credential needs the auth workload client (ACR_AUTH_WORKLOAD_*)")
+	}
+	return entitlements.New(entitlements.Config{BaseURL: baseURL, Workload: exchange, ProxyURL: proxyURL, CACertPath: get("ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE")})
 }

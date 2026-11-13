@@ -303,6 +303,9 @@ func (fixedRefreshStore) StartBrowserFamily(context.Context, storage.BrowserFami
 func (s fixedRefreshStore) RotateBrowserRefresh(context.Context, storage.BrowserRefreshRotation) (storage.BrowserRefreshOutcome, error) {
 	return s.outcome, nil
 }
-func (fixedRefreshStore) RevokeBrowserFamilyByToken(context.Context, string, string, string, time.Time) (storage.BrowserFamilyRevocationOutcome, error) {
+func (fixedRefreshStore) RevokeBrowserFamilyByToken(context.Context, string, string, string, storage.BrowserFamilyRevokeReason, time.Time) (storage.BrowserFamilyRevocationOutcome, error) {
 	return storage.BrowserFamilyRevocationOutcome{}, nil
+}
+func (fixedRefreshStore) BrowserRefreshFamilyOrg(context.Context, string, string) (string, error) {
+	return "", storage.ErrNotFound
 }

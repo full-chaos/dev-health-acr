@@ -13,6 +13,9 @@ import (
 
 // The ownership statements are split so the edge counts read the producers' own
 // row sources; the rendered producer statements must not change by one byte.
+// The project_teams_group goldens pin the test-only oracle copy
+// (ownership_legacy_export_test.go) to the statement the project -> team
+// producer ran before it read the stored groups.
 func TestOwnershipProducerStatementsAreByteIdenticalToTheGoldens(t *testing.T) {
 	t.Parallel()
 	for name, got := range map[string]string{
@@ -35,16 +38,16 @@ func TestOwnershipProducerStatementsAreByteIdenticalToTheGoldens(t *testing.T) {
 
 func TestOwnershipEdgeCountsReadTheProducersOwnRowSourceAndKeepTheirOmissions(t *testing.T) {
 	t.Parallel()
-	for _, ingest := range []bool{false, true} {
-		project := projectOwnershipEdgeCountSQL(ingest)
-		for _, want := range []string{
-			projectTeamsFromGroupSQL(ingest),
-			"HAVING NOT (" + projectTeamsSuppressedSQL + ")",
-			derivedIDFitsSQL(identity.KindProject, "g_provider", "g_project_id"),
-		} {
-			if !strings.Contains(project, want) {
-				t.Errorf("ingest=%v: project statement lacks %q", ingest, want)
-			}
+	project := projectOwnershipEdgeCountSQL()
+	for _, want := range []string{
+		"FROM project_team_ownership_groups_current FINAL",
+		"org_id = {org_id:String}",
+		"is_deleted = 0",
+		"edge_suppressed = 0",
+		derivedIDFitsSQL(identity.KindProject, "provider", "project_id"),
+	} {
+		if !strings.Contains(project, want) {
+			t.Errorf("project statement lacks %q", want)
 		}
 	}
 	repository := repositoryOwnershipEdgeCountSQL()
@@ -64,7 +67,7 @@ func TestOwnershipEdgeCountsReadTheProducersOwnRowSourceAndKeepTheirOmissions(t 
 			t.Errorf("work item statement lacks %q", want)
 		}
 	}
-	for _, statement := range []string{project0(), repository, workItem} {
+	for _, statement := range []string{project, repository, workItem} {
 		for _, banned := range []string{"LIMIT {row_limit", "{since_us", "ORDER BY"} {
 			if strings.Contains(statement, banned) {
 				t.Errorf("a count has no page or cursor (%q)", banned)
@@ -73,13 +76,11 @@ func TestOwnershipEdgeCountsReadTheProducersOwnRowSourceAndKeepTheirOmissions(t 
 	}
 }
 
-func project0() string { return projectOwnershipEdgeCountSQL(false) }
-
 func TestOwnedByTeamEdgeCountsReportEveryArmAndRefuseAnUnknownOne(t *testing.T) {
 	t.Parallel()
 	client := &edgeCountClient{rows: map[string][][]any{
-		"AS g_repo_key":   {{"repository", uint64(7)}},
-		"AS g_project_id": {{"project", uint64(3)}},
+		"AS g_repo_key":                         {{"repository", uint64(7)}},
+		"project_team_ownership_groups_current": {{"project", uint64(3)}},
 	}}
 	source, err := NewTeamsProjectsSource(client, true)
 	if err != nil {

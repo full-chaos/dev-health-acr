@@ -1,4 +1,4 @@
-# CHAOS-3832 T2 — HNSW efRuntime/efConstruction + over-fetch sweep
+# HNSW sweep tooling T2 — HNSW efRuntime/efConstruction + over-fetch sweep
 
 Status: MEASUREMENT-ONLY. No production default changed. Tooling landed
 under `internal/contextfabric/falkorgraph` (`hnsw_sweep.go`, `hnsw_recall.go`,
@@ -159,9 +159,9 @@ index options were re-verified unchanged afterward.
   production itself would use, or the run is skipped (empty refuses, never
   defaults).
 
-### CHAOS-3831 oracle integration — absolute recall is now measurable
+### Retrieval-harness parity work oracle integration — absolute recall is now measurable
 
-`RunHNSWSweep` (`hnsw_sweep.go`) now consumes CHAOS-3831's exact-search
+`RunHNSWSweep` (`hnsw_sweep.go`) now consumes the retrieval-harness parity work's exact-search
 oracle (`oracle.go`: `fetchEmbedderFenceCorpus`, `bruteForceRank`,
 `topKInclusive`) as its PREFERRED reference source, precomputed once, before
 any index in the sweep is touched, via `buildOracleCorrectSets`:
@@ -194,7 +194,7 @@ strict-metric (historical)** — not re-run in this changeset. A future run
 with an embedder attached would report ABSOLUTE recall per point (no
 `RecallAtK=1.0`-by-construction anywhere), which is expected to differ from
 the numbers below; §5's residuals already flagged this exact gap before
-CHAOS-3831 landed.
+Retrieval-harness parity work landed.
 
 **Validated** (`hnsw_sweep_test.go`): `TestRunHNSWSweepOracleModeCanDisagreeWithFallbackMode`
 runs the identical fixture — same seed, same two ANN build points, same
@@ -215,7 +215,7 @@ node's own stored vector as its query (a leave-one-in self-query; the
 self-match term is identical across every swept setting and cancels out of
 the comparison). It does **not** measure T1's **text-relevance recall**
 (does the right *subject* come back for a real paraphrase question), which
-needs the withheld 50-question corpus and lane-3831's oracle. The two are
+needs the withheld 50-question corpus and the retrieval-harness oracle. The two are
 deliberately different numbers (spec §5 L2: "the T1 oracle quantifies exactly
 how many misses are ANN-attributable") — this tool is what makes that split
 possible without needing the withheld corpus, not a replacement for T1's
@@ -239,7 +239,7 @@ boundary for T2 rather than a shortcut around one.
 
 ## 3. Live sweep results (relative, strict-metric — HISTORICAL)
 
-**This table predates the CHAOS-3831 oracle integration** (see above): it
+**This table predates the retrieval-harness parity work oracle integration** (see above): it
 was run in fallback/relative mode (no embedder attached) with the
 pre-tie-tolerance strict comparison. Kept as the historical record of the
 first live run, not re-run for this integration. A future run with an
@@ -354,7 +354,7 @@ change (spec §4, "Retrieval-policy changes without re-embedding").
   vector-typed `RETURN` decoding to `client.go`'s `decodeValue`, or (b)
   fetching the corpus through a different path. Neither is done here —
   scoped explicitly to T1/a future extension, see §2's scoping note. Once
-  lane-3831 (T1)'s `fetchEmbedderFenceCorpus` / `bruteForceRank` merge,
+  the retrieval-harness work (T1)'s `fetchEmbedderFenceCorpus` / `bruteForceRank` merge,
   `RunHNSWSweep`'s reference point should switch to their true-oracle output
   (`ann_loss` framing) as a follow-up commit — not done in this changeset per
   team-lead's direction, kept as the documented no-oracle fallback.

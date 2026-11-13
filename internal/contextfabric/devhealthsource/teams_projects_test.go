@@ -379,7 +379,7 @@ func workItemTeamRow(workItemID, teamID, source, confidence, repoID, repoSlug st
 // it -- the window function that decides ambiguity was never something this
 // fake could compute anyway.
 func projectTeamRow(projectID, teamID, source string, validFrom time.Time, latestIsOpen uint8, latestValidTo, updatedAt time.Time) []any {
-	return []any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, "github", uint8(0), []string{}, uint8(0)}
+	return storedGroupRow([]any{projectID, teamID, source, validFrom, latestIsOpen, latestValidTo, updatedAt, "github", uint8(0), []string{}, uint8(0)})
 }
 
 // liveShapedEdgeClient replays the ground-truth org's real edge row shapes:
@@ -400,7 +400,7 @@ func liveShapedEdgeClient() *fakeClient {
 			workItemTeamRow("linear:CHAOS-3802", "CHAOS", "native_team", "high", zeroRepositoryUUID, "", at),
 			workItemTeamRow("gl:42", "gl:full.chaos", "project_ownership", "medium", "cd620f84-2602-8dea-7809-8d1f11825cf4", "full.chaos/dev-health-ops", at),
 		}},
-		fakeTable{match: "FROM team_project_ownership FINAL", rows: [][]any{
+		fakeTable{match: ownershipGroupsMarker, rows: [][]any{
 			projectTeamRow("70d529e0-3c06-4597-8480-794fd02328b6:gitlab:71133891", "gl:full.chaos", "native",
 				time.Date(2026, 8, 12, 13, 8, 20, 79000000, time.UTC), 1, time.Unix(0, 0).UTC(), at),
 		}},
@@ -560,7 +560,7 @@ func TestClosedOwnershipWindowEndsTheEdge(t *testing.T) {
 	began := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	ended := time.Date(2026, 7, 15, 0, 0, 0, 0, time.UTC)
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM team_project_ownership FINAL", rows: [][]any{
+		{match: ownershipGroupsMarker, rows: [][]any{
 			projectTeamRow("project-x", "team-y", "manual", began, 0, ended, ended),
 		}},
 	}}
@@ -614,7 +614,7 @@ func TestEveryTeamsProjectsEdgeTypeIsDeclared(t *testing.T) {
 // its own test against the ledger's own statement.
 func omittedProjectTeamRow(projectID, teamID, source string, updatedAt time.Time) []any {
 	oversized := projectID + strings.Repeat("x", 256)
-	return []any{oversized, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, "github", uint8(0), []string{}, uint8(0)}
+	return storedGroupRow([]any{oversized, teamID, source, updatedAt, uint8(1), time.Unix(0, 0).UTC(), updatedAt, "github", uint8(0), []string{}, uint8(0)})
 }
 
 // TestTeamAuthorizationTelemetryCountsAdmittedVersusDeniedTeams (CHAOS-4390)
@@ -711,7 +711,7 @@ func TestConsumedProgressIsRefusedWhenItDoesNotMatchTheCheckpoint(t *testing.T) 
 	t.Parallel()
 	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM team_project_ownership FINAL", rows: [][]any{
+		{match: ownershipGroupsMarker, rows: [][]any{
 			omittedProjectTeamRow("p1", "team-a", "native", at),
 		}},
 	}}
@@ -740,7 +740,7 @@ func TestConsumedProgressIsReportedOnceForItsOwnCheckpoint(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM team_project_ownership FINAL", rows: [][]any{
+		{match: ownershipGroupsMarker, rows: [][]any{
 			omittedProjectTeamRow("p1", "team-a", "native", at),
 		}},
 	}}
@@ -789,9 +789,7 @@ func TestProgressMemoDoesNotSurviveAPublishedBatch(t *testing.T) {
 	}
 	rows = append(rows, projectTeamRow("p-published", "team-b", "native", at.Add(time.Hour), 1, time.Unix(0, 0).UTC(), at.Add(time.Hour)))
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM team_project_ownership FINAL", rows: rows, cursorOf: func(row []any) (time.Time, string) {
-			return row[6].(time.Time), row[0].(string) + ":" + row[1].(string) + ":" + row[2].(string)
-		}},
+		{match: ownershipGroupsMarker, rows: rows, cursorOf: storedGroupCursor},
 	}}
 	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
 	if err != nil {
@@ -838,7 +836,7 @@ func TestProgressMemoIsDiscardedByAFromScratchRun(t *testing.T) {
 		ambiguous = append(ambiguous, omittedProjectTeamRow(fmt.Sprintf("p%03d", i), "team-a", fmt.Sprintf("KEY-%03d", i), at.Add(time.Duration(i)*time.Second)))
 	}
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM team_project_ownership FINAL", rows: ambiguous},
+		{match: ownershipGroupsMarker, rows: ambiguous},
 	}}
 	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
 	if err != nil {
@@ -890,7 +888,7 @@ func TestProgressMemoIsDiscardedByAFromScratchRun(t *testing.T) {
 func TestChaos4542_TableReadFailureLogsTheClickHouseCode(t *testing.T) {
 	t.Parallel()
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM team_project_ownership FINAL", err: &clickhousedriver.Exception{
+		{match: ownershipGroupsMarker, err: &clickhousedriver.Exception{
 			Code: 241, Name: "DB::Exception",
 			Message: "Memory limit (total) exceeded: would use 9.31 GiB, SELECT o.project_id, o.team_id FROM ... WHERE org_id = 'secret-org'",
 		}},
@@ -954,15 +952,15 @@ func TestChaos4542_ConflictingIdentityEmitsNoEdge(t *testing.T) {
 	// conflict_ref / conflict_key are the OWNERSHIP row's own identity: the
 	// same pair on every flagged row for one disagreeing source row, which is
 	// what makes the ledger count sources rather than resolved edges.
-	conflicting := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), []string{"own-ref-1\x00OWN-KEY-1"}, uint8(1)}
+	conflicting := storedGroupRow([]any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), []string{"own-ref-1\x00OWN-KEY-1"}, uint8(1)})
 	// The SAME ownership row, flagged once per resolved project -- which is
 	// exactly what the SQL emits: two rows, two different resolved ids, one
 	// disagreeing source row. Keying the ledger on the resolved edge counted
 	// this as TWO suppressions and told an operator that twice as much was
 	// dropped as actually was (codex R3).
-	conflictingB := []any{"proj-b", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), []string{"own-ref-1\x00OWN-KEY-1"}, uint8(1)}
+	conflictingB := storedGroupRow([]any{"proj-b", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1), []string{"own-ref-1\x00OWN-KEY-1"}, uint8(1)})
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM team_project_ownership FINAL", rows: [][]any{
+		{match: ownershipGroupsMarker, rows: [][]any{
 			conflicting,
 			conflictingB,
 			projectTeamRow("proj-clean", "team-x", "native", at, 1, time.Unix(0, 0).UTC(), at),
@@ -1033,10 +1031,10 @@ func TestChaos4542_ConflictsCountEverySourceRowInAGroup(t *testing.T) {
 	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
 	// ONE result row whose group holds TWO distinct disagreeing ownership
 	// identities -- what groupUniqArray returns for that shape.
-	twoInOneGroup := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1),
-		[]string{"own-ref-1\x00KEY-B", "own-ref-1\x00KEY-C"}, uint8(1)}
+	twoInOneGroup := storedGroupRow([]any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github", uint8(1),
+		[]string{"own-ref-1\x00KEY-B", "own-ref-1\x00KEY-C"}, uint8(1)})
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM team_project_ownership FINAL", rows: [][]any{twoInOneGroup}},
+		{match: ownershipGroupsMarker, rows: [][]any{twoInOneGroup}},
 	}}
 	logged := &bytes.Buffer{}
 	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
@@ -1075,10 +1073,10 @@ func TestChaos4542_CleanRowKeepsItsEdgeBesideAConflictingOne(t *testing.T) {
 	// One result row for the shared group: a clean row exists (so
 	// edge_suppressed = 0), and the conflicting row's identity is still
 	// collected.
-	sharedGroup := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github",
-		uint8(0), []string{"own-ref-conflicting\x00KEY-B"}, uint8(1)}
+	sharedGroup := storedGroupRow([]any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github",
+		uint8(0), []string{"own-ref-conflicting\x00KEY-B"}, uint8(1)})
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM team_project_ownership FINAL", rows: [][]any{sharedGroup}},
+		{match: ownershipGroupsMarker, rows: [][]any{sharedGroup}},
 	}}
 	logged := &bytes.Buffer{}
 	source, err := devhealthsource.NewTeamsProjectsSource(client, true)
@@ -1128,10 +1126,10 @@ func TestChaos4542_CleanRowKeepsItsEdgeBesideAConflictingOne(t *testing.T) {
 func TestChaos4542_ConflictTelemetryFiresOnTheCallThatSuppressed(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 8, 13, 19, 0, 0, 0, time.UTC)
-	suppressed := []any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github",
-		uint8(1), []string{"own-ref-1\x00KEY-B\x00team-x\x00native"}, uint8(1)}
+	suppressed := storedGroupRow([]any{"proj-a", "team-x", "native", at, uint8(1), time.Unix(0, 0).UTC(), at, "github",
+		uint8(1), []string{"own-ref-1\x00KEY-B\x00team-x\x00native"}, uint8(1)})
 	client := &fakeClient{tables: []fakeTable{
-		{match: "FROM team_project_ownership FINAL", rows: [][]any{suppressed}},
+		{match: ownershipGroupsMarker, rows: [][]any{suppressed}},
 	}}
 	logged := &bytes.Buffer{}
 	source, err := devhealthsource.NewTeamsProjectsSource(client, true)

@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/entitlements"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statictoken"
 )
 
 // turnedOffModelConfigs reads the org model configuration through the real
@@ -40,12 +39,8 @@ func newTurnedOffModelConfigs(t *testing.T) turnedOffModelConfigs {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tokenFile := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenFile, []byte("svc_acr_standin_token_0123456789"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	client, err := entitlements.New(entitlements.Config{
-		BaseURL: baseURL, TokenFile: tokenFile, Timeout: time.Second, MaxResponseBytes: 4096,
+		BaseURL: baseURL, Workload: statictoken.Source("workload-standin-token"), Timeout: time.Second, MaxResponseBytes: 4096,
 		PositiveCacheTTL: time.Second, NegativeCacheTTL: time.Second, CacheCapacity: 4,
 	})
 	if err != nil {

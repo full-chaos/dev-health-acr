@@ -144,6 +144,7 @@ type llmGenerator struct {
 	interpretation  outputSchema
 	synthesis       outputSchema
 	phrasing        outputSchema
+	planReads       outputSchema
 	maxOutputTokens int
 	promptCache     bool
 	logger          *slog.Logger
@@ -182,11 +183,14 @@ func NewWithLLM(config Config, clients LLMClients) (*Runtime, error) {
 	if gen.phrasing, err = newOutputSchema(phrasingOutput{}, true); err != nil {
 		return nil, err
 	}
+	if gen.planReads, err = newOutputSchema(planReadsOutput{}, true); err != nil {
+		return nil, err
+	}
 	runtime, err := newWithGenerator(config, gen)
 	if err != nil {
 		return nil, err
 	}
-	for _, model := range []string{runtime.config.ModelRef, runtime.config.PhrasingModelRef} {
+	for _, model := range []string{runtime.config.ModelRef, runtime.config.PhrasingModelRef, runtime.config.PlanReadsModelRef} {
 		if _, ok := clients[model]; !ok {
 			return nil, fmt.Errorf("no llm client for model %q", model)
 		}
@@ -466,6 +470,22 @@ func (g llmGenerator) Phrase(ctx context.Context, request generationRequest) (ph
 	var output phrasingOutput
 	if err := json.Unmarshal([]byte(candidate), &output); err != nil {
 		return phrasingOutput{}, usage, &outputMismatch{stage: "decode"}
+	}
+	return output, usage, nil
+}
+
+func (g llmGenerator) PlanReads(ctx context.Context, request generationRequest) (planReadsOutput, contextfabric.ModelUsage, error) {
+	text, usage, err := g.complete(ctx, "plan_reads", request, g.planReads)
+	if err != nil {
+		return planReadsOutput{}, usage, err
+	}
+	candidate, checkErr := g.check(ctx, "plan_reads", text, g.planReads)
+	if checkErr != nil {
+		return planReadsOutput{}, usage, checkErr
+	}
+	var output planReadsOutput
+	if err := json.Unmarshal([]byte(candidate), &output); err != nil {
+		return planReadsOutput{}, usage, &outputMismatch{stage: "decode"}
 	}
 	return output, usage, nil
 }

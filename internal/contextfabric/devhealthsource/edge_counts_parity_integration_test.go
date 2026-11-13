@@ -78,6 +78,7 @@ func TestLiveEdgeCountsEqualTheEdgesTheProducersAssert(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	seed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -127,7 +128,7 @@ func TestLiveEdgeCountsEqualTheEdgesTheProducersAssert(t *testing.T) {
 	workItem("linear:S-1", edgeParityProject(1), 1)
 	transition("s1 history", "work_item", "linear:S-1", "", edgeParityProject(2), 2, "ev-s1-a")
 
-	teams, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	teams, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 	if err != nil {
 		t.Fatal(err)
 	}

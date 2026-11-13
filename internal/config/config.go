@@ -205,6 +205,19 @@ type Config struct {
 	// reuse key are as before. Turn it on after web's and ask-dev's pins are
 	// deployed.
 	ContextFabricInvestmentSunburstEnabled bool
+	// ContextFabricInvestmentRepositoryFromOpsEnabled (CHAOS-12690,
+	// ACR_CONTEXT_FABRIC_INVESTMENT_REPOSITORY_FROM_OPS_ENABLED) reads a
+	// repository's investment mix from the ops investmentBreakdownRepository
+	// answers: the split of a work unit across repositories is the ops one
+	// (lines changed), not ACR's PR-ref count. Default OFF: turning it moves
+	// repository numbers for units that span repositories, so it also joins
+	// the answer-reuse key (devhealthfacts.QueryVersionFor).
+	ContextFabricInvestmentRepositoryFromOpsEnabled bool
+	// ContextFabricInvestmentTeamFromOpsEnabled (CHAOS-12690 I2,
+	// ACR_CONTEXT_FABRIC_INVESTMENT_TEAM_FROM_OPS_ENABLED) reads a team's
+	// investment mix from the ops investmentBreakdownTeam answers (owner-share
+	// weighted over the team's repositories). Default OFF; joins the reuse key.
+	ContextFabricInvestmentTeamFromOpsEnabled bool
 	// ContextFabricInvestmentSankeyEnabled (CHAOS-12582,
 	// ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED) turns on the
 	// investment_repository_flow render rule: one team's effort from its
@@ -223,6 +236,12 @@ type Config struct {
 	// landscape_position render rule. Default OFF, for the same reason as the
 	// treemap. Turn it on after web's and ask-dev's pins are deployed.
 	ContextFabricLandscapeQuadrantEnabled bool
+	// ContextFabricReadFallbackEnabled (CHAOS-13002,
+	// ACR_CONTEXT_FABRIC_READ_FALLBACK_ENABLED) lets the model plan which
+	// canonical fact kinds an answer reads when no fixed question family
+	// serves the question. Default OFF. Turn it on after web's and ask-dev's
+	// pins hold answer_plan.fallback.
+	ContextFabricReadFallbackEnabled bool
 	// ServerCompletenessAuthorityEnabled (CHAOS-5640,
 	// ACR_CONTEXT_FABRIC_SERVER_COMPLETENESS_AUTHORITY_ENABLED) is the
 	// gated FLIP's master switch -- default OFF, same "ships dark"
@@ -322,7 +341,6 @@ type Config struct {
 	TrustedProxyCIDRs                    []string
 	CORSAllowedOrigins                   []string // CHAOS-12086: exact browser origins for CORS; empty answers none (cors.go)
 	DevHealthEntitlementURL              string
-	DevHealthEntitlementTokenFile        string
 	DevHealthEntitlementCredential       string
 	DevHealthEntitlementTimeout          time.Duration
 	DevHealthEntitlementMaxResponseBytes int64
@@ -383,6 +401,9 @@ type Config struct {
 	AuthWorkload AuthWorkloadConfig
 	// AuthProjection (CHAOS-11198) switches on the lifecycle outbox publisher; zero is off. See auth_projection.go.
 	AuthProjection AuthProjectionConfig
+	// DeviceApprovalPDP (CHAOS-13586) is the approver check of a device or consent approval; zero is off. See
+	// device_approval_pdp.go.
+	DeviceApprovalPDP DeviceApprovalPDPConfig
 
 	// dataQueryURL / dataQueryTimeout: internal ops query service call
 	// (ACR_DATA_QUERY_URL, ACR_DATA_QUERY_TIMEOUT); read via the
@@ -454,6 +475,9 @@ func load(lookup lookupEnv) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	if err := CheckEntitlementCredentialSettings(lookup); err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		Environment:                    environment,
@@ -466,7 +490,6 @@ func load(lookup lookupEnv) (Config, error) {
 		TrustedProxyCIDRs:              stringListValue(lookup, "ACR_TRUSTED_PROXY_CIDRS"),
 		CORSAllowedOrigins:             stringListValue(lookup, CORSAllowedOriginsEnv),
 		DevHealthEntitlementURL:        stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_URL", ""),
-		DevHealthEntitlementTokenFile:  stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE", ""),
 		DevHealthEntitlementProxyURL:   stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_PROXY_URL", ""),
 		DevHealthEntitlementCACertPath: stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_CA_BUNDLE", ""),
 		DevHealthEntitlementCredential: strings.TrimSpace(stringValue(lookup, "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL", "")),
@@ -519,6 +542,7 @@ func load(lookup lookupEnv) (Config, error) {
 	if err := cfg.AuthProjection.Validate(cfg.AuthWorkload); err != nil {
 		return Config{}, err
 	}
+	cfg.DeviceApprovalPDP = deviceApprovalPDPValue(lookup)
 
 	if cfg.RequestTimeout, err = durationValue(lookup, "ACR_REQUEST_TIMEOUT", defaultRequestTimeout); err != nil {
 		return Config{}, err

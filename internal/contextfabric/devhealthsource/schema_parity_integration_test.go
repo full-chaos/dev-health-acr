@@ -98,6 +98,7 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 
 	mustSeed := func(label, statement string, args ...any) {
 		t.Helper()
@@ -269,7 +270,7 @@ func TestLiveSchemaParityAcrossEveryProducer(t *testing.T) {
 		}
 	}
 
-	assertTeamsProjectsSchemaParity(t, ctx, query, orgID, repoID, projectID, teamID)
+	assertTeamsProjectsSchemaParity(t, ctx, newStoredGroupsClient(query, direct), orgID, repoID, projectID, teamID)
 }
 
 // assertTeamsProjectsSchemaParity is CHAOS-3802's half of the same guarantee,

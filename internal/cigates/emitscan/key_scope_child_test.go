@@ -97,6 +97,7 @@ func TestKeyScopeCheckerHeavyShapesAreRefusedByTheHelperLimits(t *testing.T) {
 }
 
 func runHeavyShapes(t *testing.T, estimate bool) {
+	limit, note := cpuLimit(t, time.Second)
 	for _, c := range checkerHeavyShapes() {
 		if !estimate && strings.HasPrefix(c.name, estimateOnlyShape) {
 			continue
@@ -133,8 +134,8 @@ func runHeavyShapes(t *testing.T, estimate bool) {
 		helperRuns := emitscan.ProbeCacheLen()
 		restoreLimits()
 		t.Logf("%s (estimate %v): parent %s cpu, %s wall, findings %q", c.name, estimate, used, time.Since(wall).Round(time.Millisecond), got)
-		if limit := time.Second * raceSlowdown; used > limit {
-			t.Errorf("%s: the scanning process used %s cpu, want < %s", c.name, used, limit)
+		if used > limit {
+			t.Errorf("%s: the scanning process used %s cpu, want < %s (%s)", c.name, used, limit, note)
 		}
 		if refusedBeforeHelper && helperRuns != 0 {
 			t.Errorf("%s: %d helper verdicts cached with the syntax estimate on, which must refuse it before any helper runs", c.name, helperRuns)

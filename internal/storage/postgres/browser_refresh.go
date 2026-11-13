@@ -146,7 +146,7 @@ func (s *BrowserRefreshStore) RotateBrowserRefresh(ctx context.Context, rotation
 	if source.RevokedAt != nil {
 		// A member credential revoked outside the family path (an older
 		// release) ends the family.
-		revoked, err := s.revokeBrowserFamilyTx(ctx, tx, family.orgID, token.familyID, "member_revoked", rotation.ActorID, now)
+		revoked, err := s.revokeBrowserFamilyTx(ctx, tx, family.orgID, token.familyID, storage.BrowserFamilyRevokeMemberRevoked, rotation.ActorID, now)
 		if err != nil {
 			return storage.BrowserRefreshOutcome{}, err
 		}
@@ -170,7 +170,7 @@ func (s *BrowserRefreshStore) RotateBrowserRefresh(ctx context.Context, rotation
 		replay.OrgID, replay.FamilyID = outcome.OrgID, outcome.FamilyID
 		return replay, s.commit(tx, "browser refresh")
 	}
-	revoked, err := s.revokeBrowserFamilyTx(ctx, tx, family.orgID, token.familyID, "reuse", rotation.ActorID, now)
+	revoked, err := s.revokeBrowserFamilyTx(ctx, tx, family.orgID, token.familyID, storage.BrowserFamilyRevokeReuse, rotation.ActorID, now)
 	if err != nil {
 		return storage.BrowserRefreshOutcome{}, err
 	}
@@ -270,8 +270,8 @@ SELECT credential_id, consumed_at FROM acr.browser_refresh_tokens WHERE token_ha
 // revokeBrowserFamilyTx revokes a family row (once) and every member
 // credential still live, writing one credential_revoked audit row each. It
 // returns the number of credentials it revoked.
-func (s *BrowserRefreshStore) revokeBrowserFamilyTx(ctx context.Context, tx *sql.Tx, orgID, familyID, reason, actorID string, now time.Time) (int, error) {
-	// The refresh paths (member_revoked, reuse, sign_out) act as the refresh grant:
+func (s *BrowserRefreshStore) revokeBrowserFamilyTx(ctx context.Context, tx *sql.Tx, orgID, familyID string, reason storage.BrowserFamilyRevokeReason, actorID string, now time.Time) (int, error) {
+	// The refresh paths (member_revoked, reuse, sign_out, org_deprovisioned) act as the refresh grant:
 	// a user actor named by the grant's actor id, as their audit rows record.
 	return revokeBrowserFamilyTx(ctx, tx, s.audit, orgID, familyID, reason, actorID, credentiallifecycle.Actor{Type: credentiallifecycle.ActorUser, Ref: actorID}, now)
 }
@@ -279,10 +279,10 @@ func (s *BrowserRefreshStore) revokeBrowserFamilyTx(ctx context.Context, tx *sql
 // revokeBrowserFamilyTx writes every sibling event with the actor the caller
 // mapped (FamilyMemberActor: a self revoke's siblings are revoked by the system);
 // nothing here rebuilds an actor from the actor id.
-func revokeBrowserFamilyTx(ctx context.Context, tx *sql.Tx, audit *AuditStore, orgID, familyID, reason, actorID string, actor credentiallifecycle.Actor, now time.Time) (int, error) {
+func revokeBrowserFamilyTx(ctx context.Context, tx *sql.Tx, audit *AuditStore, orgID, familyID string, reason storage.BrowserFamilyRevokeReason, actorID string, actor credentiallifecycle.Actor, now time.Time) (int, error) {
 	if _, err := tx.ExecContext(ctx, `
 UPDATE acr.browser_token_families SET revoked_at = $2, revoked_reason = $3
-WHERE family_id = $1 AND revoked_at IS NULL`, familyID, now, reason); err != nil {
+WHERE family_id = $1 AND revoked_at IS NULL`, familyID, now, string(reason)); err != nil {
 		return 0, fmt.Errorf("revoke browser family: %w", sanitizeDatabaseError(err))
 	}
 	rows, err := tx.QueryContext(ctx, `
@@ -320,7 +320,7 @@ WHERE org_id = $1::uuid AND family_id = $2 AND revoked_at IS NULL`, orgID, famil
 		event := storage.AuditEvent{
 			OrgID: orgID, ActorType: "user", ActorID: actorID,
 			Action: storage.AuditActionCredentialRevoked, ResourceType: "acr_credential", ResourceID: member.CredentialID,
-			Status: "success", CreatedAt: now, Metadata: map[string]any{"family_id": familyID, "family_revoke_reason": reason},
+			Status: "success", CreatedAt: now, Metadata: map[string]any{"family_id": familyID, "family_revoke_reason": string(reason)},
 		}
 		if err := audit.record(ctx, tx, event); err != nil {
 			return 0, err
@@ -332,14 +332,36 @@ WHERE org_id = $1::uuid AND family_id = $2 AND revoked_at IS NULL`, orgID, famil
 	return len(revoked), nil
 }
 
+// BrowserRefreshFamilyOrg reads the organization of a refresh token's family for its client, with no lock.
+func (s *BrowserRefreshStore) BrowserRefreshFamilyOrg(ctx context.Context, presentedHash, clientID string) (string, error) {
+	if err := s.ready(ctx); err != nil {
+		return "", err
+	}
+	if presentedHash == "" || clientID == "" {
+		return "", storage.ErrInvalidBrowserRefresh
+	}
+	var orgID string
+	err := s.DB.QueryRowContext(ctx, `
+SELECT f.org_id::text FROM acr.browser_refresh_tokens t
+JOIN acr.browser_token_families f ON f.family_id = t.family_id
+WHERE t.token_hash = $1 AND f.client_id = $2`, presentedHash, clientID).Scan(&orgID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", storage.ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("read browser family organization: %w", sanitizeDatabaseError(err))
+	}
+	return orgID, nil
+}
+
 // RevokeBrowserFamilyByToken revokes the family a refresh token belongs to,
 // for the client that holds it (sign-out; it works when every access token of
 // the family has expired).
-func (s *BrowserRefreshStore) RevokeBrowserFamilyByToken(ctx context.Context, presentedHash, clientID, actorID string, now time.Time) (storage.BrowserFamilyRevocationOutcome, error) {
+func (s *BrowserRefreshStore) RevokeBrowserFamilyByToken(ctx context.Context, presentedHash, clientID, actorID string, reason storage.BrowserFamilyRevokeReason, now time.Time) (storage.BrowserFamilyRevocationOutcome, error) {
 	if err := s.ready(ctx); err != nil {
 		return storage.BrowserFamilyRevocationOutcome{}, err
 	}
-	if presentedHash == "" || clientID == "" || actorID == "" || now.IsZero() {
+	if presentedHash == "" || clientID == "" || actorID == "" || !reason.Valid() || now.IsZero() {
 		return storage.BrowserFamilyRevocationOutcome{}, storage.ErrInvalidBrowserRefresh
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
@@ -363,7 +385,7 @@ func (s *BrowserRefreshStore) RevokeBrowserFamilyByToken(ctx context.Context, pr
 		outcome.Decision = storage.BrowserRefreshFamilyRevoked
 		return outcome, nil
 	}
-	revoked, err := s.revokeBrowserFamilyTx(ctx, tx, family.orgID, token.familyID, "sign_out", actorID, now.UTC())
+	revoked, err := s.revokeBrowserFamilyTx(ctx, tx, family.orgID, token.familyID, reason, actorID, now.UTC())
 	if err != nil {
 		return storage.BrowserFamilyRevocationOutcome{}, err
 	}

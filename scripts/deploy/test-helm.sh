@@ -37,6 +37,13 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
   --scenario  happy (default) or one of the negative scenarios:
               mutable-image, invalid-secret-ref, invalid-image-pull-secret-ref,
               shared-runtime-migration-dsn, injected-mcp, entitlement-path,
+              entitlement-workload-no-token, entitlement-token-secret-retired, entitlement-workload-ca-only,
+              entitlement-workload-no-client, entitlement-workload-no-url, entitlement-credential-both-sources,
+              entitlement-credential-bad-value, entitlement-url-no-client, entitlement-remote-required,
+              entitlement-token-file-key-retired, entitlement-extraenv-only,
+              entitlement-workload-extraenv-valuefrom, entitlement-empty-extraenv-value, entitlement-empty-extraenv-valuefrom,
+              entitlement-credential-null, entitlement-credential-bad-value-no-schema,
+              entitlement-credential-non-string-no-schema,
               pgbouncer-missing-pooler, extra-container, direct-with-pooler,
               unsupported-entitlement-scheme, userinfo-url, query-url, fragment-url, unknown-root-key,
               unknown-config-key, alternate-port, mutable-token-copy-image,
@@ -54,6 +61,8 @@ Usage: test-helm.sh --values <path> [--image <ref>] [--chart <path>] [--scenario
               The acr-api ServiceAccount scenarios: api-service-account-dedicated (positive),
               api-service-account-shared, api-service-account-default, api-service-account-default-exchange-off,
               service-account-name-collision.
+              The acr-api apiserver egress scenarios: kube-api-endpoints-off and kube-api-endpoints-on
+              (positive), kube-api-endpoints-bad (each bad entry fails closed).
               The acr-api auth workload client scenarios (CHAOS-11195): auth-workload-client-on (positive),
               auth-workload-client-off-render, auth-workload-client-bad-inputs,
               auth-workload-client-presence-only.
@@ -220,6 +229,29 @@ embed_api_with_projector() {
     "$@"
 }
 
+# kube_api_rules <render>: the acr-api NetworkPolicy egress rules that can reach the apiserver, one line each:
+# "portonly <port>" for a rule with no destination on networkPolicy.egress.kubernetesAPIPort (443 here),
+# "ipblock <cidr> <port>" for a destination-limited rule. Other egress rules are not printed.
+kube_api_rules() {
+  python3 -I - "$1" "$RELEASE" <<'PY'
+import sys, yaml
+path, release = sys.argv[1], sys.argv[2]
+for d in yaml.safe_load_all(open(path)):
+    if not d or d.get('kind') != 'NetworkPolicy' or d['metadata']['name'] != release:
+        continue
+    for r in d['spec'].get('egress') or []:
+        ports = [p.get('port') for p in r.get('ports') or []]
+        to = r.get('to') or []
+        if not to and 443 in ports and len(ports) == 1:
+            print('portonly 443')
+        for t in to:
+            cidr = (t.get('ipBlock') or {}).get('cidr')
+            if cidr:
+                for p in ports:
+                    print('ipblock %s %s' % (cidr, p))
+PY
+}
+
 api_sa_render() {
   render \
     --set contextFabric.projector.enabled=true \
@@ -355,12 +387,62 @@ print('  ok   auth-workload: projected token (audience dev-health-workload-excha
 PY
 }
 
+# ---------------------------------------------------------------------------
+# Entitlement credential (config.entitlement.credential): "" or workload; a
+# remote origin needs authWorkloadClient, and the service token keys are retired.
+# ---------------------------------------------------------------------------
+ent_prod_args=(
+  --set-string "config.environment=production"
+  --set config.localCompositionReady=false
+  --set config.requireBackingStores=true
+  --set-string "credentials.runtime.existingSecret=acr-runtime"
+  --set-string "credentials.migration.existingSecret=acr-migration"
+)
+
+ent_render() {
+  render "${ent_prod_args[@]}" --set-string "config.entitlement.url=http://ops.example:8091" "$@"
+}
+
+ent_client_args=(
+  --set authWorkloadClient.enabled=true
+  --set-string "authWorkloadClient.exchangeURL=http://auth-service.acr-test.svc:8080"
+  --set authWorkloadClient.allowPlainHTTP=true
+  --set-string "authWorkloadClient.issuer=https://auth.example.test"
+)
+
+ent_workload_args=(
+  --set-string "config.entitlement.credential=workload"
+  "${ent_client_args[@]}"
+)
+
+# ent_assert <file> <want_credential:0|1> <want_init:0|1>
+ent_assert() {
+  python3 - "$@" <<'PY' || exit 1
+import re, sys
+f, cred, init = sys.argv[1], sys.argv[2] == '1', sys.argv[3] == '1'
+docs = open(f).read().split('\n---\n')
+def fail(m): print('  FAIL ' + m, file=sys.stderr); sys.exit(1)
+cm = [d for d in docs if re.search(r'(?m)^kind: ConfigMap$', d) and re.search(r'(?m)^  name: acr-test-config$', d)]
+dep = [d for d in docs if re.search(r'(?m)^kind: Deployment$', d) and re.search(r'(?m)^  name: acr-test$', d)]
+if len(cm) != 1 or len(dep) != 1: fail('want one acr-api ConfigMap and Deployment')
+cm, dep = cm[0], dep[0]
+has_cred = re.search(r'(?m)^  ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL: "workload"$', cm) is not None
+if has_cred != cred: fail('ConfigMap ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL present=%s want %s' % (has_cred, cred))
+if not re.search(r'(?m)^  ACR_AUTH_WORKLOAD_SUBJECT_FILE: ', cm): fail('ConfigMap lacks the auth workload subject')
+for needle in ('_TOKEN_FILE', '- name: entitlement-token\n', 'entitlement-token-source', 'cp /source/'):
+    if needle in cm or needle in dep: fail('the render carries the retired service token piece %r' % needle)
+has_init = '- name: prepare-entitlement-token\n' in dep
+if has_init != init: fail('init container prepare-entitlement-token present=%s want %s' % (has_init, init))
+print('  ok   entitlement-credential render: credential=%s init=%s' % (cred, init))
+PY
+}
+
 case "$scenario" in
   mutable-image)
     negative mutable-image "mutable-image" \
       --set-string "config.environment=production" \
       --set-string "config.entitlement.url=https://ops.dev-health.internal" \
-      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
+      "${ent_client_args[@]}" \
       --set-string "image.reference=registry.internal/dev-health-acr/acr-api:latest"
     exit 0 ;;
   invalid-secret-ref)
@@ -383,8 +465,119 @@ case "$scenario" in
     exit 0 ;;
   entitlement-path)
     negative entitlement-path "entitlement-origin" \
-      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
+      "${ent_client_args[@]}" \
       --set-string "config.entitlement.url=https://ops.dev-health.internal/api/internal/entitlements"
+    exit 0 ;;
+  entitlement-workload-no-token)
+    printf 'scenario: entitlement-workload-no-token (workload: no token volume, mount, init container or Secret name)\n'
+    ent_render "${ent_workload_args[@]}" >"$workdir/ent-wl-no-token.yaml"
+    ent_assert "$workdir/ent-wl-no-token.yaml" 1 0
+    if grep -q 'acr-entitlement-token' "$workdir/ent-wl-no-token.yaml"; then fail_gate "entitlement-workload: render names acr-entitlement-token"; fi
+    printf 'RESULT: scenario entitlement-workload-no-token passed\n'
+    exit 0 ;;
+  entitlement-token-secret-retired)
+    negative entitlement-token-secret-retired "entitlementToken" \
+      "${ent_workload_args[@]}" \
+      --set-string "config.entitlement.url=http://ops.example:8091" \
+      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token"
+    exit 0 ;;
+  entitlement-token-file-key-retired)
+    negative entitlement-token-file-key-retired "tokenFileName" \
+      "${ent_workload_args[@]}" \
+      --set-string "config.entitlement.url=http://ops.example:8091" \
+      --set-string "config.entitlement.tokenFileName=token"
+    exit 0 ;;
+  entitlement-workload-ca-only)
+    printf 'scenario: entitlement-workload-ca-only (workload, CA bundle: init container copies only the CA)\n'
+    ent_render "${ent_workload_args[@]}" --set-string "config.entitlementCaBundle.existingSecret=acr-entitlement-ca" >"$workdir/ent-wl-ca.yaml"
+    ent_assert "$workdir/ent-wl-ca.yaml" 1 1
+    if grep -qF 'cp /source/' "$workdir/ent-wl-ca.yaml"; then fail_gate "entitlement-workload: CA-only init container copies a token"; fi
+    grep -qF 'cp /source-ca/ca.crt /target-ca/ca.crt' "$workdir/ent-wl-ca.yaml" || fail_gate "entitlement-workload: CA-only init container does not copy the CA"
+    printf 'RESULT: scenario entitlement-workload-ca-only passed\n'
+    exit 0 ;;
+  entitlement-workload-no-client)
+    negative entitlement-workload-no-client "entitlement-workload" \
+      "${ent_prod_args[@]}" \
+      --set-string "config.entitlement.url=http://ops.example:8091" \
+      --set-string "config.entitlement.credential=workload"
+    exit 0 ;;
+  entitlement-workload-no-url)
+    negative entitlement-workload-no-url "entitlement-workload" \
+      "${ent_workload_args[@]}"
+    exit 0 ;;
+  entitlement-credential-both-sources)
+    negative entitlement-credential-both-sources "env-source" \
+      "${ent_prod_args[@]}" \
+      --set-string "config.entitlement.url=http://ops.example:8091" \
+      "${ent_workload_args[@]}" \
+      --set-json 'deployment.extraEnv=[{"name":"ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL","value":"workload"}]'
+    exit 0 ;;
+  entitlement-credential-bad-value)
+    negative entitlement-credential-bad-value "credential" \
+      --set-string "config.entitlement.credential=bogus"
+    exit 0 ;;
+  entitlement-workload-extraenv-valuefrom)
+    negative entitlement-workload-extraenv-valuefrom "env-source" \
+      "${ent_prod_args[@]}" \
+      --set-string "config.entitlement.url=http://ops.example:8091" \
+      "${ent_workload_args[@]}" \
+      --set-json 'deployment.extraEnv=[{"name":"ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL","valueFrom":{"configMapKeyRef":{"name":"x","key":"y"}}}]'
+    exit 0 ;;
+  entitlement-empty-extraenv-value)
+    printf 'scenario: entitlement-empty-extraenv-value (credential "" with an extraEnv value entry renders)\n'
+    ent_render "${ent_client_args[@]}" \
+      --set-string "config.entitlement.credential=" \
+      --set-json 'deployment.extraEnv=[{"name":"ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL","value":"workload"}]' >"$workdir/ent-empty-value.yaml"
+    grep -q 'name: ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL' "$workdir/ent-empty-value.yaml" || fail_gate "entitlement-empty-extraenv-value: the extraEnv entry is missing"
+    printf 'RESULT: scenario entitlement-empty-extraenv-value passed\n'
+    exit 0 ;;
+  entitlement-empty-extraenv-valuefrom)
+    printf 'scenario: entitlement-empty-extraenv-valuefrom (credential "" with an extraEnv valueFrom entry renders)\n'
+    ent_render "${ent_client_args[@]}" \
+      --set-string "config.entitlement.credential=" \
+      --set-json 'deployment.extraEnv=[{"name":"ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL","valueFrom":{"configMapKeyRef":{"name":"x","key":"y"}}}]' >"$workdir/ent-empty-valuefrom.yaml"
+    grep -q 'name: ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL' "$workdir/ent-empty-valuefrom.yaml" || fail_gate "entitlement-empty-extraenv-valuefrom: the extraEnv entry is missing"
+    printf 'RESULT: scenario entitlement-empty-extraenv-valuefrom passed\n'
+    exit 0 ;;
+  entitlement-credential-null)
+    printf 'scenario: entitlement-credential-null (a null credential renders equal to the credential unset, checksum annotations dropped)\n'
+    ent_render "${ent_client_args[@]}" --set-json 'config.entitlement.credential=null' | grep -v ' checksum/' >"$workdir/ent-null.yaml"
+    ent_render "${ent_client_args[@]}" | grep -v ' checksum/' >"$workdir/ent-unset.yaml"
+    cmp -s "$workdir/ent-unset.yaml" "$workdir/ent-null.yaml" || { diff -u "$workdir/ent-unset.yaml" "$workdir/ent-null.yaml" >&2 || true; fail_gate "entitlement-credential-null: the render differs from the credential unset"; }
+    ent_assert "$workdir/ent-null.yaml" 0 0
+    printf 'RESULT: scenario entitlement-credential-null passed\n'
+    exit 0 ;;
+  entitlement-credential-bad-value-no-schema)
+    negative entitlement-credential-bad-value-no-schema "config.entitlement.credential" \
+      "${ent_prod_args[@]}" \
+      --set-string "config.entitlement.url=http://ops.example:8091" \
+      "${ent_client_args[@]}" \
+      --skip-schema-validation \
+      --set-string "config.entitlement.credential=bogus"
+    exit 0 ;;
+  entitlement-credential-non-string-no-schema)
+    negative entitlement-credential-non-string-no-schema "config.entitlement.credential" \
+      "${ent_prod_args[@]}" \
+      --set-string "config.entitlement.url=http://ops.example:8091" \
+      "${ent_client_args[@]}" \
+      --skip-schema-validation \
+      --set-json "config.entitlement.credential=false"
+    exit 0 ;;
+  entitlement-url-no-client)
+    negative entitlement-url-no-client "authWorkloadClient.enabled=true" \
+      "${ent_prod_args[@]}" \
+      --set-string "config.entitlement.url=http://ops.example:8091"
+    exit 0 ;;
+  entitlement-remote-required)
+    negative entitlement-remote-required "entitlement-remote-required" \
+      "${ent_prod_args[@]}"
+    exit 0 ;;
+  entitlement-extraenv-only)
+    printf 'scenario: entitlement-extraenv-only (extraEnv credential entry with the key unset still renders)\n'
+    ent_render "${ent_client_args[@]}" \
+      --set-json 'deployment.extraEnv=[{"name":"ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL","value":"workload"}]' >"$workdir/ent-extraenv.yaml"
+    grep -q 'name: ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL' "$workdir/ent-extraenv.yaml" || fail_gate "entitlement-extraenv: the extraEnv entry is missing"
+    printf 'RESULT: scenario entitlement-extraenv-only passed\n'
     exit 0 ;;
   pgbouncer-missing-pooler)
     negative pgbouncer-missing-pooler "pgbouncer-admin-dsn" \
@@ -400,22 +593,22 @@ case "$scenario" in
     exit 0 ;;
   unsupported-entitlement-scheme)
     negative unsupported-entitlement-scheme "entitlement-origin" \
-      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
+      "${ent_client_args[@]}" \
       --set-string "config.entitlement.url=ftp://ops.dev-health.internal"
     exit 0 ;;
   userinfo-url)
     negative userinfo-url "entitlement-origin" \
-      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
+      "${ent_client_args[@]}" \
       --set-string "config.entitlement.url=https://user@ops.dev-health.internal"
     exit 0 ;;
   query-url)
     negative query-url "entitlement-origin" \
-      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
+      "${ent_client_args[@]}" \
       --set-string "config.entitlement.url=https://ops.dev-health.internal?x=1"
     exit 0 ;;
   fragment-url)
     negative fragment-url "entitlement-origin" \
-      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
+      "${ent_client_args[@]}" \
       --set-string "config.entitlement.url=https://ops.dev-health.internal#f"
     exit 0 ;;
   unknown-root-key)
@@ -433,7 +626,8 @@ case "$scenario" in
   mutable-token-copy-image)
     negative mutable-token-copy-image "mutable-image: security.tokenCopyImage" \
       --set-string "config.entitlement.url=https://ops.dev-health.internal" \
-      --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" \
+      "${ent_client_args[@]}" \
+      --set-string "config.entitlementCaBundle.existingSecret=acr-entitlement-ca" \
       --set-string "security.tokenCopyImage=registry.internal/dev-health-acr/token-copy:latest"
     exit 0 ;;
   missing-device-verification-url)
@@ -506,7 +700,7 @@ case "$scenario" in
       --set config.requireBackingStores=true \
       --set config.localCompositionReady=false \
       --set-string config.entitlement.url=https://ops.dev-health.internal \
-      --set-string credentials.entitlementToken.existingSecret=acr-entitlement-token \
+      "${ent_client_args[@]}" \
       --set acrMcp.enabled=true \
       --set-string "acrMcp.image.reference=registry.internal/dev-health-acr/acr-mcp:latest"
     exit 0 ;;
@@ -594,6 +788,42 @@ case "$scenario" in
       pass "embed-api-timeout-$good accepted and rendered"
     done
     printf 'RESULT: scenario embed-api-timeout-bounds passed\n'
+    exit 0 ;;
+  kube-api-endpoints-off)
+    printf 'scenario: kube-api-endpoints-off (empty kubernetesAPIEndpoints: render byte-equal to the render without the key; the port-only apiserver rule as before)\n'
+    exch=(--set workloadTokenExchange.enabled=true --set-string "workloadTokenExchange.trustDomain=test.cluster.local")
+    render "${exch[@]}" >"$workdir/kapi-unset.yaml"
+    render "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[]' >"$workdir/kapi-empty.yaml"
+    cmp -s "$workdir/kapi-unset.yaml" "$workdir/kapi-empty.yaml" || fail_gate "kube-api-endpoints: an empty list must render byte-equal to the render without the key"
+    kube_api_rules "$workdir/kapi-empty.yaml" >"$workdir/kapi-empty.rules"
+    [[ "$(cat "$workdir/kapi-empty.rules")" == "portonly 443" ]] || fail_gate "kube-api-endpoints: empty list must keep exactly the port-only 443 rule, got: $(tr '\n' ';' <"$workdir/kapi-empty.rules")"
+    pass "kube-api-endpoints-off: empty list byte-equal, port-only 443 rule kept"
+    printf 'RESULT: scenario kube-api-endpoints-off passed\n'
+    exit 0 ;;
+  kube-api-endpoints-on)
+    printf 'scenario: kube-api-endpoints-on (each entry renders ipBlock /32 + port; no port-only apiserver rule)\n'
+    exch=(--set workloadTokenExchange.enabled=true --set-string "workloadTokenExchange.trustDomain=test.cluster.local")
+    render "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.151/32","port":6443}]' >"$workdir/kapi-on.yaml"
+    kube_api_rules "$workdir/kapi-on.yaml" >"$workdir/kapi-on.rules"
+    [[ "$(cat "$workdir/kapi-on.rules")" == "ipblock 10.0.0.151/32 6443" ]] || fail_gate "kube-api-endpoints: want exactly one rule ipBlock 10.0.0.151/32 port 6443 and no port-only 443 rule, got: $(tr '\n' ';' <"$workdir/kapi-on.rules")"
+    render "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.151/32","port":6443},{"cidr":"10.0.0.152/32","port":6443}]' >"$workdir/kapi-two.yaml"
+    kube_api_rules "$workdir/kapi-two.yaml" >"$workdir/kapi-two.rules"
+    [[ "$(tr '\n' ';' <"$workdir/kapi-two.rules")" == "ipblock 10.0.0.151/32 6443;ipblock 10.0.0.152/32 6443;" ]] || fail_gate "kube-api-endpoints: two entries must render two ipBlock rules and no port-only rule, got: $(tr '\n' ';' <"$workdir/kapi-two.rules")"
+    render --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.151/32","port":6443}]' >"$workdir/kapi-exch-off.yaml"
+    [[ -z "$(kube_api_rules "$workdir/kapi-exch-off.yaml")" ]] || fail_gate "kube-api-endpoints: exchange off must render no apiserver rule"
+    pass "kube-api-endpoints-on: ipBlock /32 + port per entry, no port-only rule; exchange off renders none"
+    printf 'RESULT: scenario kube-api-endpoints-on passed\n'
+    exit 0 ;;
+  kube-api-endpoints-bad)
+    exch=(--set workloadTokenExchange.enabled=true --set-string "workloadTokenExchange.trustDomain=test.cluster.local")
+    negative kube-api-endpoints-no-cidr "cidr" "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"port":6443}]'
+    negative kube-api-endpoints-no-port "port" "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.151/32"}]'
+    negative kube-api-endpoints-not-32 "cidr" "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.0/24","port":6443}]'
+    negative kube-api-endpoints-any "cidr" "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"0.0.0.0/0","port":6443}]'
+    negative kube-api-endpoints-port-zero "port" "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.151/32","port":0}]'
+    negative kube-api-endpoints-port-high "port" "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.151/32","port":70000}]'
+    negative kube-api-endpoints-extra-key "additional" "${exch[@]}" --set-json 'networkPolicy.egress.kubernetesAPIEndpoints=[{"cidr":"10.0.0.151/32","port":6443,"host":"x"}]'
+    printf 'RESULT: scenario kube-api-endpoints-bad passed\n'
     exit 0 ;;
   api-service-account-dedicated)
     printf 'scenario: api-service-account-dedicated (acr-api has its own ServiceAccount; projector and TokenReview binding assertions)\n'
@@ -796,22 +1026,22 @@ if grep -Eq 'ACR_DEV_HEALTH_ENTITLEMENT_|prepare-entitlement-token|entitlement-t
 fi
 pass "local-entitlement: development render omits remote URL/token/CA/network inputs"
 
-distinct_token_render="$workdir/distinct-token.yaml"
+ca_copy_render="$workdir/ca-copy.yaml"
 render \
   --set-string 'config.entitlement.url=http://ops.dev-health.internal:8091' \
-  --set-string 'credentials.entitlementToken.existingSecret=acr-entitlement-token' \
+  "${ent_client_args[@]}" \
   --set-string 'config.entitlementCaBundle.existingSecret=acr-entitlement-ca' \
-  --set-string 'credentials.entitlementToken.key=source-token' \
-  --set-string 'config.entitlement.tokenFileName=runtime-token' \
-  >"$distinct_token_render"
-grep -qF 'cp /source/runtime-token /target/runtime-token' "$distinct_token_render" \
-  || fail_gate "entitlement-token: init container must copy the projected token filename"
-pass "entitlement-token: init container copies the projected Secret filename"
+  >"$ca_copy_render"
+grep -qF 'cp /source-ca/ca.crt /target-ca/ca.crt' "$ca_copy_render" \
+  || fail_gate "entitlement-ca: init container must copy the entitlement CA"
+if grep -qF 'cp /source/' "$ca_copy_render"; then fail_gate "entitlement-ca: init container copies a token"; fi
+pass "entitlement-ca: init container copies only the entitlement CA"
 
 token_copy_image="registry.example/token-copy@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 token_copy_render="$(render \
   --set-string 'config.entitlement.url=https://ops.dev-health.internal' \
-  --set-string 'credentials.entitlementToken.existingSecret=acr-entitlement-token' \
+  "${ent_client_args[@]}" \
+  --set-string 'config.entitlementCaBundle.existingSecret=acr-entitlement-ca' \
   --set-string "security.tokenCopyImage=${token_copy_image}")"
 token_copy_block="$(awk '/        - name: prepare-entitlement-token/{inside=1} inside{print} inside && /^      containers:/{exit}' <<<"${token_copy_render}")"
 grep -Fq "image: \"${token_copy_image}\"" <<<"${token_copy_block}" \
@@ -837,7 +1067,7 @@ assert_restricted_container() {
   fi
 }
 
-assert_restricted_container prepare-entitlement-token "$distinct_token_render"
+assert_restricted_container prepare-entitlement-token "$ca_copy_render"
 assert_restricted_container acr-api
 assert_restricted_container acr-migrate
 pass "pod-security: every rendered API, migration, and present init container is Restricted-compatible"
@@ -1001,10 +1231,10 @@ device_verification_url="$(grep 'ACR_DEVICE_VERIFICATION_URL' "$rendered" | head
 pass "device-verification-url: hosted runtime approval URL is rendered ($device_verification_url)"
 
 # Gate 14: remote mode remains explicit and accepts an ordinary HTTP service origin.
-ent_url="$(grep 'ACR_DEV_HEALTH_ENTITLEMENT_URL' "$distinct_token_render" | head -1 | grep -oE 'https?://[^"]+')"
+ent_url="$(grep 'ACR_DEV_HEALTH_ENTITLEMENT_URL' "$ca_copy_render" | head -1 | grep -oE 'https?://[^"]+')"
 [[ "$ent_url" == "http://ops.dev-health.internal:8091" ]] \
   || fail_gate "entitlement-origin: explicit remote render did not retain the HTTP origin"
-pass "entitlement-origin: explicit remote render retains HTTP origin and token projection"
+pass "entitlement-origin: explicit remote render retains the HTTP origin"
 
 # Gate 15: Secret rotation rolls pods (checksum/credentials present and reactive).
 cc=$(grep -c 'checksum/credentials' "$rendered")
@@ -1121,18 +1351,13 @@ pass "postgres-transport: ordinary development render has no mandatory PostgreSQ
 
 custom_projection="$(render \
   --set-string config.entitlement.url=https://ops.dev-health.internal \
-  --set-string credentials.entitlementToken.existingSecret=acr-entitlement-token \
-  --set-string credentials.entitlementToken.key=entitlement.custom \
-  --set-string config.entitlement.tokenFileName=token.custom \
+  "${ent_client_args[@]}" \
   --set-string config.postgresCaBundle.existingSecret=acr-postgres-ca \
   --set-string config.postgresCaBundle.key=postgres.custom \
   --set-string config.clickhouseCaBundle.existingSecret=acr-clickhouse-ca \
   --set-string config.clickhouseCaBundle.key=clickhouse.custom \
   --set-string config.entitlementCaBundle.existingSecret=acr-entitlement-ca \
   --set-string config.entitlementCaBundle.key=entitlement-ca.custom)"
-grep -Fq 'key: "entitlement.custom"' <<<"$custom_projection" || fail_gate "secret-projection: custom entitlement Secret key is not rendered"
-grep -Fq 'path: "token.custom"' <<<"$custom_projection" || fail_gate "secret-projection: entitlement token is not projected to tokenFileName"
-grep -Fq 'cp /source/token.custom /target/token.custom' <<<"$custom_projection" || fail_gate "secret-projection: init container does not consume the projected entitlement token filename"
 for key in postgres.custom clickhouse.custom entitlement-ca.custom; do
   grep -Fq "key: \"$key\"" <<<"$custom_projection" || fail_gate "secret-projection: custom CA Secret key $key is not rendered"
 done

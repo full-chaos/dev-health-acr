@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http"
 	"slices"
 	"sort"
+	"strings"
 )
 
 const WebAssertionPermissionCredentialIssue = "credential:issue"
@@ -18,12 +20,76 @@ const WebAssertionPermissionCredentialIssue = "credential:issue"
 // first-party authorize that starts it (api.OAuthFirstPartyAuthorizePath,
 // CHAOS-12568), both pinned by a test in internal/api. T20 (CHAOS-12109)
 // narrows web assertions on data routes only; these routes stay outside it.
+// The read routes in webAssertionOrganizationWideReads also take "*".
 var webAssertionOrganizationWidePaths = []string{"/api/v1/oauth/device_approval", "/authorize/consent", "/authorize/first-party"}
 
 // WebAssertionOrganizationWidePaths returns the routes an organization-wide
 // web assertion may name.
 func WebAssertionOrganizationWidePaths() []string {
 	return append([]string(nil), webAssertionOrganizationWidePaths...)
+}
+
+// WebAssertionReadRoute is a read route that takes an organization-wide ("*")
+// web assertion, with the exact permission sets (sorted) it takes it with.
+// A Pattern ending in "{name}" matches one non-empty path segment.
+type WebAssertionReadRoute struct {
+	Method         string
+	Pattern        string
+	PermissionSets [][]string
+}
+
+// webAssertionOrganizationWideReads (CHAOS-13612) are the sets web signs for
+// an organization-wide reader, and no others: capabilities is called with both
+// read permissions before every packet and evidence read.
+var webAssertionOrganizationWideReads = []WebAssertionReadRoute{
+	{Method: http.MethodGet, Pattern: "/api/v1/agent-context/capabilities", PermissionSets: [][]string{{ScopeContextRead, ScopeEvidenceRead}}},
+	{Method: http.MethodPost, Pattern: "/api/v1/agent-context/context-packets", PermissionSets: [][]string{{ScopeContextRead}}},
+	{Method: http.MethodGet, Pattern: "/api/v1/agent-context/evidence/{evidence_ref_id}", PermissionSets: [][]string{{ScopeEvidenceRead}}},
+}
+
+// WebAssertionOrganizationWideReadRoutes returns the read routes an
+// organization-wide web assertion may name, with their permission sets.
+func WebAssertionOrganizationWideReadRoutes() []WebAssertionReadRoute {
+	routes := make([]WebAssertionReadRoute, 0, len(webAssertionOrganizationWideReads))
+	for _, route := range webAssertionOrganizationWideReads {
+		sets := make([][]string, 0, len(route.PermissionSets))
+		for _, set := range route.PermissionSets {
+			sets = append(sets, slices.Clone(set))
+		}
+		routes = append(routes, WebAssertionReadRoute{Method: route.Method, Pattern: route.Pattern, PermissionSets: sets})
+	}
+	return routes
+}
+
+func organizationWideIssue(permissions []string, method, path string) bool {
+	return len(permissions) == 1 && permissions[0] == WebAssertionPermissionCredentialIssue &&
+		method == http.MethodPost && slices.Contains(webAssertionOrganizationWidePaths, path)
+}
+
+func organizationWideRead(permissions []string, method, path string) bool {
+	sorted := normalizeWebPermissions(permissions)
+	for _, route := range webAssertionOrganizationWideReads {
+		if route.Method != method || !webAssertionReadPathMatches(route.Pattern, path) {
+			continue
+		}
+		for _, set := range route.PermissionSets {
+			if slices.Equal(sorted, set) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// webAssertionReadPathMatches compares the escaped request path (never
+// decoded) with a route pattern.
+func webAssertionReadPathMatches(pattern, path string) bool {
+	prefix, _, found := strings.Cut(pattern, "{")
+	if !found {
+		return path == pattern
+	}
+	segment, ok := strings.CutPrefix(path, prefix)
+	return ok && segment != "" && segment != "." && segment != ".." && !strings.Contains(segment, "/")
 }
 
 func readAssertionBody(r *http.Request, maximum int64) ([]byte, error) {
@@ -46,13 +112,45 @@ func assertionBodyDigest(body []byte) string {
 	return base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
+// webAssertionBodyScopedPaths are the approvals whose request body names the
+// repositories (device_approval_request.repository_scopes, the consent
+// approve's repository_scopes). On them the repository_scopes claim may be
+// left out (CHAOS-13562): the body, bound by body_sha256, carries the list,
+// so the header stays the same size at any count.
+var webAssertionBodyScopedPaths = []string{"/api/v1/oauth/device_approval", "/authorize/consent"}
+
+// webAssertionScopeClaim is the repository_scopes claim with its presence: an
+// assertion that leaves the member out differs from one that sends null or [].
+type webAssertionScopeClaim struct {
+	present bool
+	values  []string
+}
+
+func (c *webAssertionScopeClaim) UnmarshalJSON(raw []byte) error {
+	c.present = true
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		c.values = nil
+		return nil
+	}
+	return json.Unmarshal(raw, &c.values)
+}
+
+// validWebRepositoryClaim admits an absent claim only for a credential issue
+// on a body-scoped approval path; a present claim follows validWebRepositories.
+func validWebRepositoryClaim(claim webAssertionScopeClaim, permissions []string, method, path string) bool {
+	if !claim.present {
+		return len(permissions) == 1 && permissions[0] == WebAssertionPermissionCredentialIssue &&
+			method == http.MethodPost && slices.Contains(webAssertionBodyScopedPaths, path)
+	}
+	return validWebRepositories(claim.values, permissions, method, path)
+}
+
 func validWebRepositories(scopes, permissions []string, method, path string) bool {
 	if len(scopes) == 0 {
 		return false
 	}
 	if len(scopes) == 1 && scopes[0] == "*" {
-		return len(permissions) == 1 && permissions[0] == WebAssertionPermissionCredentialIssue &&
-			method == http.MethodPost && slices.Contains(webAssertionOrganizationWidePaths, path)
+		return organizationWideIssue(permissions, method, path) || organizationWideRead(permissions, method, path)
 	}
 	_, _, refused := webRepositoryScopeFault(scopes)
 	return !refused

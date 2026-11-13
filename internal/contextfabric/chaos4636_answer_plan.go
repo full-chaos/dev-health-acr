@@ -205,6 +205,12 @@ type PlanAnswerInput struct {
 	// before this field existed. That is the same honest absence
 	// deriveTurnRequirements already returns for a nil frame.
 	Requirements []DerivedRequirement
+	// ReadPlanKinds are the kinds the read planner chose for a question no
+	// fixed family serves (CHAOS-13002), already validated. They are a
+	// widening appended LAST, so every kind the model, the family or a
+	// requirement row already named keeps its own entry. Empty when the read
+	// fallback did not apply.
+	ReadPlanKinds []FactKind
 }
 
 // PlanAnswer produces the plan. It never fails: an unresolved or
@@ -236,7 +242,7 @@ func PlanAnswer(input PlanAnswerInput) AnswerPlan {
 		RequireRanking: definition.RequireRanking,
 		RenderKinds:    append([]contractsv1.ContextFabricRenderKind(nil), definition.RenderKinds...),
 		Axes:           planWireAxes(definition),
-		FactKinds:      planFactKinds(definition, input.Interpretation, input.Requirements),
+		FactKinds:      planFactKinds(definition, input.Interpretation, input.Requirements, input.ReadPlanKinds...),
 		Budget:         planBudget(definition.Budget, input.Budget, input.MaxCohortMembers, !input.WorkItemList),
 	}
 	// The group axis is a MODEL-EMITTED signal, and only the grouped family
@@ -314,7 +320,7 @@ func planWireAxes(definition QuestionFamilyDefinition) []contractsv1.ContextFabr
 // absent. That is exactly the position the hardcoded ranking injection held
 // in engine.go before this stage existed, so the resulting set is unchanged
 // for every family that resolved to a cohort before.
-func planFactKinds(definition QuestionFamilyDefinition, interpretation InterpretedQuestion, requirements []DerivedRequirement) []FactKind {
+func planFactKinds(definition QuestionFamilyDefinition, interpretation InterpretedQuestion, requirements []DerivedRequirement, readPlanKinds ...FactKind) []FactKind {
 	kinds := make([]FactKind, 0, len(interpretation.FactRequirements)+len(cohortRankingFormulaKinds))
 	seen := make(map[FactKind]struct{}, cap(kinds))
 	appendKind := func(kind FactKind) {
@@ -362,6 +368,12 @@ func planFactKinds(definition QuestionFamilyDefinition, interpretation Interpret
 	}
 	kinds, _ = appendOperandReadKinds(kinds, requirements)
 	kinds, _ = appendSubjectObligationKinds(kinds, requirements)
+	// The sixth widening (CHAOS-13002): the read planner's kinds, last.
+	for _, kind := range readPlanKinds {
+		if !slices.Contains(kinds, kind) {
+			kinds = append(kinds, kind)
+		}
+	}
 	return kinds
 }
 
@@ -830,6 +842,7 @@ func (e *Engine) finalizeResult(
 	result = withDegradedLimitationFallback(result)
 	result = withServedDetailTableLimitation(result, facts.Facts)
 	result = withUnclaimedRepositorySplitFloor(result, frame)
+	result = withReadFallbackLimitation(result, stamped)
 	result.Completeness = ComputeAnswerCompleteness(result)
 	return result
 }

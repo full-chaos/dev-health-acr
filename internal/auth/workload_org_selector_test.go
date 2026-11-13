@@ -18,7 +18,7 @@ const (
 
 func selectorResolver(t *testing.T, bindings ...storage.WorkloadBinding) authverify.GrantResolver {
 	t.Helper()
-	resolver, err := NewGrantResolver(&fakeWorkloadBindingStore{bindings: bindings})
+	resolver, err := NewGrantResolver(&fakeWorkloadBindingStore{bindings: bindings}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

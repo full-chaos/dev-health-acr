@@ -30,7 +30,7 @@ func TestServiceModelRefusalAtTheToolBoundaryLeavesTheDataToolsOpen(t *testing.T
 		t.Fatalf("run_operation: %v %q", risk, text)
 	}
 	catalog, text := dtCallTool(t, cs, "data_catalog", map[string]any{"sections": []string{"operations"}})
-	if catalog == nil || len(catalog["operations"].(map[string]any)["operations"].([]any)) != 22 {
+	if catalog == nil || len(catalog["operations"].(map[string]any)["operations"].([]any)) != 23 {
 		t.Fatalf("data_catalog: %v %q", catalog, text)
 	}
 

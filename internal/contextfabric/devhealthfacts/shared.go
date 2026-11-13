@@ -1463,7 +1463,43 @@ import (
 // teams share as a window option the user picks (window_clarification and
 // structure_needs), and the model is no longer shown common_live_day
 // (CHAOS-13009). An answer saved under v286 holds the refusal without the option.
-const QueryVersion = "devhealthfacts.clickhouse.v287"
+//
+// v287 -> v288: when no fixed question family serves a question and the read
+// fallback is on, the model plans which fact kinds the answer reads, and the
+// plan carries answer_plan.fallback (CHAOS-13002). An answer saved under v287
+// reads only the family's kinds.
+//
+// v288 -> v289: teamWorkItemBreakdown joins the served run_operation catalogue
+// (a team's work-item cycle time, CHAOS-13001): the data catalogue lists it and a
+// question that read the investment basis for a team cycle time can now be
+// answered from the work-item basis. An answer saved under v288 cannot.
+//
+// v289 -> v290: a team's investment mix can be read from the ops
+// investmentBreakdownTeam answers (CHAOS-12690 I2, behind a default-off switch;
+// QueryVersionFor adds "+team_from_ops" while it is on). With the switch off the
+// facts are unchanged, but the bump keeps one version per main merge.
+const QueryVersion = "devhealthfacts.clickhouse.v290"
+
+// repositoryFromOpsVersionSuffix marks the version of a deployment that reads
+// the repository investment mix from ops (CHAOS-12690): the numbers differ for
+// a unit that spans repositories, so an answer stored under the other source
+// must not be reused. With the switch off the version is QueryVersion itself.
+const (
+	repositoryFromOpsVersionSuffix = "+repository_from_ops"
+	teamFromOpsVersionSuffix       = "+team_from_ops"
+)
+
+// QueryVersionFor is the version a deployment stamps and keys reuse by.
+func QueryVersionFor(repositoryFromOps, teamFromOps bool) string {
+	version := QueryVersion
+	if repositoryFromOps {
+		version += repositoryFromOpsVersionSuffix
+	}
+	if teamFromOps {
+		version += teamFromOpsVersionSuffix
+	}
+	return version
+}
 
 // defaultTimeout is the FactCapability.Timeout this package advertises for
 // every provider. The registry (fact_registry.go's readProvider) wraps each

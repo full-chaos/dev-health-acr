@@ -31,7 +31,9 @@ helm template acr-test "$chart" --namespace acr-test \
   --set-string "credentials.migration.existingSecret=acr-migration" \
   --set-string "config.deviceVerificationUrl=https://acr.example/device" \
   --set-string "config.entitlement.url=https://ops.dev-health.internal" \
-  --set-string "credentials.entitlementToken.existingSecret=acr-entitlement-token" >/dev/null
+  --set "authWorkloadClient.enabled=true" \
+  --set-string "authWorkloadClient.exchangeURL=https://auth-service.dev-health.internal" \
+  --set-string "authWorkloadClient.issuer=https://auth.dev-health.internal" >/dev/null
 
 echo "== development values (harness happy path)"
 bash scripts/deploy/test-helm.sh --values "$chart/values-development.yaml" --image "$image"

@@ -15,6 +15,7 @@ Owns ACR token lifecycle, repository-scope normalization, authentication middlew
 | Attempt limiting | `limiter.go` | Per-client failure controls and retry timing |
 | Client address | `client_ip.go` | Trusted proxy handling and safe fallback |
 | Scope constants/errors | `types.go` | Read defaults and opt-in write scope |
+| Device approval diagrams | `device-approval-architecture.md` | Diagram and token-row source; public page `docs/device-approval.md` |
 
 ## INVARIANTS
 

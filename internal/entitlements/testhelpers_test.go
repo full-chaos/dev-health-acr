@@ -25,7 +25,7 @@ func clientConfig(t *testing.T, server *httptest.Server, overrides entitlements.
 	}
 	return mergeConfig(entitlements.Config{
 		BaseURL:          mustURL(t, server.URL),
-		TokenFile:        writeToken(t, testToken),
+		Workload:         &fakeTokenSource{token: testToken},
 		CACertPath:       caFile,
 		Timeout:          time.Second,
 		MaxResponseBytes: 2048,
@@ -38,9 +38,6 @@ func clientConfig(t *testing.T, server *httptest.Server, overrides entitlements.
 func mergeConfig(base, overrides entitlements.Config) entitlements.Config {
 	if overrides.BaseURL != nil {
 		base.BaseURL = overrides.BaseURL
-	}
-	if overrides.TokenFile != "" {
-		base.TokenFile = overrides.TokenFile
 	}
 	if overrides.Timeout != 0 {
 		base.Timeout = overrides.Timeout
@@ -70,15 +67,6 @@ func mergeConfig(base, overrides entitlements.Config) entitlements.Config {
 		base.Observe = overrides.Observe
 	}
 	return base
-}
-
-func writeToken(t *testing.T, token string) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(path, []byte(token), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	return path
 }
 
 func mustURL(t *testing.T, raw string) *url.URL {

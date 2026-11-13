@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/full-chaos/dev-health-go/pep"
+
 	"github.com/full-chaos/dev-health-acr/internal/api"
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/authworkload"
@@ -17,6 +19,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/hostedmetrics"
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/observability"
+	"github.com/full-chaos/dev-health-acr/internal/outboundhttp"
 	"github.com/full-chaos/dev-health-acr/internal/runtime/hosted"
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
@@ -61,6 +64,11 @@ func prepareServer(ctx context.Context, request serverBuildRequest) (serverRunne
 		return nil, nil, closeBuildFailure(closeRuntime, fmt.Errorf("initialize web assertions: %w", err))
 	}
 	dependencies.WebAssertions = webAssertions
+	approvals, err := approvalDecisions(request.config, request.logger)
+	if err != nil {
+		return nil, nil, closeBuildFailure(closeRuntime, fmt.Errorf("initialize device approval decisions: %w", err))
+	}
+	dependencies.ApprovalDecisions = approvals
 	app, err := api.NewApp(appConfig(request.config, request.serviceVersion), dependencies, request.logger)
 	if err != nil {
 		return nil, nil, closeBuildFailure(closeRuntime, fmt.Errorf("initialize application: %w", err))
@@ -94,6 +102,50 @@ func webAssertionVerifier(cfg config.Config, replays auth.WebAssertionReplayStor
 		MaxBodyBytes: int64(cfg.MaxSerializedBytes),
 		Replays:      replays, Logger: logger,
 	})
+}
+
+// approvalDecisions builds the approver check of an approval (CHAOS-13586): nil when ACR_DEVICE_APPROVAL_PDP is off.
+// It never stops the start (product rule 3): an unknown mode is off with one ERROR line; shadow or enforce without a
+// well-formed ACR_DEVICE_APPROVAL_PDP_URL or the workload client has no PDP client, one ERROR line, and enforce then
+// refuses every approval (fail closed). One INFO line names the effective mode, for the roll read-back.
+func approvalDecisions(cfg config.Config, logger *slog.Logger) (*auth.ApprovalDecisions, error) {
+	mode, err := auth.ParseApprovalDecisionMode(cfg.DeviceApprovalPDP.Mode)
+	if err != nil {
+		logger.Error("device approval decision mode unknown", "key", "ACR_DEVICE_APPROVAL_PDP", "allowed", "off,shadow,enforce")
+	}
+	logger.Info("device approval decision mode", "mode", string(mode))
+	if mode == auth.ApprovalDecisionOff {
+		return nil, nil
+	}
+	var decider pep.Decider
+	if cfg.DeviceApprovalPDP.Configured(cfg.AuthWorkload) {
+		client, fault := approvalDecisionClient(cfg, logger)
+		if fault != "" {
+			logger.Error("device approval decision client invalid", "key", "ACR_DEVICE_APPROVAL_PDP_URL", "fault", fault)
+		} else {
+			decider = client
+		}
+	}
+	return auth.NewApprovalDecisions(mode, decider, logger)
+}
+
+// approvalDecisionClient builds the PDP client, or names the step that failed with a closed word (never an error's
+// text, which can hold a configured value).
+func approvalDecisionClient(cfg config.Config, logger *slog.Logger) (pep.Decider, string) {
+	tokens, err := authworkload.Build(cfg.AuthWorkload, logger)
+	if err != nil || tokens == nil {
+		return nil, "workload_client"
+	}
+	httpClient, err := tokens.HTTPClient(outboundhttp.Transport(), cfg.DeviceApprovalPDP.URL, "auth-service")
+	if err != nil {
+		return nil, "workload_transport"
+	}
+	client, err := pep.New(pep.Config{BaseURL: cfg.DeviceApprovalPDP.URL, AllowPlainHTTP: cfg.AuthWorkload.AllowPlainHTTP,
+		HTTPClient: httpClient, ClientService: "dev-health-acr-api"})
+	if err != nil {
+		return nil, "pep_client"
+	}
+	return client, ""
 }
 
 func applicationDependencies(ctx context.Context, request serverBuildRequest) (api.Dependencies, func() error, error) {

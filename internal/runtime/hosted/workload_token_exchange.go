@@ -54,7 +54,7 @@ func workloadTokenExchangeConfigured(lookup func(string) (string, bool)) bool {
 // lifecycle every other issuance path already uses) into the one service
 // api.RuntimeDependencies.WorkloadTokenExchange needs. Returns (nil, nil)
 // when unconfigured.
-func buildWorkloadTokenExchange(postgres postgresComponents, now func() time.Time, lookup func(string) (string, bool)) (*authverify.WorkloadTokenExchangeService, error) {
+func buildWorkloadTokenExchange(postgres postgresComponents, orgs auth.OrganizationPresence, now func() time.Time, lookup func(string) (string, bool)) (*authverify.WorkloadTokenExchangeService, error) {
 	if !workloadTokenExchangeConfigured(lookup) {
 		return nil, nil
 	}
@@ -82,7 +82,9 @@ func buildWorkloadTokenExchange(postgres postgresComponents, now func() time.Tim
 	if err != nil {
 		return nil, fmt.Errorf("build kubernetes token review validator: %w", err)
 	}
-	resolver, err := auth.NewGrantResolver(postgres.workloadBindings)
+	// orgs (the entitlement client's fresh organization read) serves a
+	// live_orgs binding; nil in local entitlement mode refuses such a row.
+	resolver, err := auth.NewGrantResolver(postgres.workloadBindings, orgs)
 	if err != nil {
 		return nil, fmt.Errorf("build workload grant resolver: %w", err)
 	}

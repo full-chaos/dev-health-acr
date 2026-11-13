@@ -43,6 +43,10 @@ var (
 	// match the tokens the presented token derives: a store defect, never
 	// answered with tokens.
 	errRefreshDerivation = errors.New("browser refresh successor does not match its derivation")
+	// errRefreshOrganizationGone reports a family whose organization is gone; the family is revoked.
+	errRefreshOrganizationGone = errors.New("browser refresh family organization is gone")
+	// errRefreshOrganizationDisabled reports a family whose organization is disabled; the family is revoked.
+	errRefreshOrganizationDisabled = errors.New("browser refresh family organization is disabled")
 )
 
 // ValidRefreshTokenShape reports whether a value has the refresh token shape.
@@ -76,6 +80,7 @@ func deriveRefreshSuccessor(presented string, seed []byte) (access, refresh stri
 // BrowserRefreshService runs the refresh grant over a refresh store.
 type BrowserRefreshService struct {
 	store    storage.BrowserRefreshStore
+	orgs     OrganizationPresence
 	now      func() time.Time
 	randomMu sync.Mutex
 	random   io.Reader
@@ -146,6 +151,9 @@ func (s *BrowserRefreshService) Refresh(ctx context.Context, presented, clientID
 	if !ValidRefreshTokenShape(presented) || clientID == "" {
 		return BrowserRefresh{Decision: storage.BrowserRefreshUnknownToken}, nil
 	}
+	if err := s.checkFamilyOrganization(ctx, HashRefreshToken(presented), clientID); err != nil {
+		return BrowserRefresh{}, err
+	}
 	seed := make([]byte, refreshSeedBytes)
 	if err := s.read(seed); err != nil {
 		return BrowserRefresh{}, fmt.Errorf("generate rotation seed: %w", err)
@@ -180,12 +188,44 @@ func (s *BrowserRefreshService) Refresh(ctx context.Context, presented, clientID
 	return result, nil
 }
 
+// checkFamilyOrganization refuses, and revokes, a family whose organization is gone or disabled; an outage refuses
+// without a write. Both revokes record org_deprovisioned (the family reasons are fixed by migration 0073).
+func (s *BrowserRefreshService) checkFamilyOrganization(ctx context.Context, presentedHash, clientID string) error {
+	if s.orgs == nil {
+		return nil
+	}
+	orgID, err := s.store.BrowserRefreshFamilyOrg(ctx, presentedHash, clientID)
+	if errors.Is(err, storage.ErrNotFound) {
+		// An unknown token or another client's: the rotation answers it as before and mints nothing.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read browser family organization: %w", err)
+	}
+	switch err := s.orgs.OrganizationKnownNow(ctx, orgID); {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrOrganizationGone):
+		if _, err := s.store.RevokeBrowserFamilyByToken(ctx, presentedHash, clientID, browserRefreshActor, storage.BrowserFamilyRevokeOrgDeprovisioned, s.now().UTC()); err != nil {
+			return fmt.Errorf("revoke browser family of a gone organization: %w", err)
+		}
+		return errRefreshOrganizationGone
+	case errors.Is(err, ErrOrganizationDisabled):
+		if _, err := s.store.RevokeBrowserFamilyByToken(ctx, presentedHash, clientID, browserRefreshActor, storage.BrowserFamilyRevokeOrgDeprovisioned, s.now().UTC()); err != nil {
+			return fmt.Errorf("revoke browser family of a disabled organization: %w", err)
+		}
+		return errRefreshOrganizationDisabled
+	default:
+		return fmt.Errorf("check browser family organization: %w", err)
+	}
+}
+
 // RevokeFamily revokes the family of a presented refresh token (sign-out).
 func (s *BrowserRefreshService) RevokeFamily(ctx context.Context, presented, clientID string) (storage.BrowserRefreshDecision, error) {
 	if !ValidRefreshTokenShape(presented) || clientID == "" {
 		return storage.BrowserRefreshUnknownToken, nil
 	}
-	outcome, err := s.store.RevokeBrowserFamilyByToken(ctx, HashRefreshToken(presented), clientID, browserRefreshActor, s.now().UTC())
+	outcome, err := s.store.RevokeBrowserFamilyByToken(ctx, HashRefreshToken(presented), clientID, browserRefreshActor, storage.BrowserFamilyRevokeSignOut, s.now().UTC())
 	if err != nil {
 		return "", err
 	}

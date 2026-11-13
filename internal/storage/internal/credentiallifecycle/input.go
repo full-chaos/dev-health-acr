@@ -134,6 +134,11 @@ type RevocationInput struct {
 	ActorType string
 	// Reason is optional free text recorded in the audit metadata.
 	Reason string
+	// FamilyReason is set by a browser family revoke (the refresh paths): every
+	// member's audit row then carries it as family_revoke_reason and no Reason
+	// text, as Postgres's revokeBrowserFamilyTx writes it. Empty for a direct
+	// revoke of one credential.
+	FamilyReason string
 	// SelfCredential marks a revocation the credential asked for itself; it
 	// changes only the actor the lifecycle outbox names (credential), never
 	// the audit row. ActorID must then be the credential id.

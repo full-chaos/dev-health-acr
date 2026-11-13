@@ -226,6 +226,8 @@ func goVarName(e Event) string {
 		return "ModelSynthesizeDecision"
 	case ModelPhraseDecision.ID:
 		return "ModelPhraseDecision"
+	case ModelPlanReadsDecision.ID:
+		return "ModelPlanReadsDecision"
 	case FactScopeExpansionGap.ID:
 		return "FactScopeExpansionGap"
 	case FactScopeExpansionDecision.ID:
@@ -444,6 +446,8 @@ func goVarName(e Event) string {
 		return "MCPHTTPReadiness"
 	case OAuthStep.ID:
 		return "OAuthStep"
+	case CredentialRevokeOnBehalf.ID:
+		return "CredentialRevokeOnBehalf"
 	case OTelExport.ID:
 		return "OTelExport"
 	case SuppliedInterpretationDecision.ID:
@@ -452,12 +456,20 @@ func goVarName(e Event) string {
 		return "ClientSynthesisDecision"
 	case SuppliedSynthesisDecision.ID:
 		return "SuppliedSynthesisDecision"
+	case DevhealthsourceTableReadPage.ID:
+		return "DevhealthsourceTableReadPage"
+	case DevhealthsourceTableReadDrained.ID:
+		return "DevhealthsourceTableReadDrained"
+	case DevhealthsourceTableReadNotNew.ID:
+		return "DevhealthsourceTableReadNotNew"
 	case GraphCountCheckFinished.ID:
 		return "GraphCountCheckFinished"
 	case PlanOperandReads.ID:
 		return "PlanOperandReads"
 	case PlanSubjectObligationReads.ID:
 		return "PlanSubjectObligationReads"
+	case ReadFallbackDecision.ID:
+		return "ReadFallbackDecision"
 	case WindowClassification.ID:
 		return "WindowClassification"
 	case InferredWindowGate.ID:

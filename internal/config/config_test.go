@@ -222,16 +222,18 @@ func TestProductionCannotDisableKeyringValidationWithBackingStoreOverride(t *tes
 // to production-only, still passed an error-only version of this test).
 func TestStagingCannotDisableBackingStoresOverride(t *testing.T) {
 	values := map[string]string{
-		"ACR_ENVIRONMENT":                       "staging",
-		"ACR_REQUIRE_BACKING_STORES":            "false",
-		"ACR_CLICKHOUSE_DSN":                    "clickhouse://redacted",
-		"ACR_POSTGRES_DSN":                      "postgres://redacted?sslmode=verify-full",
-		"ACR_EVIDENCE_ID_ACTIVE_KID":            "current",
-		"ACR_EVIDENCE_ID_KEYS":                  "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
-		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "https://ops.example.test",
-		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
-		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
-		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
+		"ACR_ENVIRONMENT":                "staging",
+		"ACR_REQUIRE_BACKING_STORES":     "false",
+		"ACR_CLICKHOUSE_DSN":             "clickhouse://redacted",
+		"ACR_POSTGRES_DSN":               "postgres://redacted?sslmode=verify-full",
+		"ACR_EVIDENCE_ID_ACTIVE_KID":     "current",
+		"ACR_EVIDENCE_ID_KEYS":           "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+		"ACR_DEV_HEALTH_ENTITLEMENT_URL": "https://ops.example.test",
+		"ACR_AUTH_WORKLOAD_EXCHANGE_URL": "https://auth-service.example.test",
+		"ACR_AUTH_WORKLOAD_ISSUER":       "https://auth.example.test",
+		"ACR_AUTH_WORKLOAD_SUBJECT_FILE": "/var/run/secrets/dev-health/auth-workload/token",
+		"ACR_DEVICE_VERIFICATION_URL":    "https://verify.example.test/device",
+		"ACR_POSTGRES_CONNECTION_KIND":   "direct",
 	}
 	cfg, err := load(mapLookup(values))
 	if err != nil {
@@ -244,16 +246,18 @@ func TestStagingCannotDisableBackingStoresOverride(t *testing.T) {
 
 func TestProductionAcceptsConfiguredBackingStores(t *testing.T) {
 	cfg, err := load(mapLookup(map[string]string{
-		"ACR_ENVIRONMENT":                       "production",
-		"ACR_CLICKHOUSE_DSN":                    "clickhouse://redacted",
-		"ACR_POSTGRES_DSN":                      "postgres://redacted?sslmode=verify-full",
-		"ACR_LOG_LEVEL":                         "warn",
-		"ACR_EVIDENCE_ID_ACTIVE_KID":            "current",
-		"ACR_EVIDENCE_ID_KEYS":                  "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
-		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "https://ops.example.test",
-		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
-		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
-		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
+		"ACR_ENVIRONMENT":                "production",
+		"ACR_CLICKHOUSE_DSN":             "clickhouse://redacted",
+		"ACR_POSTGRES_DSN":               "postgres://redacted?sslmode=verify-full",
+		"ACR_LOG_LEVEL":                  "warn",
+		"ACR_EVIDENCE_ID_ACTIVE_KID":     "current",
+		"ACR_EVIDENCE_ID_KEYS":           "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
+		"ACR_DEV_HEALTH_ENTITLEMENT_URL": "https://ops.example.test",
+		"ACR_AUTH_WORKLOAD_EXCHANGE_URL": "https://auth-service.example.test",
+		"ACR_AUTH_WORKLOAD_ISSUER":       "https://auth.example.test",
+		"ACR_AUTH_WORKLOAD_SUBJECT_FILE": "/var/run/secrets/dev-health/auth-workload/token",
+		"ACR_DEVICE_VERIFICATION_URL":    "https://verify.example.test/device",
+		"ACR_POSTGRES_CONNECTION_KIND":   "direct",
 	}))
 	if err != nil {
 		t.Fatal(err)
@@ -280,12 +284,12 @@ func TestProductionRequiresDevHealthEntitlementConfiguration(t *testing.T) {
 		field  string
 	}{
 		{"missing URL", base, "ACR_DEV_HEALTH_ENTITLEMENT_URL"},
-		{"missing token file", map[string]string{
+		{"missing auth workload client", map[string]string{
 			"ACR_ENVIRONMENT": "production", "ACR_REQUIRE_BACKING_STORES": "false",
 			"ACR_CLICKHOUSE_DSN": "clickhouse://redacted", "ACR_POSTGRES_DSN": "postgres://redacted?sslmode=verify-full",
 			"ACR_EVIDENCE_ID_ACTIVE_KID": "current", "ACR_EVIDENCE_ID_KEYS": "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
 			"ACR_DEV_HEALTH_ENTITLEMENT_URL": "https://ops.example.test",
-		}, "ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE"},
+		}, "ACR_AUTH_WORKLOAD_"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			// When
@@ -305,10 +309,12 @@ func TestProductionAcceptsPlainHTTPDevHealthEntitlementURL(t *testing.T) {
 		"ACR_ENVIRONMENT": "production", "ACR_REQUIRE_BACKING_STORES": "false",
 		"ACR_CLICKHOUSE_DSN": "clickhouse://redacted", "ACR_POSTGRES_DSN": "postgres://redacted?sslmode=verify-full",
 		"ACR_EVIDENCE_ID_ACTIVE_KID": "current", "ACR_EVIDENCE_ID_KEYS": "current=MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE=",
-		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "http://ops.internal:8091",
-		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": "/run/secrets/ops-token",
-		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
-		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
+		"ACR_DEV_HEALTH_ENTITLEMENT_URL": "http://ops.internal:8091",
+		"ACR_AUTH_WORKLOAD_EXCHANGE_URL": "https://auth-service.example.test",
+		"ACR_AUTH_WORKLOAD_ISSUER":       "https://auth.example.test",
+		"ACR_AUTH_WORKLOAD_SUBJECT_FILE": "/var/run/secrets/dev-health/auth-workload/token",
+		"ACR_DEVICE_VERIFICATION_URL":    "https://verify.example.test/device",
+		"ACR_POSTGRES_CONNECTION_KIND":   "direct",
 	}
 
 	// When

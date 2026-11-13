@@ -321,7 +321,7 @@ link_check_files=""
 if [ -d "$root/docs" ]; then
   while IFS= read -r -d '' f; do
     link_check_files="$link_check_files $f"
-  done < <(find "$root/docs" -maxdepth 1 -name '*.md' -print0)
+  done < <(find "$root/docs" -maxdepth 2 \( -path "$root/docs/*.md" -o -path "$root/docs/runbooks/*.md" -o -path "$root/docs/release-notes/*.md" \) -print0)
 fi
 
 if [ -n "$link_check_files" ]; then

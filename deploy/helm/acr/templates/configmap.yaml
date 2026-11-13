@@ -97,7 +97,9 @@ data:
   {{- if include "acr.remoteEntitlement" . }}
   ACR_DEV_HEALTH_ENTITLEMENT_URL: {{ .Values.config.entitlement.url | quote }}
   ACR_DEV_HEALTH_ENTITLEMENT_TIMEOUT: {{ .Values.config.entitlement.timeout | quote }}
-  ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE: {{ printf "%s/%s" (.Values.config.entitlement.tokenMountPath | trimSuffix "/") .Values.config.entitlement.tokenFileName | quote }}
+  {{- if include "acr.entitlementWorkload" . }}
+  ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL: "workload"
+  {{- end }}
   {{- end }}
   {{- if .Values.config.postgresCaBundle.existingSecret }}
   ACR_POSTGRES_CA_BUNDLE: "/var/run/acr/postgres-ca/ca.crt"

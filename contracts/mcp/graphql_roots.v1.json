@@ -28,6 +28,7 @@
       "operations": [
         "investmentBreakdown",
         "investmentBreakdownTeam",
+        "teamWorkItemBreakdown",
         "investmentFull",
         "investmentBreakdownRepository"
       ],

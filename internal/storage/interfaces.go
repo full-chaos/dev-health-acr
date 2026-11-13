@@ -98,6 +98,19 @@ type Principal struct {
 	// for every other authentication.
 	SessionID     string
 	Impersonating bool
+	// ApproverReference is the web approver reference (CHAOS-13586) that came
+	// with a web assertion and passed the pair check, the one token an
+	// approval forwards to the policy decision point; empty otherwise, with
+	// ApproverReferenceFault naming why (closed set, for the log).
+	ApproverReference      string
+	ApproverReferenceFault string
+
+	// RepositoryScopesInBody marks a web assertion that left out the
+	// repository_scopes claim (CHAOS-13562): RepositoryScopes is empty and
+	// the approval it signs takes its repositories from the body the
+	// assertion binds. Only a credential-issue approval admits it; any other
+	// reader must treat such a principal as holding no repository.
+	RepositoryScopesInBody bool
 	// CredentialSessionID is the ACP web session a browser-class credential
 	// is bound to (its row's session_id, CHAOS-12123), copied by
 	// authentication; empty for every other credential and for a web
@@ -320,19 +333,30 @@ type WorkloadBindingKey struct {
 // (migration seed or a direct operator write), matching the "keep the
 // surface minimal" instruction on the parent ticket.
 type WorkloadBinding struct {
-	BindingID        string
-	OrgID            string
+	BindingID string
+	// OrgID is the bound organization; empty for a WorkloadOrgScopeLiveOrgs row.
+	OrgID string
+	// OrgScope is WorkloadOrgScopeOrg (the row serves OrgID) or
+	// WorkloadOrgScopeLiveOrgs (the revoke row that serves the organization the
+	// exchange selects, while Dev Health says it exists; migration 0072).
+	OrgScope         string
 	Role             string
 	RepositoryScopes []string
 	DisabledAt       *time.Time
 }
 
+// The org_scope values of acr.workload_bindings (migration 0072).
+const (
+	WorkloadOrgScopeOrg      = "org"
+	WorkloadOrgScopeLiveOrgs = "live_orgs"
+)
+
 // WorkloadBindingStore is a read-only lookup by the exact validated
 // identity tuple. Implementations must never resolve from anything else
 // (see WorkloadBindingKey's doc comment). One identity may be bound in
 // several organizations, so Lookup returns every row for the identity
-// (disabled rows included, ordered by org_id) and ErrNotFound when there
-// is none; choosing among them is the resolver's job.
+// (disabled rows included, ordered by org_id, a live_orgs row last) and
+// ErrNotFound when there is none; choosing among them is the resolver's job.
 type WorkloadBindingStore interface {
 	Lookup(ctx context.Context, key WorkloadBindingKey) ([]WorkloadBinding, error)
 }

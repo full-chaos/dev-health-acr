@@ -331,7 +331,7 @@ func teamsProjectsTablesFor(omissions *ambiguityLedger, presence *presenceTeleme
 		{name: "projects", carry: true, dimension: true, query: queryProjects, subjectKinds: []contractsv1.ContextFabricSubjectKind{contractsv1.ContextFabricSubjectProject}},
 		{name: "project_membership_presence", carry: true, query: subjectProjectMembershipsQuery(presence, ingest)},
 		{name: "work_item_team_attributions", carry: true, query: workItemTeamsQuery(presence)},
-		{name: "team_project_ownership", carry: true, query: projectTeamsQuery(omissions, ingest)},
+		{name: "team_project_ownership", carry: true, query: projectTeamsQuery(omissions)},
 		// CHAOS-6561: repository -> team OWNED_BY_TEAM, the ownership edge
 		// team_repo_ownership carries (queryTeams reads the same table only
 		// for a team's authorization scope).
@@ -913,6 +913,9 @@ type presenceTelemetryLedger struct {
 	// membership is the page-level record of the read
 	// (membership_read_telemetry.go).
 	membership membershipReadLedger
+	// tables is the same record for every other table of the cursor
+	// (table_read_telemetry.go).
+	tables tableReadLedger
 }
 
 func (l *presenceTelemetryLedger) recordRead(source, subjectKind string) {
@@ -1123,7 +1126,7 @@ func (s *TeamsProjectsSource) presenceLedgerFor(orgID string, fromScratch bool) 
 		if previous := s.presence[orgID]; previous != nil {
 			run = previous.membership.run + 1
 		}
-		s.presence[orgID] = &presenceTelemetryLedger{membership: membershipReadLedger{run: run, summaryOwed: fromScratch}}
+		s.presence[orgID] = &presenceTelemetryLedger{membership: membershipReadLedger{run: run, summaryOwed: fromScratch}, tables: tableReadLedger{summaryOwed: fromScratch}}
 	}
 	return s.presence[orgID]
 }
@@ -1282,7 +1285,7 @@ func (s *TeamsProjectsSource) Enabled() bool {
 	return s != nil && s.enabled
 }
 
-func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (contextfabric.ProjectionBatch, bool, error) {
+func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoint contextfabric.ProjectionCheckpoint) (_ contextfabric.ProjectionBatch, _ bool, err error) {
 	if s == nil {
 		return contextfabric.ProjectionBatch{}, false, fmt.Errorf("devhealthsource: teams/projects source is not configured")
 	}
@@ -1343,6 +1346,12 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 	presence := s.presenceLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logPresenceTelemetry(ctx, s.logger, checkpoint.OrgID, presence)
 	defer logMembershipPages(ctx, s.logger, checkpoint.OrgID, presence)
+	defer func() {
+		if err != nil {
+			presence.recordTableCallFailed()
+		}
+		logTableReadPages(ctx, s.logger, checkpoint.OrgID, presence)
+	}()
 	teamAuth := s.teamAuthLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
 	defer logTeamAuthorizationTelemetry(ctx, s.logger, checkpoint.OrgID, teamAuth)
 	repoOwnership := s.repositoryOwnershipLedgerFor(strings.TrimSpace(checkpoint.OrgID), fromScratch)
@@ -1355,23 +1364,26 @@ func (s *TeamsProjectsSource) NextProjectionBatch(ctx context.Context, checkpoin
 		space = cursorSpaceIngestColumns
 	}
 	return sourcePlan{
-		client:          s.client,
-		source:          TeamsProjectsSourceName,
-		version:         TeamsProjectsSourceVersion,
-		space:           space,
-		tables:          teamsProjectsTablesFor(ledger, presence, teamAuth, repoOwnership, ingest),
-		windowTables:    teamsProjectsTablesFor(&ambiguityLedger{}, windowPresence, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}, ingest),
-		logger:          s.logger,
-		now:             s.now,
-		overlap:         s.overlapDuration(),
-		windowInterval:  s.windowInterval,
-		windowCarry:     s.windowCarry,
-		window:          s.windowMemo(),
-		reconcile:       teamsReconcileQuery(&teamAuthorizationLedger{}),
-		reconcilePeriod: teamOwnershipReconcilePeriod,
-		recordConsumed:  s.recordConsumed(checkpoint.Cursor),
-		dropConsumed:    s.forgetConsumed,
-		observePage:     presence.recordConsumed,
+		client:         s.client,
+		source:         TeamsProjectsSourceName,
+		version:        TeamsProjectsSourceVersion,
+		space:          space,
+		tables:         teamsProjectsTablesFor(ledger, presence, teamAuth, repoOwnership, ingest),
+		windowTables:   teamsProjectsTablesFor(&ambiguityLedger{}, windowPresence, &teamAuthorizationLedger{}, &repositoryOwnershipLedger{}, ingest),
+		logger:         s.logger,
+		now:            s.now,
+		overlap:        s.overlapDuration(),
+		windowInterval: s.windowInterval,
+		windowCarry:    s.windowCarry,
+		window:         s.windowMemo(),
+		reconciles:     []reconcilePlan{teamsReconcilePlan(&teamAuthorizationLedger{}), projectTeamsReconcilePlan(&ambiguityLedger{})},
+		recordConsumed: s.recordConsumed(checkpoint.Cursor),
+		dropConsumed:   s.forgetConsumed,
+		observePage: func(all []candidate) {
+			presence.recordConsumed(all)
+			presence.recordTableConsumed(all)
+		},
+		observeRead: presence.recordTableStatement,
 		// Without this the shared engine's per-item quarantine drops items
 		// on THIS source with no signal at all -- a silent loss, which the
 		// standing ruling forbids outright. The ClickHouse source got the

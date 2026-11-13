@@ -78,6 +78,7 @@ func TestChaos7126FindModesOnRealProducers(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	adapter := chaos7074FalkorAdapter(t, ctx)
 
 	now := time.Now().UTC()
@@ -103,7 +104,7 @@ func TestChaos7126FindModesOnRealProducers(t *testing.T) {
 		t.Fatal(err)
 	}
 	drainSource(t, ctx, main, adapter, orgID, devhealthsource.SourceName)
-	teams, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	teams, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -219,7 +219,7 @@ func (i *Instruments) InvestigationEventsDropped(ctx context.Context, stage stri
 }
 
 var (
-	entitlementCredentials = []string{"service_token", "workload"}
+	entitlementCredentials = []string{"workload"}
 	entitlementOutcomes    = []string{"sent", "token_unavailable"}
 )
 

@@ -1,7 +1,7 @@
 # ACR evaluation fixture corpus
 
-CHAOS-2918 delivers a deterministic, public-safe evaluation corpus that
-unblocks CHAOS-2905 (the Go context assembler). This document explains what
+Evaluation-corpus work delivers a deterministic, public-safe evaluation corpus that
+unblocks the evidence-assembler work (the Go context assembler). This document explains what
 the corpus is, how it was produced, and how to bootstrap or regenerate it in
 a clean checkout.
 
@@ -19,7 +19,7 @@ testdata/evaluation/v1/
 
 `internal/evalfixture` is the Go package that loads and verifies this
 corpus. It never fabricates ACR packet output; it only proves the corpus
-itself is well-formed, hash-stable, and internally consistent. CHAOS-2905
+itself is well-formed, hash-stable, and internally consistent. Evidence-assembler work
 imports `internal/evalfixture` as a test helper and reads only
 `testdata/evaluation/v1/**` — it never depends on customer or production
 data.
@@ -99,4 +99,4 @@ make verify
 ```
 
 If any of these fail on a fresh clone, the corpus or verifier has drifted
-and must be fixed before CHAOS-2905 can rely on it.
+and must be fixed before the evidence-assembler work can rely on it.

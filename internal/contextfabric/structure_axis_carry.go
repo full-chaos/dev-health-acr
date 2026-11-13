@@ -38,9 +38,10 @@ import (
 // question would inherit each other's axes. Chain identity in this codebase
 // is the prior-result breadcrumb -- each hop's ConfirmedStructure entries
 // name the PriorResultID they resolved from -- so this reuses
-// carryReferencedResultIDs' seeding, the CHAOS-3898 §2.2 epoch taint gate,
-// and the depth/visited bounds verbatim rather than growing a second,
-// differently-bounded walk.
+// carryReferencedResultIDs' seeding and the depth/visited bounds verbatim
+// rather than growing a second, differently-bounded walk. Unlike the
+// candidate-hint path it applies NO graph epoch gate: a kind is a contract
+// vocabulary member, not a graph id (see walkCarriedKind).
 //
 // KNOWN LIMIT, stated rather than discovered later: the walk can only be
 // seeded from a prior result the REQUEST names, and a request names one only
@@ -72,13 +73,8 @@ const (
 	// KindCarryMissUnloadable: every reachable candidate failed to load or
 	// named an empty result id.
 	KindCarryMissUnloadable KindCarryOutcome = "miss_unloadable"
-	// KindCarryMissStaleGraphEpoch: a candidate loaded but failed the
-	// CHAOS-3898 §2.2 ingress taint gate -- the SAME fail-closed check
-	// resolveCarriedWindow and resolvePriorSubjectHints already apply,
-	// reused here rather than re-implemented.
-	KindCarryMissStaleGraphEpoch KindCarryOutcome = "miss_stale_graph_epoch"
-	// KindCarryMissNoConfirmedKind: every reachable, taint-gate-passing
-	// result carried no receipt-confirmed expected_kind entry.
+	// KindCarryMissNoConfirmedKind: every reachable, loadable result carried
+	// no receipt-confirmed expected_kind entry.
 	KindCarryMissNoConfirmedKind KindCarryOutcome = "miss_no_confirmed_kind"
 	// KindCarryMissDepthExceeded: the walk still had unvisited candidates
 	// when carryChainMaxDepth/carryChainMaxVisited was reached.
@@ -148,7 +144,7 @@ type kindCarryResult struct {
 
 // resolveCarriedKind resolves the nearest receipt-confirmed expected_kind
 // this conversation already established. Fails closed on every ambiguity --
-// no reference, an unloadable candidate, a stale graph epoch, a chain
+// no reference, an unloadable candidate, a chain
 // exhausted before a hit, two carriers that disagree, or a depth that found a
 // hit but could not be scanned to the end: "no carry" is always a safe,
 // disclosed answer, never a guess.
@@ -233,10 +229,13 @@ func (e *Engine) walkCarriedKind(ctx context.Context, principal storage.Principa
 		return kindCarryResult{Outcome: KindCarryMissNoReference}
 	}
 	visited := make(map[string]struct{}, carryChainMaxVisited)
+	otherEpochVisited := 0
+	finishWalk := carryWalkRecorderFrom(ctx).begin()
+	defer func() { finishWalk(len(visited), otherEpochVisited) }()
 	// reachedViaAncestry records which frontier ids were reachable ONLY
 	// because a stored parent pointed at them -- see ViaStoredAncestry.
 	reachedViaAncestry := make(map[string]struct{}, carryChainMaxVisited)
-	var sawUnloadable, sawStaleEpoch, capExceeded, sawVetoedCarrier bool
+	var sawUnloadable, capExceeded, sawVetoedCarrier bool
 	for depth := 0; depth < carryChainMaxDepth && len(frontier) > 0; depth++ {
 		var next []string
 		// The WHOLE depth is scanned before any decision, for the reason
@@ -250,8 +249,8 @@ func (e *Engine) walkCarriedKind(ctx context.Context, principal storage.Principa
 		// trustworthy if the WHOLE depth was scanned, because the conflict
 		// check below can only see the candidates it actually visited. If
 		// the visit cap cut this depth short, or a sibling at this depth
-		// could not be read at all (unloadable, or refused by the epoch
-		// taint gate), then an unexamined same-depth candidate may carry a
+		// could not be read at all (unloadable), then an unexamined
+		// same-depth candidate may carry a
 		// DIFFERENT kind and returning the hit would resolve an ambiguity
 		// to a value. That is the one thing this mechanism must never do,
 		// so a truncated depth fails closed even when it found a hit.
@@ -276,15 +275,14 @@ func (e *Engine) walkCarriedKind(ctx context.Context, principal storage.Principa
 				depthTruncated = true
 				continue
 			}
-			// CHAOS-3898 §2.2 ingress taint gate -- IDENTICAL check to
-			// resolveCarriedWindow's and resolvePriorSubjectHints' own. A
-			// rebuild between turns can change what a kind even denotes, so
-			// a carrier from another epoch is refused outright rather than
-			// trusted partially.
-			if fetched.GraphEpoch == nil || *fetched.GraphEpoch != binding.Epoch {
-				sawStaleEpoch = true
-				depthTruncated = true
-				continue
+			// NO GRAPH EPOCH GATE on this axis. An expected_kind is a member
+			// of the closed contract vocabulary (ValidContextFabricSubjectKind
+			// below), never a graph id, so a lifecycle rebuild between turns
+			// does not change what it denotes. The graph read it narrows runs
+			// fresh on this turn's binding. Candidate hints and anchors, which
+			// ARE graph ids, keep the CHAOS-3898 §2.2 gate at their own sites.
+			if carrierFromOtherEpoch(fetched, binding) {
+				otherEpochVisited++
 			}
 			prior := fetched.Result
 			kind, ok, refused := carriableConfirmedKind(prior)
@@ -349,14 +347,10 @@ func (e *Engine) walkCarriedKind(ctx context.Context, principal storage.Principa
 			// is this walk's own rule -- it may equally hold a NEARER one
 			// than anything a deeper hit could offer. Descending would
 			// silently prefer the far confirmation over an unread near one.
-			switch {
-			case capExceeded:
+			if capExceeded {
 				return kindCarryResult{Outcome: KindCarryMissDepthExceeded, ChainDepth: depth}
-			case sawStaleEpoch:
-				return kindCarryResult{Outcome: KindCarryMissStaleGraphEpoch, ChainDepth: depth}
-			default:
-				return kindCarryResult{Outcome: KindCarryMissUnloadable, ChainDepth: depth}
 			}
+			return kindCarryResult{Outcome: KindCarryMissUnloadable, ChainDepth: depth}
 		}
 		if len(hits) > 0 {
 			for _, h := range hits[1:] {
@@ -372,8 +366,6 @@ func (e *Engine) walkCarriedKind(ctx context.Context, principal storage.Principa
 		return kindCarryResult{Outcome: KindCarryMissDepthExceeded}
 	}
 	switch {
-	case sawStaleEpoch:
-		return kindCarryResult{Outcome: KindCarryMissStaleGraphEpoch}
 	case sawUnloadable:
 		return kindCarryResult{Outcome: KindCarryMissUnloadable}
 	case sawVetoedCarrier:
@@ -634,7 +626,7 @@ func composeCarriedKindEntry(carry kindCarryResult) *contractsv1.ContextFabricCo
 // recordKindCarry reports carry.Outcome to telemetry -- a no-op when
 // telemetry is unconfigured or carry was never attempted, mirroring
 // recordWindowCarry's own "once per non-zero signal" shape.
-func (e *Engine) recordKindCarry(ctx context.Context, principal storage.Principal, carry kindCarryResult, seedSource CarrySeedSource) {
+func (e *Engine) recordKindCarry(ctx context.Context, principal storage.Principal, carry kindCarryResult, seedSource CarrySeedSource, walk CarryWalkStats) {
 	if e.telemetry == nil || carry.Outcome == KindCarryNotAttempted {
 		return
 	}
@@ -649,7 +641,7 @@ func (e *Engine) recordKindCarry(ctx context.Context, principal storage.Principa
 	// operator reading "hit" alone cannot tell a chain carrying `repository`
 	// from one carrying `team`. redeemedKind is empty except on a drop, where
 	// it is the only place the disagreement is recorded.
-	e.telemetry.RecordKindCarry(ctx, principal, carry.Outcome, carry.ChainDepth, carry.Kind, carry.RedeemedKind, seedSource, carry.ViaStoredAncestry)
+	e.telemetry.RecordKindCarry(ctx, principal, carry.Outcome, carry.ChainDepth, carry.Kind, carry.RedeemedKind, seedSource, carry.ViaStoredAncestry, walk)
 }
 
 // carryResultCacheKey scopes the per-request carry load cache below.

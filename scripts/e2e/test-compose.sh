@@ -9,7 +9,7 @@ receipt_validator="$root/scripts/e2e/validate-error-receipt.sh"
 
 bash -n "$script" "$pki" "$receipt_validator"
 bash -n "$root/scripts/e2e/test-acr-db-init.sh"
-for scenario in happy existing-volume missing-ops-token invalid-ca revoked-acr-token clickhouse-read-denied migration-failure; do
+for scenario in happy existing-volume missing-ops-token invalid-ca revoked-acr-token clickhouse-read-denied migration-failure bootstrap-rotation; do
   grep -Fq "$scenario" "$script"
 done
 grep -Fq 'refusing the operator default Compose project' "$script"
@@ -31,25 +31,70 @@ if grep -Eq 'acr-ops-tls|acr-pki-init|acr_e2e_(postgres|clickhouse)_tls|sslmode=
   exit 1
 fi
 grep -Fq 'Ops organization provisioning failed' "$script"
-# The ops internal listener answers 401 to a request without the svc_acr_ bearer (ops CHAOS-9993): the
-# credential is minted before the readiness probe, the probe sends it, and a rejection is named.
-grep -Fq -- '-e ACR_PROBE_TOKEN --entrypoint sh acr-tls-proxy -c' "$script"
+# The ops internal acr routes accept only the acr-api workload token (ops CHAOS-12977): the harness writes the
+# acr-api bootstrap credential, the readiness probe exchanges it at auth-service and sends the workload token, and
+# a retired-class bearer and no bearer are then measured to get 401 on the same route.
+grep -Fq 'http://auth-service:8095/internal/v1/token/exchange' "$script"
+grep -Fq 'urn%3Adev-health%3Aparams%3Aoauth%3Atoken-type%3Aworkload-bootstrap' "$script"
+grep -Fq -- '--post-file /tmp/form' "$script"
+# The bootstrap credential never reaches a command line: it is read from the volume into a tmpfs form file.
 # shellcheck disable=SC2016 # the pin is a literal source line.
-grep -Fq -- '--header "Authorization: Bearer $ACR_PROBE_TOKEN" http://go-api:8091/api/v1/internal/acr/health' "$script"
-# No secret on a command line: the readiness probe never expands the bearer value into an argv.
+grep -Fq 'b="$(enc < /run/workload/acr-api.bootstrap)"' "$script"
+if sed -n '/^workload_probe_script=/,/^$/p' "$script" | grep -nE -- '--post-data'; then
+  printf 'the bootstrap credential must be posted from a file, not a command line\n' >&2
+  exit 1
+fi
+# shellcheck disable=SC2016 # the pin is a literal source line.
+sed -n '/^wait_go_api()/,/^}/p' "$script" | grep -Fq 'workload_probe "${go_api_internal}${acr_health_path}"'
+# The refusal controls: the bearer reaches the probe by environment name, and anything but 401 fails the run.
+grep -Fq -- '-e ACR_PROBE_TOKEN -e ACR_PROBE_URL --entrypoint sh acr-tls-proxy -c' "$script"
+# shellcheck disable=SC2016 # the pin is a literal source line.
+grep -Fq -- '--header "Authorization: Bearer $ACR_PROBE_TOKEN" "$ACR_PROBE_URL"' "$script"
+grep -Fq 'acr_health_path=/api/v1/internal/acr/health' "$script"
+grep -Fq 'want 401' "$script"
 if sed -n '/^wait_go_api()/,/^}/p' "$script" | grep -nE 'Bearer \$\{token\}|Bearer \$token'; then
-  printf 'the svc_acr_ token must reach the probe by environment name, not a command line\n' >&2
+  printf 'the readiness probe must not expand a bearer value on this side\n' >&2
   exit 1
 fi
-grep -Fq 'mint_ops_service_token()' "$script"
-mint_line="$(grep -n 'token="$(mint_ops_service_token)"' "$script" | head -n 1 | cut -d: -f1)"
-wait_line="$(grep -n '^  wait_go_api "$token"' "$script" | head -n 1 | cut -d: -f1)"
-[[ -n "$mint_line" && -n "$wait_line" && "$mint_line" -lt "$wait_line" ]]
+# pin: retired-verbs (ops CHAOS-13170 removed `dho service-credentials`; nothing can mint a svc_acr_ credential)
+retired_callers="$(grep -lE 'service-credentials|mint_ops_service_token|ops-probe-token|secrets/ops-token' "$script_dir"/*.sh | grep -vxF "$script_dir/test-compose.sh" || true)"
+if [[ -n "$retired_callers" ]]; then
+  printf 'an e2e script still uses the retired service credential: %s\n' "$retired_callers" >&2
+  exit 1
+fi
+# pin: control-retired-bearer (made at run time, never a repo literal, a file or a dho call)
+control_body="$(sed -n '/^assert_retired_bearer_refused()/,/^}/p' "$script")"
+# shellcheck disable=SC2016 # the pin is a literal source line.
+grep -Fq 'ACR_PROBE_TOKEN="svc_acr_$(random_secret)"' <<<"$control_body"
+grep -Fq 'a retired-class bearer is refused' <<<"$control_body"
+if grep -nE '(^|[^[:alnum:]_])dho([^[:alnum:]_]|$)|STATE' <<<"$control_body"; then
+  printf 'the retired-class bearer must be made at run time in the control\n' >&2
+  exit 1
+fi
+# pin: control-no-bearer (the same route with no Authorization header at all)
+control_body="$(sed -n '/^assert_retired_bearer_refused()/,/^}/p' "$script")"
+grep -Fq -- "-c 'wget -S -O /dev/null \"\$ACR_PROBE_URL\"'" <<<"$control_body"
+grep -Fq 'no bearer is refused' <<<"$control_body"
+# pin: control-order (bootstrap, then readiness, then the controls, in both drivers)
+for driver in "$script" "$script_dir/svs.sh"; do
+  bootstrap_line="$(grep -n '^  provision_acr_workload$' "$driver" | head -n 1 | cut -d: -f1)"
+  wait_line="$(grep -n '^  wait_go_api$' "$driver" | head -n 1 | cut -d: -f1)"
+  control_line="$(grep -n '^  assert_retired_bearer_refused$' "$driver" | head -n 1 | cut -d: -f1)"
+  [[ -n "$bootstrap_line" && -n "$wait_line" && -n "$control_line" ]]
+  [[ "$bootstrap_line" -lt "$wait_line" && "$wait_line" -lt "$control_line" ]]
+done
+# pin: end
 if grep -Fq 'wget -q -O /dev/null http://go-api:8091' "$script"; then
-  printf 'the ops readiness probe must send the svc_acr_ bearer\n' >&2
+  printf 'the ops readiness probe must send a credential\n' >&2
   exit 1
 fi
-grep -Fq 'rejected the svc_acr_ credential (last HTTP status' "$script"
+grep -Fq 'rejected the acr-api workload token (last HTTP status' "$script"
+# acr-api itself sends the workload token: no service-token file reaches it.
+grep -Fq 'ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL: workload' "$script"
+if sed -n '/^  acr-api:$/,/^  acr-credentials:$/p' "$script" | grep -Fq 'acr_ops_token'; then
+  printf 'acr-api must not mount the service token in workload mode\n' >&2
+  exit 1
+fi
 grep -Fq 'actual_status="$?"' "$script"
 grep -Fq 'expected failure diagnostics' "$script"
 grep -Fq 'for tool in docker openssl curl git jq' "$script"
@@ -220,6 +265,17 @@ collision_status=$?
 set -e
 test "$collision_status" -eq 1
 grep -Fq 'refusing pre-existing Compose project name' "$tmp/collision.log"
+# bootstrap-rotation is an accepted scenario: it gets past argument parsing to the project check (exit 1, not the
+# usage exit 2 an unknown scenario gets).
+set +e
+PATH="$tmp/bin:$PATH" bash "$script" --compose "$tmp/compose.yml" --overlay "$tmp/overlay.yml" --project acr-e2e-collision --scenario bootstrap-rotation >"$tmp/rotation-parse.log" 2>&1
+rotation_parse_status=$?
+PATH="$tmp/bin:$PATH" bash "$script" --compose "$tmp/compose.yml" --overlay "$tmp/overlay.yml" --project acr-e2e-collision --scenario bootstrap-rotation-unknown >"$tmp/rotation-unknown.log" 2>&1
+rotation_unknown_status=$?
+set -e
+test "$rotation_parse_status" -eq 1
+grep -Fq 'refusing pre-existing Compose project name' "$tmp/rotation-parse.log"
+test "$rotation_unknown_status" -eq 2
 valid_receipt="$tmp/valid-receipt.json"
 cat > "$valid_receipt" <<'EOF'
 {"schema_version":"error.v1","request_id":"req_test","error":{"code":"invalid_token","message":"token is invalid","http_status":401,"retryable":false,"details":{}}}
@@ -381,4 +437,85 @@ run_cleanup_case failure 1
 run_cleanup_case success 0
 run_cleanup_case signal-int 130
 run_cleanup_case signal-term 143
+
+# --- bootstrap-rotation: wiring, redaction and the rule judges on planted inputs ------------------------------------------
+# Dispatch or manual only: the scenario runs about 40 minutes, so no workflow or make target names it (PR smoke unchanged).
+# shellcheck disable=SC2016 # the pin is a literal source line.
+grep -Fq 'elif [[ "$SCENARIO" == bootstrap-rotation ]]; then' "$script"
+if grep -rFq 'bootstrap-rotation' "$root/.github" "$root/Makefile"; then
+  printf 'bootstrap-rotation must stay out of the PR smoke set and every workflow\n' >&2
+  exit 1
+fi
+# The delivery is the runbook's: one rename of the .next file over the live file, as the volume owner.
+# shellcheck disable=SC2016 # the pin is a literal source line.
+grep -Fq 'rotation_deliver() { rotation_volume "mv -f ${ROTATION_NEXT} ${ROTATION_LIVE}"; }' "$script"
+grep -Fq -- "--user 65532:65532 --entrypoint sh acr-workload-volume" "$script"
+grep -Fq 'ROTATION_NEXT=/run/workload/acr-api.bootstrap.next' "$script"
+# shellcheck disable=SC2016 # the pin is a literal source line.
+grep -Fq 'bootstrap-rotate -workload acr-api -out "$ROTATION_NEXT" -overlap "$ROTATION_OVERLAP" -apply' "$script"
+# The PLAN timings are the defaults.
+for timing in ROTATION_OVERLAP=10m ROTATION_OVERLAP_S=600 ROTATION_BASE_S=300 ROTATION_DELIVER_AT_S=180 ROTATION_EXPIRED_AT_S=630 \
+  ROTATION_REVOKE_AT_S=660 ROTATION_POST_END_S=1020 ROTATION_CUT_BOUND_S=200 ROTATION_NEG_REFUSE_BOUND_S=330 \
+  ROTATION_NEG_RECOVER_BOUND_S=90 ROTATION_LOAD_EVERY_S=5; do
+  grep -Eq "^${timing}$" "$script"
+done
+# The direct cell presents the named file; the credential still never reaches a command line.
+# shellcheck disable=SC2016,SC2154 # the pin is literal text; rotation_probe_script comes from the sourced driver.
+[[ "$rotation_probe_script" == *'b="$(enc < "$ACR_PROBE_BOOTSTRAP")"'* ]]
+[[ "$rotation_probe_script" != *'/run/workload/acr-api.bootstrap)'* ]]
+# shellcheck disable=SC2016 # the pin is a literal source line.
+grep -Fq -- '-H @"$STATE/rotation-auth.header"' "$script"
+# The operations runbook carries the same rotation form.
+grep -Fq 'bootstrap-rotate -workload acr-api -out /run/workload/acr-api.bootstrap.next -overlap 1h -apply' "$root/docs/operations.md"
+grep -Fq "mv -f /run/workload/acr-api.bootstrap.next /run/workload/acr-api.bootstrap" "$root/docs/operations.md"
+# redact_log masks a workload bootstrap value as it masks the other credential classes.
+planted_value="fcwlb_$(printf 'A%.0s' $(seq 1 43))"
+redacted_line="$(printf 'presented %s here\n' "$planted_value" | redact_log)"
+[[ "$redacted_line" == 'presented REDACTED here' ]]
+# Rule judges. A 503 in the window, a failed lookup or too few calls is a FAIL.
+pent="$tmp/pent.log"
+for at in $(seq 1000 5 1300); do printf '%s 200\n' "$at"; done > "$pent"
+[[ "$(rotation_judge_load "$pent" 1000 1300 0)" == PASS:* ]]
+[[ "$(rotation_judge_load "$pent" 1000 1300 1)" == FAIL:* ]]
+[[ "$(rotation_judge_load "$pent" 1000 2000 0)" == FAIL:* ]]
+printf '1150 503\n' >> "$pent"
+[[ "$(rotation_judge_load "$pent" 1000 1300 0)" == FAIL:* ]]
+# Rows: epoch|client_ip|credential_id. acr-api is 10.0.0.2 here; 10.0.0.9 is a direct cell.
+c1=11111111-1111-4111-8111-111111111111
+c2=22222222-2222-4222-8222-222222222222
+rows="$tmp/rows.txt"
+printf '%s\n' "1100|10.0.0.2|${c1}" "1300|10.0.0.2|${c1}" "1310|10.0.0.9|${c2}" "1500|10.0.0.2|${c2}" "1700|10.0.0.2|${c2}" > "$rows"
+[[ "$(rotation_judge_overlap_use "$rows" '10.0.0.2 10.0.1.2' "$c1" 1200 600)" == PASS:* ]]
+[[ "$(rotation_judge_overlap_use "$rows" '10.0.0.2' "$c1" 1400 600)" == FAIL:* ]]
+printf '1250|null|%s\n' "$c1" > "$tmp/rows-null.txt"
+[[ "$(rotation_judge_overlap_use "$tmp/rows-null.txt" '10.0.0.2' "$c1" 1200 600)" == VOID* ]]
+[[ "$(rotation_judge_cutover "$rows" '10.0.0.2' "$c1" "$c2" 1380 1200 600 200 2000)" == PASS:* ]]
+# The read-once shape: acr-api keeps C1 after the delivery and never exchanges C2 (the cell's C2 row is not acr-api's).
+printf '%s\n' "1100|10.0.0.2|${c1}" "1450|10.0.0.2|${c1}" "1310|10.0.0.9|${c2}" > "$tmp/rows-read-once.txt"
+[[ "$(rotation_judge_cutover "$tmp/rows-read-once.txt" '10.0.0.2' "$c1" "$c2" 1380 1200 600 200 2000)" == FAIL:* ]]
+# Too late, and a C1 exchange after the overlap, are each a FAIL.
+[[ "$(rotation_judge_cutover "$rows" '10.0.0.2' "$c1" "$c2" 1200 1200 600 200 2000)" == FAIL:* ]]
+printf '1850|10.0.0.2|%s\n' "$c1" >> "$rows"
+[[ "$(rotation_judge_cutover "$rows" '10.0.0.2' "$c1" "$c2" 1380 1200 600 200 2000)" == FAIL:* ]]
+# A time never seen reads "none", not an empty or a raw epoch.
+[[ "$(rotation_after TS 1411 1380)" == 'TS+31 s' ]]
+[[ "$(rotation_after TS '' 1380)" == none ]]
+[[ "$(rotation_judge_neg 1000 '' 1280 1300 '' x 0)" == *'refused revoked at none'*'200 at none'* ]]
+[[ "$(rotation_judge_cells PASS PASS PASS PASS PASS)" == PASS:* ]]
+[[ "$(rotation_judge_cells PASS PASS PASS FAIL PASS)" == FAIL:* ]]
+[[ "$(rotation_judge_bounds a=PASS b=PASS)" == PASS:* ]]
+[[ "$(rotation_judge_bounds a=PASS b=FAIL)" == FAIL:* ]]
+[[ "$(rotation_judge_counts 0 1 1 2)" == PASS:* ]]
+[[ "$(rotation_judge_counts 0 1 0 1)" == FAIL:* ]]
+[[ "$(rotation_judge_neg 1000 1150 1280 1300 1330 0 0)" == PASS:* ]]
+[[ "$(rotation_judge_neg 1000 '' 1280 1300 1330 0 0)" == FAIL:* ]]
+[[ "$(rotation_judge_neg 1000 1150 1280 1300 1500 0 0)" == FAIL:* ]]
+[[ "$(rotation_judge_neg 1000 1150 1280 1300 1330 1 0)" == FAIL:* ]]
+# Rule 8: a clean record set passes; a bootstrap value planted in a record copy fails the leak scan.
+mkdir -p "$tmp/records"
+printf 'RULE 1: PASS: credential=%s\n' "$c1" > "$tmp/records/rules.md"
+[[ "$(rotation_judge_leak "$tmp/records"/*)" == PASS:* ]]
+cp "$tmp/records/rules.md" "$tmp/records/rules-copy.md"
+printf 'planted %s\n' "$planted_value" >> "$tmp/records/rules-copy.md"
+[[ "$(rotation_judge_leak "$tmp/records"/*)" == FAIL:* ]]
 printf 'compose e2e static checks passed\n'

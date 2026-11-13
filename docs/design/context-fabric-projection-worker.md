@@ -1,4 +1,4 @@
-# Context Fabric projection worker (CHAOS-3753, Reset 1A)
+# Context Fabric projection worker (Reset 1A)
 
 Short design note. Covers: what the production `ProjectionSource` reads, where
 checkpoints persist, and the worker/binary shape. Written before bulk
@@ -91,7 +91,7 @@ NOTHING` for the first-ever checkpoint) — same shape as
 to `contextfabric.ErrProjectionConflict`, matching `ProjectionWorker`'s
 existing contract.
 
-**The checkpoint and the graph are two stores (CHAOS-3882, CHAOS-12630).** A
+**The checkpoint and the graph are two stores.** A
 batch apply writes the graph's own watermark node (`_AcrWatermark`: the batch's
 `cursor` and `backend_watermark`) with the batch's rows. The checkpoint is
 advanced in Postgres after the apply. So the watermark node says what the graph
@@ -100,11 +100,11 @@ reads, the coordinator checks the two:
 
 - **A missing watermark** (the graph was lost or purged) while the checkpoint
   names a batch is a divergence. The organization is rebuilt
-  (`checkpointStoreDiverged`, CHAOS-3882).
+  (`checkpointStoreDiverged`).
 - **A watermark that names another batch** than the checkpoint means the graph
   reloaded an older copy of itself, or its apply landed and the checkpoint's
   advance did not. The checkpoint's cursor and `backend_watermark` move to the
-  graph's (`realignToGraphWatermarks`, CHAOS-12630), and one WARN names the
+  graph's (`realignToGraphWatermarks`), and one WARN names the
   move. The lost batches are walked again; every write is an idempotent merge.
   A watermark that cannot be read, or names no batch, and a checkpoint that
   names no batch, change nothing. A watermark of another source version than
@@ -708,7 +708,7 @@ still `0001`–`0005` immediately before implementation began (no other lane
 had landed a new one), so `0006_context_fabric_projection_checkpoints.sql`
 did not need renumbering.
 
-## PART_OF hierarchy: cycles are accepted, self-references are filtered (CHAOS-3779 codex round-1 finding M3)
+## PART_OF hierarchy: cycles are accepted, self-references are filtered (the closed-relationship-vocabulary work codex round-1 finding M3)
 
 `queryWorkItemHierarchy` (`devhealthsource/tables.go`) projects `PART_OF`
 edges from `work_items.parent_id`, or from `work_items.epic_id` where

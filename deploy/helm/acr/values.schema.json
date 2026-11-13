@@ -44,6 +44,14 @@
           "type": "boolean",
           "description": "ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED for acr-api (CHAOS-12554). Keep false until web's and ask-dev's pins hold the investment_subcategory_share rule and ACR's run_operation policy serves ISSUE_SIZE on the scoped investment breakdowns."
         },
+        "investmentRepositoryFromOpsEnabled": {
+          "type": "boolean",
+          "description": "ACR_CONTEXT_FABRIC_INVESTMENT_REPOSITORY_FROM_OPS_ENABLED for acr-api (CHAOS-12690). Keep false until the ops pin holds sizedUnitCount and the repository proofs are re-run."
+        },
+        "investmentTeamFromOpsEnabled": {
+          "type": "boolean",
+          "description": "ACR_CONTEXT_FABRIC_INVESTMENT_TEAM_FROM_OPS_ENABLED for acr-api (CHAOS-12690 I2). Keep false until the ops pin holds sizedUnitCount and the team proofs are re-run."
+        },
         "investmentSankeyEnabled": {
           "type": "boolean",
           "description": "ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED for acr-api (CHAOS-12582). Keep false until web's and ask-dev's pins hold the investment_repository_flow rule."
@@ -55,6 +63,10 @@
         "landscapeQuadrantEnabled": {
           "type": "boolean",
           "description": "ACR_CONTEXT_FABRIC_LANDSCAPE_QUADRANT_ENABLED for acr-api (CHAOS-12626). Keep false until web's and ask-dev's pins hold the landscape_position rule."
+        },
+        "readFallbackEnabled": {
+          "type": "boolean",
+          "description": "ACR_CONTEXT_FABRIC_READ_FALLBACK_ENABLED for acr-api (CHAOS-13002). Keep false until web's and ask-dev's pins hold answer_plan.fallback."
         },
         "runLeaseEnabled": {
           "type": "boolean",
@@ -256,12 +268,11 @@
         },
         "entitlement": {
           "type": "object",
-          "additionalProperties": true,
+          "additionalProperties": false,
           "properties": {
             "url": { "type": "string" },
             "timeout": { "type": "string" },
-            "tokenMountPath": { "type": "string" },
-            "tokenFileName": { "type": "string" }
+            "credential": { "type": "string", "enum": ["", "workload"] }
           }
         },
         "postgresCaBundle": {
@@ -355,14 +366,6 @@
           "properties": {
             "existingSecret": { "type": "string" },
             "postgresDsnKey": { "type": "string" }
-          }
-        },
-        "entitlementToken": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "existingSecret": { "type": "string" },
-            "key": { "type": "string" }
           }
         },
         "rotationRevision": { "type": ["string", "integer"] }
@@ -576,7 +579,19 @@
             "queryMcpPodSelector": { "type": "object", "additionalProperties": { "type": "string" } },
             "falkorPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
             "embedPort": { "type": "integer", "minimum": 0, "maximum": 65535 },
-            "kubernetesAPIPort": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            "kubernetesAPIPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "kubernetesAPIEndpoints": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["cidr", "port"],
+                "properties": {
+                  "cidr": { "type": "string", "pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/32$" },
+                  "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+                }
+              }
+            }
           }
         }
       }

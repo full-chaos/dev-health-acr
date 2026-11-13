@@ -141,7 +141,7 @@ func TestRegistryWatch_digest_drift_stamps_served_and_warns_once(t *testing.T) {
 	ws := warns(buf.String())
 	if len(ws) != 1 || !strings.Contains(ws[0], "registry digest drift") ||
 		!strings.Contains(ws[0], cat.SchemaDigest()) || !strings.Contains(ws[0], servedDrift) ||
-		!strings.Contains(ws[0], "pinned_ops=66") || !strings.Contains(ws[0], "served_ops=66") {
+		!strings.Contains(ws[0], "pinned_ops=67") || !strings.Contains(ws[0], "served_ops=67") {
 		t.Fatalf("warns = %q", ws)
 	}
 	// Same state again: no repeat line.
@@ -310,19 +310,20 @@ func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *tes
 	if !strings.Contains(out, "operation=capacityCompletionDistribution ") || !strings.Contains(out, "reason=missing_in_served") {
 		t.Errorf("no missing_in_served line for the new operation: %s", out)
 	}
-	for _, op := range []string{"coverageBaselines", "coverageScopeBaseline", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentEvidenceQuality", "sourceHealth", "testopsJobFailures"} {
+	for _, op := range []string{"coverageBaselines", "coverageScopeBaseline", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentEvidenceQuality", "sourceHealth", "teamWorkItemBreakdown", "testopsJobFailures"} {
 		if !strings.Contains(out, "operation="+op+" ") {
 			t.Errorf("no missing_in_served line for %s: %s", op, out)
 		}
 	}
-	if got := strings.Count(out, "registry operation drift"); got != len(changed)+9 {
-		t.Errorf("%d operation drift lines, want %d: %s", got, len(changed)+9, out)
+	if got := strings.Count(out, "registry operation drift"); got != len(changed)+10 {
+		t.Errorf("%d operation drift lines, want %d: %s", got, len(changed)+10, out)
 	}
 }
 
-// Fixture: the GET /registry body of ops 0b763a85, written from the output of
-// ops go run ./cmd/registrydump (the current text of every operation, the
-// legacy texts left out, as the route serves them), not captured from a host.
+// Fixture: the GET /registry body of ops 0b763a85 plus the teamWorkItemBreakdown row of ops
+// 5c321277 (CHAOS-13017), written from the output of ops go run ./cmd/registrydump (the
+// current text of every operation, the legacy texts left out, as the route serves them), not
+// captured from a host.
 // The catalogue pinned from that commit must match it with zero drift.
 func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T) {
 	body, err := os.ReadFile("testdata/query_registry_0b763a85.json")
@@ -341,8 +342,8 @@ func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T)
 	if ws := warns(buf.String()); len(ws) != 0 {
 		t.Fatalf("drift against the vendored commit's registry: %q", ws)
 	}
-	if !strings.Contains(buf.String(), "registry digest match") || !strings.Contains(buf.String(), "operations=66") {
-		t.Fatalf("no match line with 66 ops: %s", buf)
+	if !strings.Contains(buf.String(), "registry digest match") || !strings.Contains(buf.String(), "operations=67") {
+		t.Fatalf("no match line with 67 ops: %s", buf)
 	}
 }
 
@@ -361,12 +362,12 @@ func TestRegistryWatch_51652ba7_served_registry_against_the_new_pin_shows_digest
 	w.Start()
 	w.Wait()
 	out := buf.String()
-	if ws := warns(out); len(ws) != 4 || !strings.Contains(ws[0], "registry digest drift") {
-		t.Fatalf("want digest drift + 3 operation drift warnings: %q", ws)
+	if ws := warns(out); len(ws) != 5 || !strings.Contains(ws[0], "registry digest drift") {
+		t.Fatalf("want digest drift + 4 operation drift warnings: %q", ws)
 	}
 	for _, want := range []string{
 		"operation=investmentBreakdown ", "reason=changed",
-		"operation=investmentBreakdownRepository ", "operation=investmentBreakdownTeam ", "reason=missing_in_served",
+		"operation=investmentBreakdownRepository ", "operation=investmentBreakdownTeam ", "operation=teamWorkItemBreakdown ", "reason=missing_in_served",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no drift line with %q: %s", want, out)
@@ -433,8 +434,8 @@ func TestRegistryWatch_previous_served_registry_against_the_new_pin_shows_the_di
 			digest++
 		}
 	}
-	if digest != 1 || len(ws) != 15 {
-		t.Fatalf("want one digest drift warning + 14 operation drift lines (12 changed documents, 2 scoped investment documents missing in served): %q", ws)
+	if digest != 1 || len(ws) != 16 {
+		t.Fatalf("want one digest drift warning + 15 operation drift lines (12 changed documents, 3 documents missing in served: the two scoped investment documents and teamWorkItemBreakdown): %q", ws)
 	}
 }
 
@@ -454,13 +455,13 @@ func TestRegistryWatch_pin21_served_registry_against_the_new_pin_shows_digest_dr
 	w.Start()
 	w.Wait()
 	ws := warns(buf.String())
-	if len(ws) != 10 {
-		t.Fatalf("want digest drift + 9 operation drift warnings: %q", ws)
+	if len(ws) != 11 {
+		t.Fatalf("want digest drift + 10 operation drift warnings: %q", ws)
 	}
 	if !strings.Contains(buf.String(), "registry digest drift") {
 		t.Errorf("no schema digest drift line: %s", buf)
 	}
-	for _, op := range []string{"compoundingRisk", "home", "investmentBreakdown", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentFull", "operatingReview", "testOpsCoverage", "testOpsPipeline"} {
+	for _, op := range []string{"compoundingRisk", "home", "investmentBreakdown", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentFull", "operatingReview", "teamWorkItemBreakdown", "testOpsCoverage", "testOpsPipeline"} {
 		if !strings.Contains(buf.String(), "operation="+op+" ") {
 			t.Errorf("no drift line for %s", op)
 		}
@@ -484,13 +485,13 @@ func TestRegistryWatch_5376c7c1_served_registry_against_the_new_pin_shows_digest
 	w.Start()
 	w.Wait()
 	ws := warns(buf.String())
-	if len(ws) != 9 {
-		t.Fatalf("want digest drift + 8 operation drift warnings: %q", ws)
+	if len(ws) != 10 {
+		t.Fatalf("want digest drift + 9 operation drift warnings: %q", ws)
 	}
 	if !strings.Contains(buf.String(), "registry digest drift") {
 		t.Errorf("no schema digest drift line: %s", buf)
 	}
-	for _, op := range []string{"home", "investmentBreakdown", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentFull", "operatingReview", "testOpsCoverage", "testOpsPipeline"} {
+	for _, op := range []string{"home", "investmentBreakdown", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentFull", "operatingReview", "teamWorkItemBreakdown", "testOpsCoverage", "testOpsPipeline"} {
 		if !strings.Contains(buf.String(), "operation="+op+" ") {
 			t.Errorf("no drift line for %s", op)
 		}

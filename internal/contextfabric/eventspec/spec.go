@@ -1648,6 +1648,31 @@ var ModelPhraseDecision = Event{
 	),
 }
 
+// ModelPlanReadsDecision is the Info line Runtime.logPlanReadsDecision writes
+// once per PlanReads call (CHAOS-13002). Its operation is empty when the call
+// returned before a receipt was built.
+var ModelPlanReadsDecision = Event{
+	ID:                 "genkitruntime.model_plan_reads_decision",
+	Msg:                modelDecisionMsg,
+	Level:              LevelInfo,
+	Multiplicity:       MultiplicityZeroOrOnePerRequest,
+	Attribution:        []string{"request_id", "operation"},
+	BoundedAggregation: "at most one line per investigation: one per PlanReads call, including a call that returned before the model was reached, and the engine calls the planner at most once per turn.",
+	Fields: concatFields(
+		[]Field{
+			{Key: "request_id", Type: FieldString, Presence: PresenceRequired},
+			{Key: "org_id_hash", Type: FieldString, Presence: PresenceRequired},
+			{Key: "operation", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"plan_reads", ""}},
+			{Key: "outcome", Type: FieldString, Presence: PresenceRequired},
+			{Key: "attempts", Type: FieldInt, Presence: PresenceRequired},
+			{Key: "model_id", Type: FieldString, Presence: PresenceRequired},
+			{Key: "model_version", Type: FieldString, Presence: PresenceRequired},
+			{Key: "prompt_version", Type: FieldString, Presence: PresenceRequired},
+		},
+		modelDecisionAttemptFields(),
+	),
+}
+
 // factScopeExpansionDegradedOutcomes and factScopeExpansionServedOutcomes
 // split the outcome vocabulary exactly as factScopeGapDegrades does: a degraded
 // outcome writes the Warn line, every other writes the Info line.
@@ -2192,6 +2217,30 @@ var PlanSubjectObligationReads = Event{
 	},
 }
 
+// ReadFallbackDecision is the Info line of a turn's read fallback decision
+// (CHAOS-13002): why the family could not serve the question, what became of
+// the fallback, and how many kinds the read planner added. Closed labels and
+// a count only.
+var ReadFallbackDecision = Event{
+	ID:                       "contextfabric.read_fallback_decision",
+	Msg:                      "context fabric read fallback decision",
+	Level:                    LevelInfo,
+	Multiplicity:             MultiplicityZeroOrOnePerRequest,
+	RequiredOnlyConstruction: true,
+	Attribution:              []string{"request_id"},
+	BoundedAggregation:       "at most one line per investigation: recorded once, at the plan seam, by every turn that reaches it.",
+	Fields: []Field{
+		{Key: "org_id", Type: FieldString, Presence: PresenceRequired},
+		{Key: "reason", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, arrayTokens(contractsv1.ContextFabricReadFallbackReasonVocabulary())...)},
+		{Key: "trigger", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{"none"}, arrayTokens(contextfabric.ReadFallbackTriggerVocabulary())...)},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(contextfabric.ReadFallbackOutcomeVocabulary())},
+		{Key: "planned_kinds", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "error_class", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, contextfabric.ReadPlannerErrorClassVocabulary()...)},
+		{Key: "rejection", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, arrayTokens(contextfabric.ReadPlanRejectionVocabulary())...)},
+		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
+	},
+}
+
 // WindowClassification is the Info line of the window-class decision a current-axis turn with no request window draws its default from (CHAOS-12595).
 var WindowClassification = Event{
 	ID:                       "contextfabric.window_classification",
@@ -2249,7 +2298,7 @@ var InterpretationTerms = Event{
 	},
 }
 
-// WindowCarry is the Info line of one window carry attempt: the outcome, the depth of the chain, the seed it started from and whether stored ancestry supplied it.
+// WindowCarry is the Info line of one window carry attempt: the outcome, the depth of the chain, the seed it started from, whether stored ancestry supplied it, and how many prior results the walk visited, how many of those were saved under another graph epoch or none, and how many milliseconds it took.
 var WindowCarry = Event{
 	ID:                       "contextfabric.window_carry",
 	Msg:                      "context fabric window carry",
@@ -2264,11 +2313,14 @@ var WindowCarry = Event{
 		{Key: "chain_depth", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "seed_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CarrySeedSourceVocabulary()},
 		{Key: "via_stored_ancestry", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "visited", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "other_epoch_visited", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "walk_ms", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},
 }
 
-// KindCarry is the Info line of one kind carry attempt: the outcome, the chain depth, the kind carried and the kind redeemed, the seed and whether stored ancestry supplied it.
+// KindCarry is the Info line of one kind carry attempt: the outcome, the chain depth, the kind carried and the kind redeemed, the seed, whether stored ancestry supplied it, and how many prior results the walk visited, how many of those were saved under another graph epoch or none, and how many milliseconds it took.
 var KindCarry = Event{
 	ID:                       "contextfabric.kind_carry",
 	Msg:                      "context fabric kind carry",
@@ -2285,6 +2337,9 @@ var KindCarry = Event{
 		{Key: "redeemed_kind", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: append([]string{""}, arrayTokens(storedResultSubjectKindArr[:])...)},
 		{Key: "seed_source", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: contextfabric.CarrySeedSourceVocabulary()},
 		{Key: "via_stored_ancestry", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "visited", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "other_epoch_visited", Type: FieldInt, Presence: PresenceRequired},
+		{Key: "walk_ms", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "request_id", Type: FieldString, Presence: PresenceConditional, Applicability: requestIDApplicability},
 	},
 }
@@ -5070,7 +5125,7 @@ var (
 	graphqlQueryOperations   = []string{
 		"acrRepositoryScopes", "capacityCompletionDistribution", "capacityForecast", "capacityForecasts", "catalogValues", "cognitiveLoad",
 		"complexityTimeseries", "compoundingRisk", "hotspots", "investmentBreakdown", "investmentBreakdownRepository", "investmentBreakdownTeam", "investmentFull",
-		"securityOverview", "throughputForecast", "workGraphArtifacts", "workGraphEdges",
+		"securityOverview", "teamWorkItemBreakdown", "throughputForecast", "workGraphArtifacts", "workGraphEdges",
 		"workGraphFlow",
 	}
 )
@@ -6020,6 +6075,7 @@ var All = []Event{
 	ModelInterpretDecision,
 	ModelSynthesizeDecision,
 	ModelPhraseDecision,
+	ModelPlanReadsDecision,
 	FactScopeExpansionGap,
 	FactScopeExpansionDecision,
 	CohortRanked,
@@ -6069,6 +6125,7 @@ var All = []Event{
 	WindowCanonicalizationOutcome,
 	PlanOperandReads,
 	PlanSubjectObligationReads,
+	ReadFallbackDecision,
 	WindowClassification,
 	InferredWindowGate,
 	InterpretationTerms,
@@ -6135,11 +6192,15 @@ var All = []Event{
 	MCPHTTPServing,
 	MCPHTTPReadiness,
 	OAuthStep,
+	CredentialRevokeOnBehalf,
 	OTelExport,
 	GraphCountCheckFinished,
 	SuppliedInterpretationDecision,
 	ClientSynthesisDecision,
 	SuppliedSynthesisDecision,
+	DevhealthsourceTableReadPage,
+	DevhealthsourceTableReadDrained,
+	DevhealthsourceTableReadNotNew,
 }
 
 // CountPopulationScope (CHAOS-5775) is the Info line for whether a served

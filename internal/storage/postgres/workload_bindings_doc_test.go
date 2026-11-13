@@ -26,8 +26,8 @@ func readRepoFile(t *testing.T, rel string) string {
 }
 
 // bindingsMigrationColumns returns the column names of CREATE TABLE
-// acr.workload_bindings in migration 0030 (no later migration adds a column;
-// TestWorkloadBindingsNoLaterMigrationAddsColumn checks that).
+// acr.workload_bindings in migration 0030; bindingsAddedColumns adds the
+// columns later migrations add.
 func bindingsMigrationColumns(t *testing.T, sql string) []string {
 	t.Helper()
 	start := strings.Index(sql, "CREATE TABLE IF NOT EXISTS acr.workload_bindings (")
@@ -72,7 +72,8 @@ func bindingsDocSection(t *testing.T, doc string) string {
 var docColumnRow = regexp.MustCompile("(?m)^\\| `([a-z_]+)` \\|")
 
 func TestWorkloadBindingsDocColumnsMatchMigration(t *testing.T) {
-	want := bindingsMigrationColumns(t, readRepoFile(t, "migrations/postgres/0030_workload_token_exchange.sql"))
+	want := append(bindingsMigrationColumns(t, readRepoFile(t, "migrations/postgres/0030_workload_token_exchange.sql")), bindingsAddedColumns(t)...)
+	sort.Strings(want)
 	section := bindingsDocSection(t, readRepoFile(t, "docs/operations.md"))
 	var got []string
 	for _, m := range docColumnRow.FindAllStringSubmatch(section, -1) {
@@ -85,10 +86,25 @@ func TestWorkloadBindingsDocColumnsMatchMigration(t *testing.T) {
 }
 
 func TestWorkloadBindingsDocRolesMatchMigration(t *testing.T) {
-	sql := readRepoFile(t, "migrations/postgres/0069_credential_lifecycle_listing.sql")
-	m := regexp.MustCompile(`ck_acr_workload_bindings_role CHECK \(role IN \(([^)]*)\)\)`).FindStringSubmatch(sql)
+	// The newest migration that sets the constraint holds the live role set.
+	files, err := filepath.Glob(filepath.Join("..", "..", "..", "migrations", "postgres", "*.sql"))
+	if err != nil || len(files) == 0 {
+		t.Fatalf("glob migrations: %v (%d files)", err, len(files))
+	}
+	sort.Strings(files)
+	check := regexp.MustCompile(`ck_acr_workload_bindings_role CHECK \(role IN \(([^)]*)\)\)`)
+	var m []string
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if found := check.FindStringSubmatch(string(raw)); found != nil {
+			m = found
+		}
+	}
 	if m == nil {
-		t.Fatal("migration 0069: ck_acr_workload_bindings_role not found")
+		t.Fatal("no migration sets ck_acr_workload_bindings_role")
 	}
 	var roles []string
 	for _, r := range strings.Split(m[1], ",") {
@@ -125,20 +141,47 @@ func TestWorkloadBindingsDocNamesTheUniqueKey(t *testing.T) {
 	}
 }
 
-func TestWorkloadBindingsNoLaterMigrationAddsColumn(t *testing.T) {
+// bindingsAddedColumns returns the columns every later migration adds to
+// acr.workload_bindings with ALTER TABLE ... ADD COLUMN.
+func bindingsAddedColumns(t *testing.T) []string {
+	t.Helper()
 	dir := filepath.Join("..", "..", "..", "migrations", "postgres")
 	files, err := filepath.Glob(filepath.Join(dir, "*.sql"))
 	if err != nil || len(files) == 0 {
 		t.Fatalf("glob migrations: %v (%d files)", err, len(files))
 	}
-	add := regexp.MustCompile(`(?is)ALTER\s+TABLE\s+(IF\s+EXISTS\s+)?acr\.workload_bindings\s+[^;]*ADD\s+COLUMN`)
+	alter := regexp.MustCompile(`(?is)ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?acr\.workload_bindings\s+([^;]*)`)
+	add := regexp.MustCompile(`(?i)ADD\s+COLUMN\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_]+)`)
+	var cols []string
 	for _, f := range files {
 		raw, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if add.Match(raw) {
-			t.Fatalf("%s adds a column to acr.workload_bindings: update the doc table and bindingsMigrationColumns", filepath.Base(f))
+		for _, stmt := range alter.FindAllStringSubmatch(string(raw), -1) {
+			for _, m := range add.FindAllStringSubmatch(stmt[1], -1) {
+				cols = append(cols, m[1])
+			}
+		}
+	}
+	return cols
+}
+
+func TestWorkloadBindingsAddedColumnsAreSeen(t *testing.T) {
+	if got := strings.Join(bindingsAddedColumns(t), ","); got != "org_scope" {
+		t.Fatalf("columns later migrations add to acr.workload_bindings = %q, want \"org_scope\" (migration 0072); a new column needs its doc row", got)
+	}
+}
+
+func TestWorkloadBindingsDocNamesTheLiveOrgsConstraints(t *testing.T) {
+	sql := readRepoFile(t, "migrations/postgres/0072_workload_binding_live_orgs_scope.sql")
+	section := bindingsDocSection(t, readRepoFile(t, "docs/operations.md"))
+	for _, name := range []string{"ck_acr_workload_bindings_org_scope", "ck_acr_workload_bindings_live_orgs_revoke", "uq_acr_workload_bindings_live_orgs_identity"} {
+		if !strings.Contains(sql, name) {
+			t.Fatalf("migration 0072 no longer names %s", name)
+		}
+		if !strings.Contains(section, name) {
+			t.Fatalf("docs/operations.md does not name %s", name)
 		}
 	}
 }

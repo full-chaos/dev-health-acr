@@ -1,4 +1,4 @@
-# Context Fabric canonical fact planning (CHAOS-3783)
+# Context Fabric canonical fact planning
 
 Short reference note. Covers: what the fact-read planner decides, why its one
 rule is a proof rather than a heuristic, how a skipped provider stays visible,
@@ -158,15 +158,15 @@ The contract's own "a non-available source requires a reason" rule applies to
 `pruned` too, which is what makes the empty-states rule hold for it
 mechanically rather than by convention.
 
-## A read that returned nothing is `no_data`, never `available` (CHAOS-4521)
+## A read that returned nothing is `no_data`, never `available`
 
 `pruned` and an unexpanded scope gap cover the capabilities that never ran.
 The remaining case is the one that ran: a provider that queried ClickHouse
 and matched **no rows**.
 
-Until CHAOS-4521 that reported `available` with an empty reason whenever the
+Until the empty-read availability fix that reported `available` with an empty reason whenever the
 question sat on the current time axis, on the reasoning that "zero rows has
-always meant an ordinary empty read there". Run J (CHAOS-4450) showed the
+always meant an ordinary empty read there". Run J showed the
 cost. A project-status question committed a real Linear project subject; six
 capabilities reported `available`; the `CanonicalFactBundle` was empty;
 `SynthesisDraft.ValidateAgainst` therefore permitted no claims, and the
@@ -320,7 +320,7 @@ apply here"). `pruned` is a statement the planner made *instead of running it*
 ("you could not have applied here"). A wrong `not_applicable` is a provider
 bug; a wrong `pruned` is a planner bug. Collapsing them would make pruning
 decisions unauditable except by parsing free text, and would leave
-CHAOS-3746's in-flight surface -- which copies coverage -- unable to count
+Answer-surface work's in-flight surface -- which copies coverage -- unable to count
 skipped sources off the state alone.
 
 ## 6. What the measurement showed
@@ -338,7 +338,7 @@ round-trip per registered requirement, every subject bound to each. It cannot
 be executed, and that is not an oversight -- `buildFactQuery` refuses to ask a
 provider about an unsupported subject kind and refuses an empty subject list,
 so forcing a plan-everything mode through `ReadFacts` would reproduce the
-pre-CHAOS-3783 whole-bundle failure (§1) rather than a fan-out. A count has no
+pre-fact-provider-pruning-change whole-bundle failure (§1) rather than a fan-out. A count has no
 bundle, no stamping, and no serialization, so it has nothing to diverge on. It
 is not production "before" -- §1 explains why no slow before exists.
 
@@ -428,12 +428,12 @@ Wall-clock is reported but caveated. Dev tables are small enough that provider
 time is round-trip dominated, so round-trip **count** is the durable number
 and the observed improvements are supporting evidence only.
 
-## 6a. CHAOS-4347 — a capability's own SupportedSubjectKinds can grow
+## 6a. Status-category fact-kind work — a capability's own SupportedSubjectKinds can grow
 
 Nothing in §3's rule changes when a capability declares a WIDER
 `SupportedSubjectKinds` set than it used to: the planner still partitions
 purely on the declared set, still proves the pruned branch empty, still
-never reads phrasing. CHAOS-4347 widened `MetricsProvider` from
+never reads phrasing. Status-category fact-kind work widened `MetricsProvider` from
 `{repository}` to `{repository, team, project}` by giving it real
 `team_metrics_daily`/`team_project_ownership` sources for the new kinds
 (`metrics.go`'s package doc comment) — the planner requires no change to
@@ -452,9 +452,9 @@ writes `FactRequirement{Kind: factKind}` with no `Subjects`, and
 requirement fans out over every investigation subject even when its origin
 knew better. Narrowing at the producers is a real further win on the
 subject-binding axis; it touches `graphrank` and `falkorgraph` and was left
-out of CHAOS-3783.
+out of the fact-provider pruning change.
 
-## 8. Status-category composition (CHAOS-4347)
+## 8. Status-category composition
 
 ### The gap this closes
 
@@ -474,7 +474,7 @@ supposed to: `FactStatus`'s capability declares `SupportedSubjectKinds:
 {work_item}`, a repository or team subject does not match, the requirement
 prunes `subject_kind_unsupported`, and the investigation answers from graph
 paths alone -- even when real canonical facts exist for that subject under a
-DIFFERENT `FactKind` name. CHAOS-4344 case 23 is this exactly: a real,
+DIFFERENT `FactKind` name. Status-category corpus case case 23 is this exactly: a real,
 human-curated oracle case (`question_class=subject_status`,
 `kind=repository`, `authority=annotation`) that a bare `FactStatus`
 requirement could never answer, though `devhealthfacts.NewProviders`
@@ -506,7 +506,7 @@ A mixed-kind cohort never loses either half: a subject kind absent from the
 table (`work_item`, or a future kind this table has not caught up to) keeps
 its own `FactStatus` requirement alongside whatever OTHER subject kind's
 requirement also composed. Every other category stays 1:1, untouched --
-this is scoped to the ONE category CHAOS-4344's corpus evidence proved
+this is scoped to the ONE category the status-category corpus case's corpus evidence proved
 broken, not a general category→set rewrite.
 
 ### Telemetry (same change, per the standing order)
@@ -526,11 +526,11 @@ gives all 12 the composed fact set for the first time. A further 8 are
 `project`-kind and remain unanswerable by this composition -- `project` has
 no registered fact producer at all (§1's "project cohort" row already
 documents `2 → 0` round-trips, "previously unanswerable," for the same
-underlying reason) -- that gap is tracked separately (CHAOS-4347's own
+underlying reason) -- that gap is tracked separately (the status-category fact-kind work's own
 project-producer phase), not closed here.
 
 
-## A project subject reads the project's own data (CHAOS-4521b)
+## A project subject reads the project's own data (the empty-read availability fixb)
 
 The zero-row honesty above told the truth about an empty project answer.
 This says why it was empty, and fixes the half acr owns.
@@ -544,7 +544,7 @@ independent ways, both observed on live data (org `70d529e0`, 2026-08-29).
 NULL; the only non-empty Linear key belongs to the
 `{org}:linear:<teamKey>` pseudo-project a team-key fallback writes. So the
 join matched that pseudo-row and nothing else. The producer half is
-CHAOS-4530 — and note the shape of that defect: a **team key** was being
+Team-key defect — and note the shape of that defect: a **team key** was being
 used as a project key, so a project fact resolved to "team CHAOS".
 
 **When it did resolve, it returned the wrong rows.** The readers joined the
@@ -560,7 +560,7 @@ pinning tests assert the **statement**.
 asserts it (`github_work_item_derived_surfaces_oracle_test.go`: *"same
 work_scope_id (project_id)"*). Three source tables carry it; three do not.
 
-| rollup | source table | project dimension | team hop | after CHAOS-4521b |
+| rollup | source table | project dimension | team hop | after the empty-read availability fixb |
 | --- | --- | --- | --- | --- |
 | flow | `work_item_metrics_daily` | **`work_scope_id`** | incidental | keyed on project identity |
 | readiness | `estimate_coverage_metrics_daily` | **`work_scope_id`** | incidental | keyed on project identity |
@@ -593,7 +593,7 @@ needs none, `projects.id` being unique by construction.
 
 **The ownership join moved onto the same identity match** (behind the single
 constant `ProjectOwnershipJoinColumn`), because a `project_key` join could
-not survive either direction of CHAOS-4530: it reaches no real Linear
+not survive either direction of the team-key defect: it reaches no real Linear
 project today, and once 4530 nulls `project_key` on the UUID-keyed rows it
 would match nothing at all, taking health/investment/landscape to zero on
 deploy. Both arms stay for the same reason in reverse — the id arm picks up

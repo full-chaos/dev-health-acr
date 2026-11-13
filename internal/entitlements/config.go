@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strings"
 	"time"
 )
 
@@ -24,11 +23,10 @@ const (
 	maxCacheCapacity        = 1024
 )
 
-// Config configures the Dev Health service entitlement boundary. It excludes
-// the token value: New reads that secret only from TokenFile.
+// Config configures the Dev Health service entitlement boundary. It holds no
+// credential: every call sends a token minted by Workload.
 type Config struct {
 	BaseURL          *url.URL
-	TokenFile        string
 	Timeout          time.Duration
 	MaxResponseBytes int64
 	ProxyURL         *url.URL
@@ -36,14 +34,14 @@ type Config struct {
 	PositiveCacheTTL time.Duration
 	NegativeCacheTTL time.Duration
 	CacheCapacity    int
-	// Workload, when set, selects the workload-token credential: every call
-	// sends a token it mints for the dev-health-api audience, TokenFile is
-	// never opened and no service token is ever loaded. Nil keeps the
-	// service-token credential read from TokenFile.
+	// Workload mints the token every call sends, for the dev-health-api
+	// audience. Required.
 	Workload TokenSource
 	// Observe, when set, receives one closed (credential, outcome) pair per
 	// outgoing call.
 	Observe func(ctx context.Context, credential, outcome string)
+	// Now is the cache clock; nil is time.Now.
+	Now func() time.Time
 }
 
 // TokenSource mints a workload access token for an audience; a
@@ -68,6 +66,9 @@ func (c Config) withDefaults() Config {
 	if c.CacheCapacity == 0 {
 		c.CacheCapacity = defaultCacheCapacity
 	}
+	if c.Now == nil {
+		c.Now = time.Now
+	}
 	return c
 }
 
@@ -81,8 +82,8 @@ func (c Config) validate() error {
 	if c.BaseURL.Scheme != "https" && c.BaseURL.Scheme != "http" {
 		return errors.New("Dev Health entitlement URL must use HTTP or HTTPS")
 	}
-	if c.Workload == nil && strings.TrimSpace(c.TokenFile) == "" {
-		return errors.New("Dev Health entitlement token file is required")
+	if c.Workload == nil {
+		return errors.New("Dev Health entitlement workload token source is required")
 	}
 	if c.Timeout < minTimeout || c.Timeout > maxTimeout {
 		return fmt.Errorf("Dev Health entitlement timeout must be between %s and %s", minTimeout, maxTimeout)

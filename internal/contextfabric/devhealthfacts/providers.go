@@ -36,6 +36,15 @@ type ProviderOptions struct {
 	// ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED, default off). Off, the
 	// investment read makes no call and its facts are as before.
 	InvestmentSunburstEnabled bool
+	// InvestmentRepositoryFromOps reads a repository's investment mix from
+	// the ops investmentBreakdownRepository answers (CHAOS-12690 I1a; config
+	// ACR_CONTEXT_FABRIC_INVESTMENT_REPOSITORY_FROM_OPS_ENABLED, default off).
+	// Off, the mix is read as before.
+	InvestmentRepositoryFromOps bool
+	// InvestmentTeamFromOps reads a team's investment mix from the ops
+	// investmentBreakdownTeam answers (CHAOS-12690 I2; config
+	// ACR_CONTEXT_FABRIC_INVESTMENT_TEAM_FROM_OPS_ENABLED, default off).
+	InvestmentTeamFromOps bool
 }
 
 // NewProvidersWithOptions is NewProviders with the deployment switches.
@@ -46,6 +55,8 @@ func NewProvidersWithOptions(client contextpacket.ClickHouseQueryClient, options
 	investment := newInvestmentProvider(client)
 	investment.operations = operations
 	investment.subcategoryBreakdown = options.InvestmentSunburstEnabled
+	investment.repositoryFromOps = options.InvestmentRepositoryFromOps
+	investment.teamFromOps = options.InvestmentTeamFromOps
 	return []contextfabric.FactProvider{
 		newIdentityProvider(client),
 		newMembershipProvider(client),

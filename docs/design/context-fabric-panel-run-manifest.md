@@ -1,18 +1,18 @@
-# CHAOS-3860 P6 panel run manifest
+# Consensus-evidence precondition fix P6 panel run manifest
 
 Status: **Implementation contract** — authoritative for `internal/panelharness`,
 `cmd/acr-panel-harness`, and `testdata/panelharness/v1/`.
 
-Ruling: sol-max architectural channel, CHAOS-3860, 2026-08-20 (adopted
+Ruling: sol-max architectural channel, the consensus-evidence precondition fix-08-20 (adopted
 recommendation (b), amended as (d) staged as (b) — see the Linear issue's own
 comment history for the full ruling text).
 
 ## 1. What this harness is, and is not
 
-`internal/panelharness` is the CHAOS-3860 P6 activation driver: it runs a
+`internal/panelharness` is the consensus-evidence precondition fix P6 activation driver: it runs a
 multi-model panel through a bounded, N-turn select-and-continue confirmation
 loop (pivot-intent design brief §2.4/§3.1, generalized past its original
-two-turn shape by CHAOS-4146(a) to as many rounds as
+two-turn shape by the clarification-loop work(a) to as many rounds as
 `RunConfig.MaxClarificationTurns` allows) against a REAL org's REAL data, speaking
 the hosted ACR contract directly over HTTP
 (`POST /api/v1/context-fabric/investigations`) with a REAL, per-panelist
@@ -99,7 +99,7 @@ P5/curation's own, separately-ratified rule (design brief §3.2's promotion
 rule) — this harness reports the raw histogram and the three booleans above;
 it does not guess the threshold.
 
-### 2.3 Clarification log (CHAOS-4146(a))
+### 2.3 Clarification log (the clarification-loop work(a))
 
 `ClarificationLogs` carries one `PanelistClarificationLog` per panelist that
 attempted at least one `Investigate` call: that panelist's own turn-by-turn
@@ -115,7 +115,7 @@ session state across calls), so every turn after the first resends the FULL
 set of previously-applied receipts, not just the newest turn's — a request
 that dropped an earlier turn's receipt would silently un-confirm it.
 
-### 2.4 Batch corpus provenance (CHAOS-4146(b)/(c), schema v2)
+### 2.4 Batch corpus provenance (the clarification-loop work(b)/(c), schema v2)
 
 `cmd/acr-panel-harness -corpus` (§5) drives the panel over a JSON array
 corpus file, one case per array element, instead of a single `-question`.
@@ -155,13 +155,13 @@ this binary produces.
 
 This harness runs against a real org's own real data. It is never pointed at
 the frozen evaluation corpus (`.remember/acr-3778-corpus-frozen-annotated.json`)
-— that corpus stays eval-only forever, per the holdout discipline CHAOS-3860's
+— that corpus stays eval-only forever, per the holdout discipline the consensus-evidence precondition fix's
 own GUARDS section states as a design requirement, not an option. The batch
 corpus driver (§2.4, §5) is validated against `.remember/acr-3778-corpus-ext65.json`
-(CHAOS-4146(d)'s own ext65 measurement corpus) — a SEPARATE, already-in-use
+(the clarification-loop work(d)'s own ext65 measurement corpus) — a SEPARATE, already-in-use
 trial corpus, never the frozen holdout.
 
-## 5. Batch corpus driver (CHAOS-4146(b))
+## 5. Batch corpus driver (the clarification-loop work(b))
 
 `cmd/acr-panel-harness -corpus <path>` replaces `-question <text>` (mutually
 exclusive) and drives the panel across a contiguous slice of the corpus

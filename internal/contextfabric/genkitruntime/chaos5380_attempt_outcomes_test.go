@@ -2,6 +2,7 @@ package genkitruntime
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -471,4 +472,8 @@ func TestPhraseDecisionIsEmittedAtInfoNotDebug(t *testing.T) {
 	if n := run(slog.LevelWarn); n != 0 {
 		t.Fatalf("phrase decisions collected at LevelWarn = %d, want 0 -- not discriminating", n)
 	}
+}
+
+func (g *sequencedGenerator) PlanReads(context.Context, generationRequest) (planReadsOutput, contextfabric.ModelUsage, error) {
+	return planReadsOutput{}, contextfabric.ModelUsage{}, errors.New("sequencedGenerator.PlanReads is unused")
 }

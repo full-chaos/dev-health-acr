@@ -11,6 +11,7 @@ least-privilege runtime credentials; acr-mcp is a separate workload.
 {{- include "acr.validateShutdownBudget" . -}}
 {{- $image := include "acr.image" . -}}
 {{- $remoteEntitlement := include "acr.remoteEntitlement" . -}}
+{{- $caMounted := and $remoteEntitlement .Values.config.entitlementCaBundle.existingSecret -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -80,19 +81,14 @@ spec:
           {{- end }}
         {{- end }}
       {{- end }}
-      {{- if $remoteEntitlement }}
+      {{- if $caMounted }}
       initContainers:
         - name: prepare-entitlement-token
           image: {{ include "acr.tokenCopyImage" . | quote }}
-          command: ["sh", "-c", 'umask 077 && cp /source/{{ .Values.config.entitlement.tokenFileName }} /target/{{ .Values.config.entitlement.tokenFileName }} && if [ -f /source-ca/ca.crt ]; then cp /source-ca/ca.crt /target-ca/ca.crt; fi']
+          command: ["sh", "-c", 'umask 077 && if [ -f /source-ca/ca.crt ]; then cp /source-ca/ca.crt /target-ca/ca.crt; fi']
           securityContext:
             {{- include "acr.containerSecurityContext" . | nindent 12 }}
           volumeMounts:
-            - name: entitlement-token-source
-              mountPath: /source
-              readOnly: true
-            - name: entitlement-token
-              mountPath: /target
             {{- if .Values.config.entitlementCaBundle.existingSecret }}
             - name: entitlement-ca-source
               mountPath: /source-ca
@@ -158,6 +154,12 @@ spec:
             # CHAOS-12554: always rendered, like the flag above. See values.yaml.
             - name: ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED
               value: {{ .Values.contextFabric.investmentSunburstEnabled | default false | quote }}
+            # CHAOS-12690: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_INVESTMENT_REPOSITORY_FROM_OPS_ENABLED
+              value: {{ .Values.contextFabric.investmentRepositoryFromOpsEnabled | default false | quote }}
+            # CHAOS-12690 I2: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_INVESTMENT_TEAM_FROM_OPS_ENABLED
+              value: {{ .Values.contextFabric.investmentTeamFromOpsEnabled | default false | quote }}
             # CHAOS-12582: always rendered, like the flag above. See values.yaml.
             - name: ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED
               value: {{ .Values.contextFabric.investmentSankeyEnabled | default false | quote }}
@@ -167,6 +169,9 @@ spec:
             # CHAOS-12626: always rendered, like the flag above. See values.yaml.
             - name: ACR_CONTEXT_FABRIC_LANDSCAPE_QUADRANT_ENABLED
               value: {{ .Values.contextFabric.landscapeQuadrantEnabled | default false | quote }}
+            # CHAOS-13002: always rendered, like the flag above. See values.yaml.
+            - name: ACR_CONTEXT_FABRIC_READ_FALLBACK_ENABLED
+              value: {{ .Values.contextFabric.readFallbackEnabled | default false | quote }}
             # CHAOS-12472: always rendered, like the flag above. Ask Dev's Stop
             # needs it; see values.yaml's own comment.
             - name: ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED
@@ -308,11 +313,6 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
-            {{- if $remoteEntitlement }}
-            - name: entitlement-token
-              mountPath: {{ .Values.config.entitlement.tokenMountPath | quote }}
-              readOnly: true
-            {{- end }}
             {{- if .Values.config.postgresCaBundle.existingSecret }}
             - name: postgres-ca
               mountPath: /var/run/acr/postgres-ca
@@ -348,15 +348,6 @@ spec:
         - name: tmp
           emptyDir: {}
         {{- if $remoteEntitlement }}
-        - name: entitlement-token
-          emptyDir:
-            medium: Memory
-        - name: entitlement-token-source
-          secret:
-            secretName: {{ .Values.credentials.entitlementToken.existingSecret | quote }}
-            items:
-              - key: {{ .Values.credentials.entitlementToken.key | default "token" | quote }}
-                path: {{ .Values.config.entitlement.tokenFileName | quote }}
         - name: entitlement-ca
           emptyDir:
             medium: Memory

@@ -29,6 +29,10 @@ type EngineOptions struct {
 	// LandscapeQuadrantEnabled turns on the landscape_position rule
 	// (CHAOS-12626). See Config.ContextFabricLandscapeQuadrantEnabled.
 	LandscapeQuadrantEnabled bool
+	// ReadFallbackEnabled lets the read planner choose reads for a question
+	// no fixed family serves (CHAOS-13002). See
+	// Config.ContextFabricReadFallbackEnabled.
+	ReadFallbackEnabled bool
 	// CompletionForecastEnabled turns on the completion_forecast rule
 	// (CHAOS-12608). See Config.CompletionDistributionEnabled.
 	CompletionForecastEnabled bool
@@ -357,6 +361,10 @@ type EngineDependencies struct {
 	// attempted, exactly as if the feature did not exist: every option's
 	// Label stands alone, byte-identical to before this ticket.
 	OfferPhraser OfferPhraser
+	// ReadPlanner (CHAOS-13002) is optional and wired explicitly, never found
+	// by a type assertion on the model runtime. nil means the read fallback
+	// never calls a model; a turn it would apply to keeps its family plan.
+	ReadPlanner ReadPlanner
 	// Requirements (S7c) derives this turn's requirement rows from the
 	// validated question frame, so the served answer can say what it was
 	// SUPPOSED to contain and what became of each part.
@@ -712,6 +720,9 @@ type EngineTelemetry interface {
 	// they name as serving their sides, and how many of those the plan read
 	// only because of them. Plain counts, no kind names.
 	RecordOperandReadKinds(ctx context.Context, principal storage.Principal, operandRows, kindsNamed, kindsAdded int)
+	// RecordReadFallbackDecision (CHAOS-13002) reports the turn's read
+	// fallback decision once, from the plan seam: closed labels and a count.
+	RecordReadFallbackDecision(ctx context.Context, principal storage.Principal, event ReadFallbackDecisionEvent)
 	// RecordSubjectObligationReadKinds (CHAOS-12710) reports, for a turn
 	// whose derived rows hold at least one committed-subject read row that
 	// requires its kinds, how many such rows there were, how many distinct
@@ -747,7 +758,7 @@ type EngineTelemetry interface {
 	// a carry hit rate can be ATTRIBUTED rather than merely observed -- see
 	// CarrySeedSource. Reported on every outcome, hit or miss, so both share
 	// a denominator per source.
-	RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource, viaStoredAncestry bool)
+	RecordWindowCarry(ctx context.Context, principal storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource, viaStoredAncestry bool, walk CarryWalkStats)
 	// RecordKindCarry reports the outcome of ONE same-conversation
 	// expected_kind carry attempt -- see KindCarryOutcome's own doc comment
 	// for the closed vocabulary (structure_axis_carry.go). Called at most
@@ -765,7 +776,7 @@ type EngineTelemetry interface {
 	// disagreed. They are in the signature rather than a side channel because
 	// a drop reported without both sides is a decision an operator cannot
 	// check.
-	RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource, viaStoredAncestry bool)
+	RecordKindCarry(ctx context.Context, principal storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource, viaStoredAncestry bool, walk CarryWalkStats)
 	// RecordConfirmedNeedLedger (CHAOS-5639) reports the per-need
 	// confirmation ledger's own gate decision -- called at most once per
 	// Investigate call, from resolveConfirmedNeedLedger's own outcome
@@ -1407,6 +1418,8 @@ type Engine struct {
 	priorConsultant             PriorConsultant
 	priorHandleGrammarChecker   HandleGrammarChecker
 	offerPhraser                OfferPhraser
+	readPlanner                 ReadPlanner
+	readFallbackEnabled         bool
 	requirements                RequirementDeriver
 	observationKeys             ObservationKeyDeclarer
 	regimeAOffersDisabled       bool
@@ -1497,6 +1510,8 @@ func NewEngine(dependencies EngineDependencies, options EngineOptions) (*Engine,
 		priorConsultant:            dependencies.PriorConsultant,
 		priorHandleGrammarChecker:  dependencies.PriorHandleGrammarChecker,
 		offerPhraser:               dependencies.OfferPhraser,
+		readPlanner:                dependencies.ReadPlanner,
+		readFallbackEnabled:        options.ReadFallbackEnabled,
 		requirements:               dependencies.Requirements,
 		observationKeys:            dependencies.ObservationKeys,
 		reuseProjectionVersion:     options.ReuseProjectionVersion, reuseModelIdentities: options.ReuseModelIdentities,
@@ -2841,6 +2856,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	} else {
 		derivedRequirements = deriveTurnRequirements(requirementFrame, e.requirements)
 	}
+	// CHAOS-13002: before the plan, so the planner's kinds widen it last; a
+	// decision that did not apply adds nothing and the plan is the family's.
+	readFallback := e.decideReadFallback(ctx, principal, request, interpretation, familyOutcome, workItemTuple)
 	plan := PlanAnswer(PlanAnswerInput{
 		Family:           familyOutcome,
 		Interpretation:   interpretation,
@@ -2848,7 +2866,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		MaxCohortMembers: request.Options.MaxCohortMembers,
 		WorkItemList:     workItemTuple,
 		Requirements:     derivedRequirements,
+		ReadPlanKinds:    readFallback.kinds,
 	})
+	plan.Fallback = readFallback.planRecord()
 	// The derived requirement rows belong to the PLAN VARIABLE, not to a copy
 	// of it.
 	//
@@ -2993,8 +3013,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// request.PriorSubjectReceipts -- see carryReferencedResultIDs' own
 		// doc comment (chaos4360_carry.go) for why an unmatched
 		// PriorSubjectReceipts entry must not be able to seed the walk.
-		windowCarry = e.resolveCarriedWindow(carryCtx, principal, request, priorValidatedReceipts, binding)
-		e.recordWindowCarry(ctx, principal, windowCarry, carrySeedSource(request, priorValidatedReceipts))
+		windowWalkCtx, windowWalk := withCarryWalkRecorder(carryCtx, e.now)
+		windowCarry = e.resolveCarriedWindow(windowWalkCtx, principal, request, priorValidatedReceipts, binding)
+		e.recordWindowCarry(ctx, principal, windowCarry, carrySeedSource(request, priorValidatedReceipts), windowWalk.snapshot())
 		if windowCarry.Outcome == WindowCarryHit {
 			effectiveWindow = windowCarry.Window
 		}
@@ -3016,6 +3037,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	// axes are independent (each fails closed on its own), and a window
 	// carry miss must not suppress a kind carry hit.
 	var kindCarry kindCarryResult
+	var kindWalk *carryWalkRecorder
 	if !statedExpectedKindThisTurn(request, structureCanon) {
 		// CHAOS-5639: appliedNeeds/confirmedNeedLedger.SourceResultID thread
 		// the per-need confirmation ledger into the SAME gated producer the
@@ -3023,7 +3045,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// inside itself, never in a separate helper, so the value it returns
 		// always passes through statedExpectedKindThisTurn and applyCarryDrop
 		// (resolveCarriedKind's own doc comment).
-		kindCarry = e.resolveCarriedKind(carryCtx, principal, request, priorValidatedReceipts, binding, appliedNeeds, confirmedNeedLedger.SourceResultID)
+		kindWalkCtx, kindWalkRec := withCarryWalkRecorder(carryCtx, e.now)
+		kindWalk = kindWalkRec
+		kindCarry = e.resolveCarriedKind(kindWalkCtx, principal, request, priorValidatedReceipts, binding, appliedNeeds, confirmedNeedLedger.SourceResultID)
 		// Compare and drop BEFORE the disclosure is composed and before the
 		// outcome is recorded, so all three views agree.
 		// CHAOS-5734: a remembered subject_candidate/subject_handle joins the
@@ -3044,7 +3068,7 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 	if windowCarry.Outcome == WindowCarryMissQuestionDrift || kindCarry.Outcome == KindCarryMissQuestionDrift {
 		driftRefusedParent = carryParentSeed(request)
 	}
-	e.recordKindCarry(ctx, principal, kindCarry, carrySeedSource(request, priorValidatedReceipts))
+	e.recordKindCarry(ctx, principal, kindCarry, carrySeedSource(request, priorValidatedReceipts), kindWalk.snapshot())
 	carriedStructureEntries := []*contractsv1.ContextFabricConfirmedStructureEntry{
 		composeCarriedWindowEntry(windowCarry),
 		composeCarriedKindEntry(kindCarry),
@@ -3208,6 +3232,11 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		if epoch, epochErr := e.reuseEpochSnapshotter.SnapshotRebuildEpoch(ctx, principal.OrgID); epochErr == nil {
 			reuseEpoch = &epoch
 		}
+	}
+	// CHAOS-13002: an answer whose reads the model chose is never offered for
+	// reuse; nil watermarks are Save's never-reusable state.
+	if plan.Fallback != nil {
+		reuseWatermarkSnapshot, reuseEpoch = nil, nil
 	}
 	// CHAOS-3888: resolveCtx carries a fresh counter cell a GraphReader MAY
 	// report authorization-dropped candidates through (RecordSubjectCandidatesAuthzDropped) --

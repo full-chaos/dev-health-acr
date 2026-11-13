@@ -1,7 +1,7 @@
 # Ask Dev conversation contract (threads)
 
 Status: the contract (plan item I-28, acr #1762), the store and routes
-(I-29, §9), and the run lease, attach and cancel (I-S10a, CHAOS-11949, §10).
+(I-29, §9), and the run lease, attach and cancel (I-S10a, the Ask Dev run-lease work, §10).
 Feedback (I-32a) and the retention job (I-30) build on this contract and add
 their own parts of it. §6 lists what those items must keep.
 
@@ -59,7 +59,7 @@ thread id once per conversation and sends it on every turn as
   (plan §2.6, D-22) under §6.
 - Results with no submission link (MCP, Workbench) are not in any thread and
   are out of scope.
-- **A submission with no thread** (I-30, CHAOS-11952, lead ruling Q2; with
+- **A submission with no thread** (I-30, the retention-coverage change, lead ruling Q2; with
   `ACR_ASK_DEV_RETENTION_ENABLED` on, §12) is still an Ask Dev result's
   record: it is retained as a one-turn thread with retention `0`, keyed on its
   own admission (`admitted_at` + 24 hours,
@@ -68,7 +68,7 @@ thread id once per conversation and sends it on every turn as
   `409 thread_closed`, as for an expired thread; the job then removes both.
   It appears in no history. A web follow-up whose parent is such a result
   fails closed the same way once the parent is past its window. An implicit
-  admission (`acr-implicit-…`, CHAOS-11997) names no result, so removing it
+  admission (`acr-implicit-…`) names no result, so removing it
   removes only the record.
 
 ## 3. Wire
@@ -106,7 +106,7 @@ newest `last_turn_at` first, then `thread_id`; `next_cursor` (opaque, present
 when more threads exist). Query: `limit` 1..50 (default 20), `cursor`. Closed
 threads are not listed.
 
-`first_question` (CHAOS-12235, additive; always served since CHAOS-12271, once
+`first_question` (the first-question list-item change, additive; always served since the first-question switch removal, once
 every consumer's pin accepted it) is the question recorded on the
 thread's **true first turn**: the first of the row's own linked records in turn
 order (`admitted_at`, then `submission_id`), not the first turn of a served
@@ -292,12 +292,12 @@ item that implements it.
 
 `docs/design/context-fabric-architecture-diagrams.md` §18.
 
-## 9. Implementation (I-29, CHAOS-11948)
+## 9. Implementation (I-29)
 
 - **Thread row.** `acr.context_fabric_threads` (migration `0060`), keyed
   `(org_id, owner_auth_method, owner_subject, thread_id)` like the submission
   records, with the canonical owner beside it (`owner_user_id`,
-  `owner_surface`; the approving-user design, T2, CHAOS-12091, migration
+  `owner_surface`; the approving-user design, T2, the approving-user key-owner change, migration
   0059). A caller reaches a row when the legacy pair is the same or the
   canonical user and surface are the same (`ownerMatchSQL`,
   `contextfabric.SameSubmissionOwner`); if more than one row matches, the
@@ -366,7 +366,7 @@ item that implements it.
   thread routes when they land. The retention job (I-30) removes the backing
   set after `expires_at`.
 
-## 10. Run lease, attach and cancel (I-S10a, CHAOS-11949)
+## 10. Run lease, attach and cancel (I-S10a)
 
 Design, diagram and code map: `docs/design/context-fabric-architecture-diagrams.md`
 §19. What this item keeps of §6:
@@ -393,7 +393,7 @@ Design, diagram and code map: `docs/design/context-fabric-architecture-diagrams.
   no result content, removed with its record; the organization purge names
   the table. The retention job (I-30) removes it by removing the records.
 
-## 11. Answer feedback (I-32a, CHAOS-11950)
+## 11. Answer feedback (I-32a)
 
 Plan AC: "Correct/useful per result; owner-checked (INV-1); covered by
 retention." The web controls are I-32b; this item is the ACR store and route.
@@ -449,7 +449,7 @@ retention." The web controls are I-32b; this item is the ACR store and route.
   (T5/T7 of the direct-browser design) add this route when they land; CORS
   already answers it (`investigations` class).
 
-## 12. Retention job (I-30, CHAOS-11952)
+## 12. Retention job (I-30)
 
 Plan AC: "D-22 rows incl. event log and feedback; `0` ≤24 h, `30` 30 days,
 org purge; replay/redemption/attach fail closed after expiry; drill on
@@ -466,15 +466,15 @@ back-dated rows." Rules: `internal/contextfabric/retention.go`; SQL:
 - **Where.** A bounded purge loop in every `acr-api` replica
   (`runtime/hosted/retention_purge.go`, every 5 minutes, 500 units a pass),
   started with the other Postgres purge loops, **on acr-api's own pool, as the
-  runtime role** (CHAOS-12244: no role, credential or DSN of its own; chris
+  runtime role** (the retention runtime-role change: no role, credential or DSN of its own; chris
   rejected a dedicated role). `internal/dbacl.RuntimeGrants` holds every
   privilege the job's statements need (`internal/dbacl.RetentionPrivileges`:
   SELECT and DELETE on the threads, the records, the results, the run event
   log, the structure selections and the claims, and UPDATE on the records for
   the erase), and `grant-runtime-acl`, the Helm grant Job and the compose
   bootstrap grant them with the rest of the runtime set. The clarification
-  selections stay capture-only for the runtime (migration 0016, CHAOS-3859):
-  runtime: INSERT, DELETE (retention, CHAOS-12244) and SELECT on only
+  selections stay capture-only for the runtime (migration 0016):
+  runtime: INSERT, DELETE (retention) and SELECT on only
   `org_id` and `prior_result_id`, the two columns the retention DELETE's
   WHERE reads; no table SELECT and no UPDATE, so the runtime reads no
   selection back. The purge role was
@@ -532,5 +532,5 @@ back-dated rows." Rules: `internal/contextfabric/retention.go`; SQL:
   an id, a question or an owner (a due scan that stops finding rows shows at
   Info). A pass that fails logs the same line at Warn with `outcome=failed`
   and the counts of the units it had already committed (each unit is counted
-  only after its commit, CHAOS-12214); the error itself is the loop's own Warn
+  only after its commit, the retention-log change); the error itself is the loop's own Warn
   line. The switch off is one `outcome=disabled` line at startup.

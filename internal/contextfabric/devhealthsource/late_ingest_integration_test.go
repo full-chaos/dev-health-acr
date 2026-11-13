@@ -200,7 +200,7 @@ func TestLateIngestedRowsAreProjected(t *testing.T) {
 		return h
 	}
 	teamsProjects := func(t *testing.T, orgID string) *ingestHarness {
-		src, err := devhealthsource.NewTeamsProjectsSource(query, true)
+		src, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 		if err != nil {
 			t.Fatal(err)
 		}

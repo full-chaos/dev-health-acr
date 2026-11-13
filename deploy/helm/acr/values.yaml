@@ -94,10 +94,11 @@ config:
   entitlement:
     url: ""
     timeout: "5s"
-    # Mount path for the entitlement bearer token file sourced from an existing
-    # Secret (see credentials.entitlementToken).
-    tokenMountPath: /var/run/acr/entitlement
-    tokenFileName: token
+    # acr-api sends its auth workload token on every entitlement call, so a url
+    # needs authWorkloadClient.enabled. "" and workload are the same credential;
+    # workload also renders ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL. Set it here,
+    # not in deployment.extraEnv.
+    credential: ""
   # Optional PEM CA bundles mounted from existing Secrets (references only).
   postgresCaBundle:
     existingSecret: ""
@@ -183,10 +184,6 @@ credentials:
   purge:
     existingSecret: ""
     postgresDsnKey: ACR_POSTGRES_PURGE_DSN
-  # Bearer token used to authenticate to the Dev Health Ops entitlement service.
-  entitlementToken:
-    existingSecret: ""
-    key: token
   # Bump this opaque revision whenever a referenced Secret's CONTENT is rotated
   # (name unchanged). Helm cannot observe external Secret content, so changing
   # this value forces the API and migration pods to roll onto the new material.
@@ -315,6 +312,16 @@ contextFabric:
   # investment_subcategory_share rule). selected_by is a closed enum, so keep
   # false until web's and ask-dev's pins hold the rule.
   investmentSunburstEnabled: false
+  # CHAOS-12690: read a repository's investment mix from the ops
+  # investmentBreakdownRepository answers (the ops lines-changed split of a
+  # work unit across repositories). Numbers move for units that span
+  # repositories; keep false until the ops pin holds sizedUnitCount and the
+  # proofs are re-run.
+  investmentRepositoryFromOpsEnabled: false
+  # CHAOS-12690 I2: read a team's investment mix from the ops
+  # investmentBreakdownTeam answers (owner-share weighted). Keep false until
+  # the ops pin holds sizedUnitCount and the team proofs are re-run.
+  investmentTeamFromOpsEnabled: false
   # CHAOS-12582: serves the investment_repository_flow sankey (one team's effort
   # from its repositories to the themes). selected_by is a closed enum, so keep
   # false until web's and ask-dev's pins hold the rule. Its own switch: the
@@ -326,6 +333,10 @@ contextFabric:
   # CHAOS-12626: serves the landscape_position quadrant. selected_by is a
   # closed enum, so keep false until web's and ask-dev's pins hold the rule.
   landscapeQuadrantEnabled: false
+  # CHAOS-13002: lets the model plan which fact kinds an answer reads when no
+  # fixed question family serves the question. The plan gains
+  # answer_plan.fallback, so keep false until web's and ask-dev's pins hold it.
+  readFallbackEnabled: false
   # CHAOS-12472: runs a streamed Ask Dev question under an ACR-owned lease, so
   # Stop cancels it and a reload reattaches. Turn it on wherever Ask Dev runs.
   # acr-api refuses to start without ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED=true
@@ -775,6 +786,13 @@ networkPolicy:
     # egress rules above -- NetworkPolicy cannot target the API server by pod
     # label the way it can an in-cluster Service.
     kubernetesAPIPort: 443
+    # Destination-limited apiserver egress: a list of {cidr, port}. When set,
+    # each entry renders one rule (ipBlock cidr + TCP port) and the port-only
+    # kubernetesAPIPort rule above is NOT rendered. cidr is one IPv4 address
+    # as a /32. Use the apiserver ENDPOINT address and port (the `kubernetes`
+    # EndpointSlice), not the ClusterIP: on k3s the policy sees the packet
+    # after the Service DNAT. Empty (the default) renders as before.
+    kubernetesAPIEndpoints: []
 
 # OTLP/gRPC export of each workload's own telemetry (acr-api, acr-mcp,
 # acr-projector): HTTP server spans and metrics, projection-tick spans, and a
@@ -824,9 +842,10 @@ workloadTokenExchange:
 
 # CHAOS-11195: acr-api as a CLIENT of the auth-service workload-token exchange (RFC 8693). Off by default: off
 # renders nothing. On, acr-api gets a projected ServiceAccount token (audience dev-health-workload-exchange,
-# 600 s, read-only mount) and builds its exchange client at start from these values; it makes no exchange at
-# start and no readiness check depends on it. Calls arrive with later work. Distinct from workloadTokenExchange,
-# where acr is the exchange SERVER for its own consumers.
+# 600 s, read-only mount) and builds its exchange client at start from these values. Required with
+# config.entitlement.url: every entitlement call sends a workload token, so the start-up entitlement check fails
+# when no token can be exchanged. Distinct from workloadTokenExchange, where acr is the exchange SERVER for its
+# own consumers.
 authWorkloadClient:
   enabled: false
   # auth-service's origin (scheme, host, port): https, or http with allowPlainHTTP for a cluster-internal Service.

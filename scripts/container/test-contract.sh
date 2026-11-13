@@ -574,6 +574,7 @@ bash "${repo_root}/scripts/container/test-trivy-db-provenance.sh"
 grep -q 'FROM scratch AS acr-mcp' "${repo_root}/Dockerfile"
 grep -q 'rm -f /mcp-root/usr/bin/sh /mcp-root/usr/bin/dash' "${repo_root}/Dockerfile"
 test "$(grep -c 'assert_git_lfs_fixed .* MCP' "${repo_root}/scripts/container/verify.sh")" -eq 1
+test "$(grep -cx 'report_mcp_git_versions "\$mcp_image"' "${repo_root}/scripts/container/verify.sh")" -eq 1
 if grep -q 'documented base-image exception' "${repo_root}/docs/container-images.md"; then
   printf 'MCP documentation must not retain a runtime shell exception\n' >&2
   exit 1

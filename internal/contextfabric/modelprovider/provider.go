@@ -85,7 +85,7 @@ func newPrimaryRuntime(ctx context.Context, cfg Config) (*genkitruntime.Runtime,
 		}
 		fallback = fallbackRuntime
 	}
-	clients, err := newLLMClients(cfg, cfg.Model, cfg.PhrasingModel)
+	clients, err := newLLMClients(cfg, cfg.Model, cfg.PhrasingModel, cfg.PlanReadsModel)
 	if err != nil {
 		return nil, fmt.Errorf("initialize model runtime: %w", err)
 	}
@@ -238,6 +238,8 @@ func runtimeConfigWithPhrasing(cfg Config, model string, fallback contextfabric.
 	if cfg.PhrasingModel != "" {
 		config.PhrasingModel = cfg.PhrasingModel
 	}
+	// The read planner, like phrasing, runs on the primary runtime only.
+	config.PlanReadsModel = cfg.PlanReadsModel
 	// CHAOS-5655: wired here, not in the shared runtimeConfig above, because
 	// this function builds ONLY the primary runtime (the fallback runtime is
 	// built through the plain runtimeConfig call in newPrimaryRuntime) --

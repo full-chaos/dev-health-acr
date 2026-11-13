@@ -34,11 +34,13 @@ const maxResourceLength = 2048
 const maxClientIDLength = 2048
 
 var knownScopes = map[string]struct{}{
-	"context:read":              {},
-	"evidence:read":             {},
-	"episode:write":             {},
-	"data:read":                 {},
-	"credential_lifecycle:read": {},
+	"context:read":                             {},
+	"evidence:read":                            {},
+	"episode:write":                            {},
+	"data:read":                                {},
+	"credential_lifecycle:read":                {},
+	"credential_lifecycle:revoke":              {},
+	"credential_lifecycle:revoke_organization": {},
 }
 
 func ValidateCreateInput(input CreateInput) error {
@@ -314,6 +316,7 @@ func normalizeRevocation(input RevocationInput) (RevocationInput, error) {
 		}
 	}
 	input.ActorType = strings.TrimSpace(input.ActorType)
+	input.FamilyReason = strings.TrimSpace(input.FamilyReason)
 	return input, nil
 }
 

@@ -3,16 +3,15 @@
 - Status: **Superseded by [ADR 0009](0009-context-fabric-falkordb-graph-adapter.md)**
 - Date: 2026-08-11 (superseded 2026-08-12)
 - Decision owners: Context Fabric / ACR
-- Implements: CHAOS-3752
 
 **Superseded.** This ADR's own "Deployment topology" section already
 documented, from research alone, that Zep v3 is a Zep Cloud-only API with no
 supportable self-hosted image, making the credential this ADR requires an
 external, environment-provisioned dependency this repository cannot
-provision on its own timeline. CHAOS-3752 was re-scoped: `zep-go/v3` was
+provision on its own timeline. FalkorDB graph-adapter work was re-scoped: `zep-go/v3` was
 proven live (not just by reading docs) to speak a completely disjoint wire
 protocol from a real self-hosted Graphiti server (every route 404s; see the
-CHAOS-3752 investigation record), and the final backend decision landed on
+FalkorDB graph-adapter work investigation record), and the final backend decision landed on
 FalkorDB, a self-hosted graph database needing no external credential at
 all. `internal/contextfabric/zepgraph` remains in-tree (still fully tested,
 selectable by config) rather than deleted; the rest of this document is kept
@@ -68,8 +67,8 @@ No `zep-go` request or response type is allowed in public Context Fabric contrac
   and the losing side's canonical metadata (aliases, provider IDs) is
   silently overwritten rather than merged. This is not a defect to be fixed
   in the adapter -- Zep's attribute model has no CAS primitive to build one
-  on -- it is a documented precondition on the caller. **The CHAOS-3753
-  projection worker must serialize `ApplyProjectionBatch` calls per
+  on -- it is a documented precondition on the caller. **The projection
+  worker must serialize `ApplyProjectionBatch` calls per
   organization** (e.g. one in-flight batch per org at a time across all
   sources); it must not run multiple sources' batches for the same org
   concurrently. See `ProjectionBackend`'s doc comment in
@@ -126,7 +125,7 @@ No `zep-go` request or response type is allowed in public Context Fabric contrac
 
 **Zep v3 is a Zep Cloud-only API; there is no supportable self-hosted server
 image for it.** This was researched directly (not assumed) as part of
-CHAOS-3752:
+FalkorDB graph-adapter work:
 
 - Zep discontinued Zep Community Edition (the former self-hosted server).
   Its own announcement states: "we've decided to stop maintaining and
@@ -143,7 +142,7 @@ CHAOS-3752:
   several minor releases behind current `graphiti-core` (image pinned near
   v0.10 against a v0.22 library). Standing it up would also mean ACR either
   running a Python HTTP service or embedding the Graphiti library outside
-  Go, both of which are explicit non-goals of CHAOS-3752 and of
+  Go, both of which are explicit non-goals of the FalkorDB graph-adapter work and of
   `internal/contextfabric/AGENTS.md`.
 - Zep Cloud, reached at `https://api.getzep.com`, is therefore the only
   backend `zep-go/v3` can talk to. This is an **external credential
@@ -152,7 +151,7 @@ CHAOS-3752:
   environment today. `internal/contextfabric/zepgraph.TestLiveZepContextFabricLifecycle`
   documents and enforces this — it is env-gated and skips without
   `ACR_TEST_ZEP_BASE_URL` / `ACR_TEST_ZEP_API_KEY`, and it has not been run
-  against a live endpoint as part of this change. See "What CHAOS-3752 did
+  against a live endpoint as part of this change. See "What the FalkorDB graph-adapter work did
   not resolve" below for exactly what is needed to unblock it.
 
 Because there is no self-hostable image, there is nothing to add to
@@ -162,7 +161,7 @@ exactly like the Dev Health Ops entitlement origin already is, and (like
 that origin in local development) it is simply left unconfigured today
 rather than wired to a value nothing can supply.
 
-What CHAOS-3752 *does* establish is the runtime configuration contract the
+What the FalkorDB graph-adapter work *does* establish is the runtime configuration contract the
 adapter itself understands, in
 `internal/contextfabric/zepgraph.ConfigFromEnv`:
 
@@ -181,7 +180,7 @@ set at all, so a deployment that has not opted into Context Fabric never
 constructs the adapter and never fails closed over a dependency it did not
 choose. **Nothing in `cmd/acr-api` or `internal/api` reads these variables
 yet** — Context Fabric's hosted composition and its `RuntimeDependencies`
-wiring are Reset 1 scope (CHAOS-3753/3754/3755), and the endpoint stays
+wiring are Reset 1 scope (the projection-pipeline work, the question-interpretation work and fact-planning work), and the endpoint stays
 unregistered per `internal/contextfabric/AGENTS.md` until Reset 1 publishes
 the public contract. This table is the agreed contract Reset 1 wires
 against; Compose and Helm should add the matching secret/env plumbing in
@@ -236,7 +235,7 @@ The adapter proves, against a fake transport (`internal/contextfabric/zepgraph/a
 - Rebuild (purge + checkpoint reset + replay) is composed from
   `ProjectionBackend.PurgeOrganization` plus the caller's own
   `ProjectionSource`/`ProjectionCheckpointStore` (`internal/contextfabric/ports.go`);
-  it is Reset 1 (CHAOS-3753) worker-orchestration scope, not a zepgraph method.
+  it is Reset 1 worker-orchestration scope, not a zepgraph method.
 
 `internal/contextfabric/zepgraph.TestLiveZepContextFabricLifecycle` proves
 the same lifecycle end-to-end against a real Zep endpoint — isolated graph
@@ -244,7 +243,7 @@ creation, projection of every kind, idempotent replay, retrieval with
 temporal/evidence metadata, tombstone, watermark read, purge (including
 idempotent re-purge), and cross-organization isolation — but is env-gated
 on `ACR_TEST_ZEP_BASE_URL` / `ACR_TEST_ZEP_API_KEY` and has **not been run**
-as part of CHAOS-3752: no Zep Cloud account/API key was available in this
+as part of the FalkorDB graph-adapter work: no Zep Cloud account/API key was available in this
 environment. Run it with:
 
 ```bash

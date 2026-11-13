@@ -1,6 +1,6 @@
 # Grant-scoped evidence census
 
-CHAOS-12452 (PR1), CHAOS-12456 (PR2), CHAOS-12467 (the listing) and CHAOS-12498 (a
+Grant-scoped-census work (PR1), the repo-less work-item change (PR2), the census-satisfier listing change (the listing) and the absence-statement change (a
 complete zero). Plans and rulings: the tickets. This records what shipped.
 
 ## The rule
@@ -9,8 +9,8 @@ A restricted caller's census runs inside its grant. The grant is ANDed into
 every statement of every census call. A grant that cannot apply is an error,
 never a read of the organization.
 
-Since CHAOS-12592 a web user is not a restricted caller: its `*` grant stays `*`
-after the access read (chris on CHAOS-4390: "a user can see all the data in an
+Since the org-wide star grant a web user is not a restricted caller: its `*` grant stays `*`
+after the access read (chris on the team-authorization-from-ownership change: "a user can see all the data in an
 org"), so its census reads the organization, as any universal caller's does. A
 restricted caller here is a credential that names repositories or owners, such
 as a repository-bound MCP or CLI credential.
@@ -69,7 +69,7 @@ inside subject committed only beside hidden rows
 with a bound handle and nothing committed, the round now runs whatever
 `searchTruncated` says.
 
-CHAOS-12467 ruling 1 extends this to every caller but project-only: an unrestricted
+Census-satisfier listing change ruling 1 extends this to every caller but project-only: an unrestricted
 caller with one bound handle and nothing committed runs the round, whatever the
 search says. Before, an empty search gave that caller "Retrieval found no candidate"
 with no census asked. **This changes what an unrestricted caller gets: a lone
@@ -117,17 +117,17 @@ counts a population and is never listed.
   `ContextFabricCensusListedLimitation`. One text for every cause, a count and never
   a name. They say "what you can read": a web user has no credential in view. With nothing listed the sentence is checked ahead of the floor and the
   exclusion prompt: both would be false in that state, and a clarification with
-  nothing to redeem is refused (CHAOS-5637).
+  nothing to redeem is refused.
 - **A handle two subjects satisfy is not offered.** A redeemed handle never reaches a
   commit, so the option would loop. Candidates carry receipts instead.
 - **Labels are the server's.** A label is the handle, the caller's granted slug or the
   tracker, and the title unless the title is an identifier: it holds a canonical id,
-  escaped or not, or it is a bare UUID (CHAOS-12468). `matched_terms` holds the handle
+  escaped or not, or it is a bare UUID. `matched_terms` holds the handle
   as the question wrote it. The census marker is internal: it comes off every candidate
   as the candidate leaves the resolver, on every path. The slug comes
   from `auth.RepositoryAllowed`, never from its position in the node's list: a node can
   list an old slug. A pool-built candidate keeps its label, and two with one label take
-  the prompt's ordinal (CHAOS-12468).
+  the prompt's ordinal.
 - **Side channels.** The ids are inside the grant, each passes the node gate, and the
   trace carries counts only (`evidence_census_listing`). Outside rows change no
   candidate, label, offer, sentence, trace, statement or graph read
@@ -136,7 +136,7 @@ counts a population and is never listed.
   left out of the comparison and no other (`sameTrace`). Project-only never reaches the census,
   so it gets none of this.
 
-## A complete zero (CHAOS-12498)
+## A complete zero
 
 A complete count of 0 on the question's one handle is a proven absence inside what
 the caller can read, and nothing more. No sentence reads as "does not exist": a
@@ -161,7 +161,7 @@ no oracle.
   the question does not bind. None of them proved anything.
 - **A committed turn:** a zero beside a committed repository is below.
 
-## A handle beside a committed repository (CHAOS-12523)
+## A handle beside a committed repository
 
 A question that names a handle is answered about that handle, or says why not. The
 round runs beside a committed repository, but it cannot decide this: an anchor-only
@@ -190,14 +190,14 @@ expected kind, which the model's `requested_subject_kind` fills, or a lone
   A work item's census covers all you can read, so it takes the general sentence, or
   Sentence A for a restricted caller.
 - **A work item commits beside the repository, and the answer says whether a link
-  joins them (CHAOS-12505).** A key names one item, so the commit stands either way.
+  joins them.** A key names one item, so the commit stands either way.
   The keyed link read is asked with the one named repository as the scope, under the
   caller's grants, and the engine appends one fixed sentence after synthesis: a native
   link, a link that names its lower tier (explicit text, heuristic), no link the answer
   admits, or a link that could not be read (`contractsv1`
   `ContextFabricNamedRepository*LinkLimitation`). A failed or cut read never reads as
   "no link". With two named repositories nothing is read and nothing is said.
-- **A handle beside a team (CHAOS-12557).** Team = ownership only. A pull request or a
+- **A handle beside a team.** Team = ownership only. A pull request or a
   CI run is counted in the repositories the team owns now (the tree walk over current
   OWNED_BY_TEAM edges, then one repository-anchored census each, at most 25; past that
   nothing is read and the cut is logged at Info). A work item is counted across what you
@@ -206,7 +206,7 @@ expected kind, which the model's `requested_subject_kind` fills, or a lone
   on a turn that states the handle's kind), with the scope's absence sentence; an
   unstated 0 keeps the team's answer, with that sentence. A read that fails or is cut
   changes nothing.
-- **Several handles beside a repository (CHAOS-12557).** A turn that states their kind
+- **Several handles beside a repository.** A turn that states their kind
   counts each inside the repository, takes the repository out, offers what was found and
   asks for one at a time; a complete 0 among them gets the scope's absence sentence. A
   turn that states no kind keeps the repository's answer, and the engine appends after
@@ -223,7 +223,7 @@ expected kind, which the model's `requested_subject_kind` fills, or a lone
   narrowing, a repository narrowing, or a team narrowing with its reader wired
   gets a census. A project narrowing, or repositories with teams, does not: as
   for an unrestricted principal, a satisfier outside the request must not decide.
-- The count of matches outside the requested repositories is CHAOS-12446's own
+- The count of matches outside the requested repositories is the covered-refusal count's own
   rule: it holds what the caller's grant admits, and only ordinary search feeds
   it. The census reads inside the grant AND the request, and a satisfier the
   request refuses leaves before the merge, so the census neither adds to that
@@ -251,7 +251,7 @@ requests. So a restricted caller reaches a repo-less work item by one rule: **a
 native link of record to a pull request of a granted repository.** `explicit_text`
 and `heuristic` links never grant. Project, owning team and the team's
 repositories are never the relation. A GitHub or GitLab issue sits on its own
-repository's row, and that repository decides for it (CHAOS-12561): the node
+repository's row, and that repository decides for it: the node
 gate admits it by that repository, and so does the census.
 
 **The census.** `withWorkItemGrantFilter`, in `devhealthsource`:
@@ -260,7 +260,7 @@ gate admits it by that repository, and so does the census.
   list or a `*` as the organization-wide grant.
 - `readers.WorkItemScopeSQLAmong` is narrowed to the handle's candidates. The
   statement keeps an id by `Provenance[direct_repo].Expr OR Provenance[pr_link].Expr`
-  (CHAOS-12561), never by `AuthorizationExpr`, which ORs the project path. The
+, never by `AuthorizationExpr`, which ORs the project path. The
   direct arm takes a row with a real repository, by that repository; the link arm
   takes a repository-less row, through a native link. Both test the two-part slug
   grammar before the owner. The key prefix read takes the same pair.
@@ -339,7 +339,7 @@ link only under `fetch_dev_status`; without it every Jira item stays unresolved,
 with the disclosure. A free-text handle binds `CHAOS-n` only, so another key reaches
 the gate through search.
 
-## A key in a question (CHAOS-12463)
+## A key in a question
 
 The free-text grammar binds a ticket key of any upper-case prefix, and a GitHub or
 GitLab reference (`owner/repo#7`, `group/project!7`). The shape alone proves
@@ -367,14 +367,14 @@ attaches, so each prefix is read once per turn, a failed read included. Measured
 local stack: 40 to 130 ms under a one- to five-repository grant, 4 to 8 ms with no
 grant.
 
-### A GitHub reference names an issue or a pull request (CHAOS-12642)
+### A GitHub reference names an issue or a pull request
 
 GitHub issues and pull requests share one number space, so `owner/repo#8` can name
 either, and the text cannot tell which. The sync also stores each GitHub pull
 request as a work item `ghpr:owner/repo#8`, so the work item reading alone commits
 that mirror, not the pull request. Before the prefix read, a turn reads the stored
 rows for each reference with `#`, through the census and under the caller's grant,
-in this order (lead ruling, CHAOS-12642):
+in this order (lead ruling):
 
 | Stored rows | Handle | Rule on the line |
 | --- | --- | --- |
@@ -396,7 +396,7 @@ pull request census first, and a row makes the handle the pull request. The dire
 read line names the decision in `reference_row` (`pull_request_row`,
 `work_item_reading`, `unread`). It reads only an unanchored handle of a caller
 who is not repository-restricted: a restricted caller is refused on the key shape
-before any read (CHAOS-7200), and with an anchor the census of a refused anchor
+before any read, and with an anchor the census of a refused anchor
 must not show through the kind, so an anchored reference keeps the work item
 reading.
 
@@ -420,14 +420,14 @@ this change the `CHAOS` prefix alone was accepted in a sentence.
   segment key of at most 255 bytes. A grant entry of another shape refuses that caller's census; it never
   widens it.
 - **A stale native link.** Ops never removes a native row, so a link removed at the
-  provider keeps granting until ops can retract it (CHAOS-12456 ruling 2).
+  provider keeps granting until ops can retract it (the repo-less work-item change ruling 2).
 - **A name that starts with a dot.** The library's grammar refuses `acme/.github`
   and the gate admits it. So an item linked only there counts 0: the census misses
   it inside the grant, and search can still reach it. No signal leaves the grant.
 - **A repository-owned work item outside the grant.** A GitHub or GitLab issue
   whose own repository is outside the grant counts 0 even with a native link to a
   pull request inside: its own repository decides, as at the node gate
-  (CHAOS-12561). Before CHAOS-12561 the census read the link arm only, so such an
+. Before the repository-owned work-item admission the census read the link arm only, so such an
   issue counted 0 inside the grant too.
 - **Timing of the key prefix read.** It scans the organization's work items of the
   prefix before the grant applies, so its duration follows that count (40 ms for

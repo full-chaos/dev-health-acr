@@ -36,6 +36,10 @@ const pageSize = 200
 // idListMax bounds client id lists (ops binds 500 or 1000 ids silently).
 const idListMax = 200
 
+// repoIDListMax bounds a repository id list: the forced grant list of a
+// restricted caller must fit it, so it is the grant bound.
+const repoIDListMax = dr.MaxGrantedRepositories
+
 var (
 	repository = &dr.SubjectConversion{Kind: dr.SubjectKindRepository, AcrPrefix: "repository:", OpsForm: "bare_uuid"}
 	team       = &dr.SubjectConversion{Kind: dr.SubjectKindTeam, AcrPrefix: "team:", OpsForm: "bare_id"}
@@ -45,7 +49,7 @@ var (
 	forcedFalse  = variableDecl{Source: dr.SourceForced, ForcedValue: json.RawMessage("false")}
 	client       = variableDecl{}
 
-	repoIDs = variableDecl{MaxItems: idListMax, Subject: repository}
+	repoIDs = variableDecl{MaxItems: repoIDListMax, Subject: repository}
 	teamIDs = variableDecl{MaxItems: idListMax, Subject: team}
 	teamID  = variableDecl{Subject: team}
 )
@@ -650,7 +654,49 @@ func declaredPolicyFor(scoped bool) policyDeclaration {
 	if scoped {
 		maps.Copy(declaration.Served, scopedInvestmentEntries())
 	}
+	declaration.Served["teamWorkItemBreakdown"] = teamWorkItemBreakdownDecl(scoped)
 	return declaration
+}
+
+// teamWorkItemBreakdownDecl is the work-item team breakdown (CHAOS-13001): the InvestmentBreakdown body
+// under its own ops registry name (ops 5c321277, CHAOS-13017), asked for dimension TEAM x CYCLE_TIME_HOURS with
+// batch.useInvestment forced FALSE. ops resolveUseInvestment ([ops] analytics/investment.go:487-507) then reads
+// the work-item path: completed work items joined to primary team attribution, keyed by team id. The investment
+// entries keep forcing true, so one operation name serves one basis: the same breakdown on the investment path
+// returns work-unit values 7x to 28x larger (439.9 and 103.2 against 15.81 hours for linear:CHAOS, window
+// 2026-08-06..2026-11-04). The shape is ORG with no ids, as the investment entries; the unrestricted caller only.
+// workItemBasisWithheld is the reason the evidence-quality outputs of the InvestmentBreakdown document are
+// withheld on the work-item basis.
+const workItemBasisWithheld = "computed only with useInvestment=true ([ops] analytics/investmentquality.go; RM §8-9); this entry forces it false, so the output is empty and a JSON leaf is not passed (CHAOS-13018)"
+
+func teamWorkItemBreakdownDecl(scoped bool) operationDecl {
+	// The evidence-quality outputs of the shared document are computed only on the investment path
+	// (useInvestment true), so on this basis they are withheld, not excepted: an excepted JSON leaf
+	// passes any key that is not a person-name token.
+	decl := investmentDecl("TeamWorkItemBreakdown", nil, nil)
+	decl.WithheldOutputs = map[string]string{
+		"analytics.evidenceQualityDistribution":     workItemBasisWithheld,
+		"analytics.evidenceQualityStats.bandCounts": workItemBasisWithheld,
+	}
+	if scoped {
+		decl = withLevelReasons(decl, scopedLevelReasons)
+	}
+	decl.Variables = withVariables(decl.Variables, map[string]variableDecl{
+		"batch.breakdowns[*].dimension": {
+			AllowedValues: []string{"TEAM"},
+			RefusedValues: []dr.ValueRefusal{
+				{Value: "THEME", Code: dr.RefusalVariableNotAllowed, Reason: "THEME is read on the investment path; use investmentBreakdown (one operation name serves one basis)"},
+				{Value: "SUBCATEGORY", Code: dr.RefusalVariableNotAllowed, Reason: "SUBCATEGORY is read on the investment path; use investmentBreakdown (one operation name serves one basis)"},
+				{Value: "WORK_TYPE", Code: dr.RefusalVariableNotAllowed, Reason: "WORK_TYPE is read on the investment path; use investmentBreakdown (one operation name serves one basis)"},
+				{Value: "REPO", Code: dr.RefusalVariableNotAllowed, Reason: "REPO is not served on the work-item basis"},
+			},
+		},
+		"batch.breakdowns[*].measure": enum("CYCLE_TIME_HOURS"),
+		"batch.useInvestment":         forcedFalse,
+	})
+	decl.Unrestricted = served("work-item basis: ops reads work_item_cycle_times joined to primary team attribution when dimension is TEAM and useInvestment is false ([ops] analytics/investment.go:487-507; CHAOS-13001 repro: linear:CHAOS 15.8145 hours over 15179 completed items, window 2026-08-06..2026-11-04), keyed by team id")
+	decl.Notes = []string{"work items completed in the window; a team with none has no row, which is not a zero", "the value is the work-item cycle time, never the investment work-unit basis (investmentBreakdown forces useInvestment true)"}
+	return decl
 }
 
 func notServed() map[string]notServedDecl {

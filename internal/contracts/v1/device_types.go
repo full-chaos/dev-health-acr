@@ -121,8 +121,8 @@ func (r *DeviceApprovalRequest) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return err
 	}
-	if decoded.SchemaVersion == DeviceApprovalPreviewRequestSchema && fields["repository_scopes"] != nil {
-		return fmt.Errorf("device approval preview request forbids repository_scopes")
+	if raw, present := fields["repository_scopes"]; present && decoded.SchemaVersion == DeviceApprovalPreviewRequestSchema && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("device approval preview request forbids a null repository_scopes")
 	}
 	*r = DeviceApprovalRequest{SchemaVersion: decoded.SchemaVersion, UserCode: decoded.UserCode, RepositoryScopes: decoded.RepositoryScopes}
 	return nil
@@ -136,6 +136,10 @@ type DeviceApprovalResponse struct {
 type DeviceApprovalPreviewRequest struct {
 	SchemaVersion string `json:"schema_version"`
 	UserCode      string `json:"user_code"`
+	// RepositoryScopes is the grant the preview filters the hints by
+	// (CHAOS-13562), the same list a later approval names. Absent keeps the
+	// earlier form, where the web assertion's claim carries it.
+	RepositoryScopes []string `json:"repository_scopes,omitempty"`
 }
 
 type DeviceApprovalPreviewResponse struct {

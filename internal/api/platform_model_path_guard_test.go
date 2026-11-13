@@ -189,6 +189,9 @@ func TestPlatformModelPathIsReachedOnlyThroughTheServiceModelGate(t *testing.T) 
 	}{
 		{name: "resolver constructions", got: sites.resolverConstructions, want: []string{
 			"internal/runtime/hosted/open.go:offerPhrasingRuntimeFor",
+			// CHAOS-13002: the read planner's resolver over the deployment
+			// default, composed into the same one engine as phrasing's.
+			"internal/runtime/hosted/open.go:readPlanningRuntimeFor",
 			"internal/runtime/hosted/org_model_config.go:newOrgModelRuntimeResolver",
 		}},
 		{name: "engine constructions", got: sites.engineConstructions, want: []string{

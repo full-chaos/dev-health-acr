@@ -64,6 +64,11 @@ type membershipReadLedger struct {
 	seen          map[string]map[uint64]struct{}
 	consumedPages map[string]int
 	summaryOwed   bool
+	// lastDrained: the last statement returned no row on any arm and found
+	// nothing more. A summary becomes owed only at a run's start (before any
+	// statement) or when a page consumes rows (after a page statement), so a
+	// call that runs no membership statement never drains on an older one.
+	lastDrained bool
 }
 
 func (p *membershipPage) arm(name string) *membershipArmPage {
@@ -77,8 +82,10 @@ func (p *membershipPage) arm(name string) *membershipArmPage {
 }
 
 // recordStatement notes one membership statement: rows are the rows it
-// returned inside its limit, more is whether rows lay beyond the limit. Both
-// arms get a record, so an arm that returned nothing is stated, not absent.
+// returned inside its limit, more is whether rows lay beyond the limit. Every
+// arm gets a record, so an arm that returned nothing is stated, not absent. A
+// statement that returned no row on any arm and found nothing more is a drain
+// probe: counted, not a page.
 func (l *presenceTelemetryLedger) recordStatement(rows []candidate, more bool) {
 	if l == nil {
 		return
@@ -90,13 +97,19 @@ func (l *presenceTelemetryLedger) recordStatement(rows []candidate, more bool) {
 	for _, name := range membershipArms {
 		page.arm(name)
 	}
+	armRows := 0
 	for _, c := range rows {
 		if c.arm == "" {
 			continue
 		}
 		arm := page.arm(c.arm)
 		arm.statementRows++
+		armRows++
 		arm.lastStamp, arm.lastKey = c.position(), c.sortKey
+	}
+	l.membership.lastDrained = armRows == 0 && !more
+	if l.membership.lastDrained {
+		return
 	}
 	l.membership.pages = append(l.membership.pages, page)
 }
@@ -167,10 +180,10 @@ func (l *presenceTelemetryLedger) membershipConsumedTotal(arm string) int {
 	return len(l.membership.seen[arm])
 }
 
-// logMembershipPages writes one line per arm for every statement that returned
-// or consumed a membership row, and one summary line per arm when a statement
-// finds the read drained: after rows were consumed, or at the first empty
-// statement of a run that started from an empty cursor. statement_more is a
+// logMembershipPages writes one line per arm for every page the statements
+// recorded, and one summary line per arm when a statement finds the read
+// drained: after rows were consumed, or at the first empty statement of a run
+// that started from an empty cursor. statement_more is a
 // fact about the whole statement: while it is true, an arm with no row may
 // still hold rows beyond the limit; when it is false, that arm has no row past
 // the cursor. No line carries a row id: the last key is logged as a digest.
@@ -194,27 +207,13 @@ func logMembershipPages(ctx context.Context, logger *slog.Logger, orgID string, 
 		}
 	}
 	// Drained: the last statement returned no membership row at all.
-	drained := len(pages) > 0 && m.summaryOwed
-	if drained {
-		last := pages[len(pages)-1]
-		drained = !last.more
-		for _, arm := range last.arms {
-			drained = drained && arm.statementRows == 0
-		}
-	}
+	drained := m.summaryOwed && m.lastDrained
 	if drained {
 		m.summaryOwed = false
 	}
 	ledger.mu.Unlock()
 
 	for _, page := range pages {
-		rows := 0
-		for _, arm := range page.arms {
-			rows += arm.statementRows + arm.consumedRows
-		}
-		if rows == 0 {
-			continue
-		}
 		for _, name := range membershipArms {
 			arm := page.arms[name]
 			total[name] += arm.consumedNew

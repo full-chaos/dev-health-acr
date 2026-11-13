@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -15,12 +16,14 @@ import (
 // with scope_required (the caller names its repositories itself) rather
 // than serve a partial grant as if it were the whole one.
 //
-// It is 200, not larger: every restricted operation's forced repository
-// variable allows at most 200 items (operations.v1.json max_items), and one
-// subject gate decision takes at most MaxSubjectsPerRequest (256) subjects.
-// A larger cap could only produce a request the gate or the policy refuses.
+// It is 256 (contractsv1.MaxRepositoryScopes, the most repositories one
+// credential can carry), not larger: every restricted operation's forced
+// repository variable allows at most that many items (operations.v1.json
+// max_items, generated from this constant), and one subject gate decision
+// takes at most MaxSubjectsPerRequest (256) subjects. A larger cap could only
+// produce a request the gate or the policy refuses.
 // TestGrantedRepositoriesCapFitsGateAndPolicy holds both bounds.
-const MaxGrantedRepositories = 200
+const MaxGrantedRepositories = contractsv1.MaxRepositoryScopes
 
 // ErrGrantedRepositoriesIncomplete: the caller's grant reaches more
 // repositories than MaxGrantedRepositories, or the graph listing was
@@ -54,12 +57,11 @@ func (g *LookupGrantedRepositories) GrantedRepositories(ctx context.Context, pri
 	}
 	var refs []contextfabric.SubjectRef
 	cursor := ""
-	// One page of MaxGrantedRepositories is enough to decide: a grant that
-	// fills it and has more is over the cap. The loop still follows the
-	// cursor so a smaller page size (a future MaxFindLimit change) keeps
-	// the rule: all pages, or an error.
+	// A page is at most MaxFindLimit (200), below the cap, so the loop
+	// follows the cursor: all pages, or an error. A grant past the cap is
+	// over it as soon as the listing holds more than MaxGrantedRepositories.
 	for {
-		response, err := g.lookup.Find(ctx, principal, FindRequest{Kind: SubjectKindRepository, Limit: MaxGrantedRepositories, Cursor: cursor})
+		response, err := g.lookup.Find(ctx, principal, FindRequest{Kind: SubjectKindRepository, Limit: MaxFindLimit, Cursor: cursor})
 		if err != nil {
 			return nil, err
 		}

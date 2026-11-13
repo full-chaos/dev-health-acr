@@ -223,7 +223,19 @@ func TestWebAssertionGolden_refusesEachWrongField(t *testing.T) {
 		{name: "org empty", claims: func(c map[string]any) { c["org_id"] = "" }},
 		{name: "org too long", claims: func(c map[string]any) { c["org_id"] = string(bytes.Repeat([]byte("o"), 257)) }},
 		{name: "repo empty", claims: func(c map[string]any) { c["repository_scopes"] = []string{} }},
-		{name: "repo global wildcard", claims: func(c map[string]any) { c["repository_scopes"] = []string{"*"} }},
+		{name: "repo global wildcard with evidence read", claims: func(c map[string]any) {
+			c["repository_scopes"] = []string{"*"}
+			c["permissions"] = []string{auth.ScopeEvidenceRead}
+		}},
+		{name: "repo global wildcard with both read permissions", claims: func(c map[string]any) {
+			c["repository_scopes"] = []string{"*"}
+			c["permissions"] = []string{auth.ScopeContextRead, auth.ScopeEvidenceRead}
+		}},
+		{name: "repo global wildcard with credential issue", claims: func(c map[string]any) {
+			c["repository_scopes"] = []string{"*"}
+			c["permissions"] = []string{auth.WebAssertionPermissionCredentialIssue}
+		}},
+		{name: "repo global wildcard mixed with a name", claims: func(c map[string]any) { c["repository_scopes"] = []string{"*", hostedTestRepository} }},
 		{name: "repo owner wildcard", claims: func(c map[string]any) { c["repository_scopes"] = []string{"example-org/*"} }},
 		{name: "repo duplicate", claims: func(c map[string]any) { c["repository_scopes"] = []string{hostedTestRepository, hostedTestRepository} }},
 		{name: "repo not normalized", claims: func(c map[string]any) { c["repository_scopes"] = []string{"Example-Org/Widget-Service"} }},

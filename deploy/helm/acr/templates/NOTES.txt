@@ -30,9 +30,6 @@ Boundary reminders (ADR-0004):
   - All credentials are referenced from existing Secrets:
       runtime:      {{ .Values.credentials.runtime.existingSecret }}
       migration:    {{ .Values.credentials.migration.existingSecret }}
-      {{- if include "acr.remoteEntitlement" . }}
-      entitlement:  {{ .Values.credentials.entitlementToken.existingSecret }}
-      {{- end }}
     Ensure these Secrets exist in namespace {{ .Release.Namespace }} before the
     migration hook runs (live existence is verified at deploy time, Todo 19).
 

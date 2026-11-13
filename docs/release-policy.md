@@ -51,7 +51,7 @@ Do not move or reuse an immutable version tag, `main-<full-sha>` GitHub
 Release tag, or full-SHA GHCR image tag. Versioned recovery always runs the
 current workflow against the existing tag and original source commit.
 
-### Re-releasing an older tag (CHAOS-4889)
+### Re-releasing an older tag
 
 `release.yml`'s `mirror-preflight` job (see "The ghcr.io/full-chaos/dev-
 health-acr mirror" in [`container-images.md`](container-images.md)) validates
@@ -62,7 +62,7 @@ triggers is always `main`. An older tag's Dockerfile or testcontainers pins
 can differ from `main`'s (a different `golang` base digest, for example), so
 a `workflow_dispatch` release against a tag whose pins were never mirrored
 fails `mirror-preflight` with those images reported `MISSING`, even though
-the same re-release would have worked, unmirrored, before CHAOS-4855.
+the same re-release would have worked, unmirrored, before the Docker Hub mirror change.
 
 `mirror-preflight`'s failure message names the exact fix: it prints a
 `gh workflow run mirror-images.yml -f ref=<commit>` command for the resolved
@@ -295,7 +295,7 @@ cosign verify-blob acr-mcp-SHA256SUMS \
 (sha256sum --check --ignore-missing acr-mcp-SHA256SUMS)
 ```
 
-Releases published before CHAOS-6236 carry only the combined `SHA256SUMS`.
+Releases published before the checksum-manifest change carry only the combined `SHA256SUMS`.
 
 ## Local operator fallback
 

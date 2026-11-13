@@ -5,8 +5,10 @@ import (
 	"testing"
 	"time"
 
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/identity"
 )
 
 // A key shared by two projects suppresses the ownership edge; once the
@@ -50,14 +52,67 @@ func TestOwnershipEdgeReturnsWhenAnAmbiguousKeyResolves(t *testing.T) {
 
 	project("REASSERT-Q", "REASSERT-OTHER", t0.Add(2*time.Hour))
 	if _, back := drainUntil(t, ctx, fixture, cursor, func(b contextfabric.ProjectionBatch) bool { return hasRelationship(b, edge) }); !back {
+		logStoredGroup(t, ctx, fixture, identity.JoinSegments("github", "REASSERT-P", "TEAM-GITHUB", "native"), cursor)
 		t.Fatalf("%q did not come back after the ambiguity resolved", edge)
 	}
 }
 
-// The wider cursor re-reads an ownership group when any project of its
-// provider changes, but the edge's own ObservedAt stays what it was: the later
-// of the ownership row's and its reachable projects' stamps. An unrelated
-// project's write must not restamp every edge of the provider.
+// logStoredGroup logs what the store holds for one group, beside the cursor
+// the walk read from: every log row, the current row, and the oracle's row.
+func logStoredGroup(t *testing.T, ctx context.Context, fixture *ownershipFixture, rowKey, cursor string) {
+	t.Helper()
+	t.Logf("cursor position %+v", decodeCursorPosition(t, cursor))
+	for _, e := range fixture.client.events {
+		t.Logf("DIAG sync %s", e)
+	}
+	for _, q := range []string{
+		`SELECT 'log', toString(stored_at), edge_suppressed, is_deleted, content_hash FROM project_team_ownership_groups_log WHERE org_id = ? AND row_key = ? ORDER BY stored_at`,
+		`SELECT 'current', toString(stored_at), edge_suppressed, is_deleted, content_hash FROM project_team_ownership_groups_current FINAL WHERE org_id = ? AND row_key = ?`,
+	} {
+		rows, err := fixture.direct.Query(ctx, q, fixture.orgID, rowKey)
+		if err != nil {
+			t.Logf("diagnostic read failed: %v", err)
+			continue
+		}
+		for rows.Next() {
+			var kind, storedAt string
+			var suppressed, deleted uint8
+			var hash uint64
+			if err := rows.Scan(&kind, &storedAt, &suppressed, &deleted, &hash); err != nil {
+				t.Logf("diagnostic scan failed: %v", err)
+				break
+			}
+			t.Logf("%s %s stored_at=%s edge_suppressed=%d is_deleted=%d content_hash=%d", kind, rowKey, storedAt, suppressed, deleted, hash)
+		}
+		rows.Close()
+	}
+	oracle, err := fixture.direct.Query(clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{"org_id": fixture.orgID})), devhealthsource.OwnershipGroupsOracleSQLForTest())
+	if err != nil {
+		t.Logf("oracle read failed: %v", err)
+		return
+	}
+	defer oracle.Close()
+	for oracle.Next() {
+		var key, content string
+		if err := oracle.Scan(&key, &content); err != nil {
+			t.Logf("oracle scan failed: %v", err)
+			return
+		}
+		if key == rowKey {
+			t.Logf("oracle %s %s", key, content)
+		}
+	}
+}
+
+// An unrelated project's write must not restamp the edges of its provider.
+// The ownership edges page the stored groups: the refresh rebuilds every group
+// and stores only a group whose content changed, and a write that changes no
+// group's resolution changes no group. So the edge is not read again, and its
+// ObservedAt stays the later of the ownership row's and its reachable projects'
+// stamps. (The group statement the stored groups replaced keyed the group on
+// the provider-wide newest project, so every write of the provider re-read
+// it.) A write that does change a group's resolution is stored and read: see
+// TestOwnershipEdgeReturnsWhenAnAmbiguousKeyResolves.
 func TestOwnershipEdgeObservedAtIgnoresAnUnrelatedProjectWrite(t *testing.T) {
 	ctx := context.Background()
 	query, direct := orgIsolationClickHouseFixture(t)
@@ -85,14 +140,39 @@ func TestOwnershipEdgeObservedAtIgnoresAnUnrelatedProjectWrite(t *testing.T) {
 		t.Fatalf("first projection ObservedAt = %v, want exactly the seeded stamp %v", observed, t0)
 	}
 
-	project("OBS-UNRELATED", "OBS-OTHER", t0.Add(3*time.Hour))
-	drainUntil(t, ctx, fixture, cursor, collect)
-	if len(observed) < 2 {
-		t.Fatal("the edge was not re-read after a project of its provider changed; the wider cursor is not doing its job")
+	// Written now, as an ingest writer stamps last_synced: the walk's cursor
+	// stands at the stored groups' refresh stamp (about now), so a row stamped
+	// with the fixture's past clock would be behind it.
+	mustExec(t, ctx, fixture.direct, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at, last_synced) VALUES ('OBS-UNRELATED', ?, 'github', 'OBS-OTHER', 'OBS-UNRELATED', 1, 'started', '', ?, ?)`,
+		fixture.orgID, t0.Add(3*time.Hour), time.Now().UTC().Add(time.Second))
+	unrelatedID, _, err := identity.Derive(identity.KindProject, []string{"github", "OBS-UNRELATED"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelated := false
+	drainUntil(t, ctx, fixture, cursor, func(b contextfabric.ProjectionBatch) bool {
+		for _, e := range b.Entities {
+			unrelated = unrelated || e.Subject.CanonicalID == unrelatedID
+		}
+		return collect(b)
+	})
+	if !unrelated {
+		t.Fatal("premise: the unrelated project was never projected, so the walk did not pass its write")
+	}
+	var stored uint64
+	if err := fixture.direct.QueryRow(ctx, `SELECT count() FROM project_team_ownership_groups_log WHERE org_id = ? AND row_key = ?`,
+		fixture.orgID, identity.JoinSegments("github", "OBS-P", "TEAM-GITHUB", "native")).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != 1 {
+		t.Errorf("the unrelated write stored the group again: %d log rows, want 1", stored)
 	}
 	for _, at := range observed {
 		if !at.Equal(t0) {
 			t.Fatalf("an unrelated project write moved the edge's ObservedAt to %v, want %v", at, t0)
 		}
+	}
+	if len(observed) != 1 {
+		t.Errorf("the edge was read again after an unrelated project write (%d times); its stored group did not change", len(observed))
 	}
 }

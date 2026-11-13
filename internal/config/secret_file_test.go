@@ -91,18 +91,19 @@ func TestLoad_readsHostedSecretsFromFileSources(t *testing.T) {
 	writeSecretFile(t, directory, "clickhouse", "clickhouse://acr@example/acr?secure=true&skip_verify=false")
 	writeSecretFile(t, directory, "kid", "test-kid")
 	writeSecretFile(t, directory, "keys", "test-kid="+base64.RawStdEncoding.EncodeToString(make([]byte, 32)))
-	writeSecretFile(t, directory, "token", "ops-token")
 	lookup := testSecretEnvironment(map[string]string{
-		"ACR_ENVIRONMENT":                       "test",
-		"ACR_REQUIRE_BACKING_STORES":            "true",
-		"ACR_POSTGRES_CONNECTION_KIND":          "direct",
-		"ACR_POSTGRES_DSN_FILE":                 filepath.Join(directory, "postgres"),
-		"ACR_CLICKHOUSE_DSN_FILE":               filepath.Join(directory, "clickhouse"),
-		"ACR_EVIDENCE_ID_ACTIVE_KID_FILE":       filepath.Join(directory, "kid"),
-		"ACR_EVIDENCE_ID_KEYS_FILE":             filepath.Join(directory, "keys"),
-		"ACR_DEV_HEALTH_ENTITLEMENT_URL":        "https://ops.example",
-		"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE": filepath.Join(directory, "token"),
-		"ACR_DEVICE_VERIFICATION_URL":           "https://verify.example.test/device",
+		"ACR_ENVIRONMENT":                 "test",
+		"ACR_REQUIRE_BACKING_STORES":      "true",
+		"ACR_POSTGRES_CONNECTION_KIND":    "direct",
+		"ACR_POSTGRES_DSN_FILE":           filepath.Join(directory, "postgres"),
+		"ACR_CLICKHOUSE_DSN_FILE":         filepath.Join(directory, "clickhouse"),
+		"ACR_EVIDENCE_ID_ACTIVE_KID_FILE": filepath.Join(directory, "kid"),
+		"ACR_EVIDENCE_ID_KEYS_FILE":       filepath.Join(directory, "keys"),
+		"ACR_DEV_HEALTH_ENTITLEMENT_URL":  "https://ops.example",
+		"ACR_AUTH_WORKLOAD_EXCHANGE_URL":  "https://auth-service.example.test",
+		"ACR_AUTH_WORKLOAD_ISSUER":        "https://auth.example.test",
+		"ACR_AUTH_WORKLOAD_SUBJECT_FILE":  "/var/run/secrets/dev-health/auth-workload/token",
+		"ACR_DEVICE_VERIFICATION_URL":     "https://verify.example.test/device",
 	})
 
 	// When

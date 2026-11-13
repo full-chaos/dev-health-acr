@@ -1,4 +1,4 @@
-# Context Fabric: work_item_ref stub + relationship.v2 healing (CHAOS-3898 §1.5, S2b)
+# Context Fabric: work_item_ref stub + relationship.v2 healing (the graph-lifecycle design §1.5, S2b)
 
 Short design note. Covers the two closures design brief §1.5 (P5) requires,
 the decisions made implementing them, and what this slice deliberately does
@@ -7,7 +7,7 @@ verified-defect writeup this implements; this note is the "what we actually
 built and why" companion, not a restatement of the defect analysis.
 
 Sibling note: [`context-fabric-ownership-edge-retraction.md`](context-fabric-ownership-edge-retraction.md)
-(CHAOS-4565) applies the same unconditional-idempotent tombstone shape to a
+ applies the same unconditional-idempotent tombstone shape to a
 DIFFERENT trigger -- an ownership the producer can no longer substantiate, rather
 than a reference that finally resolved.
 
@@ -15,7 +15,7 @@ than a reference that finally resolved.
 
 1. **Relationship identity versioned by canonical endpoint identities.**
    `relationship.v2:<family>:<hex(sha256(enc(from)+":"+enc(to)+":"+enc(type)))[:32]>`
-   replaces the pre-CHAOS-3898 `relationship:work_item_dependency:<repo>:<src>:<tgt>:<type>`
+   replaces the pre-graph-lifecycle-design `relationship:work_item_dependency:<repo>:<src>:<tgt>:<type>`
    shape for `work_item_dependency`/`work_item_hierarchy` edges. An edge
    between different endpoints is now structurally a different relationship
    id, closing the collision class where a healed (resolved) edge and a
@@ -87,7 +87,7 @@ recognize it) — it is a distinct `SubjectKind`
 (`contractsv1.ContextFabricSubjectWorkItemRef`), added as the one closed
 Go switch (`validContextFabricSubjectKind`) plus the 13 duplicated JSON
 Schema enum sites the contract-first rule requires (see the S2b PR
-description for the exact file list — the same footprint shape CHAOS-3802's
+description for the exact file list — the same footprint shape the team and project subject projection work's
 `BELONGS_TO_PROJECT`/`OWNED_BY_TEAM` addition established as precedent).
 
 The stub is:
@@ -101,7 +101,7 @@ The stub is:
   extended to include it.
 - **Deliberately NOT embedded for vector retrieval today** — a bare raw
   label carries little useful search-text signal, and `embedKindSkipped`'s
-  membership is a COMPOSITION decision (CHAOS-3833 spec §4 Layer B) that
+  membership is a COMPOSITION decision (the embed-text v2 change spec §4 Layer B) that
   rides `embedTextTemplateVersion` like any template change, forcing a
   rebuild for every vector-enabled organization. Left as a disclosed,
   deliberate omission rather than risking an improperly-triggered template
@@ -139,7 +139,7 @@ here instead of silently detaching and deleting a node another edge still
 points at.
 
 Two devhealthsource rows resolving the SAME previously-unresolved target in
-one page (the CHAOS-3779 two-relationship-type shape: `blocks` AND
+one page (the closed-relationship-vocabulary work two-relationship-type shape: `blocks` AND
 `relates_to` between the same pair, or two different sources depending on
 the same target) would otherwise derive the IDENTICAL node tombstone twice,
 which `ContextFabricProjectionBatch.Validate()` rejects as a duplicate. A

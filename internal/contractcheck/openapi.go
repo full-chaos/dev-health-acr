@@ -104,6 +104,12 @@ func validOpenAPIPath(path string) bool {
 		// whose binding role is reconcile. Listed explicitly, like the
 		// routes above; not an /internal/ prefix wildcard.
 		"/internal/v1/credentials/lifecycle",
+		// The on-behalf revoke of an MCP-bound credential, served only to a
+		// workload-class credential whose binding role is revoke.
+		"/internal/v1/credentials/{credential_id}/revoke",
+		// The revoke of every credential of the caller's organization, served
+		// only to a workload-class credential whose binding role is revoke.
+		"/internal/v1/organization/credentials/revoke",
 		// CHAOS-3755: the Context Fabric investigation endpoint. Not
 		// under the /api/v1/agent-context/ prefix wildcard above because
 		// it is a distinct consumer-neutral surface (ADR 0006), so it is

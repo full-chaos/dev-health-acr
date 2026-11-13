@@ -3,9 +3,13 @@
 ACR product entitlement and ACR API authentication are separate controls.
 
 - `agent_context_runtime` answers whether an organization purchased or was granted the product.
-- `acr_service_model` (AI features on) and `platform_model_fallback` (a platform admin grant) together let an organization with no model configuration of its own run an investigation on the service's own model. An organization with a saved configuration runs on its own model while `acr_service_model` is ON (ops serves ON for a saved configuration unless the organization's own override says OFF; OFF refuses with `ai_features_turned_off`); a saved configuration an organization admin turned off counts as no usable own model (the service's model only with both flags, else `own_model_turned_off`); a caller that supplies its own interpretation and synthesis is decided on the same rule before any model is bound (the same refusals apply, because acr's own phrasing still binds a model), and with no model configuration and no grant it is served with the deployment model withheld. There is no deployment-wide switch that grants every organization the platform model: `ACR_MCP_SERVICE_MODEL_DEFAULT` was removed (CHAOS-12997) and is ignored with one start-up WARN.
+- `acr_service_model` (AI features on) and `platform_model_fallback` (a platform admin grant) together let an organization with no model configuration of its own run an investigation on the service's own model. An organization with a saved configuration runs on its own model while `acr_service_model` is ON (ops serves ON for a saved configuration unless the organization's own override says OFF; OFF refuses with `ai_features_turned_off`); a saved configuration an organization admin turned off counts as no usable own model (the service's model only with both flags, else `own_model_turned_off`); a caller that supplies its own interpretation and synthesis is decided on the same rule before any model is bound (the same refusals apply: the gate decides them before the caller's model is read, and a refused turn makes no model call), and with no model configuration and no grant it is served with the deployment model withheld. There is no deployment-wide switch that grants every organization the platform model: `ACR_MCP_SERVICE_MODEL_DEFAULT` was removed and is ignored with one start-up WARN.
 - An `fcacr_` credential identifies a machine client and grants explicit repository and operation scopes.
 - A Dev Health self-hosted license key is never accepted as an ACR bearer credential.
+
+See [acr-api workload token](acr-api-workload-token.md) for the server's ops credentials, migration, and rollback.
+
+See [ACR device approval](device-approval.md) for the device approval flow, its signed tokens and what ACR checks.
 
 ## Token form
 
@@ -26,7 +30,7 @@ data:read
 
 Permissions are independent. `episode:write` does not imply either read permission. Credentials default to the two read scopes only.
 
-`data:read` (CHAOS-7071, decision K4 of the CHAOS-7036 design) gates the direct data routes that serve product analytics (`POST /api/v1/context-fabric/data/operations`, the `run_operation` tool; `POST /api/v1/context-fabric/data/graphql`, the `graphql_query` tool). It is never implied: `context:read` does not include it, an OAuth request that names no scope does not get it, no workload role carries it, and a credential issued before it existed never gains it. An OAuth client gets it only by asking for it in the `scope` parameter: in the authorization-code flow (the consent page lists it) or in the RFC 8628 device grant (`POST /device_authorization` with `scope=... data:read`). A device approval authorizes the whole requestable set as a ceiling, and the credential carries only the scopes the grant asked for, so a device grant without `data:read` never gets it. The legacy `acr-mcp login` device flow has no scope parameter and always issues the default pair. The catalogue, subject lookup, fact read and relationship read routes under `/api/v1/context-fabric/data/` need `context:read`.
+`data:read` (decision K4 of the data:read design design) gates the direct data routes that serve product analytics (`POST /api/v1/context-fabric/data/operations`, the `run_operation` tool; `POST /api/v1/context-fabric/data/graphql`, the `graphql_query` tool). It is never implied: `context:read` does not include it, an OAuth request that names no scope does not get it, no workload role carries it, and a credential issued before it existed never gains it. An OAuth client gets it only by asking for it in the `scope` parameter: in the authorization-code flow (the consent page lists it) or in the RFC 8628 device grant (`POST /device_authorization` with `scope=... data:read`). A device approval authorizes the whole requestable set as a ceiling, and the credential carries only the scopes the grant asked for, so a device grant without `data:read` never gets it. The legacy `acr-mcp login` device flow has no scope parameter and always issues the default pair. The catalogue, subject lookup, fact read and relationship read routes under `/api/v1/context-fabric/data/` need `context:read`.
 
 Every direct data route also passes the direct-read subject gate (`internal/contextfabric/directread`) on every request: each subject id is checked live against the caller's own organization graph and repository grant, and a subject the caller may not read answers `denied_or_not_found`, the same answer as an id that does not exist.
 
@@ -56,7 +60,35 @@ working directory, local Git discovery, and the current analytics repository
 catalog are display or request context only; none narrows or expands
 authorization.
 
+An approval (`POST /api/v1/oauth/device_approval` and the consent `approve`)
+names at most 256 repositories, the ops decision point's allowlist bound
+(`contractsv1.MaxRepositoryScopes`); the device hints and an issued
+credential carry the same bound. 257 or more is refused by name: the device
+approval answers `400 invalid_request` with `details.reason`
+`too_many_repositories` and `details.max_repository_scopes` 256, the consent
+`400 {"error":"too_many_repositories"}`. The consent JSON body may hold 256
+keys of 255 bytes (`oauthConsentBodyMaxBytes`); a larger body is `400
+invalid_request` with `error_description` `body_too_large`. The approval takes
+its repositories from the request body, which the web assertion binds by
+`body_sha256`. The assertion's `repository_scopes` claim may be left out on
+these two approvals only; when it is sent it must name the same list as the
+body, or the approval is refused (`400`) and the request stays pending. The
+device preview (`device_approval_preview_request.v1`) follows the same rule
+when its body names `repository_scopes`: it filters the hints by that list, the
+claim is optional, a present claim must equal it, and 257 is
+`too_many_repositories`. A preview body without the list is the
+**compatibility form**: the claim carries the grant, and the preview answers
+exactly as before the 256-repository device-approval change (pinned by
+`TestCHAOS13562_PreviewClaimFormAnswersAsBefore`, run on the old and the new
+code with the same output). It exists only for the web that is live today,
+which sends no list on the preview. acr drops the compatibility form only after
+the web build of the web repository-list change (which sends the list) is LIVE, in its own PR. A
+null list, or neither list nor claim, is `400`. Every other route refuses an
+assertion without the claim.
+
 ## Lifecycle
+
+Operator runbooks: [revoke an ACR credential](runbooks/credential-revoke.md) and [rotate the acr-api workload credential](runbooks/workload-rotation.md).
 
 Credential services support create, list, rotate, and revoke operations. Rotation defaults to immediate cutover and may request a bounded overlap of no more than 15 minutes. Expired or revoked credentials return the generic `invalid_token` contract response so callers cannot enumerate credential state.
 
@@ -64,22 +96,22 @@ Authorization is evaluated when middleware looks up the credential. A request au
 
 Successful use updates last-used metadata outside downstream business transactions and emits an audit event. Rejected token lookups cannot safely disclose or attribute credential state, so they are recorded in structured security logs instead of the organization audit table.
 
-### Issuance provenance (CHAOS-12083)
+### Issuance provenance
 
 Every credential row records how, and for whom, it was issued (migration `0058`):
 
 | Column | Meaning |
 | --- | --- |
-| `client_class` | Derived by the credential lifecycle from the issuance path, never chosen by a caller: `org_bearer` (the `acr-api credentials` command, D6530; migration `0063` relabelled the rows the CLI had written as `operator`, and `operator` stays in the vocabulary with no writer), `workload` (RFC 8693 workload exchange), `native_device` (legacy device flow), `oauth_user` (OAuth authorization code or RFC 8628 device grant; it always names its client), `browser` (the first-party web browser client's code exchange, CHAOS-12123: the OAuth service names the class for a configured browser client, and the lifecycle accepts it only on an OAuth exchange that carries the session, the family and both expiries). |
+| `client_class` | Derived by the credential lifecycle from the issuance path, never chosen by a caller: `org_bearer` (the `acr-api credentials` command, D6530; migration `0063` relabelled the rows the CLI had written as `operator`, and `operator` stays in the vocabulary with no writer), `workload` (RFC 8693 workload exchange), `native_device` (legacy device flow), `oauth_user` (OAuth authorization code or RFC 8628 device grant; it always names its client), `browser` (the first-party web browser client's code exchange, the browser-class credential change: the OAuth service names the class for a configured browser client, and the lifecycle accepts it only on an OAuth exchange that carries the session, the family and both expiries). |
 | `approving_user_id` | The web-session subject that approved the device or OAuth authorization. The device-authorization store copies it from the locked authorization row inside the redemption transaction. Empty for `org_bearer`, `operator` and `workload`. |
 | `client_id` | The OAuth client the credential was issued to. |
-| `session_id`, `family_id`, `family_expires_at` | Browser class only (CHAOS-12123): the web session (`sid`) the approval was made in -- the store copies it from the locked device-authorization row (`approving_session_id`, migration `0061`), never from the caller -- the token family the credential starts, and the family's absolute end (issuance + 12 h). |
+| `session_id`, `family_id`, `family_expires_at` | Browser class only: the web session (`sid`) the approval was made in -- the store copies it from the locked device-authorization row (`approving_session_id`, migration `0061`), never from the caller -- the token family the credential starts, and the family's absolute end (issuance + 12 h). |
 
 The values are written once at issuance. Every rotation (operator rotate and self-rotate) copies them from the source row; no rotation or lifecycle request can set them, and a database trigger refuses an `UPDATE` that changes a set value. `created_by` stays an audit actor only: a self-rotation writes the rotating credential's id there, which is why it cannot identify the approving user. Authentication copies `client_class` and `approving_user_id` onto the `Principal`; policy that depends on how a credential was issued reads them, never a request header or `Origin`.
 
 The migration classifies existing rows only where the issuance records prove it: a row with a workload binding is `workload`; a row a device authorization redeemed takes that authorization's approver (and `oauth_user` when it is bound to a resource); a rotation successor inherits through the `credential_rotated` audit edge. Every other legacy row keeps a NULL class.
 
-## Credential listing for reconciliation (CHAOS-11200)
+## Credential listing for reconciliation
 
 `GET /internal/v1/credentials/lifecycle[?limit=1..500&after=<credential id>]` is the read-only listing the Auth Control Plane reconciliation reads. It answers one page of `{credential_id, revision, status}` (schema `credential_lifecycle_list.v1`) for the caller's own organization, ordered by credential id in byte order; `next_after` is the id to pass as `after`, or `null` on the last page. Nothing else about a credential is on the wire: no token, prefix, hash, scope or name. No other query parameter is accepted (400 `invalid_request`).
 
@@ -88,6 +120,28 @@ Who may call it. Only a workload-class credential (RFC 8693 token exchange) whos
 What it lists. The source is `acr.credential_lifecycle_outbox`: the newest row of each credential. `revision` is its highest revision; `status` is `revoked` or `expired` when the newest event is that terminal event, and `active` otherwise. An unrevoked credential past its expiry reads `active` until the lifecycle tick writes its `expired` event, so the reconciliation must not call that drift inside one tick. A live credential with no outbox row (it predates the outbox) is absent until the first-touch tick writes its revision 1: run the reconciliation only after that drain. A credential row that is gone (retention or the organization purge) stays listed until the outbox reaper removes its rows, and then is absent: for a credential the Auth Control Plane holds, "absent in acr" is expected, not drift.
 
 A page is a keyset read: a credential added during a walk that sorts after the cursor appears, one that sorts before it does not, and a revision may advance between pages. The walk is served by `ix_acr_credential_lifecycle_outbox_org_aggregate` (migration `0069`, which also admits the role `reconcile`).
+
+## Revoke an MCP-bound credential on behalf of a user or admin
+
+`POST /internal/v1/credentials/{credential_id}/revoke` revokes an MCP-bound credential for a person who no longer holds its token (a lost laptop, a forgotten client). The Auth Control Plane decides who the person is and names them in the body, schema `credential_revoke_on_behalf_request.v1`: `actor_type` `admin` (an admin of the organization) or `user` (the credential's approving user), and `actor_id`. The organization is the caller's binding's organization; the body never names one. A success is `204` with no body.
+
+Who may call it. Only a workload-class credential whose workload binding has the role `revoke`. The role carries the scopes `credential_lifecycle:revoke` and `credential_lifecycle:revoke_organization` and no other, so a `read`, `ops` or `reconcile` binding cannot call the route, and a `revoke` binding cannot list. The refusals before the credential service run in the listing's order (401 `invalid_token`, 403 `credential_class_refused`, 403 `insufficient_scope`); a malformed body is 400 `invalid_request`.
+
+What it revokes. Only an MCP-bound credential, class `oauth_user` (an OAuth or RFC 8628 credential bound at issuance to a resource other than the issuer, that is acr-mcp), in the caller's organization, and for `actor_type` `user` only when `actor_id` equals the row's `approving_user_id`. An unknown id, a credential of any other class (the `browser` class, bound to the issuer, included), another organization's credential and a user who did not approve the credential all answer the same `404 not_found`; only an actor the credential admits can learn that it is already revoked (`409 credential_lifecycle_conflict`). The revoke takes the storage path of the operator command (`acr-api credentials revoke`): one `credential_revoked` audit row with the body's actor type and id, and one lifecycle `revoked` event (actor `user`, ref the actor id) in the same transaction. The decision line `acr-api credential revoke on behalf` records the actor type, the decision and the refusal reason; it never names the credential or the actor id.
+
+A binding has one organization, so revoking in N organizations takes N `revoke` bindings, provisioned out of band like every binding. The route has no caller until such a binding exists, and the chart's HTTPRoute matches only `/api/v1/agent-context` by default, so a caller reaches `/internal/v1/` through the in-cluster service.
+
+## Revoke every credential of an organization
+
+`POST /internal/v1/organization/credentials/revoke` revokes every live credential of the caller's binding's organization. The Auth Control Plane calls it after it disables or deletes the organization. The body, schema `credential_revoke_organization_request.v1`, names the admin it authorized (`actor_id`) and the `reason`: `organization_disabled` or `organization_deleted`; it never names an organization. The answer, schema `credential_revoke_organization_response.v1`, is `200` with three counts: `revoked`, `caller_revoked` and `more`.
+
+Who may call it. Only a workload-class credential whose binding has the role `revoke`, which carries `credential_lifecycle:revoke_organization`. The refusals run in the listing's order (401 `invalid_token`, 403 `credential_class_refused`, 403 `insufficient_scope`); a malformed body is 400 `invalid_request`. The organization check admits a disabled organization (the revoke has to reach it); a deleted organization is 401 at authentication once the cached organization state holds the deletion; before that the fresh state read decides, and a deleted organization is then served only with `organization_deleted`; the `live_orgs` revoke binding binds a disabled organization for the same reason.
+
+Only a disabled or deleted organization. Before any revoke the route reads the organization's state from Dev Health, never from the cache. A live organization is `409 organization_live`; an unreadable state (an outage, or no organization check in local entitlement mode) is `503 upstream_unavailable`; in both cases nothing is revoked. The reason must fit the state: `organization_disabled` needs a disabled organization, `organization_deleted` a disabled or deleted one (a delete disables the organization first); a mismatch is `400 invalid_request`. The line `credential organization revoke refused` records the decision.
+
+What it revokes. Every credential of the organization that is not revoked and not expired, of every class: `browser`, `oauth_user`, `native_device`, `org_bearer`, `operator`, `workload` and unclassified rows. An expired credential is never a revoke target; an expired browser credential that is a sibling in a revoked family is revoked with its family (the existing cascade). Each revoke operation takes the storage path of the operator command, in its own transaction: the credential it names gets one `credential_revoked` audit row (actor type `admin`, the actor id, metadata `reason`; a `browser` credential's row also carries `family_id` and `family_revoke_reason` `org_deprovisioned`) and one lifecycle `revoked` event. A `browser` credential's revoke also revokes its whole family with the family reason `org_deprovisioned`: the siblings' audit rows carry actor type `user` and `family_revoke_reason` (the family cascade's fixed form), not the organization reason. A credential another path revoked or purged meanwhile is skipped.
+
+Batches. One call makes at most 500 revoke operations on credentials that the caller's own binding did not mint, oldest id first; `revoked` counts those operations, so browser siblings revoked with their family are not counted. It answers `more: true` while any such credential remains; the caller's own credentials stay live so it can call again. The call that finds none left also revokes every live credential the caller's binding minted, the calling one included (`caller_revoked`), and answers `more: false`. go-api exchanges a new credential for each call, so each call adds one credential and removes at least one other: the loop ends. Nothing new is issued meanwhile: issuance is refused for an organization that is not live, and the route refuses a live one. A repeat call on an organization with nothing left answers `revoked: 0, caller_revoked: 1` (its own credential). The line `credential organization revoke answered` records the reason and the three counts.
 
 ## Sidecar loading
 
@@ -253,7 +307,7 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   anything else the OAuth error redirect. The error page names why the client
   was refused in plain words (the `client_refusal` classes below) and never
   repeats a value from the request or the client's document.
-- `POST /authorize/first-party` (CHAOS-12568) is the same authorize for the
+- `POST /authorize/first-party` is the same authorize for the
   first-party browser client only, sent by web's server for its signed-in
   user. The parameters are an `application/x-www-form-urlencoded` body of
   authorization parameters only; a web assertion over that exact body
@@ -296,7 +350,7 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   A credential without a binding (org_bearer, operator, device, workload) is unaffected.
 - The header is caller-set, so a holder of an MCP-bound credential could call
   acr-api directly with the MCP resource value. With `ACR_MCP_HOP_REQUIRED=true`
-  (CHAOS-12094, default off) acr-api admits a credential bound to an MCP
+  (default off) acr-api admits a credential bound to an MCP
   resource (any bound resource other than `ACR_OAUTH_ISSUER`) only on a call
   that also carries acr-mcp's hop proof in `X-ACR-MCP-Hop`: a projected
   ServiceAccount token of acr-mcp, which acr-api checks with Kubernetes
@@ -317,6 +371,38 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   still serving would be refused), then `config.mcpHop.required` (needs `config.oauth.enabled`, `acrMcp.enabled`,
   `acrMcp.hop.enabled`; it grants acr-api TokenReview access). Compose has no
   Kubernetes, so the hop is off there.
+- With remote entitlements, the authenticator asks Dev Health whether the
+  credential's organization still exists. Only the coded 404
+  (`acr_organization_unknown`) means gone: a 401 like a revoked credential
+  (audit reason `organization_unknown`). Bearer calls use the entitlement
+  read and its cache, so a deleted organization can still be accepted for up
+  to 30 s after a known answer; an outage (5xx, timeout, a 404 without the
+  code) admits the call (each route keeps its own 503). Self rotate, self ack
+  and the browser refresh grant read Dev Health fresh on every call and answer
+  `503 upstream_unavailable` (refresh: `temporarily_unavailable`) until the
+  organization answers. Self revoke is not checked. Local entitlement mode
+  skips the check.
+- A disabled organization (Dev Health's 404 coded `acr_organization_disabled`:
+  the organization exists and is disabled) is refused the same way, with audit
+  reason `organization_disabled`, and is never read as gone: the organization
+  purge refuses it. Bearer calls are refused within the cache bound (30 s by
+  default after a known answer, as for a deleted organization), and at once
+  when the credential is revoked (`revoked_at` is checked before the
+  organization). The on-behalf revoke
+  (`POST /internal/v1/credentials/{credential_id}/revoke`) admits it and the
+  `live_orgs` revoke binding still binds it, so its credentials can be
+  revoked; the credential listing refuses it like any other route. A disabled
+  answer is never cached; a reactivated organization is admitted on its next
+  read.
+- Issuance reads the organization fresh: the device approval and the OAuth
+  consent (both approve through one path) refuse a gone or disabled
+  organization before anything is approved (`400 invalid_request`; consent
+  outcome `organization_unknown` / `organization_disabled`), and every
+  redemption (device token, authorization code, RFC 8628 device code) refuses
+  it before a credential is written (device token `access_denied`; token
+  outcome `organization_unknown` / `organization_disabled`). An outage fails
+  both closed (503). The approval and token refusals log
+  `device approval refused` / `device token refused` with the reason.
 - Each OAuth request writes one `acr-api oauth step` line (step, outcome,
   client kind, status). Steps: `register`, `authorize` (ok = sent to the
   consent page), `consent_preview`, `consent` (ok = approved, `access_denied`
@@ -420,7 +506,7 @@ statement:
   own eligibility rules, so it shows a delete that misses rows the rules
   select, not a rule that is wrong.
 
-## First-party browser client (CHAOS-12123)
+## First-party browser client
 
 The Dev Health web app's browser calls acr-api directly with an ACR OAuth
 credential of class `browser`. The class is set by configuration only:
@@ -452,7 +538,7 @@ What the class changes:
 | RFC 8628 device grant | refused (`unauthorized_client`) | as before |
 | Rotation (self or operator) | refused: it renews only by its refresh grant (below) | as before |
 
-**`/authorize` request limit (CHAOS-12156).** Every user of the web app
+**`/authorize` request limit.** Every user of the web app
 shares the browser client's public `client_id`, so a per-client bucket would
 put every login of every organization, and anyone who knows the id, in one
 bucket of 10 a minute. A browser client's `/authorize` presents no secret, so
@@ -491,7 +577,7 @@ grant), `rotation_not_allowed` (step `credential_rotate`). A refused typed-code
 approval writes one Info line `device approval refused` with
 `reason=impersonating`.
 
-### Browser refresh grant and family revocation (CHAOS-12124)
+### Browser refresh grant and family revocation
 
 A browser-class code exchange also returns `refresh_token`: an opaque,
 single-use token (`acrrt_` + 43 base64url characters, never a bearer) bound to
@@ -517,6 +603,11 @@ revocation.
   one rotation; both answers carry the same pair.
 - **Reuse.** Any other presentation of a consumed token revokes the whole
   family: the family row (`revoked_reason=reuse`) and every member credential.
+- **Organization gone.** A refresh whose family's organization Dev Health
+  reports as deleted mints nothing and revokes the family: the family row
+  (`revoked_reason=org_deprovisioned`) and every member credential
+  (migration 0073 adds the reason to the column's closed set: `reuse`,
+  `sign_out`, `member_revoked`, `org_deprovisioned`).
 - `POST /revoke` (RFC 7009): `token` (a refresh token), optional
   `token_type_hint`, `client_id`. It revokes the token's family
   (`revoked_reason=sign_out`) and answers `200 {}` for any refresh token, known
@@ -524,7 +615,7 @@ revocation.
   access token of the browser client is not a refresh token and revokes
   nothing there. Served only with a browser client for refresh tokens.
 - `POST /revoke` also takes an access token (`fcacr_...`) of any OAuth client
-  (CHAOS-12825). The credential must have been issued to the `client_id`
+. The credential must have been issued to the `client_id`
   presented. It revokes that one credential through the same path as
   `self/revoke` (audit `credential_revoked`, actor the credential) and answers
   `200 {}` for any token, known or not, of another client or not. Holding the
@@ -532,10 +623,10 @@ revocation.
   acr-mcp (the hop), which forwards no lifecycle route, so this is its
   holder-side revoke. The endpoint is always served when OAuth is on.
 - Credential class: `acr_browser_refresh_token` in the ops credential-class
-  contract (`contracts/auth/v1/credential-classes.json`, ops CHAOS-12141). The
+  contract (`contracts/auth/v1/credential-classes.json`, ops the ops side of credential-class contract change). The
   endpoint profiles (`contracts/auth/v1/endpoint-profiles.acr.json`) list it as
   issued on `POST /token` and accepted on `POST /token` and `POST /revoke`
-  (CHAOS-12174, CHAOS-12187). `POST /token` picks the class by the `grant_type`
+. `POST /token` picks the class by the `grant_type`
   form field: its row names the selector `class_disambiguator: grant_type /
   refresh_token`, owned by this class alone; the other grants
   (`authorization_code`, the device-code grant) are `acr_device_flow_code`.
@@ -552,13 +643,21 @@ revocation.
   for the refresh grant.
 - Telemetry, on the OAuth step line (closed vocabulary): `step=token` with
   `ok` (rotated), `grace_replay`, `reuse_revoked`, `family_expired`,
-  `family_revoked`, `client_mismatch`, `invalid_grant` (unknown token);
+  `family_revoked`, `client_mismatch`, `invalid_grant` (unknown token),
+  `organization_unknown` (the family's organization is gone; the family is
+  revoked; an outage of that check is `unavailable` and consumes nothing),
+  `organization_disabled` (the family's organization is disabled; the family is
+  revoked with reason `org_deprovisioned`);
   `step=revoke` with `ok`, `family_revoked`, `client_mismatch`,
   `invalid_grant`, `unsupported_token_type`. Every successor and every
-  revocation writes a `credential_created` / `credential_revoked` audit row with
-  `family_id` (and `family_revoke_reason`).
+  revocation writes a `credential_created` / `credential_revoked` audit row. A
+  family revocation (`reuse`, `sign_out`, `org_deprovisioned`, or a rotation
+  that finds a revoked member) writes `family_id` and `family_revoke_reason` on
+  every member row. A direct revoke of one credential (`member_revoked`) writes
+  them on its siblings, if any; the credential revoked directly carries the
+  operator's reason text instead.
 
-### Browser family purge (CHAOS-12140)
+### Browser family purge
 
 Each refresh adds one refresh row and one browser credential row, so an active
 session adds about 73 of each over its 12 hours. With a browser client
@@ -596,7 +695,45 @@ rows per statement.
   `browser family purge tick failed; retrying on next tick` with the error class
   and table only.
 
-## Per-call access re-check (CHAOS-12092)
+## Approver decision at approval
+
+`ACR_DEVICE_APPROVAL_PDP` (`off` by default, `shadow`, `enforce`) makes a device
+approval (`POST /api/v1/oauth/device_approval`) and a consent approve
+(`POST /authorize/consent`) ask the policy decision point in auth-service
+whether the approver may issue the credential. The architecture page, with the
+sequence and component diagrams and the table of every signed token, is
+[`docs/device-approval.md`](device-approval.md) (its source is
+`internal/auth/device-approval-architecture.md`; the web repository holds the same diagrams and rows).
+
+- web sends a second token with the web assertion: `X-ACR-Approver-Reference`,
+  an EdDSA JWT signed with the web assertion key, `typ` `web-approver+jwt`,
+  `aud` `auth-service`, 30 seconds, claims `sub`, `org_id`, `sid`,
+  `impersonating`, `action` (`acr.credential.issue`) and `req`, the SHA-256 of
+  the exact `X-ACR-Web-Assertion` of the same request. It has no repository
+  scopes.
+- acr checks the pair (`internal/auth/approver_reference.go`): the same key
+  rules as the web assertion, `req` over the assertion it verified, the same
+  `sub`, `org_id` and `impersonating`, the assertion's `sid` when web signed
+  one, and the reference never outlives its assertion. The pair and the
+  assertion's own jti record bind the reference to one approval.
+- After the local checks (impersonation, the organization's state, the
+  repositories within the grant) and before the approval is stored, acr asks
+  `POST /v1/authorize` with its workload token, the reference as
+  `principal_reference` and `acr.credential.issue` on the organization
+  (`internal/auth/approval_decision.go`). Poll and redeem never ask.
+- `enforce`: a deny, a missing reference or a reference that failed the pair
+  check is `403 access_denied` (consent: `access_denied`); no decision (outage,
+  timeout, rate limit, no client) is `503`. The authorization stays pending.
+  `shadow` asks, logs `device approval decision` with the outcome and counts
+  `acr_device_approval_decisions_total{mode,outcome}`, and never refuses.
+- `ACR_DEVICE_APPROVAL_PDP_URL` is auth-service's origin; the call needs the
+  workload client (`ACR_AUTH_WORKLOAD_*`). `shadow` or `enforce` without them
+  still starts: one ERROR line, and `enforce` refuses every approval.
+- At the decision point the reference is not approval-specific: for its 30
+  seconds it proves only that the user's session is live and may issue in the
+  organization, and only acr-api may present it.
+
+## Per-call access re-check
 
 A user-class credential (class `browser`, `oauth_user` or `native_device`) is
 re-checked live on **every** protected call: every route behind the runtime
@@ -609,9 +746,8 @@ handler:
 
 `GET /api/v1/internal/acr/orgs/{org_id}/principals/{approving_user_id}/access[?sid=<session id>]`
 
-with the service credential (`svc_acr_`, scope `principal_access:read`; a
-credential without that scope gets 403 from Dev Health, which acr-api answers
-503). `sid` is sent for the browser class only: its credential's bound session
+with acr-api's workload token (audience `dev-health-api`; a refused token gets
+401 or 403 from Dev Health, which acr-api answers 503). `sid` is sent for the browser class only: its credential's bound session
 (`session_id`). OAuth user and native device credentials are row-only (no
 session), and still get the membership, impersonation, flag and scope checks.
 There is no cache across calls; inside one request the read is reused. The
@@ -623,7 +759,7 @@ There is no cache across calls; inside one request the read is reused. The
 | not a member; impersonating (`impersonating` or `session.impersonating`); browser session not live; Dev Health 404 `acr_organization_unknown` (a user Dev Health does not know is `member: false`) or 400 `acr_access_invalid_sid`; a user-class row without an approving user, or a browser row without a session | 403 `access_denied`. One code for every reason, so the answer says nothing about which exists; the reason is on the Info line `principal access read refused` and on the `access_denied` audit row |
 | `agent_context_runtime` off, or `ask_dev` off for the browser class | 403 `feature_not_enabled` (audit `entitlement_denied`, `source=principal_access`), on every route but capabilities: `GET /api/v1/agent-context/capabilities` is how a client learns what is enabled, so it answers 200 with `entitlements.agent_context_runtime` from this read (false, no tool enabled) and still refuses the rows above |
 | effective scope empty | 409 `no_repository` |
-| an inventory above its limit: a 503 with `acr_access_project_scope_over_limit` or `acr_access_repository_scope_over_limit` | 503 `upstream_unavailable`, `retryable: false`, audit `access_denied` and an Info `principal access read refused` line with reason `project_scope_over_limit` or `repository_scope_over_limit`. Nothing is admitted, and a retry cannot clear it |
+| an inventory above its limit: a 503 with `acr_access_project_scope_over_limit` or `acr_access_repository_scope_over_limit`; a read listing above its cap: a 503 with `acr_access_repository_allowlist_too_large` | 503 `upstream_unavailable`, `retryable: false`, audit `access_denied` and an Info `principal access read refused` line with reason `project_scope_over_limit`, `repository_scope_over_limit` or `repository_allowlist_too_large`. Nothing is admitted, and a retry cannot clear it |
 | read failed: transport, timeout, a 404 without `acr_organization_unknown` (a route this Dev Health does not serve), any other status, a body that is not exactly `acr_principal_access.v1` for this org, user and session | 503 `upstream_unavailable` (Error line `principal access read failed` with the rejection reason); never 401, never a stale answer |
 
 A granted read writes one Debug line, `principal access read granted`, with
@@ -632,7 +768,7 @@ A granted read writes one Debug line, `principal access read granted`, with
 `elapsed_ms`, and no id but the request id. A project-only principal's
 granted read writes the same line at Info instead, with three more fields:
 `grant_class` (`project_only`), `project_scope_count` and `grant_digest_class`
-(`project`), never a project id or the digest value (CHAOS-12300; see
+(`project`), never a project id or the digest value (the project-only decision-visibility change; see
 [the project-only design](design/context-fabric-project-only-scope.md#observability)).
 
 **Effective scope.** The credential's repository grant within the
@@ -643,8 +779,15 @@ deny-all, refused 409 `no_repository` before any handler: the principal's
 scopes are never set to `[]`, which reads as unrestricted downstream. The one
 exception is an organization with no repository inventory whose read carries
 `project_scope`: a `*` grant becomes `project_only` on those projects, and every
-other grant stays 409 `no_repository` (CHAOS-12301; see
+other grant stays 409 `no_repository` (the project-only principal decode change; see
 [the project-only design](design/context-fabric-project-only-scope.md#admission)).
+
+**Kind `organization`**. A read whose `repository_scope` is
+`{"kind":"organization"}` (no `repos` key) says the user may read every
+repository of an organization that has repositories. A `*` grant stays `*`, as
+with a non-empty inventory. A grant that names repositories or owners is kept
+as issued: it is the limit of what the caller reads. Any other grant is 409
+`no_repository`. A `repos` key beside this kind is a read failure (503).
 
 The OpenAPI lists this 409 on every route behind the access check (every
 route in `protectedRoutes()`); `TestEveryProtectedRouteListsNoRepositoryInTheOpenAPI`
@@ -689,7 +832,7 @@ Both gates key on the client address, resolved the same way: the TCP peer addres
 | acr-mcp | `ACR_MCP_TRUSTED_PROXY_CIDRS` (comma-separated CIDRs and `!<address>` exclusions; chart `acrMcp.trustedProxyCidrs`) | every proxy between the caller and acr-mcp (ingress controller and, where the tunnel or node-network source address is not the caller, that address) |
 | acr-api | `ACR_TRUSTED_PROXY_CIDRS` (comma-separated CIDRs and `!<address>` exclusions; chart `config.trustedProxyCidrs`; the render refuses the same variable in `deployment.extraEnv` while it is set) | the acr-mcp pod address range; with a first-party browser client, also the proxies between the browser and acr-api (its `/authorize` limit keys on this address) |
 
-Both lists take the exclusion form go-api and auth-service read (CHAOS-11734): `!<address>` is one IP address, never a network, inside a listed network, and is never a trusted proxy. A node pod range holds the node's own addresses (on single-node k3s `10.42.0.0` and the bridge `10.42.0.1`), from which a host process or a hostNetwork pod reaches acr, so a pod-range list excludes them: `10.42.0.0/24,!10.42.0.0,!10.42.0.1`. A malformed exclusion, or one outside every listed network, refuses start. acr-api logs `trusted proxies` (Info) with `networks` and `exclusions` at startup, and acr-mcp's serving line carries `trusted_proxy_networks` and `trusted_proxy_exclusions`.
+Both lists take the exclusion form go-api and auth-service read: `!<address>` is one IP address, never a network, inside a listed network, and is never a trusted proxy. A node pod range holds the node's own addresses (on single-node k3s `10.42.0.0` and the bridge `10.42.0.1`), from which a host process or a hostNetwork pod reaches acr, so a pod-range list excludes them: `10.42.0.0/24,!10.42.0.0,!10.42.0.1`. A malformed exclusion, or one outside every listed network, refuses start. acr-api logs `trusted proxies` (Info) with `networks` and `exclusions` at startup, and acr-mcp's serving line carries `trusted_proxy_networks` and `trusted_proxy_exclusions`.
 
 acr-mcp states the address it resolved to acr-api as a single `X-Forwarded-For` value on every call it makes with a caller's bearer; it never relays the caller's own header. Without the acr-api setting, acr-api ignores that header and keys every MCP-forwarded failure on the acr-mcp pod address: one bucket for all MCP callers, so 20 bad tokens from anyone would answer `429` to every MCP caller. Without the acr-mcp setting, acr-mcp keys on the peer (the ingress), the same defect at the edge; it logs a `Warn` at startup ("edge gate keys on the peer address") so this is visible. The ingress must also pass `X-Forwarded-For` through (ingress-nginx drops it unless `use-forwarded-headers` is enabled).
 

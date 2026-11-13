@@ -32,10 +32,10 @@ func (s *WorkloadBindingStore) Lookup(ctx context.Context, key storage.WorkloadB
 		return nil, err
 	}
 	rows, err := s.DB.QueryContext(ctx, `
-SELECT binding_id, org_id, role, repository_scopes, disabled_at
+SELECT binding_id, COALESCE(org_id::text, ''), org_scope, role, repository_scopes, disabled_at
 FROM acr.workload_bindings
 WHERE trust_domain = $1 AND namespace = $2 AND service_account_name = $3 AND service_account_uid = $4
-ORDER BY org_id`,
+ORDER BY org_id NULLS LAST, binding_id`,
 		key.TrustDomain, key.Namespace, key.ServiceAccountName, key.ServiceAccountUID)
 	if err != nil {
 		return nil, mapNotFound("lookup workload binding", err)
@@ -45,7 +45,7 @@ ORDER BY org_id`,
 	for rows.Next() {
 		var binding storage.WorkloadBinding
 		var repositoryJSON []byte
-		if err := rows.Scan(&binding.BindingID, &binding.OrgID, &binding.Role, &repositoryJSON, &binding.DisabledAt); err != nil {
+		if err := rows.Scan(&binding.BindingID, &binding.OrgID, &binding.OrgScope, &binding.Role, &repositoryJSON, &binding.DisabledAt); err != nil {
 			return nil, mapNotFound("lookup workload binding", err)
 		}
 		if err := json.Unmarshal(repositoryJSON, &binding.RepositoryScopes); err != nil {

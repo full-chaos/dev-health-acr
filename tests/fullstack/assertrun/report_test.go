@@ -168,7 +168,7 @@ func TestJUnitEscaping(t *testing.T) {
 
 func TestJUnitRedactsSecretsInMessages(t *testing.T) {
 	layer := newLayer("L1", "infrastructure")
-	layer.add("probe", false, "postgres://user:pass@host/db", "1", "connection used svc_acr_leaked123")
+	layer.add("probe", false, "postgres://user:pass@host/db", "1", "connection used fcacr_leaked123")
 	report := buildReport("run-1", "task-001", []*Layer{layer})
 
 	dir := t.TempDir()
@@ -180,7 +180,7 @@ func TestJUnitRedactsSecretsInMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read junit.xml: %v", err)
 	}
-	if strings.Contains(string(data), "svc_acr_leaked123") || strings.Contains(string(data), "user:pass") {
+	if strings.Contains(string(data), "fcacr_leaked123") || strings.Contains(string(data), "user:pass") {
 		t.Fatalf("junit.xml leaked a secret:\n%s", data)
 	}
 }

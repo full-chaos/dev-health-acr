@@ -10,8 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -25,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/limits"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-acr/internal/storage/memory"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statictoken"
 )
 
 // CHAOS-12301, the c5 step of CHAOS-12228: the one change that admits
@@ -315,12 +314,8 @@ func realAccessClient(t *testing.T, status int, body string) *entitlements.Clien
 	if err != nil {
 		t.Fatal(err)
 	}
-	tokenFile := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenFile, []byte("svc_acr_standin_token_0123456789"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	client, err := entitlements.New(entitlements.Config{
-		BaseURL: baseURL, TokenFile: tokenFile, Timeout: time.Second, MaxResponseBytes: 16 << 10,
+		BaseURL: baseURL, Workload: statictoken.Source("workload-standin-token"), Timeout: time.Second, MaxResponseBytes: 16 << 10,
 		PositiveCacheTTL: time.Second, NegativeCacheTTL: time.Second, CacheCapacity: 4,
 	})
 	if err != nil {
@@ -442,6 +437,7 @@ func TestAnOverLimitInventoryIsATypedLimitationNotAnOutage(t *testing.T) {
 	}{
 		{"projects", `{"detail":"Service unavailable","code":"acr_access_project_scope_over_limit"}`, "project_scope_over_limit", true},
 		{"repositories", `{"detail":"Service unavailable","code":"acr_access_repository_scope_over_limit"}`, "repository_scope_over_limit", true},
+		{"read listing over its cap", `{"detail":"Service unavailable","code":"acr_access_repository_allowlist_too_large"}`, "repository_allowlist_too_large", true},
 		{"a plain 503", `{"detail":"Service unavailable"}`, "status", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {

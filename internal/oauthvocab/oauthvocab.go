@@ -91,6 +91,15 @@ const (
 	OutcomeFamilyExpired        = "family_expired"
 	OutcomeFamilyRevoked        = "family_revoked"
 	OutcomeUnsupportedTokenType = "unsupported_token_type"
+	// OutcomeOrganizationUnknown: the refresh token's family, the approval or the redemption belongs to an organization
+	// Dev Health no longer has.
+	OutcomeOrganizationUnknown = "organization_unknown"
+	// OutcomeOrganizationDisabled: the refresh token's family, the approval or the redemption belongs to an
+	// organization Dev Health answers as disabled.
+	OutcomeOrganizationDisabled = "organization_disabled"
+	// OutcomeTooManyRepositories: a consent approval names more repositories
+	// than one credential may hold (contractsv1.MaxRepositoryScopes, CHAOS-13562).
+	OutcomeTooManyRepositories = "too_many_repositories"
 )
 
 // OutcomeVocabulary lists every outcome, ok first.
@@ -103,6 +112,7 @@ func OutcomeVocabulary() []string {
 		OutcomeResourceMismatch, OutcomeUnauthenticated, OutcomeAuthorizationPending, OutcomeSlowDown, OutcomeRateLimited, OutcomeUnavailable,
 		OutcomeSessionRequired, OutcomeImpersonating, OutcomeUnauthorizedClient, OutcomeRotationNotAllowed,
 		OutcomeGraceReplay, OutcomeReuseRevoked, OutcomeFamilyExpired, OutcomeFamilyRevoked, OutcomeUnsupportedTokenType,
+		OutcomeOrganizationUnknown, OutcomeOrganizationDisabled, OutcomeTooManyRepositories,
 	}
 }
 
@@ -181,4 +191,34 @@ const (
 // ScopeVocabulary lists every OAuth scope.
 func ScopeVocabulary() []string {
 	return []string{ScopeContextRead, ScopeEvidenceRead, ScopeDataRead}
+}
+
+// The on-behalf credential revoke (POST /internal/v1/credentials/{credential_id}/revoke):
+// the actor types the Auth Control Plane names, the decisions, and the reasons
+// of a refusal.
+const (
+	OnBehalfActorUser  = "user"
+	OnBehalfActorAdmin = "admin"
+
+	OnBehalfDecisionRevoked  = "revoked"
+	OnBehalfDecisionRefused  = "refused"
+	OnBehalfDecisionConflict = "conflict"
+
+	OnBehalfReasonNone              = "none"
+	OnBehalfReasonUnknownCredential = "unknown_credential"
+	OnBehalfReasonNotMCPBound       = "not_mcp_bound"
+	OnBehalfReasonNotApprover       = "not_approver"
+)
+
+// OnBehalfActorVocabulary lists every on-behalf actor type.
+func OnBehalfActorVocabulary() []string { return []string{OnBehalfActorUser, OnBehalfActorAdmin} }
+
+// OnBehalfDecisionVocabulary lists every on-behalf revoke decision.
+func OnBehalfDecisionVocabulary() []string {
+	return []string{OnBehalfDecisionRevoked, OnBehalfDecisionRefused, OnBehalfDecisionConflict}
+}
+
+// OnBehalfReasonVocabulary lists every on-behalf revoke reason, none first.
+func OnBehalfReasonVocabulary() []string {
+	return []string{OnBehalfReasonNone, OnBehalfReasonUnknownCredential, OnBehalfReasonNotMCPBound, OnBehalfReasonNotApprover}
 }

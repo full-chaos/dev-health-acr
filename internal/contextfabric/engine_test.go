@@ -525,6 +525,7 @@ type recordingTelemetry struct {
 	windowGatedForConfirmation     []windowGatedRecord
 	operandReadKinds               [][3]int
 	subjectObligationReads         []recordedSubjectObligationReads
+	readFallbackDecisions          []ReadFallbackDecisionEvent
 	windowClassifications          []recordedWindowClassification
 	inferredWindowGates            []recordedInferredWindowGate
 	interpretationTerms            []InterpretationTermsEvent
@@ -578,6 +579,8 @@ type recordingTelemetry struct {
 	// something fired.
 	windowCarries     []windowCarryRecord
 	kindCarries       []kindCarryRecord
+	windowCarryWalks  []CarryWalkStats
+	kindCarryWalks    []CarryWalkStats
 	planCarryOutcomes []planCarryOutcomeRecord
 	// confirmedNeedLedgers (CHAOS-5639) mirrors the SAME list-not-count
 	// discipline.
@@ -813,6 +816,10 @@ func (r *recordingTelemetry) RecordOperandReadKinds(_ context.Context, _ storage
 	r.operandReadKinds = append(r.operandReadKinds, [3]int{operandRows, kindsNamed, kindsAdded})
 }
 
+func (r *recordingTelemetry) RecordReadFallbackDecision(_ context.Context, _ storage.Principal, event ReadFallbackDecisionEvent) {
+	r.readFallbackDecisions = append(r.readFallbackDecisions, event)
+}
+
 // recordedSubjectObligationReads is one RecordSubjectObligationReadKinds call
 // (CHAOS-12710).
 type recordedSubjectObligationReads struct {
@@ -849,12 +856,14 @@ type recordedWindowClassification struct {
 	Outcome    WindowClassOutcome
 }
 
-func (r *recordingTelemetry) RecordWindowCarry(_ context.Context, _ storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource, viaStoredAncestry bool) {
+func (r *recordingTelemetry) RecordWindowCarry(_ context.Context, _ storage.Principal, outcome WindowCarryOutcome, chainDepth int, seedSource CarrySeedSource, viaStoredAncestry bool, walk CarryWalkStats) {
 	r.windowCarries = append(r.windowCarries, windowCarryRecord{outcome, chainDepth, seedSource, viaStoredAncestry})
+	r.windowCarryWalks = append(r.windowCarryWalks, walk)
 }
 
-func (r *recordingTelemetry) RecordKindCarry(_ context.Context, _ storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource, viaStoredAncestry bool) {
+func (r *recordingTelemetry) RecordKindCarry(_ context.Context, _ storage.Principal, outcome KindCarryOutcome, chainDepth int, carriedKind, redeemedKind contractsv1.ContextFabricSubjectKind, seedSource CarrySeedSource, viaStoredAncestry bool, walk CarryWalkStats) {
 	r.kindCarries = append(r.kindCarries, kindCarryRecord{outcome, chainDepth, carriedKind, redeemedKind, seedSource, viaStoredAncestry})
+	r.kindCarryWalks = append(r.kindCarryWalks, walk)
 }
 
 func (r *recordingTelemetry) RecordStructureNeedsDisclosed(_ context.Context, _ storage.Principal, member contractsv1.ContextFabricStructureNeedKind) {

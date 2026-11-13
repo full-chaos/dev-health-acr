@@ -39,6 +39,11 @@ type InvestmentProvider struct {
 	// made and no fact changes.
 	operations           *OperationHolder
 	subcategoryBreakdown bool
+	// repositoryFromOps reads a repository's mix from ops
+	// (ProviderOptions.InvestmentRepositoryFromOps).
+	repositoryFromOps bool
+	// teamFromOps reads a team's mix from ops (ProviderOptions.InvestmentTeamFromOps).
+	teamFromOps bool
 }
 
 func newInvestmentProvider(client contextpacket.ClickHouseQueryClient) *InvestmentProvider {
@@ -56,6 +61,7 @@ func (p *InvestmentProvider) Capability() contextfabric.FactCapability {
 		contextfabric.SubjectOrganization: {contextfabric.FactTableBreakdown},
 	}
 	capability.EstimatedItems = 20
+	capability.Version = QueryVersionFor(p.repositoryFromOps, p.teamFromOps)
 	return capability
 }
 
@@ -156,6 +162,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		}
 	}()
 
+	var opsMixWithheldSubjects []opsMixWithheld
 	var mixUnavailable string
 	var projectsNoMix, projectsMixCut []contextfabric.SubjectRef
 	var teamsRequested int
@@ -171,9 +178,24 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 		// beside the mix they buried it (the model answered from the day rows
 		// and said no shares existed), and without a mix they stood in for
 		// it. A team with no mix is disclosed as unavailable instead.
-		teamRejected, unavailable, noOwned, noUnit, noEffort, noUnitCause, noLinked, linksUnwindowed, scanErr := p.readTeamThemeMix(ctx, orgID, teamSubjects, &facts, timeBound)
-		if scanErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query team theme mix", scanErr)
+		var teamRejected, unavailable int
+		var noOwned, noUnit []contextfabric.SubjectRef
+		var noEffort []teamZeroEffort
+		var noUnitCause map[string]emptyCause
+		var noLinked []teamNoLinkedWork
+		var linksUnwindowed bool
+		if p.teamFromOps {
+			// CHAOS-12690 I2: the number is the ops team answer; a team with no
+			// answer is named by its closed reason, not by the SQL causes.
+			rejected, withheld := p.readTeamMixFromOps(ctx, principal, teamSubjects, &facts, timeBound)
+			teamRejected = rejected
+			opsMixWithheldSubjects = append(opsMixWithheldSubjects, withheld...)
+		} else {
+			var scanErr error
+			teamRejected, unavailable, noOwned, noUnit, noEffort, noUnitCause, noLinked, linksUnwindowed, scanErr = p.readTeamThemeMix(ctx, orgID, teamSubjects, &facts, timeBound)
+			if scanErr != nil {
+				return contextfabric.FactProviderResult{}, readFailure("query team theme mix", scanErr)
+			}
 		}
 		rejectedCount += teamRejected
 		teamLinksUnwindowed = linksUnwindowed
@@ -223,11 +245,17 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	}
 
 	if repoSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectRepository); len(repoSubjects) > 0 {
-		rejected, scanErr := p.readRepositoryThemeMix(ctx, orgID, repoSubjects, &facts, timeBound)
-		if scanErr != nil {
-			return contextfabric.FactProviderResult{}, readFailure("query repository theme mix", scanErr)
+		if p.repositoryFromOps {
+			rejected, withheld := p.readRepositoryMixFromOps(ctx, principal, repoSubjects, &facts, timeBound)
+			rejectedCount += rejected
+			opsMixWithheldSubjects = withheld
+		} else {
+			rejected, scanErr := p.readRepositoryThemeMix(ctx, orgID, repoSubjects, &facts, timeBound)
+			if scanErr != nil {
+				return contextfabric.FactProviderResult{}, readFailure("query repository theme mix", scanErr)
+			}
+			rejectedCount += rejected
 		}
-		rejectedCount += rejected
 	}
 
 	// CHAOS-12554: the sunburst's table, on the read's one team or repository
@@ -297,7 +325,7 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if omittedUnrepresentableCount > 0 && retentionReason == "" {
 		retentionReason = unrepresentableValueReason
 	}
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersionFor(p.repositoryFromOps, p.teamFromOps), Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated || omittedUnrepresentableCount > 0, OmittedCount: omittedUnrepresentableCount}
 	applyTeamsOwningNothing(&result, query.Subjects, teamsRequested, teamsOwningNothing)
 	discloseProjectRollups(&result)
 	projectCauses := applyTeamsOwningProjectsOnly(ctx, p.facts.client, orgID, &result, query.Subjects, teamsRequested, timeBound)
@@ -350,6 +378,9 @@ func (p *InvestmentProvider) ReadFacts(ctx context.Context, principal storage.Pr
 	if len(cutSubjects) > 0 {
 		result.Truncated = true
 		addScopedReason(&result, query.Subjects, cutSubjects, unitFactReasonCut)
+	}
+	for _, withheld := range opsMixWithheldSubjects {
+		addScopedReason(&result, query.Subjects, []contextfabric.SubjectRef{withheld.subject}, withheld.coverageReason())
 	}
 	// Missing is not zero: a withheld subcategory table is a coverage reason.
 	for _, withheld := range subcategoryWithheldSubjects {

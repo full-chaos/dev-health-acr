@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 386706abc812dacb4a7def12a460bb567195ad6a18534c62f584429195e6e1f9
+# canonical-content-sha256: 4aa08e5bc77dd2acbe6ea9ded43203b2e3f66f9190b1f9b3b8a2e274bd498d88
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -1182,6 +1182,15 @@ paths:
   "/api/v1/oauth/device_approval":
     post:
       operationId: "approveDeviceAuthorization"
+      parameters:
+        -
+          description: "The web approver reference (CHAOS-13586): a compact EdDSA JWT, typ web-approver+jwt, audience auth-service, at most 1000 characters, signed with the web assertion key over the SHA-256 of this request's X-ACR-Web-Assertion (claim req). An approval checks it against the web assertion and forwards only it to the policy decision point while ACR_DEVICE_APPROVAL_PDP is shadow or enforce; with enforce an approval without a valid one, or one the decision point denies, is 403 access_denied, and a decision point failure is 503. A preview ignores it."
+          in: "header"
+          name: "X-ACR-Approver-Reference"
+          required: false
+          schema:
+            maxLength: 1000
+            type: "string"
       requestBody:
         content:
           application/json:
@@ -1363,6 +1372,82 @@ paths:
         -
           bearerAuth: []
       x-required-scope: "credential_lifecycle:read"
+  "/internal/v1/credentials/{credential_id}/revoke":
+    post:
+      operationId: "revokeCredentialOnBehalf"
+      parameters:
+        -
+          description: "The credential to revoke, in the caller's organization."
+          in: "path"
+          name: "credential_id"
+          required: true
+          schema:
+            maxLength: 256
+            minLength: 1
+            type: "string"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/credential_revoke_on_behalf_request.v1.schema.json"
+        required: true
+      responses:
+        "204":
+          description: "The MCP-bound credential is revoked; one credential_revoked audit row names the actor type and id the body gave. Only a workload-class credential whose binding role is revoke is served."
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "404":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+      x-required-scope: "credential_lifecycle:revoke"
+  "/internal/v1/organization/credentials/revoke":
+    post:
+      operationId: "revokeOrganizationCredentials"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              "$ref": "../jsonschema/v1/credential_revoke_organization_request.v1.schema.json"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                "$ref": "../jsonschema/v1/credential_revoke_organization_response.v1.schema.json"
+          description: "One batch of the organization's live credentials is revoked. The credential each revoke operation names gets one credential_revoked audit row (actor type admin, the reason; a browser credential's row also carries family_id and family_revoke_reason org_deprovisioned) and one revoked lifecycle event; a browser sibling revoked with its family gets the family cascade's row (actor type user, family_id, family_revoke_reason). An expired credential is never a revoke target; an expired browser credential that is a sibling in a revoked family is revoked with its family (the existing cascade). Only a workload-class credential whose binding role is revoke is served; a disabled organization is served; a deleted organization is 401 at authentication once the cached organization state holds the deletion; before that the fresh state read decides, and a deleted organization is then served only with organization_deleted; a live one is 409 organization_live (nothing revoked)."
+        "400":
+          "$ref": "#/components/responses/Error"
+        "401":
+          "$ref": "#/components/responses/Error"
+        "403":
+          "$ref": "#/components/responses/Error"
+        "409":
+          "$ref": "#/components/responses/Error"
+        "429":
+          "$ref": "#/components/responses/Error"
+        "500":
+          "$ref": "#/components/responses/Error"
+        "503":
+          "$ref": "#/components/responses/Error"
+      security:
+        -
+          bearerAuth: []
+      x-required-scope: "credential_lifecycle:revoke_organization"
   "/readyz":
     get:
       operationId: "getReadiness"
@@ -1543,7 +1628,7 @@ components:
                         type: "object"
                     type: "object"
                 type: "object"
-      description: "Structured safe error. feature_not_enabled with details.reason service_model_not_entitled: a caller asked for an investigation that runs on the service's own model (interpretation, synthesis, or both), and the organization has no model configuration of its own and does not hold both acr_service_model and the platform admin grant platform_model_fallback. feature_not_enabled with details.reason own_model_gate_closed: the organization's own model configuration is saved but behind a closed byo_llm plan gate (for example a lapsed plan); the service's model is never used in its place. feature_not_enabled with details.reason ai_features_turned_off: the organization has a saved model configuration but acr_service_model is OFF (its own override), so ACR AI features are turned off for it. feature_not_enabled with details.reason byo_no_investigate_config: the organization's saved BYO model keys are for other purposes only and none is set for investigations; it is a BYO organization, so the service's model is never used in its place, even with platform_model_fallback. feature_not_enabled with details.reason own_model_turned_off: an organization admin turned the saved model configuration off (kept, not deleted), so the organization has no usable own model, and it does not hold both acr_service_model and platform_model_fallback; the service's model is never used in its place. No model call was made and nothing was stored in either case. Only service_model_not_entitled is served on the caller's own model: the same question with a supplied interpretation and synthesis_mode client. The other reasons refuse that path too, because the service's phrasing step still binds a model. Credential and web assertion callers are decided on the same rule. access_denied (CHAOS-12092): a call by a user-class credential whose live access read refuses it (not a member, impersonating, a browser session that is not live, or an unknown organization or user); one code for every reason."
+      description: "Structured safe error. feature_not_enabled with details.reason service_model_not_entitled: a caller asked for an investigation that runs on the service's own model (interpretation, synthesis, or both), and the organization has no model configuration of its own and does not hold both acr_service_model and the platform admin grant platform_model_fallback. feature_not_enabled with details.reason own_model_gate_closed: the organization's own model configuration is saved but behind a closed byo_llm plan gate (for example a lapsed plan); the service's model is never used in its place. feature_not_enabled with details.reason ai_features_turned_off: the organization has a saved model configuration but acr_service_model is OFF (its own override), so ACR AI features are turned off for it. feature_not_enabled with details.reason byo_no_investigate_config: the organization's saved BYO model keys are for other purposes only and none is set for investigations; it is a BYO organization, so the service's model is never used in its place, even with platform_model_fallback. feature_not_enabled with details.reason own_model_turned_off: an organization admin turned the saved model configuration off (kept, not deleted), so the organization has no usable own model, and it does not hold both acr_service_model and platform_model_fallback; the service's model is never used in its place. No model call was made and nothing was stored in either case. Only service_model_not_entitled is served on the caller's own model: the same question with a supplied interpretation and synthesis_mode client. The other reasons refuse that path too: the gate decides them before the caller's model is read, and the refused turn makes no model call. Credential and web assertion callers are decided on the same rule. access_denied (CHAOS-12092): a call by a user-class credential whose live access read refuses it (not a member, impersonating, a browser session that is not live, or an unknown organization or user); one code for every reason."
     ContextFabricInvestigationStreamUnavailable:
       content:
         application/json:

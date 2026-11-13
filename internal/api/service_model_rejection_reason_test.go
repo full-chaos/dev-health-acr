@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +16,7 @@ import (
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/entitlements"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-acr/internal/testsupport/statictoken"
 )
 
 const entitlementValidFields = `"schema_version":"acr_entitlement.v1","org_id":"org_1","agent_context_runtime":true`
@@ -46,12 +45,8 @@ func rejectingEntitlementClient(t *testing.T, status int, body string, closed bo
 	if err != nil {
 		t.Fatal(err)
 	}
-	tokenFile := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(tokenFile, []byte("svc_acr_standin_token_0123456789"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	client, err := entitlements.New(entitlements.Config{
-		BaseURL: baseURL, TokenFile: tokenFile, Timeout: time.Second, MaxResponseBytes: 4096,
+		BaseURL: baseURL, Workload: statictoken.Source("workload-standin-token"), Timeout: time.Second, MaxResponseBytes: 4096,
 		PositiveCacheTTL: time.Second, NegativeCacheTTL: time.Second, CacheCapacity: 4,
 	})
 	if err != nil {

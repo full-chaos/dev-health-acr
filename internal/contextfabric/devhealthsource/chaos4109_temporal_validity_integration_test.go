@@ -49,6 +49,7 @@ func chaos4109Seed(t *testing.T, ctx context.Context, direct interface {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	mustSeed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -93,7 +94,7 @@ func TestTransitionHistoryProjectsClosedAndOpenIntervals(t *testing.T) {
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
 	chaos4109Seed(t, ctx, direct, t1, t2, t3)
 
-	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	source, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 	if err != nil {
 		t.Fatalf("NewTeamsProjectsSource: %v", err)
 	}
@@ -214,6 +215,7 @@ func TestSameTimestampIntervalsGetDistinctRelationshipIDs(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	mustSeed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -240,7 +242,7 @@ func TestSameTimestampIntervalsGetDistinctRelationshipIDs(t *testing.T) {
 	mustSeed("transition: move D->C (e3)", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', ?, ?, '', '', '', ?, ?, ?)`,
 		orgID, repoID, workItemID, otherProjectID, projectID, t0, t0, "e3")
 
-	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	source, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 	if err != nil {
 		t.Fatalf("NewTeamsProjectsSource: %v", err)
 	}
@@ -310,6 +312,7 @@ func TestDuplicateAddIsAContinuationNotMalformed(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	mustSeed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -333,7 +336,7 @@ func TestDuplicateAddIsAContinuationNotMalformed(t *testing.T) {
 		chaos4109OrgID, chaos4109RepoID, workItemID, projectID, t3, t3, "ev-dup-3")
 
 	logged := &bytes.Buffer{}
-	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	source, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 	if err != nil {
 		t.Fatalf("NewTeamsProjectsSource: %v", err)
 	}
@@ -392,6 +395,7 @@ func TestDuplicateAddThenRemoveClosesFromTheOriginalInterval(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	mustSeed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -413,7 +417,7 @@ func TestDuplicateAddThenRemoveClosesFromTheOriginalInterval(t *testing.T) {
 	mustSeed("transition: move to other project", `INSERT INTO project_membership_transitions (org_id, source_id, repo_id, subject_kind, subject_id, provider, from_project_id, to_project_id, from_project_key, to_project_key, actor, occurred_at, last_synced, event_id) VALUES (?, NULL, ?, 'work_item', ?, 'linear', ?, ?, '', '', '', ?, ?, ?)`,
 		chaos4109OrgID, chaos4109RepoID, workItemID, projectID, otherProjectID, t3, t3, "ev-dupclose-3")
 
-	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	source, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 	if err != nil {
 		t.Fatalf("NewTeamsProjectsSource: %v", err)
 	}
@@ -467,6 +471,7 @@ func TestDanglingRemoveIsCountedNotSilentlyDropped(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	mustSeed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -485,7 +490,7 @@ func TestDanglingRemoveIsCountedNotSilentlyDropped(t *testing.T) {
 		chaos4109OrgID, chaos4109RepoID, workItemID, projectID, otherProjectID, t1, t1, "ev-dangle-1")
 
 	logged := &bytes.Buffer{}
-	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	source, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 	if err != nil {
 		t.Fatalf("NewTeamsProjectsSource: %v", err)
 	}

@@ -76,8 +76,11 @@ func TestMembershipEdgeCountSQLReadsTheProducersOwnRowSource(t *testing.T) {
 		statement := membershipEdgeCountSQL(ingest)
 		producer := membershipStatement(cursorState{}, ingest, false)
 		rows := membershipRows(cursorState{}, ingest, false)
-		if !strings.HasPrefix(producer, rows) {
-			t.Fatalf("ingest=%v: the producer statement must be built from membershipRows", ingest)
+		if want := membershipResolvedSQL(membershipArmRows(cursorState{}, ingest, false), ingest); rows != want {
+			t.Fatalf("ingest=%v: membershipRows must be the arm rows with the one project resolution", ingest)
+		}
+		if !strings.Contains(producer, "FROM ("+membershipArmRows(cursorState{}, ingest, false)) {
+			t.Fatalf("ingest=%v: the producer statement must page the same arm rows", ingest)
 		}
 		if !strings.Contains(statement, "FROM ("+rows+")") {
 			t.Fatalf("ingest=%v: the edge count must read the producer's own row source, got:\n%s", ingest, statement)
@@ -175,9 +178,10 @@ func TestMembershipStatementIsUnchangedByTheRowSourceSplit(t *testing.T) {
 		}
 		for _, cursor := range []cursorState{{}, {After: "k"}} {
 			got := membershipStatement(cursor, ingest, true)
-			want := membershipRows(cursor, ingest, true) + sincePredicate(cursor, cursorColumn, membershipRowKey()) + orderBy(cursorColumn, membershipRowKey())
+			page := membershipArmRows(cursor, ingest, true) + sincePredicate(cursor, cursorColumn, membershipRowKey()) + orderBy(cursorColumn, membershipRowKey())
+			want := "SELECT * FROM (" + membershipResolvedSQL(page, ingest) + ")" + orderBy(cursorColumn, membershipRowKey())
 			if got != want {
-				t.Fatalf("ingest=%v cursor=%+v: statement drifted from rows+keyset+order", ingest, cursor)
+				t.Fatalf("ingest=%v cursor=%+v: statement drifted from page(arm rows+keyset+order) -> resolve -> order", ingest, cursor)
 			}
 		}
 		if !strings.HasSuffix(membershipStatement(cursorState{}, ingest, true), "LIMIT {row_limit:UInt32}") {

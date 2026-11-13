@@ -11,7 +11,7 @@ commit's metadata. They run as numeric UID/GID `65532:65532`, accept a
 read-only root filesystem, and receive no credentials or runtime configuration
 at build time. The API target is Distroless, containing only CA certificates,
 `acr-api`, `acr-migrate`, and `acr-projector`; it has no shell or package
-manager. `acr-projector` (Context Fabric's projection worker, CHAOS-3753) is
+manager. `acr-projector` (Context Fabric's projection worker) is
 deployed as its own Compose service / Kubernetes Deployment from this same
 image, entrypoint overridden to `acr-projector serve` — independent
 lifecycle and scaling, not a separate build, exactly like `acr-migrate`'s
@@ -54,9 +54,9 @@ GitHub action commit SHA):
 | Purpose | Pinned input |
 | --- | --- |
 | Dockerfile frontend | `docker/dockerfile:1.20@sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d` |
-| Go builder | `golang:1.27.3-alpine3.23@sha256:8a5046497cda39860b832ffdbe8dd66018a0f05bb01352f533a36e7e2ced66a0` |
+| Go builder | `golang:1.27.4-alpine3.23@sha256:146e3b9c7c1e2ec3d3f5348c8a686151a75e1976e50efac9fc022ebe446a9a82` |
 | API runtime | `gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab` |
-| MCP runtime | `cgr.dev/chainguard/git:latest@sha256:f30343d11878c992336af4f150dc5e2ab6200e4e5bc5e3a366aebb1665abbf65` |
+| MCP runtime | `cgr.dev/chainguard/git:latest@sha256:f3b9ade5b3e78c5ea04cd77baa431ec3a5c060da5144a8357cc0ba47326dcd93` |
 | QEMU binfmt | `docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0` |
 | Buildx CLI | `v0.35.0` linux-amd64 asset, SHA-256 `d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda` |
 | BuildKit driver | `moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1` |
@@ -89,8 +89,8 @@ Buildx release asset itself and verifies its recorded SHA-256 before the pinned
 setup action creates a builder with the digest-pinned BuildKit driver.
 
 ClickHouse is one build everywhere a ClickHouse image is pinned by digest: the
-build prod runs (`clickhouse/clickhouse-server` index digest
-`sha256:739e099abd1157390960a59e4532d21781d8fde57e6e4151cb920ea02c30b1ce`,
+build prod runs (the index digest of
+`clickhouse/clickhouse-server@sha256:739e099abd1157390960a59e4532d21781d8fde57e6e4151cb920ea02c30b1ce`,
 server 26.7.1.1315, read from prod on 2026-10-15). It is the compose E2E helper
 (`scripts/e2e/compose.sh`), the kind fixture (`ACR_E2E_IMG_CLICKHOUSE` in
 `scripts/e2e/pins.env`), the CI full-stack compose
@@ -121,11 +121,11 @@ The Trivy **vulnerability database** is the deliberate exception: it carries
 no pin anywhere in source. See "Vulnerability scanning" below for why, and
 for how a scan failure is triaged.
 
-## The ghcr.io/full-chaos/dev-health-acr mirror (CHAOS-4855)
+## The ghcr.io/full-chaos/dev-health-acr mirror
 
 Every image above except the two already-non-Docker-Hub runtimes
 (`gcr.io/distroless`, `cgr.dev/chainguard`) is pulled from Docker Hub, and
-until CHAOS-4855, CI did so **anonymously** -- acr has never held Docker Hub
+until the Docker Hub mirror change, CI did so **anonymously** -- acr has never held Docker Hub
 credentials, so every pull drew on the shared per-runner-IP anonymous quota.
 That quota ran out on 2026-09-02 and failed a `container-contract-smoke` run
 mid-pull. dev-health-ops hit the same class of failure against its own
@@ -179,7 +179,7 @@ Every digest-pinned image is mirrored under a synthetic
 consumer above requests the ref by full digest, which Docker resolves
 regardless of what tag(s) exist, so the tag is purely cosmetic bookkeeping
 for this now-acr-owned path. The one exception is `clickhouse/clickhouse-
-server`: its pin (`internal/chfixture.Image`, CHAOS-4549) is a bare tag with
+server`: its pin (`internal/chfixture.Image`) is a bare tag with
 no digest, by design, so `TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX` requests it
 by that literal tag and the mirror must publish under the same literal tag --
 there is no digest to derive a synthetic one from. `testcontainers/ryuk` is
@@ -201,7 +201,7 @@ Actions has none). If a change adds a new image to `scripts/ci/resolve-
 mirrored-images.sh`'s list or re-pins an existing one to a digest the mirror
 has never published, the FIRST push carrying that change races: `ci.yml`'s
 jobs can reach their pull before `mirror-images.yml`'s push lands, and every
-one of them fails `manifest unknown` at once (this happened on CHAOS-4855's
+one of them fails `manifest unknown` at once (this happened on the Docker Hub mirror change's
 own introducing PR -- six jobs, one root cause).
 
 `ci.yml`'s `mirror-preflight` job (which every image-pulling job `needs`)
@@ -218,7 +218,7 @@ unless `Mirror images` also fails (in which case see that workflow's own
 run log; a `403 permission_denied: write_package` there means something
 tried to write into a package acr's token cannot write to -- see this
 document's own mirror-namespace note above for why that happens and how it
-was fixed for CHAOS-4855's own introducing set).
+was fixed for the Docker Hub mirror change's own introducing set).
 
 ## Build context and verification
 
@@ -259,7 +259,7 @@ runs `acr-migrate up` successfully from the API image, reruns it to prove the
 no-op path is idempotent, and inspects migration status. Fixture credentials and
 DSNs remain process-local and are never printed or written to reports.
 
-Every image build names its version (CHAOS-12198). The Dockerfile's `VERSION`
+Every image build names its version. The Dockerfile's `VERSION`
 build-arg and `scripts/container/build.sh`'s `CONTAINER_VERSION` have no
 default, and a build without one fails before any work, naming the variable.
 An image with no version used to report `0.0.0-dev`, and hosted acr-mcp then
@@ -274,7 +274,7 @@ or `CONTAINER_VERSION=0.1.0 make container-oci`. `make container-test` passes
 its own test version and needs none.
 
 ```bash
-export CONTAINER_VERSION=0.1.0  # required by every image build (CHAOS-12198)
+export CONTAINER_VERSION=0.1.0  # required by every image build
 make container-contract
 make container-pins
 make container-test
@@ -346,7 +346,7 @@ be a reviewed, tracked ignore file entry with CVE, narrow package/image
 scope, rationale, owner, and expiration date — then be removed at expiry or
 the gate must fail again.
 
-### Vulnerability scanning: DB pinning removed, not the check (CHAOS-3772)
+### Vulnerability scanning: DB pinning removed, not the check
 
 Trivy previously scanned these images against a `trivy-db` snapshot pinned
 by immutable digest **in source**, refreshed on a manual weekly cadence and
@@ -357,7 +357,7 @@ construction, not by accident. It expired and failed the containers CI
 check repo-wide twice within roughly two weeks — #74 fixed the first
 expiry by hand; the second, on 2026-08-12, blocked all pushes until #82
 removed the scan outright rather than leave it as a recurring time bomb.
-CHAOS-3772 tracks this reintroduction.
+Container-scanning change tracks this reintroduction.
 
 The fix is not a static pin refreshed faster or by a bot: any value
 committed to source can still go stale while code is untouched. Instead,
@@ -399,7 +399,7 @@ them:**
   ID, package, installed/fixed versions, and severity: a real, newly
   published finding against an image whose code did not change. **This is
   the intended, correct behavior of a vulnerability scanner, not a
-  regression of the CHAOS-3772 class.** The old defect was the gate going
+  regression of the container-scanning change class.** The old defect was the gate going
   red while *both* code and the DB pin were frozen. Here the DB is
   deliberately never frozen, so a new red means new externally published
   vulnerability information, not the passage of time against our own

@@ -1,5 +1,53 @@
 [
   {
+    "id": "api.credential_revoke_on_behalf",
+    "msg": "acr-api credential revoke on behalf",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per request to /internal/v1/credentials/{credential_id}/revoke: one for each request whose body names a valid actor and that reaches the credential service; none for a request refused before it (authenticator, class, scope, limiter, malformed body) or one the service could not answer. The credential id, the actor id and the token never reach the line",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "actor_type",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "user",
+          "admin"
+        ]
+      },
+      {
+        "key": "decision",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "revoked",
+          "refused",
+          "conflict"
+        ]
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "unknown_credential",
+          "not_mcp_bound",
+          "not_approver"
+        ],
+        "applicability": "why a refused request was refused; none when the credential was revoked or was already revoked"
+      }
+    ]
+  },
+  {
     "id": "api.oauth_step",
     "msg": "acr-api oauth step",
     "level": "info",
@@ -7,7 +55,7 @@
     "attribution": [
       "request_id"
     ],
-    "bounded_aggregation": "exactly one line per request to /register, /authorize, /authorize/consent, /device_authorization, /token or the self-credential routes (/api/v1/auth/credentials/self/ack, /rotate, /revoke), including POSTs refused by the authenticator or limiter before their handler (a method the router rejects with 405 never reaches the route and writes none); metadata routes emit none. On a credential step the outcome reads: ok = done; invalid_request = malformed body; unauthenticated = no valid credential; invalid_grant = nothing to act on or a state conflict (no credential awaiting acknowledgement, stale credential, rotation conflict); expired = the acknowledgement window closed; rate_limited; unavailable = the credential service or runtime could not answer. The credential id and the token never reach the line",
+    "bounded_aggregation": "exactly one line per request to /register, /authorize, /authorize/consent, /device_authorization, /token or the credential routes (/api/v1/auth/credentials/self/ack, /rotate, /revoke and the on-behalf /internal/v1/credentials/{credential_id}/revoke, which shares the credential_revoke step), including POSTs refused by the authenticator or limiter before their handler (a method the router rejects with 405 never reaches the route and writes none); metadata routes emit none. On a credential step the outcome reads: ok = done; invalid_request = malformed body; unauthenticated = no valid credential; invalid_grant = nothing to act on or a state conflict (no credential awaiting acknowledgement, stale credential, rotation conflict); expired = the acknowledgement window closed; rate_limited; unavailable = the credential service or runtime could not answer. The credential id and the token never reach the line",
     "fields": [
       {
         "key": "request_id",
@@ -68,7 +116,10 @@
           "reuse_revoked",
           "family_expired",
           "family_revoked",
-          "unsupported_token_type"
+          "unsupported_token_type",
+          "organization_unknown",
+          "organization_disabled",
+          "too_many_repositories"
         ]
       },
       {
@@ -6538,6 +6589,7 @@
           "investmentBreakdownTeam",
           "investmentFull",
           "securityOverview",
+          "teamWorkItemBreakdown",
           "throughputForecast",
           "workGraphArtifacts",
           "workGraphEdges",
@@ -7244,7 +7296,6 @@
           "hit",
           "miss_no_reference",
           "miss_unloadable",
-          "miss_stale_graph_epoch",
           "miss_no_confirmed_kind",
           "miss_depth_exceeded",
           "miss_vetoed_carrier",
@@ -7319,6 +7370,21 @@
       {
         "key": "via_stored_ancestry",
         "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "visited",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "other_epoch_visited",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "walk_ms",
+        "type": "int",
         "presence": "required"
       },
       {
@@ -9788,6 +9854,103 @@
         "key": "route_switched",
         "type": "bool",
         "presence": "required"
+      },
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "conditional",
+        "applicability": "written when the request context carries a request ID"
+      }
+    ]
+  },
+  {
+    "id": "contextfabric.read_fallback_decision",
+    "msg": "context fabric read fallback decision",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id"
+    ],
+    "bounded_aggregation": "at most one line per investigation: recorded once, at the plan seam, by every turn that reaches it.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "reason",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "judgment_unservable",
+          "kind_unserved_for_member"
+        ]
+      },
+      {
+        "key": "trigger",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "none",
+          "judgment_kind",
+          "ranking_inputs",
+          "judgment_kind_and_ranking_inputs",
+          "kind_unserved"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "applied",
+          "suppressed_flag_off",
+          "planner_failed",
+          "plan_invalid",
+          "not_applicable"
+        ]
+      },
+      {
+        "key": "planned_kinds",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "error_class",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "platform_model_withheld",
+          "deadline_exceeded",
+          "canceled",
+          "rate_limited",
+          "input_too_large",
+          "model_output",
+          "model_unavailable",
+          "internal",
+          "no_runtime"
+        ]
+      },
+      {
+        "key": "rejection",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "",
+          "empty_plan",
+          "too_many_steps",
+          "unknown_tool",
+          "step_shape_invalid",
+          "too_many_kinds",
+          "unknown_kind",
+          "kind_not_offered",
+          "duplicate_kind",
+          "unknown_subject_kind",
+          "no_reads"
+        ]
       },
       {
         "key": "request_id",
@@ -13273,7 +13436,6 @@
           "hit",
           "miss_no_reference",
           "miss_unloadable",
-          "miss_stale_graph_epoch",
           "miss_no_confirmed_window",
           "miss_depth_exceeded",
           "miss_conflicting_windows",
@@ -13300,6 +13462,21 @@
       {
         "key": "via_stored_ancestry",
         "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "visited",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "other_epoch_visited",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "walk_ms",
+        "type": "int",
         "presence": "required"
       },
       {
@@ -15583,6 +15760,233 @@
     ]
   },
   {
+    "id": "devhealthsource.table_read_drained",
+    "msg": "devhealthsource table read drained",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id",
+      "table",
+      "run"
+    ],
+    "bounded_aggregation": "at most five lines (one per table) each time a read drains.",
+    "unbounded_reason": "one line per table each time the read drains, and a run drains again whenever new rows arrive after it, so the count follows how often the organization's tables change.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "dev_health_teams_projects"
+        ]
+      },
+      {
+        "key": "table",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "teams",
+          "projects",
+          "work_item_team_attributions",
+          "team_project_ownership",
+          "team_repo_ownership"
+        ]
+      },
+      {
+        "key": "run",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "rows_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "pages",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "statements",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthsource.table_read_not_new",
+    "msg": "devhealthsource table read page consumed rows that are not new and is not a replay",
+    "level": "error",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id",
+      "table",
+      "run",
+      "page_n"
+    ],
+    "bounded_aggregation": "at most one line per table per page, only for a page that consumed rows that are not new and is not a replay.",
+    "unbounded_reason": "one line per page of the cursor walk for each table that has a row in the page, so the count follows the rows the organization holds in these tables divided by the page size.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "dev_health_teams_projects"
+        ]
+      },
+      {
+        "key": "table",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "teams",
+          "projects",
+          "work_item_team_attributions",
+          "team_project_ownership",
+          "team_repo_ownership"
+        ]
+      },
+      {
+        "key": "run",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "page_n",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "consumed_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "consumed_new",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "shared_position_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "last_stamp",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "last_key_digest",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "devhealthsource.table_read_page",
+    "msg": "devhealthsource table read page",
+    "level": "info",
+    "multiplicity": "zero_or_many_per_request",
+    "attribution": [
+      "org_id",
+      "table",
+      "run",
+      "page_n"
+    ],
+    "bounded_aggregation": "at most one line per statement of a table that returned a row or found rows beyond its limit, and one per page that moved the cursor past rows of a table with no such statement; at most five tables. No row id: the last key is a digest.",
+    "unbounded_reason": "one line per statement of a table that returned a row or found rows beyond its limit, so the count follows the rows the organization holds in these tables divided by the page size.",
+    "fields": [
+      {
+        "key": "org_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "source",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "dev_health_teams_projects"
+        ]
+      },
+      {
+        "key": "table",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "teams",
+          "projects",
+          "work_item_team_attributions",
+          "team_project_ownership",
+          "team_repo_ownership"
+        ]
+      },
+      {
+        "key": "run",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "page_n",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "statement_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "statement_more",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "consumed_rows",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "consumed_new",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "consumed_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "replay",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "last_stamp",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "last_key_digest",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "genkitruntime.model_interpret_decision",
     "msg": "context fabric model decision",
     "level": "info",
@@ -15779,6 +16183,83 @@
         "presence": "required",
         "closed_vocabulary": [
           "phrase_offers",
+          ""
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "model_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "model_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "prompt_version",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_total",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempts_retried",
+        "type": "int",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_outcomes",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "attempt_elapsed_ms",
+        "type": "string",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "genkitruntime.model_plan_reads_decision",
+    "msg": "context fabric model decision",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "request_id",
+      "operation"
+    ],
+    "bounded_aggregation": "at most one line per investigation: one per PlanReads call, including a call that returned before the model was reached, and the engine calls the planner at most once per turn.",
+    "fields": [
+      {
+        "key": "request_id",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "org_id_hash",
+        "type": "string",
+        "presence": "required"
+      },
+      {
+        "key": "operation",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "plan_reads",
           ""
         ]
       },

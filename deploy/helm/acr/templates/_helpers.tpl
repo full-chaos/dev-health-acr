@@ -264,9 +264,6 @@ enforces that the migration DSN is not the runtime DSN reference.
 {{- $c := .Values.credentials -}}
 {{- $runtimeSecret := include "acr.requireSecretName" (dict "name" ($c.runtime.existingSecret | default "") "label" "invalid-secret-ref" "field" "credentials.runtime.existingSecret") -}}
 {{- $migrationSecret := include "acr.requireSecretName" (dict "name" ($c.migration.existingSecret | default "") "label" "invalid-secret-ref" "field" "credentials.migration.existingSecret") -}}
-{{- if include "acr.remoteEntitlement" . -}}
-{{- $_ := include "acr.requireSecretName" (dict "name" ($c.entitlementToken.existingSecret | default "") "label" "invalid-secret-ref" "field" "credentials.entitlementToken.existingSecret") -}}
-{{- end -}}
 {{- $runtimeKey := $c.runtime.postgresDsnKey | default "ACR_POSTGRES_DSN" -}}
 {{- $migrationKey := $c.migration.postgresDsnKey | default "ACR_POSTGRES_MIGRATION_DSN" -}}
 {{- if and (eq $runtimeSecret $migrationSecret) (eq $runtimeKey $migrationKey) -}}
@@ -489,24 +486,40 @@ remote token or CA inputs.
 {{- if (.Values.config.entitlement.url | default "") -}}true{{- end -}}
 {{- end -}}
 
+{{/* The validated credential string: null equals unset; any other non-string fails. */}}
+{{- define "acr.entitlementCredential" -}}
+{{- $v := .Values.config.entitlement.credential -}}
+{{- if kindIs "string" $v -}}{{- $v -}}
+{{- else if not (kindIs "invalid" $v) -}}
+{{- fail (printf "entitlement-credential: config.entitlement.credential must be a string (\"\" or workload), got %s" (kindOf $v)) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "acr.entitlementWorkload" -}}
+{{- if eq (include "acr.entitlementCredential" .) "workload" -}}true{{- end -}}
+{{- end -}}
+
 {{- define "acr.validateEntitlementOrigin" -}}
+{{- $credential := include "acr.entitlementCredential" . -}}
+{{- if not (has $credential (list "" "workload")) -}}
+{{- fail (printf "entitlement-credential: config.entitlement.credential %q must be \"\" or workload (the service token credential was removed; acr-api sends its auth workload token)" $credential) -}}
+{{- end -}}
 {{- $url := .Values.config.entitlement.url | default "" -}}
 {{- $environment := .Values.config.environment -}}
-{{- $tokenSecret := .Values.credentials.entitlementToken.existingSecret | default "" -}}
 {{- $caSecret := .Values.config.entitlementCaBundle.existingSecret | default "" -}}
 {{- if $url -}}
 {{- if not (regexMatch "^https?://[^/@?#]+$" $url) -}}
 {{- fail (printf "entitlement-origin: config.entitlement.url %q must be an HTTP(S) origin only (http or https scheme, host[:port], no userinfo, path, query, or fragment)" $url) -}}
 {{- end -}}
-{{- if not $tokenSecret -}}
-{{- fail "entitlement-partial: credentials.entitlementToken.existingSecret is required when config.entitlement.url is set" -}}
+{{- if not .Values.authWorkloadClient.enabled -}}
+{{- fail "entitlement-workload: config.entitlement.url requires authWorkloadClient.enabled=true (the entitlement client sends a workload token)" -}}
 {{- end -}}
 {{- else -}}
-{{- if or (eq $environment "staging") (eq $environment "production") -}}
-{{- fail (printf "entitlement-remote-required: config.entitlement.url and credentials.entitlementToken.existingSecret are required in %s" $environment) -}}
+{{- if include "acr.entitlementWorkload" . -}}
+{{- fail "entitlement-workload: config.entitlement.credential=workload requires config.entitlement.url" -}}
 {{- end -}}
-{{- if $tokenSecret -}}
-{{- fail "entitlement-partial: credentials.entitlementToken.existingSecret must be empty when local entitlement is selected" -}}
+{{- if or (eq $environment "staging") (eq $environment "production") -}}
+{{- fail (printf "entitlement-remote-required: config.entitlement.url and authWorkloadClient are required in %s" $environment) -}}
 {{- end -}}
 {{- if $caSecret -}}
 {{- fail "entitlement-partial: config.entitlementCaBundle.existingSecret must be empty when local entitlement is selected" -}}
@@ -531,7 +544,6 @@ content (which Helm cannot observe directly).
 {{- $c := .Values.credentials -}}
 runtime={{ $c.runtime.existingSecret | default "" }}:{{ $c.runtime.postgresDsnKey | default "" }}:{{ $c.runtime.clickhouseDsnKey | default "" }}:{{ $c.runtime.poolerAdminDsnKey | default "" }}:{{ $c.runtime.evidenceIdActiveKidKey | default "" }}:{{ $c.runtime.evidenceIdKeysKey | default "" }}
 migration={{ $c.migration.existingSecret | default "" }}:{{ $c.migration.postgresDsnKey | default "" }}:{{ $c.migration.poolerAdminDsnKey | default "" }}
-entitlement={{ $c.entitlementToken.existingSecret | default "" }}:{{ $c.entitlementToken.key | default "" }}
 pullSecrets={{ range .Values.imagePullSecrets }}{{ .name | default "" }},{{ end }}
 rotationRevision={{ $c.rotationRevision | default "" }}
 {{- end -}}
@@ -731,7 +743,7 @@ env entry beats the ConfigMap (envFrom) silently, so the two together would
 leave the value unread. extraEnv alone (no value set) still renders.
 */}}
 {{- define "acr.validateEnvValueSources" -}}
-{{- $fromValues := dict "ACR_TRUSTED_PROXY_CIDRS" (and .Values.config.trustedProxyCidrs "config.trustedProxyCidrs") "ACR_CORS_ALLOWED_ORIGINS" (and (default dict .Values.config.cors).allowedOrigins "config.cors.allowedOrigins") -}}
+{{- $fromValues := dict "ACR_TRUSTED_PROXY_CIDRS" (and .Values.config.trustedProxyCidrs "config.trustedProxyCidrs") "ACR_CORS_ALLOWED_ORIGINS" (and (default dict .Values.config.cors).allowedOrigins "config.cors.allowedOrigins") "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL" (and (include "acr.entitlementCredential" .) "config.entitlement.credential") -}}
 {{- range $env := .Values.deployment.extraEnv -}}
 {{- $name := toString $env.name -}}
 {{- with (get $fromValues $name) -}}

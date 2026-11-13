@@ -93,6 +93,7 @@ func seedChaos4108DualArmFixture(t *testing.T, ctx context.Context, direct inter
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	mustSeed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -142,7 +143,7 @@ func TestQueryWorkItemProjectsResolvesTheProjectKeyArm(t *testing.T) {
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
 	seedChaos4108DualArmFixture(t, ctx, direct, at)
 
-	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	source, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 	if err != nil {
 		t.Fatalf("NewTeamsProjectsSource: %v", err)
 	}
@@ -205,7 +206,7 @@ func TestGitLabColumnArmProducesNoProjectEdgeAnymore(t *testing.T) {
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
 	seedChaos4108DualArmFixture(t, ctx, direct, at)
 
-	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	source, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 	if err != nil {
 		t.Fatalf("NewTeamsProjectsSource: %v", err)
 	}
@@ -270,6 +271,7 @@ func TestAmbiguousProjectKeyIsCountedOncePerPresenceRow(t *testing.T) {
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	createOwnershipGroupsStore(t, ctx, direct)
 	mustSeed := func(label, statement string, args ...any) {
 		t.Helper()
 		if err := direct.Exec(ctx, statement, args...); err != nil {
@@ -291,7 +293,7 @@ func TestAmbiguousProjectKeyIsCountedOncePerPresenceRow(t *testing.T) {
 		chaos4193AmbiguousFanoutWorkItemID, zeroRepositoryUUID, chaos4193AmbiguousFanoutOrgID, "Fanout issue", "open", "", "", "linear", chaos4193AmbiguousFanoutSharedKey, at)
 
 	logged := &bytes.Buffer{}
-	source, err := devhealthsource.NewTeamsProjectsSource(query, true)
+	source, err := devhealthsource.NewTeamsProjectsSource(newStoredGroupsClient(query, direct), true)
 	if err != nil {
 		t.Fatalf("NewTeamsProjectsSource: %v", err)
 	}

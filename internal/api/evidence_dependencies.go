@@ -85,6 +85,9 @@ type Dependencies struct {
 	Runtime              *RuntimeDependencies
 	ClientIP             auth.ClientIPResolver
 	WebAssertions        *auth.WebAssertionVerifier
+	// ApprovalDecisions is the approver check of a device or consent approval
+	// (CHAOS-13586); nil asks nothing.
+	ApprovalDecisions *auth.ApprovalDecisions
 	// MCPHop is the acr-mcp hop check (CHAOS-12094); nil requires none.
 	MCPHop *auth.MCPHopPolicy
 	// WebAssertionReplays is the shared used-id record the hosted runtime
@@ -114,14 +117,16 @@ type App struct {
 	runtime              *RuntimeDependencies
 	authenticator        *auth.Authenticator
 	credentialService    *auth.Service
-	deviceFlow           *auth.DeviceFlowService
-	oauth                *auth.OAuthService
-	oauthConsentURL      string
-	clientIP             auth.ClientIPResolver
-	usageTelemetry       *auth.UsageTelemetry
-	mcpHop               *auth.MCPHopPolicy
-	metrics              *hostedmetrics.Instruments
-	closers              appClosers
+	// organizationRevokeBatch overrides auth.OrganizationRevokeBatch (tests); zero keeps it.
+	organizationRevokeBatch int
+	deviceFlow              *auth.DeviceFlowService
+	oauth                   *auth.OAuthService
+	oauthConsentURL         string
+	clientIP                auth.ClientIPResolver
+	usageTelemetry          *auth.UsageTelemetry
+	mcpHop                  *auth.MCPHopPolicy
+	metrics                 *hostedmetrics.Instruments
+	closers                 appClosers
 	// readinessTransitions (dictation 811) tracks the last OBSERVED /readyz
 	// outcome -- aggregate AND per-check -- so handleReady can log a
 	// transition line whenever either actually changes, instead of one
@@ -197,7 +202,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 			return nil, errors.New("hosted read runtime requires request controls")
 		}
 		var err error
-		authenticator, err = auth.NewAuthenticator(deps.Runtime.Credentials, deps.Runtime.Audit, auth.AuthenticatorOptions{Now: deps.Now, Limiter: deps.AuthAttempts, Logger: logger, ClientIP: deps.ClientIP, WebAssertions: deps.WebAssertions, UsageTelemetry: deps.UsageTelemetry, MCPHop: deps.MCPHop})
+		authenticator, err = auth.NewAuthenticator(deps.Runtime.Credentials, deps.Runtime.Audit, auth.AuthenticatorOptions{Now: deps.Now, Limiter: deps.AuthAttempts, Logger: logger, ClientIP: deps.ClientIP, WebAssertions: deps.WebAssertions, UsageTelemetry: deps.UsageTelemetry, MCPHop: deps.MCPHop, OrgPresence: organizationPresence(deps.Runtime.Entitlements)})
 		if err != nil {
 			return nil, err
 		}
@@ -220,7 +225,7 @@ func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error)
 		if deps.Runtime.OAuth != nil {
 			oauthDeviceGrants = deps.Runtime.OAuth.Store
 		}
-		deviceFlow, err = auth.NewDeviceFlowService(deps.Runtime.DeviceAuthorizations, credentialService, auth.DeviceFlowOptions{Now: deps.Now, OAuthDeviceGrants: oauthDeviceGrants})
+		deviceFlow, err = auth.NewDeviceFlowService(deps.Runtime.DeviceAuthorizations, credentialService, auth.DeviceFlowOptions{Now: deps.Now, OAuthDeviceGrants: oauthDeviceGrants, Organizations: organizationPresence(deps.Runtime.Entitlements), ApprovalDecisions: deps.ApprovalDecisions})
 		if err != nil {
 			return nil, err
 		}
@@ -295,7 +300,11 @@ func (a *App) ProtectedHandler(class limits.RequestClass, next http.Handler) htt
 }
 
 func (a *App) AuthenticatedHandler(credentials storage.CredentialStore, audit storage.AuditStore, class limits.RequestClass, next http.Handler) (http.Handler, error) {
-	authenticator, err := auth.NewAuthenticator(credentials, audit, auth.AuthenticatorOptions{Now: a.now, Limiter: a.authAttempts, Logger: a.logger, ClientIP: a.clientIP, UsageTelemetry: a.usageTelemetry, MCPHop: a.mcpHop})
+	var orgPresence auth.OrganizationPresence
+	if a.runtime != nil {
+		orgPresence = organizationPresence(a.runtime.Entitlements)
+	}
+	authenticator, err := auth.NewAuthenticator(credentials, audit, auth.AuthenticatorOptions{Now: a.now, Limiter: a.authAttempts, Logger: a.logger, ClientIP: a.clientIP, UsageTelemetry: a.usageTelemetry, MCPHop: a.mcpHop, OrgPresence: orgPresence})
 	if err != nil {
 		return nil, err
 	}

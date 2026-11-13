@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -38,9 +39,21 @@ var (
 	// that impersonates another user (CHAOS-12123, chris decision 6: deny
 	// all while impersonating). It is an ErrInvalidDeviceFlow.
 	ErrImpersonatedApproval = fmt.Errorf("%w: the approving web session is impersonating", ErrInvalidDeviceFlow)
+	// ErrApprovalOrganizationGone and ErrApprovalOrganizationDisabled refuse an approval whose organization Dev
+	// Health, read fresh, answers as gone or as disabled.
+	ErrApprovalOrganizationGone     = fmt.Errorf("%w: the organization is gone", ErrInvalidDeviceFlow)
+	ErrApprovalOrganizationDisabled = fmt.Errorf("%w: the organization is disabled", ErrInvalidDeviceFlow)
 	// ErrBrowserSessionRequired refuses a browser-class redemption whose
 	// approval named no web session. It is an ErrInvalidDeviceFlow.
 	ErrBrowserSessionRequired = fmt.Errorf("%w: a browser credential needs the approving web session", ErrInvalidDeviceFlow)
+	// ErrTooManyRepositories refuses an approval that names more than
+	// contractsv1.MaxRepositoryScopes repositories (CHAOS-13562). It is an
+	// ErrInvalidDeviceFlow.
+	ErrTooManyRepositories = fmt.Errorf("%w: %w", ErrInvalidDeviceFlow, contractsv1.ErrTooManyRepositoryScopes)
+	// ErrApprovalScopesDiffer refuses an approval whose assertion claim names
+	// a repository list other than the body's (CHAOS-13562). It is an
+	// ErrInvalidDeviceFlow.
+	ErrApprovalScopesDiffer = fmt.Errorf("%w: the assertion's repository scopes differ from the body's", ErrInvalidDeviceFlow)
 )
 
 type DeviceFlowOptions struct {
@@ -58,6 +71,12 @@ type DeviceFlowOptions struct {
 	// leaving this unset, so "OAuth is genuinely off" and "OAuth is on but
 	// someone forgot to wire the lookup" can never be the same nil.
 	OAuthDeviceGrants OAuthDeviceGrantLookup
+	// Organizations is read fresh before an approval and before a redemption: a gone or disabled organization gets
+	// neither, and an unreadable answer fails closed. Nil (local entitlement mode) checks nothing.
+	Organizations OrganizationPresence
+	// ApprovalDecisions asks the policy decision point about the approver once per approval, after every local
+	// check and before the approval is stored (CHAOS-13586). Nil asks nothing.
+	ApprovalDecisions *ApprovalDecisions
 }
 
 type DeviceFlowService struct {
@@ -67,6 +86,8 @@ type DeviceFlowService struct {
 	random            io.Reader
 	randomMu          sync.Mutex
 	oauthDeviceGrants OAuthDeviceGrantLookup
+	organizations     OrganizationPresence
+	approvals         *ApprovalDecisions
 }
 
 type DeviceAuthorizationStart struct {
@@ -90,6 +111,9 @@ type DeviceApprovalRequest struct {
 type DeviceApprovalPreviewRequest struct {
 	Principal storage.Principal
 	UserCode  string
+	// RepositoryScopes is the grant the body names (CHAOS-13562); nil when the
+	// body names none and the assertion's claim carries it.
+	RepositoryScopes []string
 }
 
 type DeviceApprovalPreview struct {
@@ -141,10 +165,23 @@ func NewDeviceFlowService(store storage.DeviceAuthorizationStore, credentials *S
 	if storage.IsNil(options.OAuthDeviceGrants) {
 		return nil, fmt.Errorf("%w: OAuthDeviceGrants is required (pass NoOAuthDeviceGrants{} when OAuth login is not configured)", ErrInvalidDeviceFlow)
 	}
+	organizations := options.Organizations
+	if storage.IsNil(organizations) {
+		organizations = nil
+	}
 	return &DeviceFlowService{
 		store: store, credentials: credentials, now: options.Now, random: options.Random,
-		oauthDeviceGrants: options.OAuthDeviceGrants,
+		oauthDeviceGrants: options.OAuthDeviceGrants, organizations: organizations, approvals: options.ApprovalDecisions,
 	}, nil
+}
+
+// checkOrganization reads orgID's state from Dev Health, never from a cache: ErrOrganizationGone,
+// ErrOrganizationDisabled, another error when the answer cannot be read, nil when live or when no check is wired.
+func (s *DeviceFlowService) checkOrganization(ctx context.Context, orgID string) error {
+	if s.organizations == nil {
+		return nil
+	}
+	return s.organizations.OrganizationKnownNow(ctx, orgID)
 }
 
 func (s *DeviceFlowService) Start(ctx context.Context, hints DeviceAuthorizationHints) (DeviceAuthorizationStart, error) {
@@ -196,9 +233,9 @@ func (s *DeviceFlowService) Preview(ctx context.Context, request DeviceApprovalP
 	if err != nil {
 		return DeviceApprovalPreview{}, fmt.Errorf("preview device authorization: %w", err)
 	}
-	principalRepositories, err := normalizedPrincipalRepositories(request.Principal)
+	principalRepositories, err := previewRepositoryCeiling(request.Principal, request.RepositoryScopes)
 	if err != nil {
-		return DeviceApprovalPreview{}, ErrInvalidDeviceFlow
+		return DeviceApprovalPreview{}, err
 	}
 	if record.OrganizationIDHint != "" && record.OrganizationIDHint != request.Principal.OrgID {
 		return DeviceApprovalPreview{}, ErrInvalidDeviceFlow
@@ -265,9 +302,20 @@ func (s *DeviceFlowService) approveUserCodeHash(ctx context.Context, principal s
 	if err != nil {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
 	}
-	principalRepositories, err := normalizedPrincipalRepositories(principal)
+	if len(repositories) > contractsv1.MaxRepositoryScopes {
+		return storage.DeviceAuthorization{}, ErrTooManyRepositories
+	}
+	switch err := s.checkOrganization(ctx, principal.OrgID); {
+	case errors.Is(err, ErrOrganizationGone):
+		return storage.DeviceAuthorization{}, ErrApprovalOrganizationGone
+	case errors.Is(err, ErrOrganizationDisabled):
+		return storage.DeviceAuthorization{}, ErrApprovalOrganizationDisabled
+	case err != nil:
+		return storage.DeviceAuthorization{}, fmt.Errorf("check approving organization: %w", err)
+	}
+	principalRepositories, err := approvalRepositoryCeiling(principal, repositories)
 	if err != nil {
-		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
+		return storage.DeviceAuthorization{}, err
 	}
 	record, err := s.store.Preview(ctx, userCodeHash)
 	if err != nil {
@@ -283,6 +331,10 @@ func (s *DeviceFlowService) approveUserCodeHash(ctx context.Context, principal s
 		}
 	} else if hasRepositoryWildcard(repositories) || !repositoriesWithinGrant(principalRepositories, repositories) {
 		return storage.DeviceAuthorization{}, ErrInvalidDeviceFlow
+	}
+	// The approver decision (CHAOS-13586; web docs/auth-acr-device-approval.md): last, before the approval is stored.
+	if err := s.approvals.Check(ctx, principal, repositories); err != nil {
+		return storage.DeviceAuthorization{}, err
 	}
 	record, err = s.store.Approve(ctx, userCodeHash, storage.DeviceAuthorizationGrant{
 		OrgID:                         principal.OrgID,
@@ -340,6 +392,49 @@ func hasRepositoryWildcard(repositories []string) bool {
 		}
 	}
 	return false
+}
+
+// approvalRepositoryCeiling is the repository grant an approval is checked
+// against (CHAOS-13562). An assertion without the repository_scopes claim
+// grants exactly the list its bound body names; an assertion with the claim
+// must name the same list as the body, else the approval is refused.
+func approvalRepositoryCeiling(principal storage.Principal, repositories []string) ([]string, error) {
+	if principal.RepositoryScopesInBody {
+		if len(principal.RepositoryScopes) != 0 {
+			return nil, ErrInvalidDeviceFlow
+		}
+		return repositories, nil
+	}
+	principalRepositories, err := normalizedPrincipalRepositories(principal)
+	if err != nil {
+		return nil, ErrInvalidDeviceFlow
+	}
+	if !slices.Equal(principalRepositories, repositories) {
+		return nil, ErrApprovalScopesDiffer
+	}
+	return principalRepositories, nil
+}
+
+// previewRepositoryCeiling is the grant a preview filters the hints by
+// (CHAOS-13562). A body that names a list is read under the approval's rule
+// (approvalRepositoryCeiling); a body that names none keeps the earlier form,
+// where the assertion's claim carries the grant.
+func previewRepositoryCeiling(principal storage.Principal, bodyScopes []string) ([]string, error) {
+	if bodyScopes == nil {
+		repositories, err := normalizedPrincipalRepositories(principal)
+		if err != nil {
+			return nil, ErrInvalidDeviceFlow
+		}
+		return repositories, nil
+	}
+	repositories, err := NormalizeRepositoryScopes(bodyScopes)
+	if err != nil {
+		return nil, ErrInvalidDeviceFlow
+	}
+	if len(repositories) > contractsv1.MaxRepositoryScopes {
+		return nil, ErrTooManyRepositories
+	}
+	return approvalRepositoryCeiling(principal, repositories)
 }
 
 func repositoriesWithinGrant(grant, selected []string) bool {

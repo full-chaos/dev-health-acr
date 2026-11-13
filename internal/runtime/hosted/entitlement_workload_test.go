@@ -39,7 +39,6 @@ type workloadStack struct {
 	cfg          config.Config
 	audiences    func() []string
 	opsAuthz     func() []string
-	tokenFile    string
 	subjectToken string
 }
 
@@ -71,24 +70,22 @@ func newWorkloadStack(t *testing.T, credential string) workloadStack {
 	if err := os.WriteFile(subject, []byte(enc.EncodeToString([]byte(`{"alg":"RS256"}`))+"."+enc.EncodeToString([]byte(`{"sub":"x"}`))+"."+enc.EncodeToString([]byte("sig"))+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	tokenFile := filepath.Join(dir, "svc-token-never-created")
 	return workloadStack{
 		cfg: config.Config{
-			Environment: "production", DevHealthEntitlementURL: ops.URL, DevHealthEntitlementTokenFile: tokenFile,
+			Environment: "production", DevHealthEntitlementURL: ops.URL,
 			DevHealthEntitlementCredential: credential,
 			AuthWorkload:                   config.AuthWorkloadConfig{ExchangeURL: exchange.URL, AllowPlainHTTP: true, Issuer: workloadTestIssuer, SubjectFile: subject},
 		},
 		audiences: func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), audiences...) },
 		opsAuthz:  func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), authz...) },
-		tokenFile: tokenFile,
 	}
 }
 
-func TestNewEntitlementWorkloadSendsAnExchangedTokenAndNeverOpensTheTokenFile(t *testing.T) {
+func TestNewEntitlementWorkloadSendsAnExchangedToken(t *testing.T) {
 	stack := newWorkloadStack(t, "workload")
 	provider, err := newEntitlement(stack.cfg, entitlementDeps{})
 	if err != nil {
-		t.Fatalf("newEntitlement with a token file path that does not exist: %v", err)
+		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = provider.Close() })
 	if err := provider.Check(context.Background()); err != nil {
@@ -103,11 +100,8 @@ func TestNewEntitlementWorkloadSendsAnExchangedTokenAndNeverOpensTheTokenFile(t 
 	}
 }
 
-func TestNewEntitlementServiceTokenDefaultReadsTheTokenFileAndNeverExchanges(t *testing.T) {
+func TestNewEntitlementUnsetCredentialSendsTheWorkloadToken(t *testing.T) {
 	stack := newWorkloadStack(t, "")
-	if err := os.WriteFile(stack.tokenFile, []byte("svc_acr_test-value\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	provider, err := newEntitlement(stack.cfg, entitlementDeps{})
 	if err != nil {
 		t.Fatal(err)
@@ -116,11 +110,11 @@ func TestNewEntitlementServiceTokenDefaultReadsTheTokenFileAndNeverExchanges(t *
 	if err := provider.Check(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := stack.opsAuthz(); len(got) != 1 || got[0] != "Bearer svc_acr_test-value" {
-		t.Fatalf("ops saw %q", got)
+	if got := stack.opsAuthz(); len(got) != 1 || !strings.HasPrefix(got[0], "Bearer ey") {
+		t.Fatalf("ops saw %q, want one workload token", got)
 	}
-	if got := stack.audiences(); len(got) != 0 {
-		t.Fatalf("the exchange was called in service_token mode: %v", got)
+	if got := stack.audiences(); len(got) != 1 || got[0] != "dev-health-api" {
+		t.Fatalf("exchange audiences = %v, want [dev-health-api]", got)
 	}
 }
 
