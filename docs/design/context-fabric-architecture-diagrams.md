@@ -1,15 +1,15 @@
-# Context Fabric architecture diagrams (CHAOS-4133)
+# Context Fabric architecture diagrams
 
 Mermaid diagrams covering the question-answering pipeline, the
-candidate-pool mechanism that hid CHAOS-4348, the subject/graph entity
+candidate-pool mechanism that hid the subject-pool reachability fix, the subject/graph entity
 tree (§3), the fact data model, the two-turn trial harness's measurement
-fields, and the N-turn confirmation-carry class (CHAOS-4360). Built
+fields, and the N-turn confirmation-carry class. Built
 against live code (`codegraph_explore`, file:line cited
 throughout) and the live kiac trial graph (`kubectl exec ... redis-cli
 GRAPH.QUERY`, counts only, org `70d529e0-3c06-4597-8480-794fd02328b6`,
 graph key `acr-cf-fa7030e2106de7411bfbf8ebce74c620-e2`).
 
-Why this page exists (chris, 2026-08-26): a same-day incident (CHAOS-4348)
+Why this page exists (chris, 2026-08-26): a same-day incident
 would have been caught immediately by a diagram that drew the candidate-pool
 vs. offer-only-pool split. Before this page, `acr/docs` had four mermaid
 blocks total and none of them drew that split.
@@ -37,7 +37,7 @@ claims to depict is worse than no diagram.
 
 **Related (2026-08-28):** cohort/team subject resolution — the full subject
 model, the corrected team-authorization and cohort-retrieval root causes, the
-cohort ranking + drivers + Rows pipeline, and the score formula for CHAOS-4398
+cohort ranking + drivers + Rows pipeline, and the score formula for the subject-model and cohort-answer design
 — is covered in
 [context-fabric-subject-model-and-cohort-answers.md](context-fabric-subject-model-and-cohort-answers.md),
 not repeated here.
@@ -65,47 +65,47 @@ flowchart TD
   REUSEGATE -->|"bypass: this turn confirmed structure,<br/>named a prior-subject receipt, or names<br/>ANY prior result the carries can walk<br/>(keyed on carryReferencedResultIDs --<br/>the carries' own seed population, so the<br/>two cannot drift). Reason counted on<br/>cf answer reuse bypass"| INTERP
   REUSEGATE -->|"no bypass: tryReuse.<br/>a HIT RETURNS TO THE CALLER here --<br/>zero model calls, and before every<br/>carry below, which is why a carriable<br/>turn must never reach this arm.<br/>A miss falls through"| INTERP
   INTERP["Interpret (model call)<br/>RuntimeQuestionInterpreter.Interpret<br/>model_runtime.go:510"]
-  INTERP --> READFB{"read fallback, CHAOS-13002<br/>decideReadFallback (read_fallback_engine.go)<br/>F1: a ranking family asked for a judgment<br/>its attention measure cannot serve<br/>F3: a listed kind no capability serves<br/>for the member kind<br/>switch ON: one plan_reads model call,<br/>plan validated by ValidateReadPlan"}
-  READFB -->|"applied: the planner's kinds widen the plan LAST,<br/>answer_plan.fallback, the service sentence,<br/>saved never reusable"| PLANSTAGE["<b>PlanAnswer</b> -- deterministic, NO model call<br/>chaos4636_answer_plan.go (CHAOS-4636 / S5)<br/>family definition x interpretation x budget<br/>-> AnswerPlan (persisted on the result)"]
+  INTERP --> READFB{"read fallback, the model-planned-reads change<br/>decideReadFallback (read_fallback_engine.go)<br/>F1: a ranking family asked for a judgment<br/>its attention measure cannot serve<br/>F3: a listed kind no capability serves<br/>for the member kind<br/>switch ON: one plan_reads model call,<br/>plan validated by ValidateReadPlan"}
+  READFB -->|"applied: the planner's kinds widen the plan LAST,<br/>answer_plan.fallback, the service sentence,<br/>saved never reusable"| PLANSTAGE["<b>PlanAnswer</b> -- deterministic, NO model call<br/>chaos4636_answer_plan.go (the grouped-cohort budget work / S5)<br/>family definition x interpretation x budget<br/>-> AnswerPlan (persisted on the result)"]
   READFB -->|"not_applicable / suppressed_flag_off /<br/>planner_failed / plan_invalid:<br/>the family plan, unchanged"| PLANSTAGE
   PLANSTAGE --> PLANCARRY{"plan carry, ONE hop<br/>resolveCarriedPlan (chaos4636_plan_carry.go)<br/>-- ONLY when this turn resolved no family<br/>carries family / group kind / narrowing basis<br/><b>NEVER the member list</b> (check 18)"}
   PLANCARRY --> STRUCT
   STRUCT["structure needs: kind / anchor / handle / window<br/>composeEffectiveWindow (window.go)<br/>canonicalizeStructure (chaos3900)"]
-  STRUCT --> CARRY{"CHAOS-4360 same-conversation<br/>window carry<br/>resolveCarriedWindow<br/>(chaos4360_carry.go)<br/>-- ONLY when effectiveWindow<br/>would be inferred_default"}
-  CARRY -->|"hit: nearest chain confirmation<br/>found (bounded walk,<br/>CHAOS-3898 taint gate applied)<br/>effectiveWindow REPLACED,<br/>Source=carried disclosed on<br/>ConfirmedStructure -- never<br/>re-accepts a receipt, the<br/>IsStructureSuperseded guard<br/>is untouched"| KINDCARRY
+  STRUCT --> CARRY{"the same-conversation evidence-window carry change same-conversation<br/>window carry<br/>resolveCarriedWindow<br/>(chaos4360_carry.go)<br/>-- ONLY when effectiveWindow<br/>would be inferred_default"}
+  CARRY -->|"hit: nearest chain confirmation<br/>found (bounded walk,<br/>the graph-lifecycle design taint gate applied)<br/>effectiveWindow REPLACED,<br/>Source=carried disclosed on<br/>ConfirmedStructure -- never<br/>re-accepts a receipt, the<br/>IsStructureSuperseded guard<br/>is untouched"| KINDCARRY
   CARRY -->|"miss: no reference / unloadable /<br/>stale_graph_epoch / no_confirmed_window /<br/>depth_exceeded"| KINDCARRY
   KINDCARRY{"same-conversation expected_kind carry<br/>resolveCarriedKind (structure_axis_carry.go)<br/>-- ONLY when this turn states no kind of its own,<br/>by RECEIPT or EXPLICITLY (any number of<br/>expected_kinds values blocks it);<br/>receipt/carried sources ONLY.<br/>Runs whether or not the window carried:<br/>the two axes are independent and<br/>neither may suppress the other"}
   KINDCARRY -->|"hit: effectiveConfirmedKind feeds<br/>ResolveSubjects' *ConfirmedExpectedKind<br/>(pool filter, and through it the kind<br/>offer's own cardinality suppression),<br/>Source=carried disclosed on EVERY result<br/>shape, the save-time supersession veto<br/>terminal included.<br/>A kind stated THIS turn always wins"| WGATE
   KINDCARRY -->|"miss: no reference / unloadable /<br/>stale_graph_epoch / no_confirmed_kind /<br/>depth_exceeded / conflicting_kinds"| WGATE
-  WGATE{"class-default window gate<br/>WindowCanonicalizationGatedClassDefault<br/>CHAOS-4040/4234"}
+  WGATE{"class-default window gate<br/>WindowCanonicalizationGatedClassDefault<br/>the inferred-window gate and turn-1 offers change"}
   WGATE -->|"regime A: inferred_default"| GATED["gatedOfferMaterial<br/>chaos4234_offers_only.go"]
   GATED --> OFFRES["graph.ResolveSubjects(WithOffersOnlyResolution)<br/>same pool mechanism as regime B,<br/>commit-bearing output DISCARDED"]
-  OFFRES --> CLSGATE{"GateOffersByFamily<br/>family ApplicableAxes gate, CHAOS-4634<br/>(subsumes CHAOS-4579/4531)<br/>chaos4579_cohort_structure_gate.go"}
+  OFFRES --> CLSGATE{"GateOffersByFamily<br/>family ApplicableAxes gate, the family-gate planning change<br/>(subsumes the family ApplicableAxes gate)<br/>chaos4579_cohort_structure_gate.go"}
   CLSGATE -->|"family=discovered_cohort_ranking:<br/>only window applicable -> drop kind/anchor/handle/candidate<br/>rows AND their options together"| WDEC
   CLSGATE -->|"family=subject_investigation / explicit_comparison / unclassified:<br/>no axis restricted -> pass through,<br/>standing zero-candidates ruling unchanged"| WDEC
-  WDEC{"decideInferredWindowGate (window.go, CHAOS-4451)<br/>line contextfabric.inferred_window_gate"}
+  WDEC{"decideInferredWindowGate (window.go)<br/>line contextfabric.inferred_window_gate"}
   WDEC -->|"gated: offers_unavailable /<br/>period_shape / offers_beyond_window"| WOFFER
   WDEC -->|"answered: window_only -- decisive path on the<br/>inferred window (provenance kept inferred_default),<br/>window offer + window-only structure_needs beside the answer"| RESOLVE
   WOFFER["windowConfirmationRequiredResult<br/>status=clarification_required, SubjectResolution EMPTY<br/>kind/handle/candidate offers minted BESIDE window offer"]
-  WGATE -->|"regime B: explicit / confirmed window"| RESOLVE["graphrank.ResolveSubjects<br/>ResolveDeps: Search / SearchQuestion / SearchKind /<br/>AliasLookup + CHAOS-4038 coverage floor<br/>(see diagram 2)"]
-  RESOLVE --> POOL["candidate pool split:<br/>pool (commit-eligible) vs offerOnlyPool (CHAOS-4271)<br/>-- see diagram 2 for why this matters"]
+  WGATE -->|"regime B: explicit / confirmed window"| RESOLVE["graphrank.ResolveSubjects<br/>ResolveDeps: Search / SearchQuestion / SearchKind /<br/>AliasLookup + the kind-scoped coverage-floor change coverage floor<br/>(see diagram 2)"]
+  RESOLVE --> POOL["candidate pool split:<br/>pool (commit-eligible) vs offerOnlyPool<br/>-- see diagram 2 for why this matters"]
   POOL --> GATE1["ResolveFromMergedCandidatesWithGateAndBasis<br/>resolution.go:401 -- corroboration -> ranked_cut -> commit decision"]
   GATE1 --> TEAMANCHOR{"scope anchor is a team,<br/>zero committed, candidates exist?<br/>uncommitted_team_anchor.go"}
   TEAMANCHOR -->|"yes: terminal BEFORE DiscoverContext,<br/>clarification_required naming the candidates<br/>(cues: kind on a cross-kind label, provider on a same-label collision,<br/>shortest unique id suffix, then a numbered ordinal), no cohort"| STATUS
   TEAMANCHOR -->|"no"| DISCOVER
   DISCOVER["DiscoverContext<br/>cohort + structure offers, falkorgraph/reader.go"]
-  DISCOVER --> SCOPE["FactReadScopeResolver<br/>fact_scope.go -- CHAOS-4099, activated<br/>project/team origin -> activity-proxy / attributed-team expansion"]
+  DISCOVER --> SCOPE["FactReadScopeResolver<br/>fact_scope.go -- the unreachable-fact-family disclosure change, activated<br/>project/team origin -> activity-proxy / attributed-team expansion"]
   SCOPE --> PLAN["planFactReads<br/>fact_planner.go:183 -- per-capability<br/>SupportedSubjectKinds partition: prune / narrow / run"]
-  PLAN -->|"no supported subject, no scope gap"| PRUNE["pruned (coverage detail code fact_pruned)<br/>proof of absence (CHAOS-3783)"]
-  PLAN -->|"no supported subject, scope gap disclosed"| UNEXP["unexpanded (outcome on the coverage detail)<br/>CHAOS-4099 -- honest 'reachable but not read'<br/>NEVER SourcePruned"]
+  PLAN -->|"no supported subject, no scope gap"| PRUNE["pruned (coverage detail code fact_pruned)<br/>proof of absence"]
+  PLAN -->|"no supported subject, scope gap disclosed"| UNEXP["unexpanded (outcome on the coverage detail)<br/>the unreachable-fact-family disclosure change -- honest 'reachable but not read'<br/>NEVER SourcePruned"]
   PLAN -->|"some/all subjects supported"| READ["FactCapabilityRegistry.ReadFacts<br/>fan-out over devhealthfacts providers (ClickHouse)<br/>-- see diagram 4"]
 
-  READ --> ROUTE{"project subject:<br/>does the source carry work_scope_id?<br/>CHAOS-4521b"}
+  READ --> ROUTE{"project subject:<br/>does the source carry work_scope_id?<br/>the empty-read availability fixb"}
   ROUTE -->|"YES -- flow / readiness / workload<br/>work_scope_id IS work_items.project_id"| OWN["ProjectIdentityJoinSQL + MatchSQL<br/>match on (projects.id OR projects.project_key)<br/>NO team-ownership hop"]
   ROUTE -->|"NO -- health / investment / landscape<br/>team/repo-scoped by construction"| HOP["ProjectOwnershipJoinSQL<br/>keyed on ProjectOwnershipJoinColumn (project_id)<br/>+ tpo.provider = p.provider<br/>empty ⇒ no_data + teamScopedProjectReason"]
   OWN --> ZERO
   HOP --> ZERO
-  ZERO{"rows matched?<br/>timebound.go retentionState<br/>CHAOS-4521"}
+  ZERO{"rows matched?<br/>timebound.go retentionState<br/>the empty-read availability fix"}
   ZERO -->|"rows > 0"| AVAIL["available<br/>(or truncated / stale)"]
   ZERO -->|"0 rows, current axis"| NODATA["<b>no_data</b> + emptyReadReason<br/>'reached and held no rows'<br/>-- NEVER available (check 12)"]
   ZERO -->|"0 rows, historical axis"| RETAIN["no_data + outOfRetentionReason<br/>'may predate the retained corpus'"]
@@ -117,18 +117,18 @@ flowchart TD
   UNEXP --> LEDGER
   NODATA --> LEDGER
   RETAIN --> LEDGER
-  LEDGER["recordFactRead ledger (CHAOS-4521)<br/>ONE record per PLANNED capability:<br/>kind · outcome (unconfigured / scope_gap / pruned / failed / completed / rejected / cancelled)<br/>· state · subjects · subject_kinds · facts · truncated<br/>closed vocabulary + counts only, no labels/IDs<br/>a read that ENDS the investigation carries ErrFactReadAborted<br/>-> failure_classification=fact_read_aborted, never unclassified"]
+  LEDGER["recordFactRead ledger<br/>ONE record per PLANNED capability:<br/>kind · outcome (unconfigured / scope_gap / pruned / failed / completed / rejected / cancelled)<br/>· state · subjects · subject_kinds · facts · truncated<br/>closed vocabulary + counts only, no labels/IDs<br/>a read that ENDS the investigation carries ErrFactReadAborted<br/>-> failure_classification=fact_read_aborted, never unclassified"]
   LEDGER --> BUNDLE["CanonicalFactBundle + Coverage"]
-  BUNDLE --> STAGE2["<b>budget stage 2</b> (CHAOS-4636) -- bound what synthesis is GIVEN<br/>chaos4636_grouped_cohort.go<br/>GROUP (owning team read off each member's own fact rows)<br/>-> NARROW (member-first, D2) -> RANK<br/>facts for removed members dropped WITH them<br/>(an ungrounded claim would fail closure)"]
-  STAGE2 --> SYN["Synthesize (model call)<br/>RuntimeAnswerSynthesizer.Synthesize<br/>model_runtime.go:596<br/><b>CHAOS-4355 follow-up:</b> modelFacingFacts<br/>(genkitruntime/runtime.go) drops every<br/>Rows-shaped field from canonical_facts<br/>BEFORE this prompt is sent<br/><b>input bound:</b> an input over the runtime's byte bound<br/>(ModelInputOverflow) is not sent -- synthesis_input_bound.go<br/>gives the model the same share of every fact kind,<br/>first in read order, committed subjects kept, no kind removed<br/>-> coverage.partial + a fixed limitation<br/>+ one synthesis_input_bounded coverage detail per fact kind (served of declared)<br/>WARN 'context fabric synthesis input bounded'<br/>a FAILED model call serves a degraded answer without model prose:<br/>synthesis_model_failed detail with failure_class + retry_hint<br/>a synthesis that ENDS the investigation carries ErrSynthesisAborted<br/>-> model_input_too_large / model_receipt_unrecorded /<br/>synthesis_aborted, never unclassified"]
-  SYN --> ROWS["attachCanonicalRows (CHAOS-4355)<br/>model-authored Rows STRIPPED + tolerated<br/>(cf_model_rows_stripped), never rejected --<br/>engine copies Rows verbatim from the canonical fact<br/>each claim cites -- model_runtime.go"]
-  ROWS --> OVERRIDE["applySynthesisStatusOverride<br/>CHAOS-4098 -- decisive clarification_required -> no_match<br/>runs BEFORE the commit gate"]
-  OVERRIDE --> GATE2{"CHAOS-4085 DP9 commit-affirmation gate<br/>applyCommitAffirmation<br/>chaos4085_commit_affirmation.go:447"}
+  BUNDLE --> STAGE2["<b>budget stage 2</b> -- bound what synthesis is GIVEN<br/>chaos4636_grouped_cohort.go<br/>GROUP (owning team read off each member's own fact rows)<br/>-> NARROW (member-first, D2) -> RANK<br/>facts for removed members dropped WITH them<br/>(an ungrounded claim would fail closure)"]
+  STAGE2 --> SYN["Synthesize (model call)<br/>RuntimeAnswerSynthesizer.Synthesize<br/>model_runtime.go:596<br/><b>the producer-rows synthesis change follow-up:</b> modelFacingFacts<br/>(genkitruntime/runtime.go) drops every<br/>Rows-shaped field from canonical_facts<br/>BEFORE this prompt is sent<br/><b>input bound:</b> an input over the runtime's byte bound<br/>(ModelInputOverflow) is not sent -- synthesis_input_bound.go<br/>gives the model the same share of every fact kind,<br/>first in read order, committed subjects kept, no kind removed<br/>-> coverage.partial + a fixed limitation<br/>+ one synthesis_input_bounded coverage detail per fact kind (served of declared)<br/>WARN 'context fabric synthesis input bounded'<br/>a FAILED model call serves a degraded answer without model prose:<br/>synthesis_model_failed detail with failure_class + retry_hint<br/>a synthesis that ENDS the investigation carries ErrSynthesisAborted<br/>-> model_input_too_large / model_receipt_unrecorded /<br/>synthesis_aborted, never unclassified"]
+  SYN --> ROWS["attachCanonicalRows<br/>model-authored Rows STRIPPED + tolerated<br/>(cf_model_rows_stripped), never rejected --<br/>engine copies Rows verbatim from the canonical fact<br/>each claim cites -- model_runtime.go"]
+  ROWS --> OVERRIDE["applySynthesisStatusOverride<br/>the clarification-status change -- decisive clarification_required -> no_match<br/>runs BEFORE the commit gate"]
+  OVERRIDE --> GATE2{"the no-commit refusal change DP9 commit-affirmation gate<br/>applyCommitAffirmation<br/>chaos4085_commit_affirmation.go:447"}
   GATE2 -->|"exempt / affirmed"| COMMIT["Commit subject(s)"]
   GATE2 -->|"refused"| RETRACT["Retract-only<br/>(fail-closed, never fabricates a commit)"]
   COMMIT --> STAGE3
   RETRACT --> STAGE3
-  STAGE3{"<b>budget stage 3</b> (CHAOS-4636) -- MEASURE the assembled result<br/>contractsv1.MeasureContextFabricResponse<br/>the SAME encoder + counts the route's 413 gate uses<br/>(one definition, imported by both planes)"}
+  STAGE3{"<b>budget stage 3</b> -- MEASURE the assembled result<br/>contractsv1.MeasureContextFabricResponse<br/>the SAME encoder + counts the route's 413 gate uses<br/>(one definition, imported by both planes)"}
   STAGE3 -->|"fits"| STATUS
   STAGE3 -->|"over budget, members left to narrow,<br/>reserved deadline available"| RESYN["RE-SYNTHESIZE ONCE with a smaller input<br/>synthesizeAndAssemble re-run (deep-copied)<br/>-- never trims a composed answer"]
   RESYN -->|"now fits"| STATUS
@@ -149,35 +149,35 @@ flowchart TD
 ```
 
 **Caption.** One investigation runs interpretation, a window gate that
-forks into a discard-heavy "offers-only" resolution (regime A, CHAOS-4234)
+forks into a discard-heavy "offers-only" resolution (regime A)
 or a decisive resolution (regime B), subject resolution against a split
 candidate pool, fact-scope expansion, fact planning, fact reads, synthesis,
 and a post-synthesis commit-affirmation gate, in that order. The amber node
 is today's open gap: the **candidate pool split** (diagram 2) is where
-CHAOS-4348 (project/team subjects silently excluded from the commit-eligible
-pool) and CHAOS-4347 (fact routing/coverage widening for those same kinds,
+Subject-pool reachability fix (project/team subjects silently excluded from the commit-eligible
+pool) and the status-category fact-kind work (fact routing/coverage widening for those same kinds,
 in progress as of 2026-08-26 17:52 PDT) both live. **Two items in the
 original brief for this diagram were verified stale and are corrected
 here, not drawn as gaps:**
-- **CHAOS-4171 (structure-offer renderer) is BUILT, not "not built."**
+- **Offer-phrasing change (structure-offer renderer) is BUILT, not "not built."**
   `ask-dev/src/components/StructureNeedsPanel.tsx` (547 lines) renders
-  kind/anchor/handle/window offers AND `CandidateOptionsSection` (CHAOS-4012)
+  kind/anchor/handle/window offers AND `CandidateOptionsSection`
   with model-generated `phrasing` per option; `.remember/today-2026-08-26.md:2`
-  records "CHAOS-4171/3478/4244 chain closed." Treat any doc or comment
+  records "the offer-phrasing change chain closed." Treat any doc or comment
   still citing an unbuilt renderer as stale.
-- CHAOS-4098 and CHAOS-4085 (the status-override and commit-affirmation
+- Clarification-status change and no-commit refusal change (the status-override and commit-affirmation
   gates) are shipped, ratified behavior — drawn `fixed`, not `gap`, matching
-  their state in the CHAOS-4061 retro diagrams
+  their state in the retro-diagram work retro diagrams
   (`.remember/retro-4061-diagrams-draft.md`, diagram 1) reused here for
   visual convention.
 
-**Updated 2026-08-27 (CHAOS-4355, `lane-4355-acr`): hop 5 (Rows render) is
-BUILT, not "not built."** CHAOS-4347 (#300) added `Rows` on
+**Updated 2026-08-27: hop 5 (Rows render) is
+BUILT, not "not built."** Status-category fact-kind work (#300) added `Rows` on
 `ContextFabricClaimedFact`/`ProjectedFact` additively but left them
 unreachable — `SynthesisDraft.ValidateAgainst` rejected any claim that set
 Rows (model-authored or otherwise), and nothing else set them, so a
 producer's renderable table (e.g. `MetricsProvider`'s project rollup
-`team_breakdown`) never survived synthesis. CHAOS-4355 closes that gap
+`team_breakdown`) never survived synthesis. Producer-rows synthesis change closes that gap
 WITHOUT letting the model author Rows: `ValidateAgainst` still rejects a
 model-supplied `claim.Rows` unconditionally (even one that happens to match
 canonical exactly — see
@@ -200,9 +200,9 @@ call rejected earlier (unavailable runtime, a model draft `ValidateAgainst`
 itself rejects, a receipt-sink failure) reports nothing here; that failure
 is the receipt sink's own outcome to record.
 
-**Updated 2026-08-27 (CHAOS-4360, `lane-4360-acr`): same-conversation
+**Updated 2026-08-27: same-conversation
 window carry defeats the class-default gate for a re-verified turn.** Live
-walkthrough (CHAOS-4355, cf-rulings.md 06:30/09:10/13:40 08-27): turn 2
+walkthrough (cf-rulings.md 06:30/09:10/13:40 08-27): turn 2
 confirms a window via `winr_` receipt and asks for a fresh subject
 clarification; the Workbench's accumulate-and-re-ask-ONCE batching means
 turn 3 carries only the new candidate pick, never the window receipt
@@ -216,7 +216,7 @@ project-status question could never reach a decisive answer past two
 turns. `resolveCarriedWindow` (`chaos4360_carry.go`) now runs immediately
 before WGATE, exactly once per call, ONLY when this turn's own window
 would otherwise be inferred: it walks the chain of prior results this
-request references (bounded depth/visited count, the SAME CHAOS-3898 §2.2
+request references (bounded depth/visited count, the SAME the graph-lifecycle design §2.2
 ingress taint gate `resolvePriorSubjectHints` already applies), and on a
 hit replaces `effectiveWindow` with the nearest genuinely CONFIRMED
 (never inferred) window found — so WGATE never fires for that turn, the
@@ -232,7 +232,7 @@ axes as a follow-up.
 
 **The `expected_kind` half is now built** (`resolveCarriedKind`,
 `structure_axis_carry.go`), on the same chain walk, the same
-`CHAOS-3898` taint gate and the same bounds — because the follow-up turned
+`the graph-lifecycle design` taint gate and the same bounds — because the follow-up turned
 out to be a defect of its own, not a nicety. Measured on the kiac pilot:
 turn 1 raises `expected_kind` and `window`, turn 2 answers both, turn 2's
 response then offers NEITHER, and an honest offer-driven client — one that
@@ -280,18 +280,18 @@ carries' own seed population, so the bypass and the carry can never again name
 different sets; the closed `AnswerReuseBypassReason` counter reports which arm
 fired, a branch that was previously silent.
 
-**The model's window class reaches the engine (CHAOS-12603).** The
+**The model's window class reaches the engine.** The
 interpretation model's sanitized `window_class` / `window_confidence` pick is
 carried from the interpret receipt onto `InterpretedQuestion`
 (`carryWindowPick`, `genkitruntime/runtime.go`), on the server-model path,
 the supplied-interpretation path and the file-exchange parser
-(`ParseInterpretationOutputSignals`). Before this, CHAOS-3900 W1 read the field in
+(`ParseInterpretationOutputSignals`). Before this, the window-inference classification W1 read the field in
 `composeEffectiveWindow` but nothing set it, so `ClassifyWindow` always fell
 back by shape. An out-of-vocabulary class stays unset (receipt
 `window_class_unrecognized`). `WindowInferenceVersion` moved to `win_v2`, so
 answers stored under the old inference are not reused.
 
-**A status question about a named handle draws no default window (CHAOS-12595).**
+**A status question about a named handle draws no default window.**
 `classifyWindowFor` (`chaos3900_window_class.go`) reads the accepted frame
 before the class table. A frame that asks only for the current state of named
 handles (goals only `assess_state`, temporal `current`, a `named_subject`
@@ -300,13 +300,13 @@ whose stated kind is `pull_request`, `work_item`, `ci_pipeline_run`,
 or a second handle needs no window either) classifies as `state_snapshot`,
 whatever the model picked; a model pick of `state_snapshot` stays the model's, any other pick is
 marked downgraded. So "what is the status of pull request P in R" is no longer
-held at the CHAOS-4040 window gate. A trend, change or driver question about the
+held at the inferred-window gate window gate. A trend, change or driver question about the
 same handle, and any question about a repository, team or project, keeps the
 shape fallback. The decision and its basis (`model`, `shape_fallback`,
 `handle_state`, `none`) are the Info line `context fabric window
 classification`, which also carries the model's own sanitized pick.
 
-**An unknown window pick is dropped, not refused (CHAOS-12617).** The output
+**An unknown window pick is dropped, not refused.** The output
 schema keeps the `window_class` and `window_confidence` enums, as providers
 read them. But the schema gate of the LLM generator (`llmGenerator.check`) and
 of the supplied path (`SuppliedInterpreter.decode`) used to refuse a whole
@@ -319,7 +319,7 @@ the reply as written, so the sanitizer leaves the class unset and sets
 not a string, and every other violation, still refuse. There is no wire
 change and no version bump.
 
-**Every current-axis answer states its window (CHAOS-11601).** When the
+**Every current-axis answer states its window.** When the
 question names no period and its window class carries no default
 (`state_snapshot`, or no class), `composeEffectiveWindow` returns no window and
 the fact reads use their own default. The assembled result then states that
@@ -340,7 +340,7 @@ pinned to the providers by
 `TestServerDefaultWindowKindsAreTheProvidersThatReadTheDefaultWindow`. Refusal
 and veto results (time bound, continuation, structure and window vetoes) read
 no state and carry no window. Investment reads the committed window, else the
-same 90-day default, and all history only for `all_time` (CHAOS-12142).
+same 90-day default, and all history only for `all_time`.
 
 ---
 
@@ -358,7 +358,7 @@ flowchart TD
 
   MERGE2 --> FLOOR{"applyKindCoverageFloor<br/>chaos4038_kind_coverage.go:264<br/>fires when confirmedKind == nil<br/>(resolve.go:1912)"}
   FLOOR -->|"missing kind: pull_request /<br/>work_item / ci_run / pull_request_review<br/>('census kinds')"| POOLIN["merge into pool<br/>(commit-eligible, unchanged)"]
-  FLOOR -->|"missing kind: repository /<br/>project / team ('alias-lookup-<br/>scoped' kinds, isAliasLookupScopedKind)"| OFFERONLY["merge into offerOnlyPool<br/>chaos4038_kind_coverage.go:300-327 (CHAOS-4271)<br/>identity-claim args nilled to avoid<br/>cross-candidate identity collision"]
+  FLOOR -->|"missing kind: repository /<br/>project / team ('alias-lookup-<br/>scoped' kinds, isAliasLookupScopedKind)"| OFFERONLY["merge into offerOnlyPool<br/>chaos4038_kind_coverage.go:300-327<br/>identity-claim args nilled to avoid<br/>cross-candidate identity collision"]
   POOLIN --> POOL[("pool = candidatesBySubject")]
   OFFERONLY --> OOP[("offerOnlyPool")]
 
@@ -367,19 +367,19 @@ flowchart TD
   POOL --> GATE["ResolveFromMergedCandidatesWithGateAndBasis<br/>graphrank/resolution.go:401<br/>corroboration trace (resolution.go:444-462)<br/>-> ranked_cut trace -> MaxSubjectCandidates cut -> commit decision"]
   GATE --> COMMITTABLE["resolution.Candidates / .Committed<br/>ONLY ever built from 'pool'<br/>(resolve.go:1926-1933, explicit doc comment)"]
 
-  GATE -->|"nothing committed AND<br/>searchTruncated AND<br/>confirmedKind == nil<br/>(turn 1's shape)"| LOWPOP{"applyLowPopulationKindOffers<br/>chaos4417_low_population_kind_scope.go<br/>CHAOS-4417"}
+  GATE -->|"nothing committed AND<br/>searchTruncated AND<br/>confirmedKind == nil<br/>(turn 1's shape)"| LOWPOP{"applyLowPopulationKindOffers<br/>chaos4417_low_population_kind_scope.go<br/>the offer-only rescue for low-population kinds"}
   LOWPOP -->|"deps.VectorMechanismConfigured:<br/>skip entirely, zero SearchKind calls"| DONE4417(("no offer"))
-  LOWPOP -->|"else, per kind in {repository,<br/>project, team}: EXHAUSTIVE SearchKind<br/>census, reusing CHAOS-4154's<br/>buildConfirmedKindScopedSnapshot --<br/>an INCOMPLETE kind is skipped,<br/>NOT fatal (an offer is a suggestion,<br/>not a proof)"| LOWOFFER["candidates from every COMPLETE<br/>kind's own census"]
+  LOWPOP -->|"else, per kind in {repository,<br/>project, team}: EXHAUSTIVE SearchKind<br/>census, reusing the confirmed-kind truncation change's<br/>buildConfirmedKindScopedSnapshot --<br/>an INCOMPLETE kind is skipped,<br/>NOT fatal (an offer is a suggestion,<br/>not a proof)"| LOWOFFER["candidates from every COMPLETE<br/>kind's own census"]
   LOWOFFER -.->|"NEVER commits -- see caption:<br/>no kind authority pre-confirmation<br/>(team-lead R4 ruling)"| COMMITTABLE
 
-  GATE -->|"nothing committed AND<br/>confirmedKind == nil AND<br/>a hinted repository/project/team kind<br/>(CHAOS-10941)"| KSEM["applyKindScopedSemanticOffers<br/>chaos10941_kind_scoped_semantic.go<br/>deps.KindScopedSemantic: ONE embed of the term,<br/>cosine over that kind's stored embeddings,<br/>exact temporal predicate in the read"]
+  GATE -->|"nothing committed AND<br/>confirmedKind == nil AND<br/>a hinted repository/project/team kind<br/>"| KSEM["applyKindScopedSemanticOffers<br/>chaos10941_kind_scoped_semantic.go<br/>deps.KindScopedSemantic: ONE embed of the term,<br/>cosine over that kind's stored embeddings,<br/>exact temporal predicate in the read"]
   KSEM -.->|"NEVER commits, never enters 'pool',<br/>no identity claim; admitted to the offer<br/>as OfferAdmittedKindScopedSemantic"| COMMITTABLE
   KSEM -->|"candidate offer ONLY (never the kind,<br/>handle or boundary inputs)"| OFFERS
   OOP --> UNION["unionCandidatesForOffer"]
   POOL -.-> UNION
   LOWOFFER --> UNION
   UNION --> OFFERS["offer builders: kindOfferMaterial,<br/>candidateOfferMaterial, handleOfferMaterial<br/>-- an offer/suggestion only"]
-  OFFERS -.->|"turn 2: caller confirms the offered<br/>candidate -> ConfirmedExpectedKind receipt<br/>-> CHAOS-4132/CHAOS-4154's EXISTING,<br/>already-sound confirmed-kind path commits"| COMMITTABLE
+  OFFERS -.->|"turn 2: caller confirms the offered<br/>candidate -> ConfirmedExpectedKind receipt<br/>-> the confirmed-kind rescue change and confirmed-kind truncation change's EXISTING,<br/>already-sound confirmed-kind path commits"| COMMITTABLE
 
   GATE -.->|"emits 'corroboration' trace event<br/>ONLY for candidates that reached 'pool'"| TRACE["ResolutionTraceEvent Stage=corroboration"]
   TRACE --> EXPPOOL["harness field expected_subject_in_pool<br/>(chaos3742_two_turn_confirmation_test.go:2309)<br/>reads TRUE only if the subject's find<br/>reached POOL, never offerOnlyPool"]
@@ -393,8 +393,8 @@ flowchart TD
 **Caption.** Every resolution builds candidates through two independently
 merged mechanisms — ordinary unscoped lexical+vector search
 (`hybridSearchNodes`) and a kind-scoped, lexical-only `SearchKind` pass used
-by the CHAOS-4038 coverage floor and the CHAOS-4132 confirmed-kind rescue.
-The floor's own split (CHAOS-4271, `chaos4038_kind_coverage.go:300-327`) is
+by the kind-scoped coverage-floor change coverage floor and the confirmed-kind rescue change confirmed-kind rescue.
+The floor's own split (`chaos4038_kind_coverage.go:300-327`) is
 the load-bearing fact this diagram exists to draw: a find for one of the
 four "census kinds" (pull request, work item, CI run, review) merges into
 the same `pool` the commit gate reads, but a find for repository, project,
@@ -409,12 +409,12 @@ emitted for candidates in `pool`. `wrong_commit=0` on such a run proves no
 *wrong* subject was affirmed — it says nothing about whether the *right*
 subject was ever a reachable commit candidate, because an offer-only hit
 was never in a position to become one. This split is the mechanism behind
-CHAOS-4348 (project/team subjects showing 0/20 "in pool" on 2026-08-26,
-`.remember/now.md:73`) and the reason CHAOS-4347's fact-routing work
+Subject-pool reachability fix (project/team subjects showing 0/20 "in pool" on 2026-08-26,
+`.remember/now.md:73`) and the reason the status-category fact-kind work's fact-routing work
 started from a false premise of unreachability rather than the real
 gap — missing facts, not missing pool membership (see diagram 4).
 
-**CHAOS-4417 (repository/project/team, PRE-confirmation, OFFER-only):**
+**Offer-only rescue for low-population kinds (repository/project/team, PRE-confirmation, OFFER-only):**
 even when a find genuinely reaches `pool`, `resolution.go`'s commit-gate
 switch checks resolution-wide `searchTruncated` before LoneFloor/TopFloor
 -- a single unscoped `Search`/`SearchQuestion` call truncating on a
@@ -422,28 +422,28 @@ HIGH-population kind (e.g. 37,001 `ci_pipeline_run` nodes) forces the
 whole resolution `ambiguous`, even for a genuinely lone, low-population
 repository/project/team candidate the SAME call also found, and the
 shared cut can ALSO crowd such a candidate out of the offer boundary
-entirely. CHAOS-4154 already built an isolated-census-and-re-decide
+entirely. Confirmed-kind truncation change already built an isolated-census-and-re-decide
 mechanism for a RECEIPT-confirmed kind (`confirmedKind != nil`), but that
 mechanism's soundness rests on CALLER AUTHORITY: a confirmed kind makes
 every OTHER kind categorically out of scope, not merely improbable, which
 is what lets it safely bypass `searchTruncated` for a STATISTICAL
-LoneFloor/TopFloor commit. CHAOS-4417 has no such authority
+LoneFloor/TopFloor commit. Offer-only rescue for low-population kinds has no such authority
 pre-confirmation -- `request.ExpectedKinds` (the only "the interpreted
 question implies a kind" signal available) is DELIBERATELY walled off
-from candidate-pool narrowing today without the CHAOS-3972
+from candidate-pool narrowing today without the structure-fields change
 `kindInsensitivityProof` precondition (`ports.go`'s own doc comment) --
 so an earlier LoneFloor-commit design for this ticket (codex rounds 1-3,
-CHAOS-4417 PR #320) was caught unsound at R3: only STRING EQUALITY can
+Offer-only rescue for low-population kinds PR #320) was caught unsound at R3: only STRING EQUALITY can
 survive resolution-wide truncation (`internal/contextfabric/AGENTS.md:313`,
-CHAOS-3810 -- "no unseen row can outrank it"), never a statistical
+Subject-resolution diagnosability change -- "no unseen row can outrank it"), never a statistical
 ranking decided over a population this ticket cannot prove complete for
 every kind that could rank above it.
-**CHAOS-10941 (repository/project/team, hinted kind, OFFER-only, semantic):**
+**Paraphrase-offer change (repository/project/team, hinted kind, OFFER-only, semantic):**
 a paraphrase that shares no token with the node ("self-hosted CI executor
 setup repository" for `full-chaos/action-runners-local`, E7 case 56) cannot
 reach it through any lexical arm (kind-hint, coverage floor, exact name),
 the unscoped vector arm is crowded by high-population kinds and withheld on
-a historical axis, and CHAOS-4417's census is skipped whenever a vector
+a historical axis, and the offer-only rescue for low-population kinds's census is skipped whenever a vector
 mechanism is configured. `KindScopedSemantic` embeds the term once and
 scores the hinted kind's own stored embeddings (identity-fenced, bounded by
 the exact-name census cap, over-cap = degraded and nothing returned) with the
@@ -451,30 +451,30 @@ exact temporal predicate in the read, so it is correct on a historical axis.
 Its finds are offered, strongest similarity first, in the candidate offer only
 (never the expected_kind or handle offers), after any non-vector candidate
 (they lead only when they are the only candidates; `ClassifyOffer`'s vector-only refusal, a
-CHAOS-6047 lane-level choice, is overridden only for this arm) and never
+Similarity-floor change lane-level choice, is overridden only for this arm) and never
 committed. One `kind_scoped_semantic` Info line per run of the arm carries
 result_count (0 = measured miss), truncated and authz_dropped.
 **Team-lead R4 ruling: this rescue NEVER commits.** It reuses
 `buildConfirmedKindScopedSnapshot` PRE-confirmation, for the fixed,
 small, identity-census-enumerable kind set (`isAliasLookupScopedKind`)
 only, to produce OFFER candidates -- the SAME "additive, never touches
-`pool`/`candidatesBySubject`" contract CHAOS-4038's own coverage floor
+`pool`/`candidatesBySubject`" contract the kind-scoped coverage-floor change's own coverage floor
 already carries for these three kinds, just EXHAUSTIVE rather than
 bounded/early-exit. An incomplete kind's own census is skipped, not
 fatal (an offer is a suggestion, not a proof, so the fail-closed
 discipline a commit needs does not apply); a live vector mechanism still
 skips the whole pass up front (buildConfirmedKindScopedSnapshot can never
 prove completeness there). The offered candidates join `coverageCandidates`
-into the SAME `unionCandidatesForOffer` union CHAOS-4038 already feeds --
+into the SAME `unionCandidatesForOffer` union the kind-scoped coverage-floor change already feeds --
 one bucket, one contract. Commit still happens ONLY through the EXISTING,
-already-sound CHAOS-4132/CHAOS-4154 confirmed-kind path once the caller
+already-sound the confirmed-kind rescue change and confirmed-kind truncation change confirmed-kind path once the caller
 confirms the offered candidate at turn 2 -- the two-turn shape the corpus
 harness measures directly. Follow-up ticket (not built here): "Turn-1
 commit under interpretation kind authority requires kindInsensitivityProof
 wiring" (CF, Medium, related 4417/3972).
 
-**In-flight fix (not yet merged as of this writing):** `lane-4347-project`
-(branch `chaos-4348-project-team-pool`) is building two new search arms
+**In-flight fix (not yet merged as of this writing):** the project-subject work stream
+(branch `the subject-pool reachability fix-project-team-pool`) is building two new search arms
 scoped to repository/project/team (`graphrank/chaos4348_reachability.go`,
 `falkorgraph/chaos4348_exact_name.go`) that merge into the real `pool`
 through the existing identity-collision guard, plus confirms two more
@@ -624,7 +624,7 @@ same rows; no edge is provider-specific. Producers are in
 2. Team = ownership only (`team_repo_ownership`, `team_project_ownership`).
    Never person membership, never a computed attribution.
 
-**Walks are derived from the tree (CHAOS-8673).** The edges above are one
+**Walks are derived from the tree.** The edges above are one
 table, `entityTree` in `internal/contextfabric/falkorgraph/tree_walk.go`. A
 named anchor's members are read along `treePath(anchor position, member
 position)`, the shortest path of that table; team and deployment are leaves,
@@ -665,7 +665,7 @@ members the caller's authorization removed carries the degrading
 members excluded by authorization). The served status is floored from
 `complete` to `partial` whatever shape the plan had, so a cut member set is
 never read as the whole one. The completeness state says the same
-(CHAOS-12147): a count over the cut set is a `narrowed` outcome row with impact
+: a count over the cut set is a `narrowed` outcome row with impact
 `scope` and cause `graph_cohort_denied_by_authorization`, served the members
 the answer carries over declared those members plus the members the row's count
 names, so `completeness.state` is never `complete` for it. Before this, the
@@ -675,7 +675,7 @@ coverage. A result stored before this keeps its stored row: every serving
 surface (fresh, reused, read by id) runs `ApplyServedStatusFloors`, which
 appends the narrowed row to the served copy when the last count row is still
 `satisfied`, and never rewrites the stored one. A member READ over the cut set
-says the same (CHAOS-12153): its `each_member` population declares the members
+says the same: its `each_member` population declares the members
 read plus the same denied count (`MembershipCardinality.AuthorizationDenied`,
 the field the count row reads), its chain begins with the cut, and the row is
 `narrowed` with that cause. A stored `satisfied` member read row is restated
@@ -686,8 +686,8 @@ eviction is disclosed in the limitations, as for a lever row.
 **An unverified project narrowing is partial.** When a request narrowed by
 `scope.project_ids` admitted a node or edge only on the `"*"` project list, the
 graph read adds a degrading `read_population_unverified` detail with raw
-`project_narrowing_unverified` (CHAOS-12231). Its served status is floored
-from `complete` to `partial` (CHAOS-12242, `applyUnverifiedProjectNarrowingStatusFloor`
+`project_narrowing_unverified`. Its served status is floored
+from `complete` to `partial` (the unverified-narrowing downgrade, `applyUnverifiedProjectNarrowingStatusFloor`
 in `ApplyServedStatusFloors`, so fresh, reused and read-by-id answers alike),
 through the same swap as the other floors. Completeness is recomputed from the
 outcome rows, which do not state the narrowing, so it can stay `complete`
@@ -699,7 +699,7 @@ also names read-population outcome rows; it never promotes and leaves
 document is not rewritten.
 
 **Stated project membership decides a requested project narrowing
-(CHAOS-12229).** A `"*"` project list proves no project. Before the first graph
+.** A `"*"` project list proves no project. Before the first graph
 read, the engine resolves the request's raw `scope.project_ids` to canonical
 `project.v2` identities through the project nodes (a project node's
 `authorization_projects` is its own raw id; its canonical id is its identity):
@@ -708,7 +708,7 @@ A raw id that resolves to none, or to more than one (the same id under two
 providers), is never widened; it makes the resolution incomplete. The resolved
 narrowing travels on the request scope as a Go-only field, not on the wire.
 For a node whose project list is `"*"`, `graphrank.ProjectMembershipOf` over
-its stated `authorization_project_identities` (CHAOS-12226) then decides:
+its stated `authorization_project_identities` then decides:
 
 | Stated membership | Resolution | Admitted | Reported unverified |
 |---|---|---|---|
@@ -723,7 +723,7 @@ grant is checked first, as before. An edge's own `"*"` defers to its endpoints
 (they decide; the edge is reported only when an endpoint is unverified). Tree
 walks read `authorization_project_identities` with the node, so a walked work
 item's stated membership decides too. A pull request states the union of its
-linked issues' sets with the weakest link tier (CHAOS-12308): a native tier
+linked issues' sets with the weakest link tier: a native tier
 decides like a work item, and a lower tier stays admitted and reported
 unverified, with a count per tier in `graph_answer_pull_requests_on_*_links`.
 Each resolution is one Info
@@ -737,16 +737,16 @@ a request whose narrowing is not. A stored answer that does not disclose
 fresh path:
 
 - the general recheck, when its graph read discloses an unverified narrowing
-  (reuse outcome `miss_project_narrowing_unverified`, CHAOS-12229);
+  (reuse outcome `miss_project_narrowing_unverified`);
 - the work-item tuple reuse, when its re-walk admitted a member only on `"*"`
-  (decision `project_narrowing_unverified`, CHAOS-12229);
+  (decision `project_narrowing_unverified`);
 - a stored answer with no evidence references, rechecked without a graph
   context read, when the request narrows by project and its resolution is
-  none or incomplete (the same outcome, CHAOS-12325).
+  none or incomplete (the same outcome).
 
 A stored answer that already discloses it is still reused.
 
-**A project-narrowing exclusion is scope, not authorization (CHAOS-12329).**
+**A project-narrowing exclusion is scope, not authorization.**
 A node the caller's grants admit that a requested project narrowing leaves out
 is out of the requested scope. The repository walk decides each link row
 without the narrowing as well: a row that passes then is counted apart
@@ -754,7 +754,7 @@ without the narrowing as well: a row that passes then is counted apart
 count, so it gives no authorization-gap disclosure and no degraded answer. What
 the grants hide is still denied. A cohort member walk (an anchor's members over
 its tree and ownership hops) applies the same rule on every hop, and to its
-anchor (CHAOS-12361): an anchor the narrowing alone refuses (its own project
+anchor: an anchor the narrowing alone refuses (its own project
 list is outside the requested projects) is out of scope, not hidden, so every
 member under it is out of scope too. Such members are counted apart
 (`project_excluded` on the team anchor walk line) and never reach the walk's
@@ -764,7 +764,7 @@ denied-cohort floor come from them. The deployment route
 the narrowing reads no deployment (`anchor_out_of_scope` on the project
 deployment walk line).
 
-**A requested team narrowing on the repository walk (CHAOS-12319).**
+**A requested team narrowing on the repository walk.**
 Repository, project and work-item nodes carry the `"*"` team list, so the node
 rule narrows none of them; `"*"` is never team evidence. Team = ownership only.
 Under `scope.team_ids` (`falkorgraph/team_narrowing.go`) an issue is admitted
@@ -794,7 +794,7 @@ the request narrows by team: `team_narrowing` (`anchor_owned` or
 `team_floor_reason` (empty, `anchor_ownership_unknown`, `project_owner_absent`
 or `ownership_read_cut`). Counts and closed values only; no id.
 
-**A requested team narrowing on the general graph read (CHAOS-12327).** The
+**A requested team narrowing on the general graph read.** The
 same reach rule decides every subject `DiscoverContext` serves
 (`falkorgraph/team_narrowing_discover.go`, one call on the path edges and one on
 the cohort candidates). Under `scope.team_ids`:
@@ -815,14 +815,14 @@ the cohort candidates). Under `scope.team_ids`:
   `BELONGS_TO_REPOSITORY` edge for each repository its service maps to). Never
   through `CORRELATED_WITH_INCIDENT`: that is relevance, not ownership. An
   incident with no repository edge has missing ownership: it is undecided, not
-  out of scope (CHAOS-12345);
+  out of scope;
 - the caller's organization node and the committed subjects stay (the subject is
   what the question names); every other kind has no ownership path to a team
   and is out of scope.
 
 A path is served only when both of its ends are in scope; an edge's own
 attributes are decided by the edge rule the read uses (`AuthorizedEdge`), so a
-project-only caller's paths are narrowed like any other (CHAOS-12396). An exclusion is scope:
+project-only caller's paths are narrowed like any other. An exclusion is scope:
 never a denial, never an authorization detail, never a floor. The read is
 floored only where the ownership it needed for a subject the rest of the request
 admits is absent, not current, or cut: the cohort's population floor (the
@@ -830,17 +830,17 @@ cohort is truncated; an empty member set has a population lower bound), on its
 own pool-truncation arm `team_narrowing_undecided`, which no census covers (a
 census fetches nodes, not their ownership). The member status walk's matches are
 narrowed the same way before they set the population, and its count-only
-disclosures are read inside the narrowing too (CHAOS-12352): the measured zero,
+disclosures are read inside the narrowing too: the measured zero,
 the outside-the-set count (a missing ownership makes it a lower bound, never a
 floor), and the pool cut, whose total is stated only when every committed anchor
 is a repository currently owned by a requested team, or a requested team. An
 owned project's total is not stated: its pull requests follow their own
-repository's owner (CHAOS-12357). The kind census's declared figure counts the
+repository's owner. The kind census's declared figure counts the
 candidates inside the narrowing. Each such read logs one
 `contextfabric.team_narrowing_general_read` line (requested teams, subjects
 decided, subjects excluded, and the floor value; log-only).
 
-**A cut read says so (CHAOS-12348, CHAOS-12451).** A read that is not a cohort
+**A cut read says so.** A read that is not a cohort
 read is served as paths, so it has no cohort to carry the floor above, and its
 coverage says what it lost. "Not a cohort read" is the reader's own test:
 `CohortMemberKindForFrame` gives no servable member kind, the test
@@ -882,7 +882,7 @@ stay verbatim. The floor never promotes and leaves `degraded`, `no_match`, a
 clarification and a refusal as they are. `cohortTerminalCoverageCode` holds
 neither code: they say nothing about a member set.
 
-**Subject resolution under `scope.team_ids`** (CHAOS-12346, lead ruling (i)/(ii);
+**Subject resolution under `scope.team_ids`** (the requested-team resolution change, lead ruling (i)/(ii);
 `graphrank/team_narrowing_resolution.go`, decided by the same reach rule through
 `ResolveDeps.TeamNarrowing`). The first decision runs as today. When it commits
 nothing and offers at least one candidate inside the requested teams, the
@@ -940,7 +940,7 @@ reached only through an owned project by its linked pull requests alone
 incidents and metrics stay owned-repository rollups and name the
 project-reached repositories they have no rows for (`not_applicable` with the
 cause when nothing else was served). The
-CHAOS-4099 fact-scope expander
+Unreachable-fact-family disclosure change fact-scope expander
 (`devhealthfacts/chaos4099_scope_expander.go`, `projectRepositories`,
 `projectRepositoriesAsOf`; `teamRepositories` in
 `devhealthfacts/fact_scope_entity_tree.go`) follows the tree:
@@ -949,7 +949,7 @@ a project reaches repositories through its issues' linked pull request rows
 projects' linked pull requests. `incident` is a supported `SubjectKind`
 with its own producer; it is not part of the tree.
 
-**Wildcard authorization closed (2026-09-28, CHAOS-7080):** the shared
+**Wildcard authorization closed (2026-09-28):** the shared
 predicate `graphrank.AuthorizedAttributes` no longer admits a node or edge
 whose `authorization_repositories` is the `"*"` wildcard to a
 repository-restricted caller (a specific repository list, including an owner
@@ -957,7 +957,7 @@ wildcard such as `acme/*`). Unrestricted callers (no list) and universal
 callers (`*`) are unchanged. The one wildcard node a restricted caller keeps is
 its own organization, identified by the reserved organization scope id in
 `authorization_projects`. Before this, every project node (projection writes a
-project's empty repository list as `"*"`), every pre-CHAOS-4390 team, every
+project's empty repository list as `"*"`), every pre-team-authorization-from-ownership-change team, every
 project→team `OWNED_BY_TEAM` edge, and every node whose repository slug did
 not resolve was visible to every restricted caller, and the engine then read
 the project's facts (including other repositories' names and risk) for it.
@@ -971,20 +971,20 @@ against the same decision before the fact read
 projected as a sentinel list that admits no repository, never as `"*"`
 (`devhealthsource.repoAuthorization`).
 
-**Team authorization (2026-08-28, CHAOS-4390, MERGED #313) and cohort
-retrieval (CHAOS-4395, IN FLIGHT, not yet merged as of this writing):** team
+**Team authorization (2026-08-28, the team-authorization-from-ownership change, MERGED #313) and cohort
+retrieval (IN FLIGHT, not yet merged as of this writing):** team
 nodes' `authorization_repositories` is now derived from `team_repo_ownership`
 at projection time (never left empty — an empty list falls back to a shared
 wildcard convention that over-exposed every team to every repository-scoped
 principal until this fix, #313). Cohort discovery (`DiscoverContext`) still
 sources members from `fulltextSearchNodes` only on `main` as of this writing
-— #314/CHAOS-4395, which adds `ExactNameCandidates`/kind census so a termless
+— #314/the cohort exact-name candidate change, which adds `ExactNameCandidates`/kind census so a termless
 "which teams..." question can populate a cohort at all, is open but not
 merged. Full corrected mechanism, the pipeline this feeds into
 (ranking/drivers/Rows), and the score formula:
 [context-fabric-subject-model-and-cohort-answers.md](context-fabric-subject-model-and-cohort-answers.md).
 
-**Clarification (CHAOS-4363):** the absence of a direct repository↔project
+**Clarification:** the absence of a direct repository↔project
 edge describes the **graph** projection only. `HealthProvider`'s new project-subject rollup
 (diagram 4) reads `team_repo_ownership` directly off **ClickHouse** -- a
 real per-team repository-ownership table this package had not read before
@@ -993,9 +993,9 @@ repository` for the `compounding_risk_daily` repo layer. That is a
 ClickHouse fact-producer join, not a graph edge: it does not add a
 `REPO -> PROJ` edge to this diagram.
 
-**Update (2026-08-30, CHAOS-4577):** that zero-row gap also starves
+**Update (2026-08-30):** that zero-row gap also starves
 `queryTeams`' authorization join above -- with no CURRENT `team_repo_ownership`
-row, every Team node is stamped with CHAOS-4390's fail-closed sentinel
+row, every Team node is stamped with the team-authorization-from-ownership change's fail-closed sentinel
 (`acr-context-fabric:no-team-repository-ownership`) instead of real owned
 repositories, so a repository-scoped principal (Ask Dev's only kind) is
 denied every team and the North Star teams question always terminates
@@ -1006,7 +1006,7 @@ run it once after `restore-clickhouse`, before `acr-projector rebuild`. Prod
 itself is unaffected (real `team_repo_ownership` rows exist there since
 2026-08-29 14:00Z) -- this closes the trial/kiac-only exposure.
 
-**Update (2026-09-24, CHAOS-6561): repository→team ownership is now a
+**Update (2026-09-24): repository→team ownership is now a
 graph edge.** `queryRepositoryTeams` (`devhealthsource/teams_projects_edges.go`)
 projects `repository -OWNED_BY_TEAM-> team` from `team_repo_ownership`, the
 ownership source of truth (never membership). One edge per
@@ -1025,13 +1025,13 @@ row still projects but is scoped to the orphaned-repository sentinel.
 `TeamsProjectsSourceVersion` moved v11 → v12, so an already-projected
 organization needs one rebuild to gain the edge. The "no direct
 repository↔team edge" statements above are superseded by this; there is
-still no repository↔project edge, and the CHAOS-4363 ClickHouse join is
+still no repository↔project edge, and the project rollup rows work ClickHouse join is
 unchanged.
 
-**Update (2026-09-29, CHAOS-7119): NULL `repo_id` rows resolve by name.**
+**Update (2026-09-29): NULL `repo_id` rows resolve by name.**
 The sentence above about NULL `repo_id` is superseded. The edge now reads
 `team_repo_ownership` through `internal/contextfabric/ownershipresolve`, the
-one rule the fact reads also use (CHAOS-7073 K11, a port of ops teamscope
+one rule the fact reads also use (the read_facts change K11, a port of ops teamscope
 `RepoCondition`): a row's own `repo_id` wins; otherwise a (provider,
 case-insensitive name) match in `repos`, proven by the join's `matched`
 sentinel, makes the row an ordinary edge to that repository, scoped to the
@@ -1045,7 +1045,7 @@ with no `repos` row keeps the orphaned-repository sentinel (the fact reads
 drop it; default pending a ruling). `TeamsProjectsSourceVersion` moved
 v12 → v13: one rebuild per projected organization (operations.md). The team
 node's `authorization_repositories` list was raw names at v13; since v15
-(CHAOS-7130) it is DERIVED FROM the repository -> team edge's own rows: the
+ it is DERIVED FROM the repository -> team edge's own rows: the
 per-(provider, resolved repository, team, source) latest assertion
 (`repositoryTeamsGroupedSQL`: one `ownershipresolve` source with the
 `valid_from <= now` arm, one latest order, one open predicate), aggregated per
@@ -1053,17 +1053,17 @@ team, canonical `repos.repo` slug, listed when any stream's latest is open. It
 equals the set of open repository -> team edges by construction; future-dated
 assertions are ignored by both.
 
-**Stale doc comment found (report only, no Go edit per this lane's scope):**
+**Stale doc comment found (report only, no Go edit per this work stream's scope):**
 `internal/contextfabric/devhealthsource/teams_projects.go:54` and
 `internal/contextfabric/devhealthsource/clickhouse.go:29` both assert,
-in a CHAOS-3898-era comment, "live-verified zero project.v2:-shaped nodes
+in a the graph-lifecycle design-era comment, "live-verified zero project.v2:-shaped nodes
 exist anywhere in that org's graph today." Project nodes are now projected with a
 `project.v2:<provider>:<id>` canonical id; a rebuild has happened since that
 comment was written. The comment is a historical decision record (why the version was
 bumped) and is not wrong about *why*, but its present-tense "today" claim is
 stale and could mislead a reader checking current graph state.
 
-**Repository -> work items (CHAOS-8667).** The members of a repository are the
+**Repository -> work items.** The members of a repository are the
 issues its pull requests link to: the walk reads them from the graph over
 `LINKS_PULL_REQUEST` (issue -> pull request), names the link tier per member
 (`native`, `explicit_text`, `heuristic`), and counts the heuristic-only ones. A
@@ -1084,16 +1084,16 @@ repository's pull requests and filtered by the dev-health-go
 (project ownership, the anchor gate, requested scope) is a named exception in
 the test, asserted exactly.
 
-**A requested repository scope refuses, and says so (CHAOS-12360).** A subject
+**A requested repository scope refuses, and says so.** A subject
 term whose match lies outside the requested repositories is not a candidate and
 is not offered: the narrowing is the caller's. A terminal result states the
 count of such subjects in a closed limitation, with no names, so the caller can
 widen the scope. The count holds only subjects the caller's own grant admits
-(CHAOS-12446): a subject outside the grant never counts, because for it the
+: a subject outside the grant never counts, because for it the
 count is an existence oracle, and a subject inside the grant is no oracle. A
 credential that names repositories or owners gets it: the access read narrows it
 to the live inventory, so it is restricted at runtime. A web user's `*` grant
-stays `*` (CHAOS-12592), so it reads the whole organization and counts every
+stays `*`, so it reads the whole organization and counts every
 match outside the requested repositories. A project-only
 caller never gets the count. A stored result that carries it is refused to a
 reader of another grant by the grant check every stored read takes. A node
@@ -1102,7 +1102,7 @@ finds a subject term, and a subject the resolution committed is not counted. A
 comparison states the distinct subjects of both operands. The window confirmation runs before any search, so it has
 nothing to state.
 
-**A bare-name comparison of exact full labels resolves its kind (CHAOS-12600).**
+**A bare-name comparison of exact full labels resolves its kind.**
 A comparison of two named sides that state no kind (`out_of_cut_unstated_kind`)
 gets one check before the flat path, over the shared exact-name population
 (`ExactNameCandidates`, read once for the check and the comparison it enables).
@@ -1112,11 +1112,11 @@ subject and all are one kind, the kind is resolved, not inferred: the pair runs
 through `resolveNamedComparison` with that kind, as a stated kind does, and the
 answer carries the service sentence "Both sides were read as repositories: ..."
 (`ContextFabricExactLabelKindLimitation`). A truncated population, no match or
-two matches on a side, or mixed kinds keep the kind question (CHAOS-12548). The
+two matches on a side, or mixed kinds keep the kind question. The
 comparison policy line carries `kind_basis` (`stated`, `exact_label`, `none`)
 and, for a refused check, `kind_refusal`.
 
-**A requested repository scope follows the link (CHAOS-8694).** An issue is in
+**A requested repository scope follows the link.** An issue is in
 a requested repository scope when it is linked to a pull request of a named
 repository, whatever its own repository: the scope is tested on the pull
 request at the other end of the link, and the issue only against the caller's
@@ -1125,7 +1125,7 @@ predicate). It holds in every walk that crosses the link (the repository
 work-item walk and the project deployment walk) and in the work-item census
 under a requested repository scope: that census reads the handle's satisfiers
 over the whole organization and keeps those that link into the scope. Since
-CHAOS-12505 that is one graph read keyed on the census's own satisfier ids
+Census-satisfier key change that is one graph read keyed on the census's own satisfier ids
 (`falkorgraph` `linkScopedWorkItemsOf`): from those work items, their
 LINKS_PULL_REQUEST rows to pull requests of a scoped repository, each row
 decided by the repository walk's own rule (the repository and the pull request
@@ -1154,7 +1154,7 @@ subjects with the requested scope. A work item the census admitted through a
 text or heuristic link says so in the answer; it is never shown as native.
 
 **A work item hint under a requested repository scope follows the link too
-(CHAOS-12706).** A hint that names a work item (a prior-result receipt, a
+.** A hint that names a work item (a prior-result receipt, a
 confirmed candidate, an engine carry, a caller's canonical id) is tested as the
 census tests its satisfiers: `graphrank.AuthorizedThroughLink` for the grants
 and the rest of the request, then the keyed link read for the repository part
@@ -1183,27 +1183,27 @@ erDiagram
     }
     DRIVER_CATEGORY ||--o| FACT_KIND : "contextFabricDriverCategoryFactKind (1:1 map)"
     FACT_PLANNER ||--|| FACT_PROVIDER : "planFactReads: prune / narrow / run"
-    FACT_SCOPE_RESOLVER ||--|| FACT_PLANNER : "expands ReadSubjects before planning (CHAOS-4099)"
+    FACT_SCOPE_RESOLVER ||--|| FACT_PLANNER : "expands ReadSubjects before planning"
 ```
 
 **23 registered `FactProvider`s** (`internal/contextfabric/devhealthfacts`,
 wired at `NewProviders`, `providers.go:14-37`; composed at
 `internal/runtime/hosted/open.go:597`):
 
-**Updated 2026-08-27 (CHAOS-4364, `lane-4364-flow`):** two NEW v1-additive
+**Updated 2026-08-27:** two NEW v1-additive
 FactKinds, `flow` and `landscape` (`flow.go`, `landscape.go`), following
-CHAOS-4347's own "widen by a real table join, never a proxy" discipline.
+Status-category fact-kind work's own "widen by a real table join, never a proxy" discipline.
 Both are added to `statusCategoryFactKindComposition`'s `team` entry
-(`chaos4347_status_category_composition.go`) — hand-merged with CHAOS-4363's
+(`chaos4347_status_category_composition.go`) — hand-merged with the project rollup rows work's
 concurrent `investment` addition to the SAME entry, so `team` now composes
 `{health, workload, readiness, investment, flow, landscape}` (all six).
-`project`'s FIRST entry (codex R2 fix, CHAOS-4364) composes every kind of
+`project`'s FIRST entry (codex R2 fix) composes every kind of
 those six whose `Capability()` actually supports `SubjectProject` — which
-is all six, since CHAOS-4363 already widened health/workload/readiness/
-investment to answer for a project directly (see the CHAOS-4363 update
+is all six, since the project rollup rows work already widened health/workload/readiness/
+investment to answer for a project directly (see the project rollup rows work update
 below) by the time this ticket rebased onto it.
 
-**Updated 2026-08-26/27 (CHAOS-4347, `lane-4347-ch`, PR #300):** the
+**Updated 2026-08-26/27 (the team-subject work stream, PR #300):** the
 `metrics`/`continuous_integration`/`deployments` rows below are widened by
 REAL table joins/reads, never by proxying one kind's data as another's —
 see `metrics.go`'s package doc comment
@@ -1225,20 +1225,20 @@ source for the SAME kind).
 | required_children | `work_item_dependencies` | work_item |
 | pull_requests | `git_pull_requests` (`state`: member state and drivers); team: rollup over the repositories the team owns, with a `pull_requests_by_state` table (repository, stored state, count; a state with no pull request has no row); a team read serves no fact per pull request unless the question asks for pull requests (status filter or pull request members) | pull_request, **team** |
 | reviews | `git_pull_request_reviews` | pull_request_review |
-| continuous_integration | `ci_pipeline_runs` (per-run status); **+`cicd_metrics_daily`** (repository aggregate, CHAOS-4347) | ci_pipeline_run, **repository** |
-| deployments | `deployments` (per-deployment status/environment); **+`deploy_metrics_daily`** (repository aggregate, CHAOS-4347); team: rollup over owned repositories | deployment, **repository, team** |
+| continuous_integration | `ci_pipeline_runs` (per-run status); **+`cicd_metrics_daily`** (repository aggregate) | ci_pipeline_run, **repository** |
+| deployments | `deployments` (per-deployment status/environment); **+`deploy_metrics_daily`** (repository aggregate); team: rollup over owned repositories | deployment, **repository, team** |
 | incidents | `operational_incidents` (`status`: member state and drivers); team: rollup over owned repositories | incident, **team** |
-| metrics | `repo_metrics_daily` — **own raw query (not `readers.ReadRepositoryMetrics`, which collapses to one row), `daily_metrics` per-day Rows table over the caller's own evidence window (explicit Start/End verbatim, else the platform's 90-day default policy width — CHAOS-4418)**; **+`team_metrics_daily`** (team, direct, still one-row scalar); **+`team_project_ownership` ⋈ `team_metrics_daily`** (project, summed-counts rollup, CHAOS-4347); **window change failure rate (repository; team = one rate over the union of its owned repositories): `repo_change_failure_daily`, the counts of every stored day in the window summed and one rule applied, never an average of daily rates; `change_failure_rate_state` is `measured`, `not_applicable_no_deployments` or `unknown_no_incident_evidence` (no rate for the last two, so a repository that deploys with no incident evidence never reads 0) and `change_failure_link_tier` is `native` or `heuristic`**; `revert_rate` is a per-day `repo_metrics_daily` value whose NULL days are not applicable (not zero), and a coverage reason names how many days lacked it | repository, **team, project** |
-| health | `compounding_risk_daily` — scalar `severity`/`compounding_risk` **+ `risk_rules` Rows table, one row per formula component (churn/complexity/ownership/review norm × weight, CHAOS-4418)**, repository and team; **+`team_project_ownership` ⋈ `compounding_risk_daily` (team layer) and +`team_project_ownership` ⋈ `team_repo_ownership` ⋈ `compounding_risk_daily` (repo layer, one hop further), both landing in one `risk_breakdown` Rows table (project, CHAOS-4363); the repo layer resolves an ownership row with no `repo_id` by repository name (CHAOS-7073, `ownedRepositoriesSource`)** | repository, team, **project** |
-| workload | `capacity_forecasts`; team (CHAOS-12607): the same latest row's p85/p95 days, the three percentile dates, `simulation_count`, and its fixed-scope completion distribution as a `distribution` table (`completion_days` key; `runs`, `cumulative_share` measures, the share copied from ops `binsToModel` and held to it by the `forecast-oracle` CI job), with `completion_distribution_state` (`available`, `not_stored`, `no_run_within_horizon`, `over_limit`, `malformed`, `scope_ambiguous`, `unmatched`) on every team fact; **+`team_project_ownership` ⋈ `capacity_forecasts`, per-team `team_breakdown` Rows, never summed/averaged (project, CHAOS-4363)**; project: `latest_run_day` is the day of the organization's newest forecast run, and a project whose freshest forecast `day` is older is served `stale` (that run did not forecast it again; its `backlog_size` is the in-progress count of its own day, never zeroed) | team, **project** |
-| investment | `work_unit_investments` only (the deprecated `investment_metrics_daily` is read for no subject and is no longer declared in `devhealthschema`, CHAOS-9273); **project (CHAOS-9195, D5932): ONLY the canonical theme mix (`work_unit_investments`, owning-team roll-up or the project's own attribution); NO `team_breakdown` and none of the legacy `investment_metrics_daily` day fields are served for a project, and a project with no canonical mix serves no fact but a named coverage reason `investment_project_no_canonical_mix`**; **+`work_unit_investments` ⋈ `work_item_team_attributions` (CHAOS-4398), the CANONICAL 5-theme distribution — `theme_*`/`theme_quality_bugfix`/`prior_theme_*` SCALAR fields on the SAME team fact, never `investment_metrics_daily`'s deprecated legacy taxonomy; see §7**; **CHAOS-6559: the team mix is now the SUM of its OWNED repositories' mixes (`team_repo_ownership`, once per repo per team), no work-item majority vote, plus a declared `theme_breakdown` table (allocation_breakdown)**; **CHAOS-12580: on a single-team read the team fact also serves the declared detail table `repository_theme_breakdown` (one row per (repository, theme) with effort; owned repositories whole, project-reached repositories by their linked pull requests only through a per-(team, repository) linked read; each repository named by its `repos` handle; row bound 320; withheld, with `devhealthfacts.repository_theme_breakdown_withheld`, for a nameless repository, a cut linked read, or more than 320 links)**; **+repository scope (CHAOS-6560): `work_unit_investments` effort split across the repos of its PR refs by PR-ref share (partition; unresolvable refs null-carrying; `repo_id` fallback when no PR ref), emitted as `theme_*` scalars + a declared `theme_breakdown` table with source/attribution provenance**; **CHAOS-7073: the repository/team mix reads the latest work-unit set ops' `LatestWorkUnitInvestmentsSource` reads (superseded units excluded via `work_unit_supersessions`, only the latest complete membership run, a NULL latest `repo_id` kept NULL), and a `team_repo_ownership` row with no `repo_id` resolves by (provider, lower-cased name) against `repos` as ops `teamscope.RepoCondition` does (`ownedRepositoriesSource`, also used by the project theme mix)**; **CHAOS-8814's project `team_breakdown` investment row (legacy day sums) was removed by CHAOS-9195; `FactMetrics`' own `team_breakdown` is unchanged**; **organization: the canonical theme mix over every work unit of the organization, with an `unattributed_effort_share` for effort that reaches no resolved repository (withheld from a repository-restricted caller, who gets a named reason instead of a partial total)**; **ownership is read as synced, not historical: an ownership row counts for a window when it has not ended before the window start (`valid_from` is a sync stamp, never a window filter), disclosed by `investment_ownership_as_synced`, and an empty team window names `investment_team_no_owned_repository` or `investment_team_no_unit_in_window`, and a team whose owned repositories hold units that all have zero persisted effort names `investment_team_effort_not_measurable` with the unit count (no fact, no zero mix; an unmeasured or capped unit is not told apart from a measured zero)**; **a team with no work unit in the window and pull requests in its repositories (window: created before the end, not merged or closed before the start; none on the current axis), none with an admitted `work_graph_issue_pr` link (a known provenance tier for the pull request, where an explicit_text or heuristic row counts only when its issue has no native row in the team's repositories; a native row of the same issue in a repository nobody asked about is a named gap; the linked work item's type is not read; the decision is logged as `devhealthfacts.team_pr_link_state_native_first`), names `investment_team_prs_without_linked_work` with the pull request count and says only that no pull request in the window has an admitted link; a team with no pull request or any linked pull request keeps `investment_team_no_unit_in_window`**; **CHAOS-12142 (lead ruling on DW0): the current axis takes a window, as every window-bound rollup does (`resolveRollupWindow`, the metrics rule): the answer's committed evidence window when it carries one (any provenance), all history for `all_time`, else the platform default of the trailing 90 days ending at 00:00 UTC today, disclosed by `investment_default_window`; the window bounds the work units (each counts whole in the window that holds its end stamp) and the pull requests behind an empty team's `investment_team_prs_without_linked_work` cause, and the rest stays the current axis (currently-owned ownership, no prior-window comparison, the current-axis empty-read reason, `population_window` `current`), and its stored-history span reason names the earliest stored unit but not the window's clock-derived bounds**; **CHAOS-12160 (CHAOS-5930 decision A, a disclosed roll-up): a project fact served the owning teams' roll-up carries `project_own_work_unit_count` (the project's own work units in the window: 0, or units with no measurable effort; an evidence-gated unit counts, CHAOS-12181), the fact field `project_own_uncategorized_unit_count` (how many of those are evidence-gated; not on the claim) and the coverage reason `investment_project_owning_team_rollup` with both unit counts, naming the gated part when there is one; every served investment claim whose grounding fact names an `investment_mix_source` carries the contract field `investment_mix` {`investment_mix_source`, `rollup_basis`, `work_unit_count`, `project_own_work_unit_count`}, set by the server after every claim is minted (`discloseInvestmentMix`), never draft-authored, and copied onto the answer projection's key facts**; **the widest window is per kind (`data_catalog` `facts.kinds[].max_window_days`; a wider request is refused with `window_beyond_kind_max`), and a window that starts before the stored history is served over the stored span with `investment_window_beyond_stored_history` (organization) or `investment_project_window_first_unit` (the project's own earliest linked unit)**; **a direct read may ask for the work units behind the allocation (`units` argument: page of 100, at most 150, `next_cursor`; a `work_unit_page` summary fact and one `work_unit_share` fact per unit; an organization unit whose effort reaches no resolved repository carries `unattributed_no_resolved_repository`)** | team, **project**, **repository**, **organization** |
-| readiness | `estimate_coverage_metrics_daily`; **+`team_project_ownership` ⋈ `estimate_coverage_metrics_daily`, per-team `team_breakdown` Rows, never summed across work scopes (project, CHAOS-4363)** | team, **project** |
+| metrics | `repo_metrics_daily` — **own raw query (not `readers.ReadRepositoryMetrics`, which collapses to one row), `daily_metrics` per-day Rows table over the caller's own evidence window (explicit Start/End verbatim, else the platform's 90-day default policy width — the repository rows change)**; **+`team_metrics_daily`** (team, direct, still one-row scalar); **+`team_project_ownership` ⋈ `team_metrics_daily`** (project, summed-counts rollup); **window change failure rate (repository; team = one rate over the union of its owned repositories): `repo_change_failure_daily`, the counts of every stored day in the window summed and one rule applied, never an average of daily rates; `change_failure_rate_state` is `measured`, `not_applicable_no_deployments` or `unknown_no_incident_evidence` (no rate for the last two, so a repository that deploys with no incident evidence never reads 0) and `change_failure_link_tier` is `native` or `heuristic`**; `revert_rate` is a per-day `repo_metrics_daily` value whose NULL days are not applicable (not zero), and a coverage reason names how many days lacked it | repository, **team, project** |
+| health | `compounding_risk_daily` — scalar `severity`/`compounding_risk` **+ `risk_rules` Rows table, one row per formula component (churn/complexity/ownership/review norm × weight)**, repository and team; **+`team_project_ownership` ⋈ `compounding_risk_daily` (team layer) and +`team_project_ownership` ⋈ `team_repo_ownership` ⋈ `compounding_risk_daily` (repo layer, one hop further), both landing in one `risk_breakdown` Rows table (project); the repo layer resolves an ownership row with no `repo_id` by repository name (`ownedRepositoriesSource`)** | repository, team, **project** |
+| workload | `capacity_forecasts`; team: the same latest row's p85/p95 days, the three percentile dates, `simulation_count`, and its fixed-scope completion distribution as a `distribution` table (`completion_days` key; `runs`, `cumulative_share` measures, the share copied from ops `binsToModel` and held to it by the `forecast-oracle` CI job), with `completion_distribution_state` (`available`, `not_stored`, `no_run_within_horizon`, `over_limit`, `malformed`, `scope_ambiguous`, `unmatched`) on every team fact; **+`team_project_ownership` ⋈ `capacity_forecasts`, per-team `team_breakdown` Rows, never summed/averaged (project)**; project: `latest_run_day` is the day of the organization's newest forecast run, and a project whose freshest forecast `day` is older is served `stale` (that run did not forecast it again; its `backlog_size` is the in-progress count of its own day, never zeroed) | team, **project** |
+| investment | `work_unit_investments` only (the deprecated `investment_metrics_daily` is read for no subject and is no longer declared in `devhealthschema`); **project (D5932): ONLY the canonical theme mix (`work_unit_investments`, owning-team roll-up or the project's own attribution); NO `team_breakdown` and none of the legacy `investment_metrics_daily` day fields are served for a project, and a project with no canonical mix serves no fact but a named coverage reason `investment_project_no_canonical_mix`**; **+`work_unit_investments` ⋈ `work_item_team_attributions`, the CANONICAL 5-theme distribution — `theme_*`/`theme_quality_bugfix`/`prior_theme_*` SCALAR fields on the SAME team fact, never `investment_metrics_daily`'s deprecated legacy taxonomy; see §7**; **Team-investment-mix change: the team mix is now the SUM of its OWNED repositories' mixes (`team_repo_ownership`, once per repo per team), no work-item majority vote, plus a declared `theme_breakdown` table (allocation_breakdown)**; **Repository-theme-breakdown change: on a single-team read the team fact also serves the declared detail table `repository_theme_breakdown` (one row per (repository, theme) with effort; owned repositories whole, project-reached repositories by their linked pull requests only through a per-(team, repository) linked read; each repository named by its `repos` handle; row bound 320; withheld, with `devhealthfacts.repository_theme_breakdown_withheld`, for a nameless repository, a cut linked read, or more than 320 links)**; **+repository scope: `work_unit_investments` effort split across the repos of its PR refs by PR-ref share (partition; unresolvable refs null-carrying; `repo_id` fallback when no PR ref), emitted as `theme_*` scalars + a declared `theme_breakdown` table with source/attribution provenance**; **Read_facts change: the repository/team mix reads the latest work-unit set ops' `LatestWorkUnitInvestmentsSource` reads (superseded units excluded via `work_unit_supersessions`, only the latest complete membership run, a NULL latest `repo_id` kept NULL), and a `team_repo_ownership` row with no `repo_id` resolves by (provider, lower-cased name) against `repos` as ops `teamscope.RepoCondition` does (`ownedRepositoriesSource`, also used by the project theme mix)**; **Newest-daily-row pin's project `team_breakdown` investment row (legacy day sums) was removed by the investment team-breakdown removal; `FactMetrics`' own `team_breakdown` is unchanged**; **organization: the canonical theme mix over every work unit of the organization, with an `unattributed_effort_share` for effort that reaches no resolved repository (withheld from a repository-restricted caller, who gets a named reason instead of a partial total)**; **ownership is read as synced, not historical: an ownership row counts for a window when it has not ended before the window start (`valid_from` is a sync stamp, never a window filter), disclosed by `investment_ownership_as_synced`, and an empty team window names `investment_team_no_owned_repository` or `investment_team_no_unit_in_window`, and a team whose owned repositories hold units that all have zero persisted effort names `investment_team_effort_not_measurable` with the unit count (no fact, no zero mix; an unmeasured or capped unit is not told apart from a measured zero)**; **a team with no work unit in the window and pull requests in its repositories (window: created before the end, not merged or closed before the start; none on the current axis), none with an admitted `work_graph_issue_pr` link (a known provenance tier for the pull request, where an explicit_text or heuristic row counts only when its issue has no native row in the team's repositories; a native row of the same issue in a repository nobody asked about is a named gap; the linked work item's type is not read; the decision is logged as `devhealthfacts.team_pr_link_state_native_first`), names `investment_team_prs_without_linked_work` with the pull request count and says only that no pull request in the window has an admitted link; a team with no pull request or any linked pull request keeps `investment_team_no_unit_in_window`**; **Current-axis windowing change (lead ruling on DW0): the current axis takes a window, as every window-bound rollup does (`resolveRollupWindow`, the metrics rule): the answer's committed evidence window when it carries one (any provenance), all history for `all_time`, else the platform default of the trailing 90 days ending at 00:00 UTC today, disclosed by `investment_default_window`; the window bounds the work units (each counts whole in the window that holds its end stamp) and the pull requests behind an empty team's `investment_team_prs_without_linked_work` cause, and the rest stays the current axis (currently-owned ownership, no prior-window comparison, the current-axis empty-read reason, `population_window` `current`), and its stored-history span reason names the earliest stored unit but not the window's clock-derived bounds**; **Owning-team roll-up disclosure (the project theme-mix roll-up decision A, a disclosed roll-up): a project fact served the owning teams' roll-up carries `project_own_work_unit_count` (the project's own work units in the window: 0, or units with no measurable effort; an evidence-gated unit counts), the fact field `project_own_uncategorized_unit_count` (how many of those are evidence-gated; not on the claim) and the coverage reason `investment_project_owning_team_rollup` with both unit counts, naming the gated part when there is one; every served investment claim whose grounding fact names an `investment_mix_source` carries the contract field `investment_mix` {`investment_mix_source`, `rollup_basis`, `work_unit_count`, `project_own_work_unit_count`}, set by the server after every claim is minted (`discloseInvestmentMix`), never draft-authored, and copied onto the answer projection's key facts**; **the widest window is per kind (`data_catalog` `facts.kinds[].max_window_days`; a wider request is refused with `window_beyond_kind_max`), and a window that starts before the stored history is served over the stored span with `investment_window_beyond_stored_history` (organization) or `investment_project_window_first_unit` (the project's own earliest linked unit)**; **a direct read may ask for the work units behind the allocation (`units` argument: page of 100, at most 150, `next_cursor`; a `work_unit_page` summary fact and one `work_unit_share` fact per unit; an organization unit whose effort reaches no resolved repository carries `unattributed_no_resolved_repository`)** | team, **project**, **repository**, **organization** |
+| readiness | `estimate_coverage_metrics_daily`; **+`team_project_ownership` ⋈ `estimate_coverage_metrics_daily`, per-team `team_breakdown` Rows, never summed across work scopes (project)** | team, **project** |
 | operational_deficiencies | `recommendations_daily` | team |
 | source_health | ops `sourceHealth` root via the direct-read operation runner (no ClickHouse table) | organization |
-| flow (CHAOS-4364) | `work_item_metrics_daily` (team, per-scope Rows; `work_item_cycle_times`'s flow_efficiency is DELIBERATELY NOT read -- ops sink omits it, see flow.go's doc comment); **+`team_project_ownership` ⋈ `work_item_metrics_daily`**, summed/averaged across a team's own (provider, work_scope_id) rows into one row per team (project, codex R2 fix); **+`repo_metrics_daily`** (repository, PR pickup/review timings, distinct shape) | team, project, repository |
+| flow | `work_item_metrics_daily` (team, per-scope Rows; `work_item_cycle_times`'s flow_efficiency is DELIBERATELY NOT read -- ops sink omits it, see flow.go's doc comment); **+`team_project_ownership` ⋈ `work_item_metrics_daily`**, summed/averaged across a team's own (provider, work_scope_id) rows into one row per team (project, codex R2 fix); **+`repo_metrics_daily`** (repository, PR pickup/review timings, distinct shape) | team, project, repository |
 | security_alerts | `security_alerts` (newest stored version per alert; open states `open`/`detected`/`confirmed` only) joined to `repos.provider` — counts by source and severity, repository only; closed alerts and secret scanning are `not_collected`, a provider with no security source (Jira, Linear) is `not_collected`, and a repository with no stored rows is `no_alerts_stored_collection_state_unknown`, never zero | repository |
 | file_hotspots | `file_hotspot_daily` (ReplacingMergeTree by computed_at; rows of the repository's latest `(day, computed_at)` run inside the window, read through the run projection) plus an existence check on `file_complexity_snapshots` — the top 10 files per repository by stored `risk_score`, with the run size; repository only; a repository with no row says `no_hotspot_rows_in_window`, a repository with no complexity snapshot serves cyclomatic fields null and says the score reflects churn only |
-| landscape (CHAOS-4364) | `ic_landscape_rolling_30d` aggregated to team, one copy of each identity's stats — never per-identity (no person-to-person ranking); a read of two or more teams whose own latest days differ also carries `common_live_day` (latest day every team has live rows for >=2 identities; only an offer for the refused quadrant, CHAOS-12958); **+`team_project_ownership` ⋈ `ic_landscape_rolling_30d`** (project, owning-teams rollup) | team, project |
+| landscape | `ic_landscape_rolling_30d` aggregated to team, one copy of each identity's stats — never per-identity (no person-to-person ranking); a read of two or more teams whose own latest days differ also carries `common_live_day` (latest day every team has live rows for >=2 identities; only an offer for the refused quadrant); **+`team_project_ownership` ⋈ `ic_landscape_rolling_30d`** (project, owning-teams rollup) | team, project |
 | commitment | `projects` (`target_date`, `state`, `state_source` as stored) ⋈ the project's issues in `work_items` FINAL (resolved project key, never an issue repository column or key prefix; latest row per item; caller-authorized items only) ⋈ `sprints` FINAL on (provider, `sprint_id`): provider-stated dates and raw counts as of the request day (`as_of_day`, the UTC date, so a client input does not move with the clock; `items_open` counts only the known open statuses backlog, todo, in_progress, in_review, blocked; an unknown or empty status is `unknown_status_count`, never open; `items_past_due_open` = known open and `due_at` before the start of `as_of_day`; `items_unreadable_count` = the project's issues the caller cannot read, a count only, and with any such issue and no stated date `commitment_status` is left out, never `none_stated`; a github project carries `iteration_basis` `not_collected` because Projects iterations have no sprint row, and with nothing stated it carries no `commitment_status`, never `none_stated`; `sprint_refs_unresolved` counts issues whose `sprint_id` names no sprint row with an end date, with `sprint_refs_unresolved_reason` `sprint_not_found_or_without_end`, and with nothing stated such a project also carries no `commitment_status`; `issue_due_dates` lists up to 25 of the project's caller-authorized dated issues as `work_item_id`, `due_at`, `status` and `past_due`, known open issues with a `due_at` before the start of `as_of_day` first, then by `due_at`, and `issue_due_dates_truncated` is true when more dated issues exist; the table is left out when no authorized issue has a `due_at`), the sprint end named by kind (`cycle` linear, `milestone` github/gitlab, `sprint` jira), `commitment_status` `stated` or `none_stated` (`none_stated` only when the project has readable issues, every issue is readable and nothing states a date; no issue rows serves the zero counts and no status), never a risk verdict; current axis only | project |
 
 **Updated 2026-09-15 (request-carried work-item repository scope).** The
@@ -1310,12 +1310,12 @@ unmodified in a new per-team `team_breakdown` field instead, disclosed via
 a `rollup_basis` field on the fact. This is what
 `ContextFabricClaimedFact.Rows` / `ContextFabricProjectedFact.Rows`
 (new, additive, `context_fabric_types.go` / `context_fabric_answer_projection.go`,
-CHAOS-4347) exist for: a renderable table on a fact/claim whose evidence
+Status-category fact-kind work) exist for: a renderable table on a fact/claim whose evidence
 is genuinely a set of rows, not a lossy single scalar. Deliberately does
 NOT touch `ContextFabricScalarValue` itself (also the projection-write
 contract's property-value type, which documents "nested objects and
 arrays remain disallowed" as a deliberate invariant for THAT surface).
-**Updated 2026-08-27 (CHAOS-4355): now wired into synthesis.** A driver's
+**Updated 2026-08-27: now wired into synthesis.** A driver's
 cited claim now carries `Rows`: `attachCanonicalRows`
 (`internal/contextfabric/model_runtime.go`), the one place a `ClaimedFact.Rows`
 is ever set, copies it verbatim from the canonical fact each claim cites,
@@ -1323,9 +1323,9 @@ immediately after `SynthesisDraft.ValidateAgainst` passes.
 `answerprojection.Project` carries it through unchanged (`project.go`'s
 `projectDrivers`, unchanged since #300).
 
-**Updated 2026-08-31 (CHAOS-4637 / S6): the rows now say what they ARE.**
+**Updated 2026-08-31 (the declaration-driven render-shapes work / S6): the rows now say what they ARE.**
 `ContextFabricClaimedFact.table` / `ContextFabricProjectedFact.table` (new,
-additive, OPTIONAL) carry the producer's CHAOS-4633 `FactTable` declaration —
+additive, OPTIONAL) carry the producer's the FactTable declaration change `FactTable` declaration —
 `shape` (`time_series` / `breakdown` / `ranking`), the COMPOSITE `key`,
 `measures`, `order_by` — beside the rows they describe. `canonicalFieldTable`
 reads it off the SAME field `canonicalRowsField` chose for the rows, so the
@@ -1334,7 +1334,7 @@ divergence there would be invisible on the wire and would make the
 declaration a lie rather than a guard. Absent means undeclared, and an
 undeclared table is never charted (§8).
 
-**Updated 2026-11-02 (CHAOS-11984): a measure states its unit.** The table
+**Updated 2026-11-02: a measure states its unit.** The table
 declaration gains an optional `measure_units` list, one `{measure, unit}` per
 measure whose producer declares a unit from the closed vocabulary `count`,
 `ratio`, `hours`, `days`, `points`. The unit comes from the producer's own
@@ -1346,7 +1346,7 @@ outside the vocabulary (`axis`, `score`, `share`, `loc`, `lines`, or none) is no
 served, so that measure has no unit on the wire, and a consumer adds none. Each
 served token has a word in the label registry under `measure_unit:<unit>`.
 
-**Updated 2026-11-02 (CHAOS-12607, CHAOS-4613 ruling 4): a fourth shape,
+**Updated 2026-11-02 (the render-shape ruling ruling 4): a fourth shape,
 `distribution`.** A completion forecast is one entity's Monte Carlo outcomes,
 one row per distinct day to the ops 365-day horizon; the largest latest
 forecast on askdev-1 has 359 rows (37,457 row bytes and 1,077 cells as the served
@@ -1362,7 +1362,7 @@ ascending. It is never cut: the answer-size row cut withholds a distribution
 over its cap whole, table and declaration together
 (`tables_distribution_withheld` on the truncation line), and a producer serves
 a distribution past its cap as a state, not a shorter table. A team's
-`repository_theme_breakdown` is withheld whole the same way (CHAOS-12582,
+`repository_theme_breakdown` is withheld whole the same way (the team sankey change,
 `tables_repository_flow_withheld`), because a cut can take every link of one
 theme while every other theme still adds up. Adding a value to
 the frozen `ClaimedFactTable.shape` enum is a contract change: an MCP client
@@ -1375,7 +1375,7 @@ ask-dev pin, the web pin and the web deploy hold the shape. Off, the team fact
 still carries the row's scalar percentiles, dates and run count, and nothing
 about the distribution: no table, no state, no horizon.
 
-**Updated 2026-11-04 (CHAOS-12726): a forecast of some of a team's work scopes
+**Updated 2026-11-04: a forecast of some of a team's work scopes
 says so.** A team is forecast under several work scopes at once and the
 workload provider emits one fact per scope. A claim states one of them, so an
 answer that claims fewer scopes than the team has must not read as the team's
@@ -1391,7 +1391,7 @@ answer: 13 work scopes.` The sentence is recognised by
 whose scopes are all claimed, or that has one, gets the count and no sentence.
 This discloses which scopes were used; it does not choose a forecast source, so
 the question whether a team answer should use the capacity page's team-wide
-forecast, one named scope, or a table of all scopes stays open (CHAOS-12726). It
+forecast, one named scope, or a table of all scopes stays open. It
 widens the forecast summary (optional fields, absent when unknown): ask-dev and
 web move by pin before the count is drawn.
 
@@ -1407,7 +1407,7 @@ flowchart LR
     DECL -. "token outside the vocabulary" .-> NONE["no entry: no unit shown"]
 ```
 
-**Updated 2026-11-02 (CHAOS-11985): a daily series states its cadence.** The
+**Updated 2026-11-02: a daily series states its cadence.** The
 table declaration gains an optional `cadence`, a closed vocabulary with one
 member, `day`: one row per UTC calendar day, every key value a date written
 `YYYY-MM-DD`, no day repeated. It is stated only on a `time_series` table, from
@@ -1433,18 +1433,18 @@ flowchart LR
     ALIGN -->|no| NO
 ```
 
-**Correction, same day (CHAOS-4355 follow-up):** the paragraph above
+**Correction, same day (the producer-rows synthesis change follow-up):** the paragraph above
 originally claimed "the prompt itself was NOT changed -- the model is never
 told Rows exist." That was never actually true and was never verified
 against the running code: `synthesisInputFromDomain`
 (`internal/contextfabric/genkitruntime/runtime.go`) put `input.Facts.Facts`
 straight into the `canonical_facts` prompt payload, unfiltered, since
-CHAOS-4347 (#300) first added `FactValue.Rows` -- any producer's
-Rows-shaped field (by CHAOS-4364, six of them: health/workload/readiness/
+Status-category fact-kind work (#300) first added `FactValue.Rows` -- any producer's
+Rows-shaped field (by the flow-and-landscape fact-kind change, six of them: health/workload/readiness/
 investment/flow/landscape) was serialized to the model verbatim. This is
 exactly what taught the model to echo a fabricated `Rows` array back onto
 its own `ClaimedFacts`, which `ValidateAgainst` unconditionally rejects --
-the kiac pilot rev 19 3/3 `synthesis_rejected` 422s (CHAOS-4355 diagnosis,
+the kiac pilot rev 19 3/3 `synthesis_rejected` 422s (the producer-rows synthesis change diagnosis,
 19:10 08-27), live-reproduced again through the Workbench during this
 follow-up. The fix: `modelFacingFacts` (same file) drops every Rows-shaped
 field from the canonical facts BEFORE they reach the prompt -- the model
@@ -1484,7 +1484,7 @@ likely conflates with the 8 unread CH tables below — report to team-lead;
 not corrected in this PR (docs-only, different file, out of this page's
 scope, flagging per this lane's discrepancy-reporting mandate).
 
-**Update (CHAOS-4347, PR #300): 3 of the original 8 CH tables now have a
+**Update (PR #300): 3 of the original 8 CH tables now have a
 reading `FactProvider`** — `team_metrics_daily`, `cicd_metrics_daily`,
 `deploy_metrics_daily` (see the widened table above). Their production
 column types were verified LIVE off the kiac trial ClickHouse
@@ -1510,7 +1510,7 @@ in a trial-harness table-name classification map,
 commented as not a read or a schema declaration — that reference is
 unrelated to the new FactProvider read path above.)
 
-**Category → FactKind is a 1:1 map today, and that is CHAOS-4347's other
+**Category → FactKind is a 1:1 map today, and that is the status-category fact-kind work's other
 half.** `contextFabricDriverCategoryFactKind`
 (`internal/contracts/v1/context_fabric_types.go:483-498`) maps exactly 14 of
 16 driver categories to exactly one `FactKind` each (`relationship` and
@@ -1525,8 +1525,8 @@ fix, lane's choice; approved in principle, implementation "Phase 2 held
 pending trial-case validation" as of 17:42 PDT — **not yet in
 `context_fabric_types.go` on `main`**.
 
-**Correction (flagged by lane-4347-ch, not fixed in this PR — out of this
-lane's scope): the paragraph above is now stale.** `lane-4335`'s CHAOS-4347
+**Correction (flagged by the team-subject work stream, not fixed in this PR — out of this
+work stream's scope): the paragraph above is now stale.** the status-category work stream's's the status-category fact-kind work
 PR #298 (`internal/contextfabric/chaos4347_status_category_composition.go`)
 merged as `1e9815c7`, ahead of this page's own cited baseline `569f0f39`.
 It does not touch the 1:1 `contextFabricDriverCategoryFactKind` map itself,
@@ -1538,24 +1538,24 @@ identity} / team→{health, workload, readiness} before planning, so
 those two kinds (work_item stays 1:1). The `project_status`
 new-FactKind-vs-widen-`StatusProvider` decision above is unaffected and
 still open — that is a separate, still-unbuilt slice
-(`lane-4347-project`, CHAOS-4348 reachability work is currently ahead of
+(the project-subject work stream, the subject-pool reachability fix reachability work is currently ahead of
 it in that lane's queue).
 
-**Update (CHAOS-4363, 4347-A, routing slice):** `statusCategoryFactKindComposition`'s
+**Update (4347-A, routing slice):** `statusCategoryFactKindComposition`'s
 `SubjectTeam` entry now also composes `FactInvestment`, so the team leg of
 the paragraph above was `team→{health, workload, readiness, investment}`
-at this ticket's own tip; CHAOS-4364 (rebased on top, see above) adds
+at this ticket's own tip; the flow-and-landscape fact-kind change (rebased on top, see above) adds
 `flow`/`landscape` to the same entry and adds the first `project` entry.
 Repository's set is unchanged.
 
-**Update (CHAOS-4363, 4347-A, producer slice — completes this ticket):**
+**Update (4347-A, producer slice — completes this ticket):**
 investment/workload/readiness/health (see the widened table above) all now
 answer for a **project** subject directly, by a real
 `team_project_ownership` join (health also chains one hop further through
 `team_repo_ownership`) -- the SAME real-join pattern `metrics.go` set for
-`FactMetrics` in CHAOS-4347, never the `FactReadScopeResolver` activity-proxy
+`FactMetrics` in the status-category fact-kind work, never the `FactReadScopeResolver` activity-proxy
 route. Unlike `FactMetrics`' commit counts, none of these four sum or
-average across owning teams (investment is no longer one of them for a project: its `team_breakdown` is gone, CHAOS-9195; it carries only the canonical theme mix): each source table partitions by a dimension
+average across owning teams (investment is no longer one of them for a project: its `team_breakdown` is gone, the investment team-breakdown removal; it carries only the canonical theme mix): each source table partitions by a dimension
 (`investment_area`/`project_stream`, `work_scope_id`, or the forecast's own
 Monte Carlo statistics) that would be meaningless mixed across teams, so
 every other project-level fact instead carries a `team_breakdown` (or, for health,
@@ -1568,7 +1568,7 @@ axis, per this ticket's acceptance criterion. `investment_classifications_daily`
 is deliberately NOT read for the "classification breakdown" the ticket
 proposed: its live production schema (`system.columns`, kiac trial
 ClickHouse, 2026-08-27) carries `repo_id`/`artifact_id`/`artifact_type`, no
-`team_id` column at all -- the same "no team-keyed source" gap CHAOS-4347's
+`team_id` column at all -- the same "no team-keyed source" gap the status-category fact-kind work's
 disposition inventory found for cognitive load (`user_metrics_daily`).
 
 **Project status drivers name each number for what it measures and date it.**
@@ -1618,7 +1618,7 @@ status floor recomposes the lead prose keeping the count sentences that lead it
 and the narrated-cohort form; a reused answer stored with its count last is
 served with the count moved to the head, once.
 
-**The status sentence states no status word (CHAOS-12286).** A person is never
+**The status sentence states no status word.** A person is never
 shown ACR's own status or completeness word (chris 2026-10-31); web shows the
 lead prose verbatim above its status pill. So the status sentence says what was
 limited, and a complete answer has none:
@@ -1652,7 +1652,7 @@ source read was cut or is out of date reads "Limited read: …" (it was "Not
 complete: …"); a stored clause is restated on the served copy. The stored
 document is never rewritten.
 
-**A cut source read is labelled in plain words (CHAOS-12289).** A driver whose
+**A cut source read is labelled in plain words.** A driver whose
 source read was cut is qualified "(truncated: the source read was cut)" (it was
 "(partial: the source read was truncated)", ACR's own state word), in the lead
 driver sentence, the principal driver list, current_state's limited-read
@@ -1685,7 +1685,7 @@ populate on THIS pilot data until Ops backfills team-scope
 `compounding_risk_daily` and/or `team_repo_ownership` -- flagged to
 team-lead as a follow-up, out of this ticket's ACR-side scope.
 
-**Codex round-1 findings, all fixed (CHAOS-4363):** (1) each project
+**Codex round-1 findings, all fixed:** (1) each project
 rollup's breakdown Rows table is now capped at 64 entries
 (`maxProjectRollupBreakdownRows`, shared.go) before `RowsFactValue` --
 `FactValue.Validate` rejects a table over that bound outright, which would
@@ -1709,7 +1709,7 @@ once, in each provider's own `Capability()` method — code-declared, never
 model/phrasing-derived (`internal/contextfabric/AGENTS.md:49`).
 `planFactReads` (`fact_planner.go:183`) compares resolved subjects against
 that declared set and prunes/narrows before any provider runs; the
-`FactReadScopeResolver` (`fact_scope.go`, CHAOS-4099, **activated** —
+`FactReadScopeResolver` (`fact_scope.go`, the unreachable-fact-family disclosure change, **activated** —
 project and team policies both ruled and shipped, `context-fabric-fact-scope.md`
 §9-10) sits one seam earlier, expanding a project/team origin to its
 activity-proxy repositories/PRs/reviews so the honest "unexpanded, but
@@ -1741,8 +1741,8 @@ flowchart LR
   end
   subgraph SYNTH["Synthesis/terminal hop"]
     D1["false_no_match<br/>expectID!='' AND status==no_match"]
-    D2["answer_rate NUMERATOR (CHAOS-4525)<br/>anchored: complete AND claimed_facts&gt;=1<br/>cohort: (complete|partial|degraded)<br/>AND claimed_facts&gt;=1<br/>AND cohort_ranked_member_count&gt;=1"]
-    D3["answer_rate DENOMINATOR (CHAOS-4525)<br/>arm==positive AND<br/>(expected_id!='' OR cohort_answer_expected)<br/>cohort_answer_expected = annex<br/>census.terminal_expectation=='aggregate_assessment'"]
+    D2["answer_rate NUMERATOR<br/>anchored: complete AND claimed_facts&gt;=1<br/>cohort: (complete|partial|degraded)<br/>AND claimed_facts&gt;=1<br/>AND cohort_ranked_member_count&gt;=1"]
+    D3["answer_rate DENOMINATOR<br/>arm==positive AND<br/>(expected_id!='' OR cohort_answer_expected)<br/>cohort_answer_expected = annex<br/>census.terminal_expectation=='aggregate_assessment'"]
     D3 --> D2
   end
   subgraph MISSING["No field exists for this hop"]
@@ -1764,11 +1764,11 @@ implies another. `expected_subject_in_pool` is the crux of the incident this
 page exists to prevent a repeat of: it is scanned from a "corroboration"
 trace event emitted only for candidates that reached the commit-eligible
 `pool` (diagram 2) — a repository/project/team subject correctly retrieved
-into the CHAOS-4271 `offerOnlyPool` reads **false** here even though it was
+into the repository coverage-floor change `offerOnlyPool` reads **false** here even though it was
 genuinely found and offered. `wrong_commit=0` is the second trap: the field
 is `false` both when the commit was correct and when nothing committed at
 all, so it certifies safety, never reachability. `window_gated_*` measures
-a completely separate concern — whether the CHAOS-4040 regime-A gate fired
+a completely separate concern — whether the inferred-window gate regime-A gate fired
 and disclosed a window-widening offer — and has no bearing on pool or
 commit correctness. **`canonical_facts_count`, named in this diagram's
 original brief, does not exist in the harness as a field** — no
@@ -1778,7 +1778,7 @@ team-lead as aspirational, not a stale-vs-current discrepancy, since no
 prior doc claimed it existed.
 
 **The answer-rate denominator is the sixth hop, and it was silently
-class-blind until CHAOS-4525.** `answer_rate` (CHAOS-4386) asks "of the
+class-blind until the answerable-band corpus change.** `answer_rate` asks "of the
 questions whose oracle expects an answer, how many got one" — and it read
 "the oracle expects an answer" as `expected_id != ""`. That is a correct
 test for an ANCHORED subject question and a false negative for a
@@ -1786,8 +1786,8 @@ discovered cohort: a cohort question's answer IS the ranked cohort, so its
 annex entry carries `anchor.positive_key: null` by construction and its
 corpus row's `expect_id` is empty. Every `cohort_assessment` case in ext65
 therefore sat outside the denominator no matter what it did — including
-the North Star's own team-cohort bar question, which CHAOS-4450 (Run J)
-found the corpus could not express in an answerable band at all. CHAOS-4525
+the North Star's own team-cohort bar question, which the cohort bar-question run (Run J)
+found the corpus could not express in an answerable band at all. Answerable-band corpus change
 adds the seeds AND the second gate: `cohort_answer_expected`, read from the
 annex's own `oracles.census.terminal_expectation`, admitted only for
 `aggregate_assessment`. `witnessed_no_match` (index 61) and
@@ -1798,7 +1798,7 @@ case still qualifies on `expected_id` alone.
 
 **The numerator is class-shaped too, for a measured reason.** It required
 `terminal_status == "complete"`, which is right for an anchored subject
-answer and wrong for a cohort: CHAOS-4522's first successful cohort answer
+answer and wrong for a cohort: the cohort-grounding fix's first successful cohort answer
 against real data is delivered as **`degraded`, with claimed facts and three
 ranked teams** — a real answer, in the user's hands, that a complete-only
 numerator scores 0. `degraded` is the honest status there under North Star
@@ -1815,15 +1815,15 @@ same as a ranked, driver-backed answer. `clarification_required` and
 
 ---
 
-## 6 — N-turn confirmation-carry class (CHAOS-4360)
+## 6 — N-turn confirmation-carry class
 
 The two-turn harness (§5) never sends a third request — every arm it
-defines is a fixed two-call shape. CHAOS-4355's live walkthrough (13:40
+defines is a fixed two-call shape. Producer-rows synthesis change's live walkthrough (13:40
 08-27) found a defect that shape structurally cannot see: the live
 Workbench batches window+candidate receipts into one turn-2 call, which
 can leave candidate unresolved (superseded by the SAME call's own
 window-driven pool change) and forces a third turn redeeming a FRESH
-candidate offer. This harness reproduces the underlying CHAOS-4360 gap
+candidate offer. This harness reproduces the underlying the same-conversation evidence-window carry change gap
 directly, WITHOUT depending on that specific supersession path: it
 deliberately never batches window and candidate in the same call at all
 (codex review round 2, P1 — see `runNTurnCase`'s own doc comment) — window
@@ -1849,20 +1849,20 @@ sequenceDiagram
   E-->>C: window: applied<br/>StructureNeeds{subject_candidate: still offered, untouched this turn}
 
   C->>E: turn 3: PriorCandidateReceipts ONLY<br/>window NEVER re-sent (already applied)
-  Note over E: nothing carries the confirmed window<br/>across this call server-side (CHAOS-4360 gap) --<br/>it arrives INFERRED again
+  Note over E: nothing carries the confirmed window<br/>across this call server-side (the same-conversation evidence-window carry change gap) --<br/>it arrives INFERRED again
   E-->>C: window_canonicalization_outcome=gated_class_default (reverted!)<br/>window re-appears in missing -- candidate receipt applies<br/>but resolution stays subjectless -- never decisive
 ```
 
 **Carry measurement.** `ContextFabricConfirmedStructureEntry.Source`
-already carries a closed pre-CHAOS-4360 vocabulary of exactly three values
+already carries a closed pre-same-conversation-evidence-window-carry-change vocabulary of exactly three values
 (`receipt`, `explicit`, `explicit_unattributed` — `nTurnKnownPreCarrySource`).
-Per lane-4360-acr (PR #306, team communication 2026-08-27): a carried
+Per the same-conversation-carry work stream (PR #306, team communication 2026-08-27): a carried
 window keeps `Provenance=clarification_confirmed` unchanged and instead
 reports the carry on `Source`, a new closed-vocab value `"carried"`. The
 harness reads `Source` generically (`nTurnIsCarriedSource`, the primary
 signal) and `Provenance` generically as a secondary, forward-compatible
 one (`nTurnIsCarriedProvenance`): any value outside the known set on either
-field is, by construction, a new carry tier lane-4360-acr mints — the
+field is, by construction, a new carry tier the same-conversation-carry work stream mints — the
 class runs green on `origin/main` today (neither field can carry an
 out-of-vocabulary value yet) and starts measuring the fix the moment it
 ships, with no harness-side code change and no coordination on an exact
@@ -1870,7 +1870,7 @@ new spelling.
 
 **RED baseline (2026-08-27, kiac, cases 57/60 — the project-candidate
 class this ticket seeds from; indices only, no question text; predates
-lane-4360-acr's own carry fix, PR #306, still in review at the time of this
+the same-conversation-carry work stream's own carry fix, PR #306, still in review at the time of this
 run).** Both safety invariants held (`wrong_commit_count=0`,
 `window_unsafe_commit_count=0`); neither case reached the acceptance bar
 (decisive AND `rows_count>0`); `carry_hit_count=0` on both, as expected
@@ -1894,7 +1894,7 @@ Re-run with the split algorithm, `candidate_only_turn_attempted_count=1`:
   offers; turn 2 sends window ONLY — applies
   (`window_canonicalization_outcome=receipt_confirmed`); turn 3 sends the
   candidate receipt ONLY (window never resent, per the never-resend
-  contract) — **this is the literal CHAOS-4360 defect, reproduced exactly**:
+  contract) — **this is the literal the same-conversation evidence-window carry change defect, reproduced exactly**:
   `window_canonicalization_outcome` reverts to `gated_class_default`
   (inferred again) and `window` re-appears in `missing`, even though it was
   genuinely confirmed one turn earlier. The candidate receipt itself
@@ -1911,7 +1911,7 @@ Full artifact:
 `.remember/trial-results/gen-trial-chaos4360_nturn-20260827T220625Z-23437.json`
 (schema v40).
 
-**GREEN measurement (2026-08-27, kiac, same cases 57/60) — lane-4360-acr's
+**GREEN measurement (2026-08-27, kiac, same cases 57/60) — the same-conversation-carry work stream's
 carry fix, PR #306, SHA `02c44254`, merged to `origin/main`.** Run from a
 disposable scratch worktree at `origin/main` (carries #306) with this
 harness's own test files copied in — never committed to either branch;
@@ -1933,12 +1933,12 @@ Case 57 is still NOT decisive end-to-end (`clarification_required`,
 `subject_candidate` still lists `applied` yet reappears in `missing` — a
 subjectless/`ambiguous` terminal): the candidate's own commit still needs
 something past what redeeming its receipt alone provides, plausibly the
-`prior_subject_receipts` reauth path lane-4360-acr's own scope note names
+`prior_subject_receipts` reauth path the same-conversation-carry work stream's own scope note names
 as separate and unmodified in PR #306 ("expected_kind/subject_anchor
 carry is NOT built... `prior_subject_receipts` re-verification already
 resolves the candidate-commit gap on its own once the window stops being
 gated"). This harness's turn 3 sends `PriorCandidateReceipts` only, never
-`PriorSubjectReceipts` — flagged to lane-4360-acr/team-lead as a possible
+`PriorSubjectReceipts` — flagged to the same-conversation-carry work stream/team-lead as a possible
 follow-up rather than assumed to be this ticket's own residual gap. Case
 60 unaffected (never needed candidate; same decisive `degraded` result
 both before and after). Both safety invariants held in the GREEN run too
@@ -2048,7 +2048,7 @@ Get).
 
 ---
 
-## 7 — Cohort ranking (CHAOS-4398, PR1+PR2)
+## 7 — Cohort ranking (PR1+PR2)
 
 `ContextFabricCohort.Members` used to carry only pool order (a fixed
 `InclusionReasons` sentence, no score) — "which teams are struggling and
@@ -2081,7 +2081,7 @@ flowchart TB
     F --> G["result.Cohort = graphContext.Cohort<br/>(already ranked; synthesizer never sets it)"]
 ```
 
-**Updated 2026-08-29 (CHAOS-4522): the cohort → synthesis handoff has TWO
+**Updated 2026-08-29: the cohort → synthesis handoff has TWO
 closures, and both were half-wired.** The diagram above stops at
 "Synthesize", which hid the fact that `SynthesisDraft.ValidateAgainst`
 re-derives its OWN view of what the model was allowed to say, from
@@ -2125,7 +2125,7 @@ grouping refusal and the single bounded path into the answer's `Limitations`.
   facts, of which 17 are `readiness|team:CHAOS`, one row per work
   scope/day. `cohort_ranking.go`'s `findFact` already documented that
   ("readiness/workload/deficiency aggregate across every fact of their kind
-  … because those producers can legitimately emit several"); CHAOS-4398 gave
+  … because those producers can legitimately emit several"); the subject-model and cohort-answer design gave
   the RANKING that treatment and the validator never got it. The first of
   those 17 carries no `estimate_coverage_ratio`, so every claim about the
   readiness coverage gap — one of the four families the v2 formula is built
@@ -2135,7 +2135,7 @@ grouping refusal and the single bounded path into the answer's `Limitations`.
   model was shown observed that field with exactly that value), only the
   slice-order tiebreak is gone.
 - **Evidence.** `synthesisSubjects` has admitted `Cohort.Members[].Subject`
-  since CHAOS-4398, but `allowedEvidence` was never widened to match, so a
+  since the subject-model and cohort-answer design, but `allowedEvidence` was never widened to match, so a
   member's `EvidenceRefIDs` — shown to the model as part of the Cohort —
   came back as "references unknown evidence". The live cohort ranks
   `team:gh:ops-team`, whose only evidence ref is `acr:v1:team:gh:ops-team`
@@ -2153,7 +2153,7 @@ grouping refusal and the single bounded path into the answer's `Limitations`.
   after the first fix landed.
 
 
-**CHAOS-6559 (2026-09-25): a team's `FactInvestment` is now ONLY the canonical
+**Team-investment-mix change (2026-09-25): a team's `FactInvestment` is now ONLY the canonical
 theme mix, one standalone fact per team.** The legacy team read
 (`readTeamInvestment`, described below) was removed: on prod the mix was merged
 onto the first per-day legacy row, the model answered from the day rows and
@@ -2173,11 +2173,11 @@ fixes. `readTeamThemeMix` (`devhealthfacts/investment.go`) instead reads
 (computed once at categorization time, never recomputed) via a NEW shared
 reader, `readers.ReadTeamThemeMix`
 (`github.com/full-chaos/dev-health-go` v0.3.0, `readers/investment_theme.go`),
-attributed to teams through the SAME CHAOS-2600 ownership-precedence
+attributed to teams through the SAME the ownership-precedence rule ownership-precedence
 majority-vote bridge ops's `investment.py` `build_unit_team_subquery`/
 `PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE` already computes for the
 Investment view — never `author_membership`/`assignee_membership`
-(CHAOS-4321: ownership only, never a person's memberships). The two
+(ownership only, never a person's memberships). The two
 `FactInvestment` facts a team can now carry (legacy per-`(area,stream)`
 rows, plus one NEW fact carrying the canonical `theme_*` fields) are kept
 SEPARATE and found by field PRESENCE, never by list position — mixing them
@@ -2189,7 +2189,7 @@ flowchart LR
     WUI["work_unit_investments<br/>theme_distribution_json<br/>subcategory_distribution_json"] -->|ARRAY JOIN theme_kv| J
     WITA["work_item_team_attributions<br/>FINAL, is_primary=1,<br/>latest computed_at"] -->|majority vote per work unit,<br/>lexicographically-largest tie-break| J["ReadTeamThemeMix<br/>(dev-health-go/readers)"]
     J -->|current window| P["readTeamThemeMix<br/>(acr devhealthfacts/investment.go)<br/>normalizes to shares, sums to ~1.0"]
-    J -.->|"SECOND explicit query,<br/>[start-duration, start)<br/>ONLY when window has an explicit start<br/>(CHAOS-4040: never inferred)"| P
+    J -.->|"SECOND explicit query,<br/>[start-duration, start)<br/>ONLY when window has an explicit start<br/>(never inferred)"| P
     P --> F2["FactInvestment (team)<br/>theme_*, theme_quality_bugfix,<br/>prior_theme_* (omitted if no prior data)"]
 ```
 
@@ -2232,7 +2232,7 @@ all UNCHANGED by PR2); the `RankingTable` Rows panel on
 the 20:50 08-27 standing rule: any acr PR widening the investigation
 contract lists an ask-dev pin bump as a follow-up).
 
-**Update (CHAOS-4525, 2026-08-29):** the harness cohort-question seeds are
+**Update (2026-08-29):** the harness cohort-question seeds are
 now built. Two answerable `cohort_assessment`/`team` cases and two
 answerable `subject_status`/`project` cases (plus a `no_match` control)
 were appended to the trial corpus and its oracle annex by
@@ -2246,12 +2246,12 @@ page and every other durable artifact; cases are named by index and band.
 
 ---
 
-## 8 — Conditional render shapes (CHAOS-4415 slice 1; CHAOS-4637/S6 made them declaration-driven)
+## 8 — Conditional render shapes (the conditional-render-shapes work slice 1; the declaration-driven render-shapes work/S6 made them declaration-driven)
 
 **What it answers.** "Why did this answer get a chart and that one not?" —
 and, harder, "how do I know the chart is telling the truth?"
 
-Before CHAOS-4415 the answer surface carried tables only
+Before the conditional-render-shapes work the answer surface carried tables only
 (`ClaimedFact.rows`, `ProjectedCohort.ranking_table`) and every consumer
 decided for itself whether to draw a chart from them. Two consumers reading
 one answer could legitimately draw different pictures, or none — which is
@@ -2261,7 +2261,7 @@ score, a per-driver contribution breakdown, and dated readiness records.
 
 Selection now lives in the service, and a chart is a claimed fact.
 
-**Updated 2026-08-31 (CHAOS-4637 / S6): the last inference is deleted.**
+**Updated 2026-08-31 (the declaration-driven render-shapes work / S6): the last inference is deleted.**
 `dated_fact_trend` was withdrawn in #340 rather than fixed a fourth time,
 because deciding which columns of a row table are MEASURES and which are
 DIMENSIONS cannot be done from the table alone. It is back, and it now reads
@@ -2276,10 +2276,10 @@ at are now looked up:
 | which column is the axis? | first column that parses as a date on every row | `table.key[0]` — arity 1 by contract |
 | which columns are measures? | "numeric, and not id-named" → a numeric `team_id` plotted; a column called `year` walked through | `table.measures ∩ {claim.field}` — exactly one |
 
-A table with NO declaration is never charted (CHAOS-4627's ruled default,
+A table with NO declaration is never charted (the table-charting ruling's ruled default,
 and the behaviour before this change). Exactly one measure is plotted:
 several on one value axis would assert a commensurability nothing declares,
-which is CHAOS-4625's own designed comparison shape, expressible precisely
+which is the comparison-shape design's own designed comparison shape, expressible precisely
 because `measures` is a declared list.
 
 The declaration carries NO rows of its own — it describes the rows beside
@@ -2298,9 +2298,9 @@ flowchart TD
     subgraph rules["deterministic rules — no fallback branch, no 'looks chartable'"]
         R1{"shape ∈ explicit_cohort,<br/>discovered_cohort<br/>AND a member has a score?"}
         R2{"rule 1 fired AND<br/>ranked members carry drivers?"}
-        R3{"dated_fact_trend (CHAOS-4637)<br/>claim.table.shape == time_series<br/>AND claim.field ∈ table.measures?"}
+        R3{"dated_fact_trend<br/>claim.table.shape == time_series<br/>AND claim.field ∈ table.measures?"}
     end
-    PLAN{"answer_plan.render_kinds<br/>authorizes 'series'?<br/>(CHAOS-4636/4637 — North Star check 10)"}
+    PLAN{"answer_plan.render_kinds<br/>authorizes 'series'?<br/>(the grouped-cohort budget work and declaration-driven render-shapes work — North Star check 10)"}
     SEL --> PLAN
     PLAN -->|yes| R1 --> R2
     PLAN -->|yes| R3
@@ -2312,7 +2312,7 @@ flowchart TD
     R1 -->|yes| S1
     R2 -->|yes| S2
     R3 -->|yes| S3
-    R1 -->|no| SKIP["no shape · EXACTLY ONE closed skip reason<br/>per rule (CHAOS-4621 invariant)<br/>RecordRenderShapeSelection"]
+    R1 -->|no| SKIP["no shape · EXACTLY ONE closed skip reason<br/>per rule (the render-selection invariant invariant)<br/>RecordRenderShapeSelection"]
     R2 -->|no| SKIP
     R3 -->|no| SKIP
 
@@ -2351,7 +2351,7 @@ flowchart TD
    number belongs in a canonical fact, where it gets provenance and coverage
    of its own.
 3. **The projection drops rather than degrades.** A projected cohort member
-   carries no `drivers` array (CHAOS-4398 PR3 narrowed it deliberately;
+   carries no `drivers` array (the subject-model and cohort-answer design PR3 narrowed it deliberately;
    only each member's top-2 driver weights survive as ranking-table cells),
    so the stacked contribution shape usually cannot resolve there. It is
    dropped WHOLE and counted in `projection_budget.render_shapes_omitted` —
@@ -2359,8 +2359,8 @@ flowchart TD
    claims its parts sum to the score, and a stack missing segments claims
    something false. ask-dev is unaffected: it reads the canonical result.
 
-4. **The PLAN gates the KIND before any geometry is consulted (CHAOS-4636,
-   extended to the trend rule by CHAOS-4637).** North Star check 10 — "rich
+4. **The PLAN gates the KIND before any geometry is consulted (the grouped-cohort budget work,
+   extended to the trend rule by the declaration-driven render-shapes work).** North Star check 10 — "rich
    views are conditional on intent, never default" — is enforced by what the
    question asked for, not by what the data happened to allow. A grouped
    status list plans `render_kinds=[table]`, so it gets no chart however
@@ -2371,7 +2371,7 @@ flowchart TD
    a result also arrives from storage, from a replay, and from any future
    producer, and the property belongs to the DOCUMENT rather than to one
    function that happened to check.
-5. **Every rule exits through exactly one recorded outcome (CHAOS-4621).**
+5. **Every rule exits through exactly one recorded outcome.**
    Selected, or exactly one closed skip reason; never both, never neither,
    never two. `RenderShapeSelectionEvent.Accounted()` is that invariant as
    code, and the production sink logs its verdict as
@@ -2385,8 +2385,8 @@ flowchart TD
    once.
 
 **What still cannot be charted, and why that is correct.** A fact carrying
-BOTH a legacy breakdown and a CHAOS-4645 time series serves the LEGACY
-field's rows (CHAOS-4645's ruling, pinned against real data), and the
+BOTH a legacy breakdown and a the team and project time-series change time series serves the LEGACY
+field's rows (the team and project time-series change's ruling, pinned against real data), and the
 declaration travels with the rows through the SAME field selector
 (`canonicalRowsField`) so the two can never describe different fields. Such
 a fact therefore declares itself a `breakdown` and is correctly refused as a
@@ -2396,19 +2396,19 @@ separate slice.
 **Update rule.** A new render kind's producer updates this diagram in the
 same PR. The seven kinds declared but unproduced in slice 1 (`table`,
 `quadrant`, `treemap`, `sunburst`, `sankey`, `burndown`, `forecast`) each
-have a CHAOS-4415 sub-issue; each adds one rule node and one shape node
+have a the conditional-render-shapes work sub-issue; each adds one rule node and one shape node
 here.
 
 ---
 
-## 9 — Answer completeness promotion (CHAOS-4413), and the outcome set that now derives it (S7c)
+## 9 — Answer completeness promotion, and the outcome set that now derives it (S7c)
 
 **What it answers.** "Did this answer stop early, and why — and how much of
 an answer is actually here?"
 
-Before CHAOS-4413, `terminal_status`/`terminal_reason`/`claimed_facts_count`/
+Before the terminal-fields change, `terminal_status`/`terminal_reason`/`claimed_facts_count`/
 `rows_count` existed only inside `cmd/acr-trial-merge-two-turn`'s
-`twoTurnCaseResult` row (CHAOS-4386, PR #315) — a corpus-report shape no
+`twoTurnCaseResult` row (PR #315) — a corpus-report shape no
 consumer of the real answer ever sees. `coverage` was already public.
 North Star check 11 ("the answer contract is richer than the prose") had no
 literal field for the other four; ask-dev and any other bounded consumer had
@@ -2537,18 +2537,18 @@ flowchart TD
    groups.
 
    **A status floor can put `status` below `completeness.state`**
-   (CHAOS-12242). Completeness counts outcome rows only (vol 3 D25). A
+. Completeness counts outcome rows only (vol 3 D25). A
    served-status floor that reads a coverage detail or a limitation which no
    outcome row states lowers the status alone. Three floors do this today:
    `applyUnverifiedProjectNarrowingStatusFloor` (the degrading
    `read_population_unverified` detail with raw `project_narrowing_unverified`),
    `applyStatusPoolCutStatusFloor` (the member-status pool-cut limitation) and
    `applyCutGraphReadStatusFloor` (the two degrading cut graph read details,
-   CHAOS-12348).
+   Narrowed-graph-read disclosure).
    Such an answer reads `status: partial` beside `completeness.state:
    complete`: every requirement was met over the served population, and the
    status plus the detail or limitation carry the disclosure. That is not the
-   authorization cut's case (CHAOS-12147/12153), where the cut removed members
+   authorization cut's case (the narrowed-cohort count), where the cut removed members
    and completeness itself was wrong, so outcome rows restate it.
    `terminal_status` still equals `status`, and the completeness authority
    never lifts a partial status back to complete.
@@ -2614,7 +2614,7 @@ the answer with its served-status head. A head with no such opening sentence
 
 ---
 
-## 10 — The grouped cohort and the three-stage budget (CHAOS-4636 / S5), and stage 3's two decision arms (S7c)
+## 10 — The grouped cohort and the three-stage budget (the grouped-cohort budget work / S5), and stage 3's two decision arms (S7c)
 
 ```mermaid
 erDiagram
@@ -2711,7 +2711,7 @@ empty.
 phrasing.** §6.2 describes resolving groups then their members. That direction
 is not reachable for a subjectless cohort: `hopWalk` runs only for committed
 subjects and Q-A commits nothing, the subjectless path
-(`chaos4348ExactNameCandidates`) never touches `Paths`, and CHAOS-4099's
+(`chaos4348ExactNameCandidates`) never touches `Paths`, and the unreachable-fact-family disclosure change's
 eligibility table has no team↔project policy and rejects that direction in its
 own "deliberately absent" block. What IS available, free, at the right moment:
 the owning team sits inside the project-subject facts the plan already reads —
@@ -3606,15 +3606,15 @@ subject's turns only; it makes no driver and does not change the commit gate.
 `committedEdgeClasses`, `attributeEdgesByFewestHops`, `logSharedEdgeBudget` and
 the admission call in `DiscoverContext` (`falkorgraph/reader.go`).
 
-## 16 — Investigation event stream (CHAOS-11909)
+## 16 — Investigation event stream
 
 `POST /api/v1/context-fabric/investigations` with `Accept: text/event-stream`
 answers with Server-Sent Events, one `context_fabric_investigation_event.v1`
-object per frame. CHAOS-11909 is the contract only: the schema, the Go type and
+object per frame. Investigation event-stream contract is the contract only: the schema, the Go type and
 validator, the stream grammar check, the frame encoder and decoder, and the
-goldens. The engine sink (CHAOS-11910) and the route writer behind
-`ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED` (CHAOS-11911) produce it; the
-submission binding (CHAOS-11912) and the thread link (CHAOS-11913) fill the
+goldens. The engine sink and the route writer behind
+`ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED` produce it; the
+submission binding and the thread link fill the
 optional `submission_id` and `thread_id` of `accepted`. Until the route writer
 lands, no request is served a stream.
 
@@ -3683,7 +3683,7 @@ Stage order is `interpreting`, `resolving_subjects`, `reading_facts`,
 engine's internal failure stages (`internal/contextfabric/stage.go`). Progress
 events carry no claims.
 
-**Engine sites (CHAOS-11910).** The engine reports stage boundaries to an
+**Engine sites.** The engine reports stage boundaries to an
 `InvestigationStageSink` carried on the request context
 (`internal/contextfabric/investigation_stage_events.go`, the
 `WithSynthesisInputCollector` pattern). One site per stage: the interpreter
@@ -3707,13 +3707,13 @@ transitions. No sink installed: every report is a no-op, and the
 served answer is byte-equal to the goldens recorded before the sites existed
 (`testdata/investigation_stage_scenarios`).
 
-**Route writer (CHAOS-11911).** `internal/api/context_fabric_event_stream.go`.
+**Route writer.** `internal/api/context_fabric_event_stream.go`.
 `Accept: text/event-stream` exactly, and `ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED`
 on, select the stream; flag off is `406 stream_unavailable` before any admission
 work. Every check before the investigation runs, a repeat of a submission
 included, answers as on the JSON path. The route proves it can move the write
 deadline before anything is admitted. The result id is the submission's
-reservation (CHAOS-11912, `admitInvestigationSubmission`); a stream whose request
+reservation (`admitInvestigationSubmission`); a stream whose request
 names no submission reserves one with the same generator
 (`contextfabric.NewInvestigationResultID`, `WithReservedResultID`). The route
 installs the sink and writes the 200, the headers and `accepted` (with the
@@ -3747,7 +3747,7 @@ response. The goldens `contracts/examples/v1/context_fabric_investigation_event_
 are encoder output, regenerated with `ACR_WRITE_INVESTIGATION_EVENT_GOLDENS=1`
 (`context_fabric_investigation_event_golden_test.go`).
 
-## 17 — Submission identity, its owner, its status and the shared limits (CHAOS-11912, CHAOS-11913, CHAOS-11914)
+## 17 — Submission identity, its owner, its status and the shared limits
 
 A create-investigation request that names `X-ACR-Submission-ID` is one user
 submit. Admission inserts one record keyed (organization, owner, submission id)
@@ -3818,12 +3818,12 @@ Repeat-key outcomes (the owner's retry of the same key):
 | `abandoned` | the run returned an error (abandoned at once) | `409 submission_abandoned` |
 | `abandoned` | running past `expires_at` (a pod that died mid-run), by reconcile or the sweeper | `409 submission_abandoned`, byte-identical to the row above |
 
-A browser-class credential (CHAOS-12093) must name the key: its create with a
+A browser-class credential must name the key: its create with a
 missing, malformed or repeated `X-ACR-Submission-ID` is `400
 submission_required`, before admission and model work, and leaves no record.
 The class comes from the credential row, never from the request; every other
 class keeps the optional header (a missing one is an implicit admission,
-CHAOS-11997).
+Shared-limits count).
 
 A client cannot tell the two `abandoned` causes apart, by design: the plan's
 recovery maps both to "Interrupted — ask again". Another principal's request
@@ -3852,7 +3852,7 @@ stateDiagram-v2
   abandoned --> [*]
 ```
 
-**The owner (CHAOS-12091).** A `SubmissionOwner` is the legacy pair
+**The owner.** A `SubmissionOwner` is the legacy pair
 (authentication method, subject) plus a canonical owner: the approving user of
 a user-approved credential (its immutable provenance, migration 0058) or the
 web assertion's subject, on a surface -- `browser` (web assertion, browser
@@ -3880,7 +3880,7 @@ to its owner only) and `evidence_expansion`. The refusal is the unknown-id
 answer. `fact_root_recheck` reads no stored row: it re-decides the turn's own
 committed roots, which a carried root reached only through `prior_result`.
 
-**Shared limits (CHAOS-11914).** A NEW key is admitted inside one
+**Shared limits.** A NEW key is admitted inside one
 transaction under a per-organization advisory lock: insert the record, count
 the live running records (inside their budget, reserved result not stored)
 for the principal and the organization, then, for a run on the deployment's
@@ -3890,7 +3890,7 @@ concurrency_limited{limit}` or `429 allowance_exhausted`. A repeat of an
 existing key is decided before any limit and is never refused by one.
 Retention and result deletion keep the aggregate; the organization purge
 deletes the organization's rows, and the write fence covers the table.
-A create WITHOUT the header that runs on the deployment's model (CHAOS-11997)
+A create WITHOUT the header that runs on the deployment's model
 is admitted the same way under a server-minted key (`acr-implicit-<hex>`):
 it counts against the three limits, its reservation never reaches the engine
 (the answer stays organization-bearer), and its record is released when the
@@ -3913,7 +3913,7 @@ flowchart TD
   U -- yes --> C
 ```
 
-**Status read and thread link (CHAOS-11913).** Admission stores the request's
+**Status read and thread link.** Admission stores the request's
 `X-ACR-Thread-ID` on the record (`thread_id`, migration `0056`; not part of the
 digest, so a retry keeps the first thread). `GET
 /api/v1/context-fabric/investigations/submissions/{submission_id}` serves the
@@ -3962,12 +3962,12 @@ route's own bodies, regenerated with `ACR_WRITE_SUBMISSION_GOLDENS=1`.
 A thread is one owner's Ask Dev conversation: the submission records the
 owner admitted with one `X-ACR-Thread-ID`, keyed `(org_id, owner,
 thread_id)` with the owner matched like a submission's (legacy pair or
-approving user and surface, CHAOS-12091), in turn order (`admitted_at`, then `submission_id`), plus its
+approving user and surface, the approving-user key-owner change), in turn order (`admitted_at`, then `submission_id`), plus its
 retention (`X-ACR-Thread-Retention-Days`: `0` = until 24 h after the last
 turn, `30` = until 30 days after it; the latest turn that named one decides;
 none named = `0`). The contract (`context_fabric_thread.v1`,
 `context_fabric_thread_list.v1`, the `thread_closed` 409, the gate surface
-`thread`) is served by the store and routes of CHAOS-11948: the thread row
+`thread`) is served by the store and routes of the Ask Dev conversation-storage work: the thread row
 `acr.context_fabric_threads` (migration `0060`) is written by admission in the
 submission's own transaction, and the routes read and close it. Design and
 obligations: `docs/design/ask-dev-conversation-contract.md` (§6, §9).
@@ -4029,7 +4029,7 @@ decision line, not one `StoredResultAuthorization` line per turn.
 
 Admission of a thread turn, in one transaction under the organization's
 admission lock: the repeat check, the thread row the caller reaches read `FOR
-UPDATE` (owner matched like a submission's, CHAOS-12091: a rotated
+UPDATE` (owner matched like a submission's, the approving-user key-owner change: a rotated
 credential of the same user on the same surface reaches the user's row; a
 user's browser and MCP never share one), a closed thread refused (`409
 thread_closed`, nothing written), the submission INSERT linking the row's
@@ -4060,7 +4060,7 @@ schemas `contracts/jsonschema/v1/context_fabric_thread.v1.schema.json` and
 `error_context_fabric_thread_closed.v1.json`, encoder output regenerated with
 `ACR_WRITE_THREAD_GOLDENS=1`.
 
-## 19 — Ask Dev run lease, event log, attach and cancel (CHAOS-11949)
+## 19 — Ask Dev run lease, event log, attach and cancel
 
 Plan of record §2.7.9 (INV-7, Phase 4). With
 `ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED` on (default off; it needs the event
@@ -4149,7 +4149,7 @@ Code: `internal/contextfabric/run_lease.go` (types, `RunStore`),
 grammar). Proofs: `internal/api/context_fabric_run_lease_test.go` (memory) and
 `context_fabric_run_lease_pg_test.go` (Postgres, one pool per replica).
 
-## 20 — Ask Dev answer feedback (CHAOS-11950)
+## 20 — Ask Dev answer feedback
 
 The owner of an Ask Dev result says whether it was correct and useful (`yes`,
 `no` or `unset` each; no free text). `GET` and `POST
@@ -4198,7 +4198,7 @@ refuses a purged organization's write.
 `0065_context_fabric_result_feedback.sql`; parity table
 `paritytest.RunResultFeedbackSuite`.
 
-## 21 — Per-call access re-check (CHAOS-12092)
+## 21 — Per-call access re-check
 
 Every protected call by a user-class credential (browser, OAuth user, native
 device) re-reads the user's access in Dev Health, live and uncached (North Star
@@ -4229,7 +4229,7 @@ sequenceDiagram
     else grant ∩ live inventory is empty
       A-->>C: 409 no_repository (never an [] scope)
     else granted
-      A->>H: a star grant kept whole (CHAOS-12592), any other grant narrowed to grant ∩ inventory, read kept for the request
+      A->>H: a star grant kept whole, any other grant narrowed to grant ∩ inventory, read kept for the request
       opt POST investigations
         H->>H: budget left < 10 s? → 503 budget_exhausted (before admission)
       end
@@ -4251,13 +4251,13 @@ context-packet route read `agent_context_runtime` from it, not from the
 `principalAccessReader` (`internal/runtime/hosted/open.go`); the codes
 `ErrorCodeAccessDenied`, `ErrorCodeNoRepository`, `ErrorCodeBudgetExhausted`
 (`internal/contracts/v1/principal_access.go`). The Dev Health side of the read
-is ops `internal/apiservice/acr/access.go` (CHAOS-12084, CHAOS-12128).
+is ops `internal/apiservice/acr/access.go`.
 
-## 22 — Ask Dev retention (CHAOS-11952)
+## 22 — Ask Dev retention
 
 The retention job removes the Ask Dev backing set (plan §2.6, D-22), behind
 `ACR_ASK_DEV_RETENTION_ENABLED` (default off): a bounded loop in every
-`acr-api` replica on acr-api's own pool as the runtime role (CHAOS-12244;
+`acr-api` replica on acr-api's own pool as the runtime role (the retention runtime-role change;
 `internal/dbacl.RuntimeGrants` holds `RetentionPrivileges`), one
 transaction per unit under the organization's admission lock, results first. A unit is an expired thread
 (whole), a deleted thread (content now, the content-free closure record at
@@ -4334,4 +4334,4 @@ flowchart TD
 
 **Updated 2026-10-10: a caller hint that names an inactive team is answered as that team.** In `resolveSubjects` (`graphrank/resolve.go`), a caller-sourced team hint whose exact read finds nothing asks `ResolveDeps.ExactHintInactive` (falkorgraph: the `InactiveTeams` authority, which applies the caller's read predicate and names the one same-name active team as a pointer). A hint reported inactive is terminal for that hint: it is recorded in `SubjectResolution.inactive_hints` (`answer: team_inactive`, optional `active_canonical_id`), no hybrid search runs for it, and the same-named active team is never committed. The engine serves a no_match with a service-authored limitation and the terminal reason `team_inactive`; the projection mirrors `inactive_hints` verbatim. Receipt-sourced hints keep the search they had. Results that carry inactive hints are never stored as answer-reuse sources.
 
-**Updated 2026-10-31: the outcome of each Ask Dev page-context hint is counted (CHAOS-12230).** In `resolveSubjects` (`graphrank/resolve.go`), a hint whose source is `ask_dev_page_context` (`hintsource.AskDevPageContext`, caller authored, not in the engine-minted registry) takes one outcome: `exact_hit` when `ExactHint` finds its node, else `label_fallback` when it has a label and the call's term search completes without error (the labels are searched after the interpreted terms, and the pass stops at its first failing term), else `unresolved`. `pageHintLookupTally` (`graphrank/page_hint_lookup.go`) is built at the hint loop and emitted by one deferred call, so the short circuit, the inactive-team answer, the identity-question exit and every error return all write the one INFO line `context fabric resolution trace: page hint lookup` (eventspec `PageHintLookup`; one per request, because a request runs either the gated offers-only resolution or the decisive one with its page hints, never both): counts per outcome and per subject kind, never an id, label or question. Resolution behaviour is unchanged. The ids web builds are pinned by the generated `contracts/examples/v1/context_fabric_canonical_id_vectors.v1.json`.
+**Updated 2026-10-31: the outcome of each Ask Dev page-context hint is counted.** In `resolveSubjects` (`graphrank/resolve.go`), a hint whose source is `ask_dev_page_context` (`hintsource.AskDevPageContext`, caller authored, not in the engine-minted registry) takes one outcome: `exact_hit` when `ExactHint` finds its node, else `label_fallback` when it has a label and the call's term search completes without error (the labels are searched after the interpreted terms, and the pass stops at its first failing term), else `unresolved`. `pageHintLookupTally` (`graphrank/page_hint_lookup.go`) is built at the hint loop and emitted by one deferred call, so the short circuit, the inactive-team answer, the identity-question exit and every error return all write the one INFO line `context fabric resolution trace: page hint lookup` (eventspec `PageHintLookup`; one per request, because a request runs either the gated offers-only resolution or the decisive one with its page hints, never both): counts per outcome and per subject kind, never an id, label or question. Resolution behaviour is unchanged. The ids web builds are pinned by the generated `contracts/examples/v1/context_fabric_canonical_id_vectors.v1.json`.

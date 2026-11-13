@@ -1,4 +1,4 @@
-# Context Fabric: retracting a suppressed `OWNED_BY_TEAM` edge (CHAOS-4565)
+# Context Fabric: retracting a suppressed `OWNED_BY_TEAM` edge
 
 Short design note, the companion to
 [`context-fabric-work-item-ref-healing.md`](context-fabric-work-item-ref-healing.md):
@@ -17,7 +17,7 @@ Owning code: `internal/contextfabric/devhealthsource/teams_projects_edges.go`
 | path | decided | since |
 | --- | --- | --- |
 | **ambiguous key** — the `project_key` names more than one project | in SQL, upstream: `readers.ProjectIdentityJoinSQL` emits no key scope row for `key_resolution_count > 1` | v7 |
-| **conflicting identity** — the row's `project_id` resolves project A while its `project_key` resolves B | in the scan, `edge_suppressed = 1` | v8 (CHAOS-4542) |
+| **conflicting identity** — the row's `project_id` resolves project A while its `project_key` resolves B | in the scan, `edge_suppressed = 1` | v8 |
 
 In both cases the producer emitted only a progress candidate. But
 **incremental graph application does not delete an absent relationship** —
@@ -110,7 +110,7 @@ the other group's live edge.
 An earlier draft of this note asserted the batch-level invariant without
 checking that the encoding carried it. It was found on this change's own
 certification review. Two things came out of it: the root fix, making the ids
-injective via `identity.DeriveRelationship` (CHAOS-4635 — it must land before
+injective via `identity.DeriveRelationship` (the injective-ref change — it must land before
 any v9 rebuild, while the id change is still free), and a contract-level guard
 shipped here, `validateProjectionRelationshipTombstoneCollision`, which rejects
 a batch that asserts and tombstones one relationship id. The guard does not
@@ -132,7 +132,7 @@ retract. Arm C resolves the key across the AMBIGUOUS key partition — one row
 per project sharing that key — flagged `retraction_only = 1` so `unassertable`
 is forced true and it can never assert.
 
-### 2.2a Arm D — the same hole, on the other column (CHAOS-4566)
+### 2.2a Arm D — the same hole, on the other column
 
 `ProjectOwnershipJoinColumn` (aliased `project_ref` here) is `team_project_ownership.project_id`, documented as carrying whichever id space a source actually writes — for GitLab today, a project *key*, not a UUID. So an ownership row can name an ambiguous key through `project_ref` while its own `project_key` column sits empty. Arm A finds no scope row to match (the key is ambiguous, so the expansion never emitted it); arm B requires `scope_kind = 'key'`, which an empty column cannot satisfy; arm C requires `project_key != ''`. Before arm D, that row was invisible to all three arms simultaneously: no edge, no conflict, no retraction, no telemetry.
 
@@ -275,7 +275,7 @@ stale edges are unreachable to the mechanism that removes them.**
 
 The version bump is what clears them, once per organization, exactly as v7 → v8
 paid it. Note what it does NOT mean: the rebuild is not how retraction works, it
-is how the pre-existing backlog is drained. CHAOS-4565's acceptance — *no
+is how the pre-existing backlog is drained. Ownership-edge drain's acceptance — *no
 rebuild is required, and no checkpoint is reset* — is about the steady state
 after this deploy, and that path is rebuild-free.
 
@@ -287,7 +287,7 @@ after this deploy, and that path is rebuild-free.
   signal from `applyTombstone`, which no other tombstone in this pipeline has
   either.
 - It does not attribute an omission to a specific ownership row for the
-  ambiguity path — CHAOS-4566 carries that, and its absence is why the catalog
+  ambiguity path — the ambiguity-path change carries that, and its absence is why the catalog
   ambiguity count is a fact about the catalog rather than a claim about edges.
 - It does not change `BELONGS_TO_PROJECT`, `queryWorkItemTeams`, or the team
   authorization scope. Only the project↔team ownership producer suppresses, so

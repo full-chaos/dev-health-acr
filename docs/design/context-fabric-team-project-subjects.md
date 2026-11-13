@@ -1,4 +1,4 @@
-# Context Fabric: team and project as first-class subject kinds (CHAOS-3802)
+# Context Fabric: team and project as first-class subject kinds
 
 Short design note. Covers: which canonical ClickHouse tables each kind reads,
 the id-space and ReplacingMergeTree traps proved against live data, validity
@@ -30,7 +30,7 @@ That placement is deliberate, and it is what makes the acceptance criterion
   every already-projected org for content none of them asked for.
 
 One shared-code note (added during implementation): the paging behavior
-`ClickHouseProjectionSource` already had is not simple — it carries CHAOS-3753's
+`ClickHouseProjectionSource` already had is not simple — it carries the projection-pipeline work's
 C6 (refusing an oversized org leaves it permanently stuck), K4 (an aggregate
 candidate count can exceed the contract bound with no single table truncated),
 and K2 (a page boundary must never split one source row's candidates) fixes.
@@ -45,7 +45,7 @@ The graph write path needs no changes at all. `falkorgraph`'s
 `ownedSubjectMergeCypher` / `subjectMergeAttrs` / `entitySearchText` /
 `kindLabel` are all generic over `SubjectKind`; `team` and `project` land as
 `:Subject:Team` / `:Subject:Project` with `search_text` populated the moment
-they are emitted as owned entities. Same for CHAOS-3778's embed projection —
+they are emitted as owned entities. Same for the vector-retrieval work's embed projection —
 it hangs off owned entities, so new kinds flow through it on rebase with no
 per-kind code.
 
@@ -150,7 +150,7 @@ a lie in the graph, not a fact.
 ## 4. Canonical id shapes — pinned, not chosen
 
 **`team:` + `teams.id`.** This is not a free choice. `devhealthfacts` already
-minted `teamPrefix = "team:"` (`workload.go:16`, CHAOS-3780), and
+minted `teamPrefix = "team:"` (`workload.go:16`), and
 `subjectIndex` strips exactly that prefix to feed `team_id IN {ids:Array(String)}`
 against the team fact tables. Proved live that those tables speak `teams.id`:
 `capacity_forecasts` distinct `team_id` = `{CHAOS}`;
@@ -181,7 +181,7 @@ already resolves through `ResolveDeps.ExactHint` on `canonical_id`.
 
 ## 6. Validity semantics
 
-Owned-write discipline per CHAOS-3785 R3-1: the owned path asserts
+Owned-write discipline per the Linear work-item projection change R3-1: the owned path asserts
 `ValidFrom`/`ValidTo` **either way**, so a nil actively clears a window some
 earlier stub write may have seeded. Referenced endpoints stay window-free.
 
@@ -200,7 +200,7 @@ earlier stub write may have seeded. Referenced endpoints stay window-free.
 - **`work_item` → project/team edges.** Window-free; neither source table
   carries validity.
 
-Flagged for the CHAOS-3781 rebase: these are additive per-kind declarations, not
+Flagged for the historical-time-axis work rebase: these are additive per-kind declarations, not
 a new axis. If 3781 lands a different convention for "no validity column
 exists", this note's §6 is the only thing that changes.
 
@@ -217,7 +217,7 @@ exists", this note's §6 is the only thing that changes.
 - **`work_item` → project/team edges** → `workItemAuthorization(repoID, repoSlug)`,
   deriving the repo from `work_items`' own `repo_id` via `LEFT JOIN repos`. Not
   from `work_item_team_attributions.repo_id`: 5077 of its 5089 rows carry the
-  zero UUID, exactly the CHAOS-3785 trap.
+  zero UUID, exactly the Linear work-item projection change trap.
 - Every join carries `org_id` equality. No exceptions.
 
 ## 8. Decisions (ruled 2026-08-13)
@@ -225,7 +225,7 @@ exists", this note's §6 is the only thing that changes.
 **D1 — relationship vocabulary. RULED: add the members.**
 `ContextFabricRelationshipType` is a closed enum with no team/project
 containment member, so `BELONGS_TO_PROJECT` and `OWNED_BY_TEAM` are added as
-additive v1 values, following CHAOS-3779's precedent (`BLOCKS` / `PART_OF` /
+additive v1 values, following the closed-relationship-vocabulary work's precedent (`BLOCKS` / `PART_OF` /
 `RELATES_TO` / `DUPLICATES` went in the same way). This costs the full
 contract-first unit: Go types, JSON Schema, OpenAPI + YAML mirror, MCP copies,
 golden fixtures, parity tests.
@@ -237,12 +237,12 @@ churn by blurring that is the wrong trade.
 
 Two declared contact points this creates:
 
-- **CHAOS-3746** (ships before this issue) carries a vocabulary parity test that
+- **Answer-surface work** (ships before this issue) carries a vocabulary parity test that
   compares the enum member-for-member. This branch re-pins that test when it
   rebases onto 3746's merged state. **That failure is intended behavior**, not a
   regression — budget for it.
 - **dev-health-web** picks up the two new enum members at its next ACR contract
-  pin bump, through the CHAOS-3791 codegen machinery. Nothing to do here; named
+  pin bump, through the codegen machinery codegen machinery. Nothing to do here; named
   so nobody is surprised.
 
 **D2 — flag default. RULED: flip to `true` in this change.**
@@ -257,7 +257,7 @@ either direction.
 
 **D3 — `is_active = 0` → `ValidTo = updated_at`. CONFIRMED**, not a tombstone
 (§6). Completed is finished, not deleted; a tombstone would erase exactly the
-history the CHAOS-3781 temporal axis exists to answer over.
+history the historical-time-axis work temporal axis exists to answer over.
 
 ## 8b. Implementation record
 
@@ -268,14 +268,14 @@ history the CHAOS-3781 temporal axis exists to answer over.
   3304 work-item attributions plus the 3 collapsed ownership edges. Every count
   predicted in §1–§3 matched exactly.
 - That live test exists because the package's fake cannot catch a `Scan`
-  type mismatch (it hands Go values straight to `Scan`) — the CHAOS-3789 class.
+  type mismatch (it hands Go values straight to `Scan`) — the UInt32 scan fix class.
   These producers scan `is_active UInt8`, `source`/`confidence` `Enum8` through
   `toString()`, `team_id Nullable(String)` through `ifNull`, a
   `Nullable(DateTime64)` collapsed by `max(valid_to IS NULL)` into a `UInt8`,
   and `teams.updated_at`'s `DateTime64(6)` with no timezone qualifier against a
   `DateTime64(6,'UTC')` bind parameter. None of that is provable with a fake.
 - **Golden fixtures are generated from the producer**, never hand-authored:
-  `TestGenerateGoldenRelationshipFixtures` emits the two CHAOS-3802 entries in
+  `TestGenerateGoldenRelationshipFixtures` emits the two the team and project subject projection work entries in
   `contracts/examples/v1/context_fabric_projection_batch.v1.json`.
   `context_fabric_investigation_result.v1.json` is deliberately NOT extended —
   its entries are read-side `ContextFabricRelationshipEdge` values produced by
@@ -338,7 +338,7 @@ A signal-terminated loop with a real immunity proof is legitimate and should
 NOT be converted for uniformity; that is churn, not rigor. What is not
 negotiable is that the proof exists and is stated.
 
-## 8d. CHAOS-4193: presence read swap (supersedes §1.2's work_items.project_id source)
+## 8d. Presence-view read swap: presence read swap (supersedes §1.2's work_items.project_id source)
 
 `querySubjectProjectMemberships` (formerly `queryWorkItemProjects`,
 `teams_projects_edges.go`) no longer reads `work_items.project_id`
@@ -398,7 +398,7 @@ Key facts this producer relies on, all decided by Context Fabric rulings on
   membership is, as of v4, unobservable through this producer at all. See
   `TestGitLabColumnArmProducesNoProjectEdgeAnymore`
   (`chaos4108_join_arm_integration_test.go`), which used to prove the
-  opposite under CHAOS-4108 and now proves the retirement.
+  opposite under the project-id join fix and now proves the retirement.
 - **`pull_request` stays grandfathered out of `identity.Registry`.** The
   edge's `pull_request` endpoint uses the legacy
   `pull_request:<repo_id>:<number>` canonical id every other PR
@@ -407,7 +407,7 @@ Key facts this producer relies on, all decided by Context Fabric rulings on
   comment for why deriving a `pull_request.v2:...` id here would produce a
   dangling edge.
 - **(provider, project_id) resolution to `projects`** uses a LEFT (not
-  INNER) join against the same dual id/`project_key` widening CHAOS-4108
+  INNER) join against the same dual id/`project_key` widening the project-id join fix
   established, now scoped by `provider`, so an unresolved or ambiguous
   match is counted (`unresolved_project_entity` /
   `ambiguous_project_entity`, logged once per batch) rather than silently
@@ -429,11 +429,11 @@ Key facts this producer relies on, all decided by Context Fabric rulings on
   subject kind exists, and the table dedups to 4 distinct `(team_id, member_id)`
   pairs behind 1526 rows anyway.
 - **No `work_unit_membership` read** (§2).
-- **No embedding work.** CHAOS-3778's embed projection is generic over owned
+- **No embedding work.** Vector-retrieval work's embed projection is generic over owned
   entities; new kinds inherit it on rebase.
 - **No changes to `ClickHouseProjectionSource` or `ClickHouseSourceVersion`** (§0).
 
-## 10. Reachability (CHAOS-4348)
+## 10. Reachability
 
 §0/§9's premise -- "projecting the subject is what activates it" -- turned
 out to be only half true. Nodes and edges project correctly (live-verified
@@ -444,7 +444,7 @@ nodes, well-formed `search_text`/embeddings/`BELONGS_TO_PROJECT`/
 run. `internal/contextfabric/devhealthsource/teams_projects.go`'s own v3 doc
 comment ("zero project.v2:-shaped nodes exist anywhere in that org's graph
 today") is now STALE -- it described the pre-projection state this ticket's
-own predecessors (CHAOS-3898/3916/4108/4109) fixed; corrected in place.
+own predecessors (the graph-lifecycle design, the graph-cutover slice, the project-id join fix and as-of project-validity change) fixed; corrected in place.
 
 Root cause, live-verified against kiac (not theorized):
 
@@ -459,9 +459,9 @@ Root cause, live-verified against kiac (not theorized):
    single most common in the corpus, worsening the crowd-out specifically
    for these three kinds.
 2. The one mechanism that runs kind-scoped and DOES find them --
-   CHAOS-4038's coverage floor (`applyKindCoverageFloor`) -- is
+   Kind-scoped coverage-floor change's coverage floor (`applyKindCoverageFloor`) -- is
    architecturally barred from the real candidate pool for exactly
-   repository/project/team (CHAOS-4271 codex round 1, HIGH, BLOCK: an
+   repository/project/team (the repository coverage-floor change codex round 1, HIGH, BLOCK: an
    offer-only floor find could otherwise trip `identityCollision` against
    an unrelated candidate's own exact match). Their floor finds merge into
    a private `offerOnlyPool` -- visible to `kindOfferMaterial`'s
@@ -488,16 +488,16 @@ flowchart TD
     EN -->|"label/alias/provider-alias<br/>equals term exactly"| P0
     P0 --> ID{"identityCollision<br/>(pre-existing, unchanged)"}
     ID -->|"single claimant"| COMMIT["auto-commit eligible"]
-    ID -->|"2+ exact claimants"| OFFER["offer, not commit<br/>(CHAOS-4271 protection preserved)"]
+    ID -->|"2+ exact claimants"| OFFER["offer, not commit<br/>(the repository coverage-floor change protection preserved)"]
 
-    CF["applyKindCoverageFloor<br/>(CHAOS-4038/4271, unchanged)"] -.->|"repository/project/team finds"| OFFPOOL(["offerOnlyPool<br/>(clarification offers ONLY,<br/>never the real pool)"])
+    CF["applyKindCoverageFloor<br/>(the kind-scoped coverage-floor change and repository coverage-floor change, unchanged)"] -.->|"repository/project/team finds"| OFFPOOL(["offerOnlyPool<br/>(clarification offers ONLY,<br/>never the real pool)"])
 ```
 
 - `applyKindHintedPoolSearch`: reuses `SearchKind` (the SAME kind-scoped
   fulltext call the coverage floor already has), but ONLY when the request
   carries a kind hint, and merges into the REAL pool through the ordinary
   `mergeSearchResults`/`identityCollision` path -- a hint is caller/
-  interpreter intent, not a blind lexical guess, so CHAOS-4271's identity-
+  interpreter intent, not a blind lexical guess, so the repository coverage-floor change's identity-
   collision concern (an unrelated candidate's exact match getting
   suppressed by a low-confidence, unsolicited floor find) does not apply.
   No hint, no call, byte-identical to before this ticket.

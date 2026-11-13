@@ -1,4 +1,4 @@
-# Context Fabric investigation result semantics (CHAOS-3755, Reset 1C)
+# Context Fabric investigation result semantics (Reset 1C)
 
 Short reference note. Covers: the four kinds of grounding an investigation
 result can carry, how each is checked (or isn't), where each lives in the
@@ -15,9 +15,9 @@ exists to prevent.
 
 | Kind | What it means | Where it lives on the wire | How closure is enforced |
 | --- | --- | --- | --- |
-| **Canonical observation** | A value ACR read directly from an authoritative Dev Health fact provider (`internal/contextfabric/devhealthfacts`, `FactCapabilityRegistry`) and the model restated verbatim. | `ContextFabricClaimedFact` entries (`result.claimed_facts`), referenced by `driver.claimed_fact_ids` / `finding.claimed_fact_ids`. | **Deterministic, code-only, value-level.** `SynthesisDraft.ValidateAgainst` (`internal/contextfabric/model_runtime.go`) deep-equals every claimed `(kind, subject, field, value)` against the canonical fact bundle the synthesizer actually received. A mismatch, or a claim for a field/kind never observed, rejects the whole draft (`ErrModelOutput` + `ErrSynthesisRejected`, CHAOS-3784). A draft written by the service's own model call is then served as a degraded answer (§2.6); a caller-supplied draft is refused with HTTP 422 `synthesis_rejected`. See §2. |
-| **Graph association** | A relationship the graph backend discovered between subjects (an edge, a path) -- evidence that two things are connected, not a measurement of either one. | `ContextFabricRelationshipPath` entries (`result.paths`), referenced by `driver.path_ids`. | **Structural only.** `ValidateAgainst` checks a cited `path_id` exists in the supplied graph context. It does not, and cannot, verify the association is semantically correct -- that is `internal/contextfabric/falkorgraph`'s and CHAOS-3754's responsibility, proved by their own test suites. |
-| **Source assertion** | A document, episode, or other free-text artifact says something, without ACR having independently measured it. | `evidence_ref_ids` pointing at a document/episode-backed `EvidenceRef` (resolved via the existing evidence boundary, not a Context Fabric-specific type). | **Structural only.** `ValidateAgainst` checks a cited evidence ref ID exists in the allow-set built from the supplied graph paths, candidates, canonical facts, and (CHAOS-4522) the cohort's own per-member `EvidenceRefIDs`. It does not verify the underlying document says what the model claims it says. |
+| **Canonical observation** | A value ACR read directly from an authoritative Dev Health fact provider (`internal/contextfabric/devhealthfacts`, `FactCapabilityRegistry`) and the model restated verbatim. | `ContextFabricClaimedFact` entries (`result.claimed_facts`), referenced by `driver.claimed_fact_ids` / `finding.claimed_fact_ids`. | **Deterministic, code-only, value-level.** `SynthesisDraft.ValidateAgainst` (`internal/contextfabric/model_runtime.go`) deep-equals every claimed `(kind, subject, field, value)` against the canonical fact bundle the synthesizer actually received. A mismatch, or a claim for a field/kind never observed, rejects the whole draft (`ErrModelOutput` + `ErrSynthesisRejected`). A draft written by the service's own model call is then served as a degraded answer (§2.6); a caller-supplied draft is refused with HTTP 422 `synthesis_rejected`. See §2. |
+| **Graph association** | A relationship the graph backend discovered between subjects (an edge, a path) -- evidence that two things are connected, not a measurement of either one. | `ContextFabricRelationshipPath` entries (`result.paths`), referenced by `driver.path_ids`. | **Structural only.** `ValidateAgainst` checks a cited `path_id` exists in the supplied graph context. It does not, and cannot, verify the association is semantically correct -- that is `internal/contextfabric/falkorgraph`'s and the question-interpretation work's responsibility, proved by their own test suites. |
+| **Source assertion** | A document, episode, or other free-text artifact says something, without ACR having independently measured it. | `evidence_ref_ids` pointing at a document/episode-backed `EvidenceRef` (resolved via the existing evidence boundary, not a Context Fabric-specific type). | **Structural only.** `ValidateAgainst` checks a cited evidence ref ID exists in the allow-set built from the supplied graph paths, candidates, canonical facts, and the cohort's own per-member `EvidenceRefIDs`. It does not verify the underlying document says what the model claims it says. |
 | **Inference** | The model's own reasoning connecting the above into a judgment, with no further external grounding possible. | Free-text prose: `direct_judgment`, `current_state`, `strongest_pressures`, `limitations`, `qualification`. | **Not independently checkable.** See §3. |
 
 `ContextFabricDriverJudgment`/`ContextFabricFinding` also carry
@@ -63,7 +63,7 @@ The fix, concretely:
    text similarity -- no false positives from rewording, no false negatives
    from a value that merely looks similar.
 
-   **"Some", not "the first" (CHAOS-4522).** `groundClaim`
+   **"Some", not "the first".** `groundClaim`
    (`model_runtime.go`) closes over EVERY fact sharing the claim's
    `(Kind, Subject)`. A `ClaimedFact` addresses a fact by
    `(Kind, Subject, Field)` alone -- `CanonicalFact` carries no identifier
@@ -109,12 +109,12 @@ The fix, concretely:
    rejected re-draw names its rule in `draw_rejected_reasons` (`output_schema_mismatch` for a draft the schema check refused; an `error_*` class when no rule judged the draw). The same word is the `rejection_reason` of the terminal rejection when the last draw is refused by the schema check alone (never `unclassified`); a draw this package's own rule also refuses keeps that rule.
 
    **The closure the model is shown must equal the closure it is judged
-   against (CHAOS-4522).** `synthesisSubjects` and the `allowedEvidence`
+   against.** `synthesisSubjects` and the `allowedEvidence`
    allow-set are rebuilt inside `ValidateAgainst` from `SynthesisInput`,
    while `synthesisInputFromDomain` decides what the model actually sees.
    When those two drift, ACR rejects the model for citing what ACR itself
    supplied. That is not hypothetical: `Cohort.Members[].Subject` was
-   admitted by `synthesisSubjects` from CHAOS-4398 onward, but the same
+   admitted by `synthesisSubjects` from the subject-model and cohort-answer design onward, but the same
    members' `EvidenceRefIDs` -- serialized into the prompt as part of the
    Cohort -- were absent from `allowedEvidence`, so a cohort member with
    no canonical fact of its own could be cited only by an evidence ref
@@ -238,15 +238,15 @@ precondition every implementation (Postgres, memory, or otherwise) must
 enforce.
 
 See also: [`context-fabric-regime-a-offers.md`](context-fabric-regime-a-offers.md)
-(CHAOS-4234) for what a turn-1 result carries when the class-default window
+ for what a turn-1 result carries when the class-default window
 gate fires -- kind/handle/candidate offers beside the window offer, with no
-committed material -- and (CHAOS-4451) when it does not: a turn whose window
+committed material -- and when it does not: a turn whose window
 is its only question answers on the inferred window, which keeps provenance
 `inferred_default`, and carries the window offer beside the answer.
 
 ## 5. Served words: the vocabulary label map
 
-Rule (CHAOS-4690 item 4, ruled for this surface on CHAOS-12413): a closed
+Rule (the result-semantics design item 4, ruled for this surface on the result-semantics ruling): a closed
 vocabulary gets a contract-carried label, and raw tokens stay in the Details
 fold. Consumer phrasing tables are ruled out, so a new value needs no change in
 ask-dev or web.
@@ -265,7 +265,7 @@ ways (`chaos12415_vocabulary_labels_test.go`), sourced from the production
 vocabulary or the published schema: a new value cannot ship unlabeled, and a
 label cannot outlive its value. The fact field table is sourced from the
 declarations themselves (`devhealthfacts/chaos12418_fact_field_labels_test.go`),
-under the catalogue-truth test (CHAOS-7073), so what a provider emits, what it
+under the catalogue-truth test, so what a provider emits, what it
 declares and what the table labels are one set.
 
 | Vocabulary | Field |
@@ -287,12 +287,12 @@ declares and what the table labels are one set.
 | `cohort_score_meaning` | `cohort.score_meaning` (what the score measures) |
 | `relationship_type` | `paths[].edges[].type` (reads between the edge's two ends; an edge says two things are linked, never that one caused the other) |
 | `window_relative_id`, `window_provenance` | `effective_evidence_window.relative_id`, `.provenance` |
-| `measure_unit` | `claimed_facts[].table.measure_units[].unit`, `claimed_facts[].time_series_table.measure_units[].unit` (CHAOS-11984: the unit the producer declares for a measure) |
-| `subcategory` | `claimed_facts[].rows[].fields.subcategory` of a `subcategory_breakdown` table (CHAOS-12554: the canonical investment subcategory; a sunburst's outer ring uses the same word) |
-| `repository_label` | `claimed_facts[].rows[].fields.repository_label` of a `repository_theme_breakdown` table (CHAOS-12578: the repository's served word, its handle; a sankey's repository node uses it) |
-| `investment_theme` | every cell of a column that `claimed_facts[].table.column_vocabularies[]` or `.time_series_table.column_vocabularies[]` declares in `investment_theme` (CHAOS-12639: the canonical investment theme; the same words the render shapes use, from one map) |
+| `measure_unit` | `claimed_facts[].table.measure_units[].unit`, `claimed_facts[].time_series_table.measure_units[].unit` (the unit the producer declares for a measure) |
+| `subcategory` | `claimed_facts[].rows[].fields.subcategory` of a `subcategory_breakdown` table (the canonical investment subcategory; a sunburst's outer ring uses the same word) |
+| `repository_label` | `claimed_facts[].rows[].fields.repository_label` of a `repository_theme_breakdown` table (the repository's served word, its handle; a sankey's repository node uses it) |
+| `investment_theme` | every cell of a column that `claimed_facts[].table.column_vocabularies[]` or `.time_series_table.column_vocabularies[]` declares in `investment_theme` (the canonical investment theme; the same words the render shapes use, from one map) |
 
-**Where a cell's word comes from (CHAOS-12639).** A claimed table states it, from
+**Where a cell's word comes from.** A claimed table states it, from
 the producer's column declaration, and never from the model:
 
 - `column_vocabularies[]`: `{column, vocabulary}`. Each cell of that key or
@@ -304,11 +304,11 @@ the producer's column declaration, and never from the model:
   `repository_label` beside `repository`). A consumer shows the word and keeps the
   id in its raw fold.
 
-A consumer keeps no word table of its own (CHAOS-4690). A cell of a declared
+A consumer keeps no word table of its own. A cell of a declared
 vocabulary with no served word, and every id, belong in the raw fold.
 
 **Notes.** A field a reader sees as one line has one word for this result, under
-`<field>:note` (CHAOS-12487). Like the correction note, a note is no table row. It
+`<field>:note`. Like the correction note, a note is no table row. It
 is served only when its field says so, so a false flag, a zero and an absent field
 all show nothing and imply nothing. The raw field stays in the fold.
 
@@ -333,13 +333,13 @@ the generic path. `obligation`, the cause and refinement fields, plan narrowing,
 and driver category, epistemic status and derivation stay in the fold. A derived
 claim's `field` is free text, even when it matches a declared name, so it takes
 the generic path.
-`completeness.state` and `data_completeness` are never shown, and `outcomes[].impact` goes to the fold (CHAOS-12245,
-CHAOS-12413): their tables are removed.
+`completeness.state` and `data_completeness` are never shown, and `outcomes[].impact` goes to the fold (the impact fold,
+Result-semantics ruling): their tables are removed.
 
 **The answer status word.** One function (`ContextFabricAnswerStatusLabel`) gives
 every `answer_status:<status>`, and the note below reads it, so the two cannot
 disagree. The word for `complete` also reads the result's completeness state, so
-a value keeps one key and its word follows this result (CHAOS-12245):
+a value keeps one key and its word follows this result:
 
 | Status | Completeness state | Word |
 |---|---|---|
@@ -356,7 +356,7 @@ the stop of ruling B also ends in `no_match`. These words are in sentence case
 because a reader sees each as a whole label, and the note quotes them.
 
 **The correction note.** `status_correction:note` is one sentence the service
-composes for one result, so consumers hold no table for it (CHAOS-12413 ruling 2).
+composes for one result, so consumers hold no table for it (the result-semantics ruling ruling 2).
 It is the only key that is not a table row, and it is present when the result or
 `completeness` carries a status correction:
 
@@ -369,7 +369,7 @@ The clause names the obligation (the first part of `deciding_requirement`) and t
 outcome. An obligation or outcome with no word drops the clause, and a direction
 outside the vocabulary reads "changed". With no word for a status there is no note:
 a raw token is never the fallback. A correction a budget lever's row decided has no
-deciding pair (CHAOS-12460), so its note has no clause: that row names no
+deciding pair, so its note has no clause: that row names no
 requirement on purpose, and the correction stands without it.
 
 **Source state words.** Each state keeps its own word, because unknown, stale,
@@ -377,7 +377,7 @@ no data, not applicable and zero are different statements (North Star check 12).
 `no_data` stays "no data": "zero rows" is true of only one of its three paths. A stored result reads
 today's words with no migration: `coverage.sources[].label` and `.state_label` are
 stamped from the structured source and state on the served copy (ruling 3, which
-narrows CHAOS-4690 design §7.3 for these two fields). `degraded_reasons[]` does not
+narrows the result-semantics design design §7.3 for these two fields). `degraded_reasons[]` does not
 change, and no string is parsed.
 
 **Bound.** Each label is 1 to 160 characters, a key at most 128, and the map at
@@ -437,7 +437,7 @@ deploy order cannot protect `main`, because acr and web roll separately. So
 `ACR_CONTEXT_FABRIC_VOCABULARY_LABELS_ENABLED` (default off) gates the map, and a
 follow-up ticket removes the flag once every consumer's pin is deployed. Off serves
 no map. The stamped source words are served in both states, because those fields
-are on every pin. So is the legend of a driver series (CHAOS-12473): `render_shapes`
+are on every pin. So is the legend of a driver series: `render_shapes`
 is saved with the result, so a stored row's `series.label` would keep the signal
 token, and `ServeVocabularyLabels` restates it from the `ranking_signal` word at
 every door. A fresh result carries the same word from `SelectRenderShapes`. The

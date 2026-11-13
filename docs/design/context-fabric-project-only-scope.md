@@ -1,10 +1,10 @@
 # Context Fabric: the project-only grant scope
 
-Status: c1 (CHAOS-12297), c2 (CHAOS-12298), c3 (CHAOS-12299), c4 (CHAOS-12300),
-the typed refusals (CHAOS-12330) and c5 (CHAOS-12301) are built. Nothing is
+Status: c1, c2, c3, c4,
+the typed refusals and c5 are built. Nothing is
 `project_only` in production until c5 is live and ops turns on
-`ACR_ACCESS_PROJECT_SCOPE`. Design of record: CHAOS-12107 (v3 and its r3
-addendum; Linear). Parent ticket: CHAOS-12228.
+`ACR_ACCESS_PROJECT_SCOPE`. Design of record: the project-only design (v3 and its r3
+addendum; Linear). Parent ticket: the project-only ticket.
 
 ## Why
 
@@ -33,7 +33,7 @@ a grant:
 explicitly takes the restricted path. `auth.ClassifyGrant` returns
 `project_only` iff `storage.Principal.ProjectScopes` (canonical `project.v2`
 identities) is non-empty, whatever the repository list holds; otherwise it
-keeps today's rule. Only the access gate (c5, CHAOS-12301) sets
+keeps today's rule. Only the access gate (c5) sets
 `ProjectScopes`; see [Admission](#admission).
 
 The three gate vocabularies derive from the grant class with no `default`.
@@ -105,7 +105,7 @@ all fail. `planted_test.go` proves each kind is found.
 ## Membership: the issue's own project link
 
 A work item's current project membership is
-`authorization_project_identities` on its graph node (CHAOS-12226).
+`authorization_project_identities` on its graph node.
 
 - **Source.** It is read from the ops view `project_membership_presence` (the
   work item's own `project_id`, or its latest transition into a project) and
@@ -125,7 +125,7 @@ A work item's current project membership is
 A project identity is `project.v2:<EncodeSegment(provider)>:<EncodeSegment(id)>`
 (`internal/contextfabric/identity`, `Derive`).
 
-- **Decode.** Ops sends `{provider, id}` pairs (ops CHAOS-12224). acr derives
+- **Decode.** Ops sends `{provider, id}` pairs (ops the ops side of project-pair decode). acr derives
   the canonical form once, at decode. An empty or invalid pair, an oversized
   identity or a duplicate rejects the read. A non-empty set never becomes the
   empty (unrestricted) grant.
@@ -135,7 +135,7 @@ A project identity is `project.v2:<EncodeSegment(provider)>:<EncodeSegment(id)>`
 
 ## Admission
 
-c5, CHAOS-12301. This is the only change that admits `project_only`. The order
+c5, the project-only principal decode change. This is the only change that admits `project_only`. The order
 is unchanged: auth, access read, scope check, budget, admission. The grant comes
 from the live read on every protected call and is never cached
 (`internal/api/principal_access.go`).
@@ -184,7 +184,7 @@ from the live read on every protected call and is never cached
 
 A pull request reaches a project only through its issues' actual linked rows
 (the entity tree), so it has no project link of its own. Its
-`authorization_project_identities` (CHAOS-12308) is the union of the sets of the
+`authorization_project_identities` is the union of the sets of the
 issues linked to it in `work_graph_issue_pr`, read through the link producer's
 rules: a lower-tier row a native link covers contributes nothing, and neither
 does an unknown tier or a pull-request-typed work item. The `pull_request` arm
@@ -222,7 +222,7 @@ of `project_membership_presence` is not read.
 - **Following the catalog.** The refresh tables do not read
   `projects.last_synced`, which moves on every catalog write. A digest of
   `(provider, id, project_key)` on the cursor says whether the catalog changed
-  (CHAOS-12410, `devhealthsource/project_catalog.go`). It commits with the
+  (`devhealthsource/project_catalog.go`). It commits with the
   position because it is the same value, so a crash re-emits and a lost digest
   is a full refresh. A change re-states every subject once: the digest is per
   organization and cannot name the project. The same refresh runs daily, because
@@ -238,29 +238,29 @@ of `project_membership_presence` is not read.
 
 ## Graph admission
 
-Under `project_only` (c3, CHAOS-12299):
+Under `project_only` (c3):
 
 - **Nodes** (`graphrank.AuthorizedAttributes`, `projectOnlyAdmits`). A node
   is admitted only when it is the caller's own organization node, a project
   node whose canonical id is in the grant, a work item whose
   `authorization_project_identities` meets the grant exactly
   (`ProjectMembershipOf` is Member), or a pull request whose stated membership
-  meets the grant exactly and stands on native links only (CHAOS-12308; a link's
+  meets the grant exactly and stands on native links only (the pull-request project-membership change; a link's
   tier grants no authority, see "Pull request membership"). Everything else is
   denied: a work item or a pull request with no stated membership, a pull
-  request with a lower-tier membership, a team (ownership reach is CHAOS-12323),
+  request with a lower-tier membership, a team (ownership reach is the team-ownership-reach change),
   a repository, a deployment, an incident, a document and an episode. The repository grant is never consulted. An attribute map
   with no subject kind (a synthetic repository or team decision) is denied, so
   the direct data tools refuse every repository-anchored and team row.
 - **Requested narrowing.** A request that names projects is refused: nothing
   is admitted, and it is never answered over the whole grant. The intersection
-  with the grant is CHAOS-12324 (after CHAOS-12229 maps raw ids). A requested
+  with the grant is the project-narrowing change (after the project-membership narrowing change maps raw ids). A requested
   repository or team narrowing still narrows a node.
 - **E1: structural edges** (`graphrank.AuthorizedEdge`). An edge is admitted
   iff both endpoints pass the node rule, at every edge decision site. The
   edge's own repository and team lists are never consulted. A real edge
   project list must hold a granted canonical identity; the projection writes
-  raw project ids there, so such an edge is denied until CHAOS-12229. `"*"` or
+  raw project ids there, so such an edge is denied until the project-membership narrowing change. `"*"` or
   an absent list defers to the endpoints. An unresolved optional endpoint does
   not pass (`sourcerow` `encodedTargets`). A link tier grants a project-only
   caller no authority in the tree walk.
@@ -269,11 +269,11 @@ Under `project_only` (c3, CHAOS-12299):
   restricted wherever a reader asks whether the caller sees only some
   repositories (`needsProjectReach`), and fails closed there.
 - **The shared predicate.** It is `graphrank.ProjectMembershipOf`, and the
-  request-side narrowing (CHAOS-12229) uses the same one.
+  request-side narrowing uses the same one.
 
 ## Fail closed before c2 (c3 r1)
 
-Until c2 (CHAOS-12298) lands, c3 refuses a `project_only` principal every
+Until c2 lands, c3 refuses a `project_only` principal every
 channel that reads its repository list or hashes only that list:
 
 - **Repositories.** `auth.AuthorizeRepository` refuses it every repository,
@@ -300,18 +300,18 @@ channel that reads its repository list or hashes only that list:
   the link read, which binds no repository grant for it. A stored work-item
   tuple, a context packet, an episode write or purge and the evidence
   repository listing are refused to it too.
-- **Census (CHAOS-12452).** A restricted caller's census now runs inside its
+- **Census.** A restricted caller's census now runs inside its
   repository grant (see `context-fabric-grant-scoped-census.md`). A project-only
   caller's stays refused: `grantScopedCensus` is false by class, so its round
   stops at `scoped_visibility`, and `ScopeCensusToCaller` binds the reserved
   value, which every census refuses with no statement. It reads no link reach and
-  is offered no handle option (CHAOS-12456), so no `handr_` can dead-end it.
+  is offered no handle option, so no `handr_` can dead-end it.
 - **Counts.** `withheld.edges_not_visible` and `page.examined` are unchanged:
   they are the disclosure contract, the same for a restricted caller.
 
 ## Digests and reuse
 
-c2, CHAOS-12298. Every other grant class keeps its digests and its reuse key
+c2, the project-only reuse-key change. Every other grant class keeps its digests and its reuse key
 byte for byte.
 
 - **Sentinel.** A `project_only` principal's repository list holds one reserved
@@ -335,7 +335,7 @@ byte for byte.
   sorted and framed (a domain tag, then each entry length-prefixed), SHA-256,
   128 bits.
 - **Stored-result grant digest.** `p:` plus those 32 hex
-  (`StoredResultGrantDigest`; migration 0066, CHAOS-12227, admits the form). A
+  (`StoredResultGrantDigest`; migration 0066, the project-scope digest change, admits the form). A
   project-only reader is a restricted reader of the gate: it is served only a
   result whose digest equals its own, never `open`, `g:` or another `p:`; a
   restricted reader's `g:` digest never equals a `p:` one.
@@ -363,7 +363,7 @@ byte for byte.
 
 ## Facts and refusals
 
-CHAOS-12330. A project-only caller is served no fact: no provider could be
+Project-only typed-limitation change. A project-only caller is served no fact: no provider could be
 proven to serve it only what its grant covers. So the fact registry refuses
 every planned read, once, before any provider or scope expander runs
 (`internal/contextfabric/fact_project_scope_withheld.go`), and the refusal is a
@@ -393,7 +393,7 @@ carries a reason.
 - **The floor keeps the narrative.** A complete answer is floored to partial
   with its own limitation, and its narrative stays
   (`applyProjectScopeWithheldStatusFloor`, the status-only
-  `floorKeepingNarrative`; CHAOS-12301, ruling (b)). Every fact kind is withheld
+  `floorKeepingNarrative`; the project-only principal decode change, ruling (b)). Every fact kind is withheld
   from this caller, so withholding the narrative too would leave it almost no
   written answer, even a correct graph-only one. No withheld value can be in the
   narrative: the registry refuses the read before any provider runs, so synthesis
@@ -411,7 +411,7 @@ carries a reason.
 - **A request that names projects (ruling B).** The engine stops before every
   read, the narrowing resolver's included, and serves a typed `no_match`
   (`internal/contextfabric/project_scope_refusal.go`). Nothing is answered over
-  the whole grant. CHAOS-12324 narrows once CHAOS-12229 maps raw ids.
+  the whole grant. Project-narrowing change narrows once the project-membership narrowing change maps raw ids.
 - **Asked kinds.** A detail fires only when the plan asks for the kind, read
   from its requirement rows because a refused kind never has a cohort. It
   states the grant class, never that a subject of the kind exists. It replaces
@@ -427,7 +427,7 @@ subjects, which the graph denies this caller.
 
 ## Observability
 
-c4, CHAOS-12300. At Info, corpus-safe: counts, closed vocabularies and
+c4, the project-only decision-visibility change. At Info, corpus-safe: counts, closed vocabularies and
 classes only, never an id, a label or a digest value. The decision
 vocabularies (`principal_class`, `principal_scope`, `caller_class`) keep
 project_only as a restricted subtype, so the gates' decisions do not move; a
@@ -490,12 +490,12 @@ separate `grant_class` field (`auth.GrantClassVocabulary`: `unrestricted`,
 
 | Step | Ticket | What it does | Behavior change |
 |---|---|---|---|
-| c1 | CHAOS-12297 | the grant class, the decision gate, this document | none |
-| c2 | CHAOS-12298 | the sentinel, digests and reuse keyed by class | none until c5 |
-| c3 | CHAOS-12299 | graph and fact admission, the shared membership predicate | none until c5 |
-| c4 | CHAOS-12300 | Info observability | logging only |
-| typed refusals | CHAOS-12330 | one coverage code, minted by the registry; rides a pin train | none until c5 |
-| c5 | CHAOS-12301 | the access-read decoder: the ONLY change that admits `project_only` | admits `project_only` |
+| c1 | Grant-class change | the grant class, the decision gate, this document | none |
+| c2 | Project-only reuse-key change | the sentinel, digests and reuse keyed by class | none until c5 |
+| c3 | Project-only admission change | graph and fact admission, the shared membership predicate | none until c5 |
+| c4 | Project-only decision-visibility change | Info observability | logging only |
+| typed refusals | Project-only typed-limitation change | one coverage code, minted by the registry; rides a pin train | none until c5 |
+| c5 | Project-only principal decode change | the access-read decoder: the ONLY change that admits `project_only` | admits `project_only` |
 
 The roll order is fixed: acr with c5 live in production BEFORE ops turns on
 `ACR_ACCESS_PROJECT_SCOPE`. The decoder refuses unknown fields today

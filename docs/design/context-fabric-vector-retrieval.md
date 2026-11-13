@@ -1,4 +1,4 @@
-# Context Fabric vector and semantic retrieval (CHAOS-3778)
+# Context Fabric vector and semantic retrieval
 
 Status: IMPLEMENTED. Orchestrator GO received 2026-08-13, including the item-4
 corroboration ruling. Everything below describes shipped behavior except where
@@ -291,7 +291,7 @@ constant in code:
 | `ACR_CONTEXT_FABRIC_EMBED_API_KEY` / `_FILE` | empty | LM Studio needs none; the shape accommodates one for a hosted embedder. |
 | `ACR_CONTEXT_FABRIC_EMBED_SIMILARITY_FLOOR` | 0.55 | τ, §4.2. |
 | `ACR_CONTEXT_FABRIC_EMBED_TIMEOUT` | 250ms | Read-path (single-text) calls. §6.2. |
-| `ACR_CONTEXT_FABRIC_EMBED_BATCH_TIMEOUT` | 5s | Write/projection-path calls, independent of the read-path timeout above (CHAOS-3828). |
+| `ACR_CONTEXT_FABRIC_EMBED_BATCH_TIMEOUT` | 5s | Write/projection-path calls, independent of the read-path timeout above. |
 | `ACR_CONTEXT_FABRIC_EMBED_ALLOW_INSECURE_BASE_URL` | false | Required for a loopback `http://` endpoint. |
 
 Unset base URL ⇒ the feature is off and the lexical path is unchanged. Same
@@ -352,7 +352,7 @@ machinery already covers them. Stating it explicitly:
   until a rebuild runs. A stale-dimension vector is never queried.
 - The operator-prescribed recovery is the existing
   `acr-projector rebuild --org` path. It already resets every source checkpoint
-  and bumps the rebuild epoch, which invalidates answer reuse (CHAOS-3782,
+  and bumps the rebuild epoch, which invalidates answer reuse (the answer-reuse work,
   condition 3 and 4). No new invalidation concept is introduced.
 - FalkorDB's own hard dimension-mismatch error is a free second fail-closed
   layer underneath the adapter check.
@@ -372,11 +372,11 @@ machinery already covers them. Stating it explicitly:
   (0.72 / 0.88 / gap 0.12). Both stay exactly as merged.
 - Similarity as an authorization mechanism. Authorization stays ahead of ranking.
 - Choosing the production embedder. `gpt-5-nano` fallback is a later decision.
-- Routes, MCP surface, and answer projection (lane-3746 owns those).
+- Routes, MCP surface, and answer projection (the answer-surface work owns those).
 
 ---
 
-## 8. Pathway diagram (CHAOS-4133)
+## 8. Pathway diagram
 
 Full pathway from bring-up to a served vector-search result, code-grounded
 against `internal/contextfabric/embedprovider` and
@@ -391,7 +391,7 @@ path" or "the read path":
   mechanism in this flow — nothing else in it decides "this cached
   artifact is now stale."
 - **The VISIBILITY-ISOLATION hop** is the epoch **build-aside** mechanism
-  (CHAOS-3898): a write during an open rebuild targets the BUILD epoch,
+: a write during an open rebuild targets the BUILD epoch,
   which is invisible to every reader (readers always resolve the ACTIVE
   epoch) until the swap promotes it. This is isolation, not invalidation
   — nothing is being marked stale, a whole epoch simply is not visible
@@ -400,13 +400,13 @@ path" or "the read path":
 ```mermaid
 flowchart TD
     subgraph ENV["Env resolution & config (embedprovider)"]
-        A1["docker compose --env-file ops/.env up<br/>(CHAOS-4192: omitting --env-file<br/>silently resolves ${VAR:-} blank)"] --> A2["ACR_CONTEXT_FABRIC_EMBED_BASE_URL / _API_KEY / ...<br/>process environment"]
+        A1["docker compose --env-file ops/.env up<br/>(omitting --env-file<br/>silently resolves ${VAR:-} blank)"] --> A2["ACR_CONTEXT_FABRIC_EMBED_BASE_URL / _API_KEY / ...<br/>process environment"]
         A2 --> A3["embedprovider.ConfigFromEnv(os.LookupEnv)"]
         A3 --> A4{"Configured()?<br/>(BaseURL nonblank)"}
         A4 -- "no" --> A5["ErrNotConfigured<br/>clean no-op: vector retrieval OFF,<br/>lexical path unchanged"]
         A4 -- "yes" --> A6["Config.validate()"]
         A6 --> A7{"APIKey blank AND<br/>NOT AllowNoCredential?"}
-        A7 -- "yes (CHAOS-4192 guard)" --> A8["hard error at STARTUP<br/>composition aborts before any batch runs<br/>(ACR_CONTEXT_FABRIC_EMBED_ALLOW_NO_CREDENTIAL<br/>is the explicit opt-in for a real no-auth<br/>endpoint, e.g. loopback LM Studio/Ollama/TEI)"]
+        A7 -- "yes (the blank-embed-credential guard guard)" --> A8["hard error at STARTUP<br/>composition aborts before any batch runs<br/>(ACR_CONTEXT_FABRIC_EMBED_ALLOW_NO_CREDENTIAL<br/>is the explicit opt-in for a real no-auth<br/>endpoint, e.g. loopback LM Studio/Ollama/TEI)"]
         A7 -- "no" --> A9["embedprovider.New(cfg) returns Embedder"]
     end
 
@@ -425,9 +425,9 @@ flowchart TD
         BIX3 -- "no" --> B4["collectEmbedTargets(batch)"]
         B4 --> B4z{"zero embed targets?"}
         B4z -- "yes" --> B6z["clearNodeVectors(id-only only)<br/>cleared=0, commits"]
-        B4z -- "no" --> B7["embedWithBoundedRetry(texts)<br/>(CHAOS-4259: a TRANSIENT error --<br/>timeout/429/5xx/connection failure --<br/>gets a short bounded retry with backoff first;<br/>a PERSISTENT error is never retried)"]
+        B4z -- "no" --> B7["embedWithBoundedRetry(texts)<br/>(a TRANSIENT error --<br/>timeout/429/5xx/connection failure --<br/>gets a short bounded retry with backoff first;<br/>a PERSISTENT error is never retried)"]
         B7 --> B8{"still failing after retry,<br/>or vector count mismatch?<br/>(one bad batch must not stall<br/>projection forever)"}
-        B8 -- "yes" --> B9["reportEmbedFailure FIRST: org's consecutive-failure<br/>streak escalates to an ERROR-level signal<br/>after N in a row (CHAOS-4259) --<br/>counted even if the clear below also fails<br/>THEN clearNodeVectors(targets)<br/>recordVectorDegraded + Warn log<br/>(embedded:0, cleared:N) -- commits"]
+        B8 -- "yes" --> B9["reportEmbedFailure FIRST: org's consecutive-failure<br/>streak escalates to an ERROR-level signal<br/>after N in a row --<br/>counted even if the clear below also fails<br/>THEN clearNodeVectors(targets)<br/>recordVectorDegraded + Warn log<br/>(embedded:0, cleared:N) -- commits"]
         B8 -- "no" --> B10r["resetEmbedFailureStreak(orgID)"] --> B10["writeNodeVector per target<br/>stamps embedder identity + composition tag<br/>commits"]
     end
 
@@ -439,7 +439,7 @@ flowchart TD
 
     subgraph STORE["FalkorDB per-epoch storage"]
         C1["Subject.embedding vector index<br/>(the write path's own vectorIndexDimension gate<br/>above IS the per-batch check;<br/>ensureVectorIndex is the separate bootstrap-time<br/>create/verify path)"]
-        C1 -.->|"VISIBILITY-ISOLATION HOP (CHAOS-3898),<br/>NOT invalidation -- nothing is marked stale here:<br/>a BUILD epoch simply is not visible to any reader<br/>until the active-epoch pointer flips atomically.<br/>Old epoch survives its grace window, then a<br/>retire sweep issues GRAPH.DELETE."| C2["epoch build-aside-and-swap<br/>graphKeyForEpoch(prefix, org, epoch)"]
+        C1 -.->|"VISIBILITY-ISOLATION HOP,<br/>NOT invalidation -- nothing is marked stale here:<br/>a BUILD epoch simply is not visible to any reader<br/>until the active-epoch pointer flips atomically.<br/>Old epoch survives its grace window, then a<br/>retire sweep issues GRAPH.DELETE."| C2["epoch build-aside-and-swap<br/>graphKeyForEpoch(prefix, org, epoch)"]
     end
 
     C1 --> D0
@@ -461,10 +461,10 @@ flowchart TD
 ```
 
 Hops most likely to be missing from an investigator's mental model, per
-CHAOS-4133's own evidence class:
+Embedding-flow diagram's own evidence class:
 
 1. **The blank-credential guard fires at STARTUP, not per-batch.** Before
-   CHAOS-4192, a blank credential produced no error anywhere — only a
+   Blank-embed-credential guard, a blank credential produced no error anywhere — only a
    scrolling `embedded:0, cleared:N` Warn per batch, indistinguishable
    from routine degraded operation unless someone was watching closely
    enough to notice `cleared` was never zero.
@@ -491,17 +491,17 @@ CHAOS-4133's own evidence class:
    checkpoint holds, the next tick retries) — only a genuine, PERSISTENT
    dimension mismatch clears vectors and commits. This is a different,
    earlier gate than the post-`Embed()` clear-and-continue everyone
-   remembers from the CHAOS-4192 incident, and conflating the two
+   remembers from the blank-embed-credential guard incident, and conflating the two
    misses that some write-path failures never touch `Embed()` at all.
 
 See also: `internal/contextfabric/embedprovider/config.go` (env
-resolution + the CHAOS-4192 guard), `internal/contextfabric/falkorgraph/vector_projection.go`
+resolution + the blank-embed-credential guard guard), `internal/contextfabric/falkorgraph/vector_projection.go`
 (write path, the fence, index-state classification),
 `internal/contextfabric/falkorgraph/lifecycle.go` (epoch resolution),
 `internal/contextfabric/falkorgraph/reader.go` (`ResolveInvestigationBinding`
 resolving the key once per investigation, `ResolveSubjects` constructing
 the one `resolutionFence` a whole resolution shares),
-`docs/operations.md`'s CHAOS-3916 cutover runbook (operational epoch
-pre-flights) and CHAOS-4192 incident note (the `--env-file`/falkordb
+`docs/operations.md`'s the graph-cutover slice cutover runbook (operational epoch
+pre-flights) and the blank-embed-credential guard incident note (the `--env-file`/falkordb
 volume traps this diagram's env-resolution box exists to prevent
 re-deriving from scratch).

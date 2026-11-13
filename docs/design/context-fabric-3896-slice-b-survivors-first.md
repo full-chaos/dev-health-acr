@@ -1,24 +1,24 @@
 # Context Fabric: 3896 Slice B — survivors-first presentation
 
-Short design note for CHAOS-3896 Slice B (design brief v6 §6 item 2):
+Short design note for the shadow-mode evidence round Slice B (design brief v6 §6 item 2):
 "presentation only. Survivors-first prompt from census-attested
-elimination; budgets/degradation live." Builds directly on CHAOS-3898 S3's
+elimination; budgets/degradation live." Builds directly on the graph-lifecycle design S3's
 bridge functions ("pool∩satisfiers now runs live against the S3 bridge
 fns — that was the whole point of S3").
 
-## 0. What Slice A (CHAOS-3899) left unbuilt
+## 0. What Slice A left unbuilt
 
-CHAOS-3899 shipped the full shadow evidence round -- D-derivation, the
+Shadow-mode evidence round shipped the full shadow evidence round -- D-derivation, the
 aggregate-first census protocol, the would_commit/would_no_match/
 would_clarify decision -- but two things stayed deliberately absent,
 matched exactly by design brief v5 §1.3(2)'s own note and by
-`devhealthsource.CensusBudget` (defined, unconsumed, since CHAOS-3899):
+`devhealthsource.CensusBudget` (defined, unconsumed, since the shadow-mode evidence round):
 
 1. **The non-decisive satisfier-SET fetch** for 2≤count≤CensusBudget. The
    census's decisive protocol only ever fetches ONE row (the witness, at
    count==1) -- there was no code path that named more than one satisfier
    at all.
-2. **The source→graph bridge**, consumed. CHAOS-3898 S3 built
+2. **The source→graph bridge**, consumed. Graph-lifecycle design S3 built
    `BridgeSatisfierToCanonicalID`; nothing called it before this slice.
 
 Both were the SAME "defined ahead of its own wiring" pattern this program
@@ -114,7 +114,7 @@ already decided.
 
 `CensusOutcome`/`KindAttestation` gained `SatisfierCanonicalID`,
 `SatisfierCanonicalIDs`, `SatisfierSetClosureMismatch`. These are
-in-process only, consumed by `SurvivorsFirstOrder` and, since CHAOS-12467, by
+in-process only, consumed by `SurvivorsFirstOrder` and, since the census-satisfier listing change, by
 `listCensusSatisfiers`, whose line carries counts only --
 `RunShadowEvidenceRound`'s own `emit` closure (the only place anything
 reaches `ResolutionTracer`) does not reference them, and
@@ -147,4 +147,4 @@ exercises its value.
   bundled here.
 - **Does not touch `RunShadowEvidenceRound`'s own decisive outcome
   logic.** would_commit/would_no_match/would_clarify are computed exactly
-  as CHAOS-3899 shipped them; this slice only reads the round's AFTERMATH.
+  as the shadow-mode evidence round shipped them; this slice only reads the round's AFTERMATH.

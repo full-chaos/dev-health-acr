@@ -1,7 +1,7 @@
-# Context Fabric turn-1 window gate: offers beside the window offer (CHAOS-4234)
+# Context Fabric turn-1 window gate: offers beside the window offer
 
 Short reference note. Covers: what the class-default window gate ("regime
-A") returns on turn 1 after CHAOS-4234, the offers-only resolution that
+A") returns on turn 1 after the turn-1 offers change, the offers-only resolution that
 feeds it, what that pass skips and why, and the trace/report fields a
 trial artifact carries for it. Design ruling and safety argument live in
 `internal/contextfabric/chaos4234_offers_only.go`'s own doc comment;
@@ -9,10 +9,10 @@ sibling note: [`context-fabric-result-semantics.md`](context-fabric-result-seman
 
 ## 1. Why
 
-Before CHAOS-4234 the class-default window gate (`engine.go`,
+Before the turn-1 offers change the class-default window gate (`engine.go`,
 `WindowCanonicalizationGatedClassDefault`) returned before `ResolveSubjects`
 ever ran, so `windowConfirmationRequiredResult` could only compose a
-window-only disclosure (CHAOS-4118 option (a)). On the two kiac replicates
+window-only disclosure (the window-only structure-needs change option (a)). On the two kiac replicates
 of record that made regime A the whole "ranking-budget wall": 45/50 and
 43/48 positive-arm `expected_kind` offer misses and 14/25, 13/24
 `subject_handle` misses were rows with no candidate pool at all, and a case
@@ -24,9 +24,9 @@ offers-only mode, keep its `StructureOfferMaterial`, discard every
 commit-bearing output, compose kind/handle/candidate offers beside the
 window offer. Ratified with it: offers minted under an inferred window are
 non-decisive disclosure, the same class as the window offer itself. The
-CHAOS-4040 bar (no committed material under an inferred window, gate order
-unchanged, `window_commit_count` stays 0) is untouched; CHAOS-4118(a) is
-extended, not reversed; CHAOS-4039's noninterference proof is untouched.
+Inferred-window gate bar (no committed material under an inferred window, gate order
+unchanged, `window_commit_count` stays 0) is untouched; the window-only structure-needs change(a) is
+extended, not reversed; the v4 measurement contract's noninterference proof is untouched.
 
 ## 2. Turn-1 gated path
 
@@ -37,13 +37,13 @@ flowchart TD
     EW -- "provenance != inferred_default" --> D[decisive path<br/>ResolveSubjects -> DiscoverContext -> facts -> synthesis]
     EW -- "inferred_default (regime A)" --> G[gatedOfferMaterial<br/>chaos4234_offers_only.go]
     G -- "AllowClarification=false" --> RF[refused no_match<br/>no graph read]
-    G -- "RegimeAOffersDisabled" --> WO[window-only StructureNeeds<br/>CHAOS-4118 shape]
+    G -- "RegimeAOffersDisabled" --> WO[window-only StructureNeeds<br/>the window-only structure-needs change shape]
     G --> RS["graph.ResolveSubjects(WithOffersOnlyResolution(ctx))"]
     RS -- "error" --> WO
     RS -- "resolution, bases, digests" --> X[DISCARDED]
     RS -- "StructureOfferMaterial" --> P[consultPriorStructureOffers]
-    P --> CG["GateOffersByFamily<br/>family ApplicableAxes gate, CHAOS-4634 (subsumes CHAOS-4579/4531)<br/>family=discovered_cohort_ranking: drop kind/subject_anchor/subject_handle/subject_candidate<br/>rows AND their options; a family with no axis restriction passes through unchanged"]
-    CG --> DEC{"decideInferredWindowGate (window.go, CHAOS-4451)<br/>offers_unavailable / period_shape / offers_beyond_window -> gated<br/>window_only -> answered"}
+    P --> CG["GateOffersByFamily<br/>family ApplicableAxes gate, the family-gate planning change (subsumes the family ApplicableAxes gate)<br/>family=discovered_cohort_ranking: drop kind/subject_anchor/subject_handle/subject_candidate<br/>rows AND their options; a family with no axis restriction passes through unchanged"]
+    CG --> DEC{"decideInferredWindowGate (window.go)<br/>offers_unavailable / period_shape / offers_beyond_window -> gated<br/>window_only -> answered"}
     DEC -- "gated" --> C["composeGatedStructureNeeds<br/>Missing = [window, +kind/handle/candidate]<br/>WindowOptions + KindOptions + HandleOptions + CandidateOptions<br/>receipts minted by composeStructureNeeds"]
     DEC -- "answered: window is the only question" --> ANS["decisive path on the inferred window<br/>(decisive ResolveSubjects marked WithPageHintLookupReported)<br/>answer keeps provenance inferred_default,<br/>window_clarification + window-only structure_needs + warning beside it"]
     WO --> R
@@ -53,7 +53,7 @@ flowchart TD
     subgraph OFFERS_ONLY["offers-only mode inside graphrank.resolveSubjects"]
         S1["Search / SearchQuestion / AliasLookup / coverage floor<br/>(unchanged)"]
         S2["ResolveFromMergedCandidatesWithGateAndBasis<br/>corroboration -> sort -> decision -> ranked_cut trace -> cut"]
-        S3["SKIPPED: shadow evidence round / census<br/>CHAOS-4154 confirmed-kind scope pass<br/>SurvivorsFirstOrder"]
+        S3["SKIPPED: shadow evidence round / census<br/>the confirmed-kind truncation change confirmed-kind scope pass<br/>SurvivorsFirstOrder"]
         S4["offer builders on kindOfferCandidates<br/>kind_offer trace: OfferedUnderWindowGate=true"]
         S1 --> S2 --> S4
         S2 -. "skipped" .-> S3
@@ -61,7 +61,7 @@ flowchart TD
     RS --- OFFERS_ONLY
 ```
 
-CHAOS-4451 (lead ruling 2026-11-02, option 1 of chris's options on the
+Inferred-window answer (lead ruling 2026-11-02, option 1 of chris's options on the
 ticket, "default window with disclosure, or offer + partial answer"): the gate
 ends the turn only when the window is not its only question. After the
 offers-only pass, `decideInferredWindowGate` gates on one of three bases, in
@@ -72,10 +72,10 @@ window would drop it), `offers_beyond_window` (the pass offered a kind, anchor,
 handle or candidate option to pick: `offerMaterialRedeemable`). Otherwise the
 turn runs the decisive path on the inferred window: `window_only`, or
 `window_only_unpickable_asks` when the pass named needs beyond the window with
-nothing to pick for them (CHAOS-12640: the standing zero-candidates disclosure
+nothing to pick for them (the window-gate counting change: the standing zero-candidates disclosure
 is kept on the result, and a named subject with zero candidates still ends
 `no_match` on no other subject). The answer keeps provenance
-`inferred_default`, so CHAOS-4040's protections hold: it is never reused or
+`inferred_default`, so the inferred-window gate's protections hold: it is never reused or
 carried as a confirmed window, and a later confirmation runs fresh. It serves
 the window offer beside the answer: `window_clarification`, a window-only
 `structure_needs` (what Ask Dev draws its window popup from), and a warning
@@ -92,7 +92,7 @@ path would use. Cost per gated request equals a regime-B turn 1 (per term:
 one fulltext, one embedding, one KNN, plus alias lookup, question search,
 and the coverage floor) minus the census round.
 
-## 2a. The §1.3 class-conditional gate (CHAOS-4579 / CHAOS-4531)
+## 2a. The §1.3 class-conditional gate
 
 `anchorOfferMaterial` and `handleOfferMaterial`
 (`graphrank/chaos3900_structure_offers.go`) decide their `Missing` row from
@@ -138,27 +138,27 @@ Three properties the implementation depends on:
 - **Rows and options are one decision.** Dropping only the row would leave
   options on the wire with no member asking for them (a receipt redeemable
   against a need never disclosed); dropping only the options leaves exactly
-  the empty-offer shell CHAOS-4579 was filed about.
+  the empty-offer shell the family ApplicableAxes gate was filed about.
 - **`AnchorOptionsRequireV2` is cleared with the options.** It is the sole
   signal promoting a result to the v2 semantic major, and both call sites
   dispatch `schemaVersion` off it.
   The follow-up reconcile (`anchor_binding_follow_up.go`) clears it the
-  same way when it removes the last anchor option (CHAOS-11975), and the
+  same way when it removes the last anchor option, and the
   contract refuses the shape: `ValidateV2` and `ValidateStoredV2` require
   `structure_needs` with a non-empty `anchor_options`, and the published v2
-  schemas refuse an empty `anchor_options`. Since CHAOS-12073 the v2 schemas
+  schemas refuse an empty `anchor_options`. Since the v2 schema requirement change the v2 schemas
   also list `structure_needs` (result and response) and `anchor_options`
-  (`StructureNeedsV2`) in `required`, one release after CHAOS-11975 shipped
+  (`StructureNeedsV2`) in `required`, one release after the v2 result-schema change shipped
   them optional (a field is optional for one release before it becomes
   required). A v1-shaped body labelled v2 is not a v2 result.
 
-There is no gate 1 any more (CHAOS-6557): a window the caller supplies -- the
+There is no gate 1 any more: a window the caller supplies -- the
 `evidence_window` field on any surface, or a single period stated in the
 question -- is committed (`question_stated`) and never gated. Only an inferred
 window (class-table default) reaches the class-default gate above.
 
 **Telemetry denominator, stated exactly.** `RecordCohortStructureGate` fires once per
-`GateOffersByFamily` call (CHAOS-4634; subsumes CHAOS-4579/4531's `GateSubjectAxisOffers`) — once
+`GateOffersByFamily` call (subsumes the family ApplicableAxes gate's `GateSubjectAxisOffers`) — once
 per request that reached a candidate-pool offer decision.
 That is deliberately *not* the same set as "requests whose result carries `structure_needs`",
 and the two differ in both directions:
@@ -175,7 +175,7 @@ and the two differ in both directions:
 To count clarification disclosures read `cf_structure_needs_disclosed`; to count class-gate
 decisions read this. Neither is the other's denominator.
 
-**The replay harness reads through the same gate.** The CHAOS-3884 frozen-interpretation replay
+**The replay harness reads through the same gate.** The the replay-harness wiring frozen-interpretation replay
 harness computes `wired_structure_needs_would_disclose` from `ResolveSubjects`' raw
 `StructureOfferMaterial`. `GateOffersByFamily` is therefore **exported**, for the same reason
 `StructureNeedsWouldDisclose` is: the harness calls the one function production calls (on the
@@ -184,11 +184,11 @@ of its condition. Without that hop a `discovered_cohort_ranking` case whose only
 kind/anchor/handle rows would be reported as disclosing while production discloses nothing — a
 false replay report.
 
-**CHAOS-4452's question-family investigation-planning stage has landed this decision** (CHAOS-4634,
+**Question-family planning stage's question-family investigation-planning stage has landed this decision** (the family-gate planning change,
 slice S4): a family (chaos4632_question_family_registry.go) carries, per class, the whole set of
 axes that are even applicable, and `GateOffersByFamily` is the ONE lookup every offer disclosure
 now consults, replacing the Shape-keyed pair (`subjectAxisAbsent`/`kindOfferMaterial`'s own
-class gap) CHAOS-4579/4531 shipped as a narrower, composition-boundary-only fix. The gate still
+class gap) the family ApplicableAxes gate shipped as a narrower, composition-boundary-only fix. The gate still
 sits at the composition boundary, not inside the four offer builders themselves
 (`kindOfferMaterial`/`candidateOfferMaterial`/`anchorOfferMaterial`/`handleOfferMaterial`,
 `graphrank/chaos3900_structure_offers.go`) — those still run unconditionally and their output is
@@ -209,9 +209,9 @@ discard is the load-bearing safety layer; the ctx mark
 | Where | Field | Meaning |
 | --- | --- | --- |
 | `EngineTelemetry.RecordGatedOfferResolution` | `composed` / `empty` / `failed` / `disabled` / `refused` / `not_projected` | once per class-default gated request; `not_projected` (codex round-2 finding #2) distinguishes a never-projected org from a genuinely empty pool, same as `subjectlessTerminalReasons`' `graph_not_projected` does for the decisive path |
-| `EngineTelemetry.RecordGatedOfferResolutionFailure` (CHAOS-12681) | `deadline_exceeded` / `canceled` / `dependency_unavailable` / `internal` | Warn, only beside `failed`: why the offers-only pass failed, by class and never by the error's text (which can carry query content). The turn then gates on the window alone (`inferred_window_gate` basis `offers_unavailable`) |
-| `EngineTelemetry.RecordCohortStructureGate` | `applied` / `no_op` / `subject_bearing` + the `shape` it fired for | once per `GateOffersByFamily` call (CHAOS-4634), at both call sites; `applied` = at least one inapplicable axis's rows were removed, `no_op` = the family restricts some axis but nothing on it was present to remove, `subject_bearing` = the family places no restriction on any of the five wire axes and the material passed through. The DECISION is family-keyed; the reported `shape` dimension is unchanged (still a meaningful cross-check of what the model reported vs. what the family gate decided). Both outcomes AND the denominator are reported, so "cohort vs subject clarification" is a countable split rather than an inference from a missing log line. **Not** one per composed `StructureNeeds` — see the denominator note below |
-| `EngineTelemetry.RecordInferredWindowGate` (`contextfabric.inferred_window_gate`) | `decision` `gated` / `answered`, `basis` `offers_unavailable` / `period_shape` / `offers_beyond_window` / `window_only` / `window_only_unpickable_asks` | once per class-default turn (CHAOS-4451): what the gate did with the turn and the one basis that decided it |
+| `EngineTelemetry.RecordGatedOfferResolutionFailure` | `deadline_exceeded` / `canceled` / `dependency_unavailable` / `internal` | Warn, only beside `failed`: why the offers-only pass failed, by class and never by the error's text (which can carry query content). The turn then gates on the window alone (`inferred_window_gate` basis `offers_unavailable`) |
+| `EngineTelemetry.RecordCohortStructureGate` | `applied` / `no_op` / `subject_bearing` + the `shape` it fired for | once per `GateOffersByFamily` call, at both call sites; `applied` = at least one inapplicable axis's rows were removed, `no_op` = the family restricts some axis but nothing on it was present to remove, `subject_bearing` = the family places no restriction on any of the five wire axes and the material passed through. The DECISION is family-keyed; the reported `shape` dimension is unchanged (still a meaningful cross-check of what the model reported vs. what the family gate decided). Both outcomes AND the denominator are reported, so "cohort vs subject clarification" is a countable split rather than an inference from a missing log line. **Not** one per composed `StructureNeeds` — see the denominator note below |
+| `EngineTelemetry.RecordInferredWindowGate` (`contextfabric.inferred_window_gate`) | `decision` `gated` / `answered`, `basis` `offers_unavailable` / `period_shape` / `offers_beyond_window` / `window_only` / `window_only_unpickable_asks` | once per class-default turn: what the gate did with the turn and the one basis that decided it |
 | `kind_offer` trace event | `OfferedUnderWindowGate` | this resolution ran in offers-only mode |
 | `ranked_cut` trace stage (`resolution.go`) | `Subject`, `Rank`, `Survived` | one event per candidate, in rank order, before the `MaxSubjectCandidates` cut; `Rank==1` opens a batch, readers keep the last batch |
 | `ranked_cut` companion (`resolve.go`) | `CoverageBypass=true`, `Rank 0` | a coverage-floor find the cut dropped but `unionCandidatesForOffer` still hands to the offer builders |

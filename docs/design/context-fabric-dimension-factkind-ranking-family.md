@@ -1,14 +1,14 @@
-# Context Fabric: dimension ↔ FactKind ↔ ranking-family mapping (CHAOS-4468)
+# Context Fabric: dimension ↔ FactKind ↔ ranking-family mapping
 
-CHAOS-4468 asked for a mapping between the nine canonical
+Dimension-to-ranking-family mapping request asked for a mapping between the nine canonical
 [`HealthDimension`](../../internal/contextfabric/chaos4632_question_family_registry.go)
 values, the 23 registered `FactKind`s, and `cohort_ranking.go`'s five
-`RankingSignal*` ranking families. Before CHAOS-4468 this mapping existed
+`RankingSignal*` ranking families. Before the dimension-to-ranking-family mapping request this mapping existed
 nowhere: North Star §19 says so itself ("No such mapping exists as of
 2026-08-28").
 
 **This table is GENERATED, not hand-maintained.** Every row comes straight
-from `FactCapability.Dimension` (CHAOS-4633) as declared on the live
+from `FactCapability.Dimension` as declared on the live
 provider registry (`devhealthfacts.NewProviders`), joined against
 `cohort_ranking.go`'s five closed `RankingSignal*` constants. There is no
 second, independently-authored copy of this mapping for either half to
@@ -23,7 +23,7 @@ current registry. A registry change that is not reflected here fails CI.
 To regenerate after a registry change:
 
 ```bash
-go run ./cmd/gendimtable > /tmp/table.md   # paste the table body back in below
+go run ./cmd/gendimtable > table.md   # paste the table body back in below
 ```
 
 (`cmd/gendimtable` is a throwaway generator kept only for this

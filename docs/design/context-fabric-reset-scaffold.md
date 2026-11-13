@@ -1,6 +1,6 @@
 # Context Fabric Reset 0–1 scaffold
 
-This document maps the initial code scaffold to CHAOS-3744 and CHAOS-3745. It is intentionally structural: no graph vendor is selected, no public route is registered, and no question strings are hard-coded.
+This document maps the initial code scaffold to the reset-scaffold work and reset-boundary work. It is intentionally structural: no graph vendor is selected, no public route is registered, and no question strings are hard-coded.
 
 ## Package map
 

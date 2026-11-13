@@ -2,13 +2,13 @@
 title: Context Fabric subject model and cohort answer design
 ---
 
-# Context Fabric: subject model and cohort answer design (CHAOS-4398)
+# Context Fabric: subject model and cohort answer design
 
 Design note for the 2026-08-28 gate re-open: team/cohort questions and the chat
 surface were not gate-clean (chris 04:05). Covers the current subject model,
 the two corrected root causes that blocked team cohort answers, and the
 cohort ranking + drivers + Rows design that answers the charter question
-"which teams are struggling and why" (CHAOS-3741, CHAOS-4398).
+"which teams are struggling and why".
 
 Decision record: [Linear — Subject model + cohort answers, decisions
 2026-08-28](https://linear.app/fullchaos/document/subject-model-cohort-answers-decisions-2026-08-28-8fec005d1fb3).
@@ -24,9 +24,9 @@ answers:
 
 | Kind | Source (ClickHouse / graph) | Ownership rule | Status |
 |---|---|---|---|
-| `team` | `teams` table; graph node via `queryTeams` (`devhealthsource/teams_projects.go`) | **Ownership only** — a team owns a subject iff `team_repo_ownership`/`team_project_ownership` says so. Never person→membership (CHAOS-4321 hard rule) | first-class, cohort-capable |
+| `team` | `teams` table; graph node via `queryTeams` (`devhealthsource/teams_projects.go`) | **Ownership only** — a team owns a subject iff `team_repo_ownership`/`team_project_ownership` says so. Never person→membership (the ownership-only team rule hard rule) | first-class, cohort-capable |
 | `project` | `projects` table; graph node via `teams_projects.go` | `team_project_ownership` (project→team) | first-class, cohort-capable — `interpretedCohortKind` already selects `SubjectProject` for project-shaped questions and `DiscoveredCohort` admits project nodes the same way it admits team nodes. The real limitation is narrower: `interpretedCohortKind` picks exactly **one** kind per question (a substring heuristic, `graphrank/discover.go:296`), so a mixed team+project cohort in one question is not supported — that is a distinct, pre-existing gap, not "project is single-subject only" |
-| `repository` | `repositories`/`tables.go` | `team_repo_ownership` (repository→team `OWNED_BY_TEAM` edge since CHAOS-6561) | first-class |
+| `repository` | `repositories`/`tables.go` | `team_repo_ownership` (repository→team `OWNED_BY_TEAM` edge since the ownership-edge projection) | first-class |
 | `metric` | `ContextFabricSubjectMetric` constant declared (`model.go:92`) | — | **declared, not wired** — no query producer reads it yet |
 | person | — | — | **not a subject kind in acr.** No `SubjectPerson` exists. This is by design, not an oversight: the dev-health **platform** root `AGENTS.md` (`../../AGENTS.md` from this repo — distinct from this repo's own `AGENTS.md`) bars person-to-person rankings under "Visualization Guardrails," and the Context Fabric project's own Linear description states the finer "no person-level productivity, health, workload, or staffing ranking" as a non-negotiable boundary; a `person` subject able to carry a ranking would need a governance decision first, not a silent addition. |
 
@@ -40,7 +40,7 @@ actual `work_graph_issue_pr` link row (the link of record, with its provenance
 tier) and the repository is the pull request's own. An issue's own repository column is not that path. A team
 reaches repositories and projects through ownership only
 (`team_repo_ownership`, `team_project_ownership`). Some reads still use a
-work item's own repository as an activity proxy (the CHAOS-4099 fact-scope
+work item's own repository as an activity proxy (the unreachable-fact-family disclosure change fact-scope
 chains, `docs/design/context-fabric-fact-scope.md` §1); they are listed in
 diagram 3 under "Code that does not yet follow the tree". ClickHouse-side
 ownership joins (`team_repo_ownership`, used by `HealthProvider`'s project
@@ -54,7 +54,7 @@ in flight; **do not re-litigate the original framing** below — it is kept only
 so the corrected mechanism is legible against what a reader might find in
 older commit messages or tickets.
 
-### 2a. Team authorization was a wildcard over-exposure, not a deny (CHAOS-4390, fixed)
+### 2a. Team authorization was a wildcard over-exposure, not a deny (fixed)
 
 **Original (superseded) framing:** `graphrank.AuthorizedAttributes`
 (`authorize.go:48`) was believed to deny any node whenever
@@ -72,7 +72,7 @@ repository-scoped principal, unconditionally — a cross-scope information
 leak, not a false deny.
 
 **Fix (merged, PR #313):** authorize a team iff it owns ≥1 repository inside
-the principal's scope (`team_repo_ownership`, CHAOS-4321 ownership-only). A
+the principal's scope (`team_repo_ownership`, the ownership-only team rule ownership-only). A
 team with no ownership row gets an explicit deny sentinel
 (`noTeamOwnershipSentinel`) — never a bare empty list, which would fall back
 to the wildcard and reproduce the exact leak this fix closes.
@@ -80,10 +80,10 @@ to the wildcard and reproduce the exact leak this fix closes.
 A cohort whose requested member set authorization cut part of is not served `complete`: the
 degrading `graph_cohort_denied_by_authorization` coverage row floors a complete answer to `partial`,
 whatever shape the plan had, and the floor is applied again when a stored result is read by id.
-A count over that member set is a `narrowed` outcome row naming the same code (CHAOS-12147), so the
-completeness state is not `complete` either; so is a member read over it (CHAOS-12153), with the same denied count.
+A count over that member set is a `narrowed` outcome row naming the same code, so the
+completeness state is not `complete` either; so is a member read over it, with the same denied count.
 
-### 2b. Cohort retrieval was fulltext-only (CHAOS-4395, in flight)
+### 2b. Cohort retrieval was fulltext-only (in flight)
 
 `DiscoverContext`'s only node source for the subjectless-cohort case was
 `fulltextSearchNodes` — a lexical search over the raw question text. A
@@ -100,18 +100,18 @@ pick `discovered_cohort` for exactly this question shape
 (`Runtime.InterpretQuestion`).
 
 **Fix (PR #314, stacked on #313):** when `Shape` names a cohort kind, source
-cohort members from `ExactNameCandidates`/the kind census (CHAOS-4348's
+cohort members from `ExactNameCandidates`/the kind census (the subject-pool reachability fix's
 existing kind-exhaustive, term-free fetch, already used by the single-subject
 path) in addition to fulltext — scoped to cohort requests only. Output shape
-stays offers-only (no ranking/drivers); those are CHAOS-4398, below.
+stays offers-only (no ranking/drivers); those are the subject-model and cohort-answer design, below.
 
-## 3. Cohort answer pipeline (CHAOS-4398)
+## 3. Cohort answer pipeline
 
 ```mermaid
 flowchart TD
   Q["Question: 'which teams are struggling and why?'"] --> INTERPRET["Interpret<br/>Runtime.InterpretQuestion (LLM)<br/>Shape=discovered_cohort"]
-  INTERPRET --> CENSUS["Cohort census<br/>DiscoverContext: fulltextSearchNodes today<br/>+ ExactNameCandidates -- IN FLIGHT (#314/CHAOS-4395,<br/>not yet merged as of this writing)"]
-  CENSUS --> AUTHZ["Authorize<br/>graphrank.AuthorizedAttributes<br/>ownership-derived (#313/CHAOS-4390, MERGED)"]
+  INTERPRET --> CENSUS["Cohort census<br/>DiscoverContext: fulltextSearchNodes today<br/>+ ExactNameCandidates -- IN FLIGHT (#314/the cohort exact-name candidate change,<br/>not yet merged as of this writing)"]
+  CENSUS --> AUTHZ["Authorize<br/>graphrank.AuthorizedAttributes<br/>ownership-derived (#313/the team-authorization-from-ownership change, MERGED)"]
   AUTHZ --> FACTS["Per-member fact production (NEW requirement injection, §3a)<br/>investigationScopeSubjects fans out subjects, but fact KINDS<br/>still come from Interpretation.FactRequirements + graphContext.FactRequirements<br/>(engine.go:1217-1222 mergeFactRequirements) -- cohort ranking must force-add<br/>health / workload / readiness / operational_deficiencies / investment (NEW join, see 4)<br/>the same way graphContext.FactRequirements already injects non-model requirements"]
   FACTS --> RANK["RankCohort (NEW, deterministic)<br/>runs after fact reads, before synthesis<br/>Score + RankingBasis + DataCompleteness ONLY --<br/>no ContextFabricDriverJudgment emission here (see DRIVERS below)"]
   RANK --> SYNTH["Synthesize (open question, see below)<br/>Score is server-computed, model never overrides it,<br/>but HOW a narrated score gets grounded/checked is<br/>NOT YET SPECIFIED -- PR3 picks: new canonical-observation<br/>claim type, or fully server-templated non-model text.<br/>Existing Rows guard keeps its strip-and-tolerate<br/>behavior unchanged (model-authored Rows stripped,<br/>answer still returned, cf_model_rows_stripped)"]
@@ -154,14 +154,14 @@ tolerates a model-authored `Rows` claim by stripping it and continuing
 (`cf_model_rows_stripped`), not by rejecting the whole answer — this design
 does not change that behavior. `CENSUS` above is marked `gap`, not `fixed`:
 `DiscoverContext` still sources cohort members from `fulltextSearchNodes`
-only on `main` as of this writing (§2b); PR #314/CHAOS-4395 adding
+only on `main` as of this writing (§2b); PR #314/the cohort exact-name candidate change adding
 `ExactNameCandidates` is in flight, not merged, and this diagram must be
 updated to `fixed` in the same PR that merges it, per the standing update
 rule in `context-fabric-architecture-diagrams.md`.
 
 ### 3a. Fact requirement injection (P1, must be resolved in PR1) — RESOLVED
 
-PR1 (`internal/contextfabric/engine.go`, `chaos-4398-cohort-rank`): when
+PR1 (`internal/contextfabric/engine.go`, `the subject-model and cohort-answer design-cohort-rank`): when
 `graphContext.Cohort != nil`, the five ranking-formula kinds
 (`health`/`workload`/`readiness`/`operational_deficiencies`/`investment`)
 are injected as the LAST group into
@@ -231,7 +231,7 @@ are **additive, optional** (`omitempty`) fields on the existing
 to stay in the v1 contract (root `AGENTS.md`: "Additive optional fields may
 stay in v1... changed meaning... require a new major contract"). Absence of
 these fields on a stored/serialized result means exactly one thing: this
-result was computed before CHAOS-4398 landed (or by a producer that has not
+result was computed before the subject-model and cohort-answer design landed (or by a producer that has not
 adopted ranking yet) — it is **not** a signal of zero score or degraded data,
 and validation/schema must not require them. This is a contract widening,
 which per standing rule requires an ask-dev pin bump before the Workbench/
@@ -248,8 +248,8 @@ teams, never individual people.
 
 ### 4a. Projection gap (P1, must be closed in PR1 or PR3) — DEFERRED to PR3
 
-**Lane decision (`lane-4398-cohort`, PR1):** closed in PR3, not PR1. PR1's
-scope (per the CHAOS-4398 build order) is the canonical-result-side contract
+**Work-stream decision (PR1):** closed in PR3, not PR1. PR1's
+scope (per the subject-model and cohort-answer design build order) is the canonical-result-side contract
 (`ContextFabricCohortMember`'s five new fields, §4 above) and the
 deterministic `RankCohort` engine pass that populates them — never the
 per-member drivers (PR2) or the answer-projection/Rows-panel surface this
@@ -258,7 +258,7 @@ section describes (PR3). Extending
 `ContextFabricProjectedCohort.RankingTable` together with their JSON
 Schema/OpenAPI/MCP/golden-fixture/parity-test updates is real, additional
 contract-first work this section correctly scopes — tracked as a PR3
-follow-up in the CHAOS-4398 PR1 body, not silently dropped. Until PR3 lands,
+follow-up in the subject-model and cohort-answer design PR1 body, not silently dropped. Until PR3 lands,
 the ranking fields are real on the canonical `ContextFabricInvestigationResult`
 but invisible to every consumer that only reads the answer-projection
 surface (API/MCP `investigate_question`/Ask Dev) — the same "contract
@@ -427,7 +427,7 @@ not in the closed `ContextFabricDriverCategory` vocabulary
 
 ### 5a. Driver budget (P1, must be resolved before PR2) — layered on PR2's structured member drivers, ruling below
 
-**Ruling (orchestrator, CHAOS-4398 PR2):** this section's budget scheme
+**Ruling (orchestrator, the subject-model and cohort-answer design PR2):** this section's budget scheme
 below (`ContextFabricDriverJudgment` emission into the shared, answer-wide
 `result.Drivers` array; the 50-cap/5-10 render-budget math; post-synthesis
 timing; `Standing`/`DriverID` crafted to survive projection truncation) is
@@ -455,7 +455,7 @@ expressible in this repo's own contractcheck engine (no `contains`/
 `minContains`/`maxContains` support), and null-vs-zero on a persisted read
 isn't schema-distinguishable either. A payload the schema accepts is not
 guaranteed valid; a payload Go's write path accepts always is. Tracked as
-a follow-up, not required to ship PR2 (CHAOS-4416).
+a follow-up, not required to ship PR2.
 
 **Original budget analysis (unchanged, PR3-owned):**
 
@@ -555,10 +555,10 @@ as zero" intent from the first draft.
 field — that breaks the exact v1-compatibility story §4 relies on.** Go's
 `encoding/json` omits a nil pointer under `omitempty` exactly the same way it
 omits a field that was never set, so a today's zero-signal member (ranking
-ran, found nothing) and a result computed before CHAOS-4398 (ranking never
+ran, found nothing) and a result computed before the subject-model and cohort-answer design (ranking never
 ran) would serialize identically — the reader cannot tell "no ranking
 attempted" from "ranking attempted, no signal." Resolution: add a companion
-boolean, `RankingComputed bool` (`omitempty`, so a pre-CHAOS-4398 result
+boolean, `RankingComputed bool` (`omitempty`, so a pre-subject-model-and-cohort-answer-design result
 still omits it and reads as `false`), set `true` by any producer that ran
 `RankCohort` for this member regardless of outcome. `Score *float64` then
 carries three real states: `RankingComputed` absent/false → ranking never
@@ -572,14 +572,14 @@ rendered as "no data" rather than a fabricated number.
 **Rank placement must not repurpose the existing `Rank` field's meaning.**
 `ContextFabricCohortMember.Rank` is a currently-required v1 field already
 assigned from graph/pool retrieval order and already projected as part of
-that judgment (§1 pipeline, pre-CHAOS-4398 behavior) — redefining what it
+that judgment (§1 pipeline, pre-subject-model-and-cohort-answer-design behavior) — redefining what it
 means (pool order → attention-score order) for existing callers is a
 **changed meaning**, which root `AGENTS.md` requires a new major contract
 for, not an additive-optional field. Resolution: leave `Rank` exactly as-is
 (pool order, unchanged) and add a new optional field,
 `AttentionRank int` (`omitempty`, 1-indexed, present only when
 `RankingComputed=true`), carrying the score-based order this design actually
-needs. Consumers that want the pre-CHAOS-4398 pool order keep reading `Rank`
+needs. Consumers that want the pre-subject-model-and-cohort-answer-design pool order keep reading `Rank`
 unaffected; consumers rendering the cohort-attention Rows table read
 `AttentionRank`. A null-`Score` member's `AttentionRank` is placed
 deterministically last: after every member with a real `Score`, ties among
@@ -608,7 +608,7 @@ per-`(member, family)` availability rule — not the batch-level
 > in `work_unit_investments`; a subject with no canonical mix gets no fact. The finding below is the
 > historical state that motivated the change.
 
-`FactInvestment` (CHAOS-4363/#308) reads `investment_metrics_daily`, fed by
+`FactInvestment` (the project rollup rows work/#308) reads `investment_metrics_daily`, fed by
 the **deprecated** `ops/src/dev_health_ops/config/investment_areas.yaml` rule
 set (free-form legacy labels, e.g. `security`/`infrastructure` — not the
 canonical 5-theme taxonomy). The canonical theme/subcategory distribution
@@ -618,10 +618,10 @@ row per `(org_id, work_unit_id)` via `argMax(..., computed_at)`), LEFT
 JOINed to `work_item_team_attributions` via ops's shared
 `build_unit_team_subquery` helper (`api/queries/investment.py`; see
 `fetch_investment_team_edges` for the reference caller), which already
-carries ownership precedence per CHAOS-2600 — **acr has no producer reading
-this join today**, the same class of gap CHAOS-4347 named for repository
-status and CHAOS-4365 named for cognitive load. The investment Rows proven
-live on 2026-08-27 came from the deprecated source. CHAOS-4398's PR1 adds the
+carries ownership precedence per the ownership-precedence rule — **acr has no producer reading
+this join today**, the same class of gap the status-category fact-kind work named for repository
+status and the cognitive-load fact kind named for cognitive load. The investment Rows proven
+live on 2026-08-27 came from the deprecated source. Subject-model and cohort-answer design's PR1 adds the
 new team-scoped read before term 1 of the score formula can be trusted —
 either a new typed query function in `api/queries/investment.py` or an
 equivalent join built the same way; there is no existing exported query API
@@ -630,10 +630,10 @@ for this shape to call as-is. See the ops-side deprecation note:
 
 ## 7. What this does not cover
 
-- Cohort ranking/drivers implementation itself (CHAOS-4398 is Backlog as of
+- Cohort ranking/drivers implementation itself (the subject-model and cohort-answer design is Backlog as of
   this writing) — this page documents the design, not a shipped capability.
   Update this page's pipeline diagram's node classes (`fixed` vs. `gap` vs.
-  `newnode`) as each of CHAOS-4398's 4 stacked PRs — and CHAOS-4395 — lands.
+  `newnode`) as each of the subject-model and cohort-answer design's 4 stacked PRs — and the cohort exact-name candidate change — lands.
   Four review passes on this design surfaced and this page now resolves:
   the driver-count budget being global and shared, computed **after**
   synthesis from the actual non-cohort driver count rather than a
@@ -666,7 +666,7 @@ for this shape to call as-is. See the ops-side deprecation note:
   defect — tracked separately (`.remember/context-fabric/drafts/subject-model-requirement.md`
   §2-3), not a subject-model or cohort-ranking concern.
 
-## 8. Outcome (CHAOS-4398 PR3) — replaces the binary §4.2 qualify/does-not-qualify
+## 8. Outcome (the subject-model and cohort-answer design PR3) — replaces the binary §4.2 qualify/does-not-qualify
 
 Chris's Linear doc "Dev Health Ops Purpose and Contract" §4.2 ("Qualification
 for a team requiring attention") originally specified a **binary**
@@ -731,12 +731,12 @@ not_applicable}` still gets a row — rank/score null, outcome and (via the
 canonical member) `MissingSignals` visible — so a cohort answer names every
 team it considered, not just the ones it could score.
 
-Reference: North Star §8 (per team-lead, CHAOS-4398 PR3 ruling); contract
+Reference: North Star §8 (per team-lead, the subject-model and cohort-answer design PR3 ruling); contract
 doc §4.2 (upload
 `e2522b60-devhealthopspurposeandcontract20260828T112058PDT.md`); review doc
 `.remember/context-fabric/drafts/purpose-contract-review-2026-08-28.md` §4/§5.
 
-## 10. Conditional render shapes (CHAOS-4415 slice 1)
+## 10. Conditional render shapes (the conditional-render-shapes work slice 1)
 
 North Star check 10 — "rich views are conditional on intent, never default"
 — had no consumer. §4a's `RankingTable` gave a cohort answer a table; a
@@ -759,7 +759,7 @@ and `ContextFabricAnswerProjection.RenderShapes`.
 `series`, `table`, `quadrant`, `treemap`, `sunburst`, `sankey`, `burndown`,
 `forecast` — so a consumer can switch exhaustively and a later producer
 never widens the wire underneath it. Only `series` has a producer here; the
-other seven are filed as CHAOS-4415 sub-issues.
+other seven are filed as the conditional-render-shapes work sub-issues.
 
 **Why bars are a `series` presentation, not their own kind.** A bar chart, a
 stacked bar chart and a line chart are the same data — an ordered set of
@@ -785,11 +785,11 @@ no shape, which is the common case.
 | `cohort_attention_score` | `interpretation.shape ∈ {explicit_cohort, discovered_cohort}` AND ≥1 member has `ranking_computed` with a non-null `score` | `series` / `bars`, one point per ranked member in `attention_rank` order, value = that member's `score` |
 | `cohort_driver_contribution` | the rule above fired AND ≥1 ranked member carries drivers AND the distinct signal count fits one stack | `series` / `stacked_bars`, one series per driver family, value = that member's `weight_contributed` for it |
 | `dated_fact_trend` | the claim's row table is DECLARED `time_series` AND the claim's own `field` is one of its declared `measures` (§10.3c) | `series` / `line` on a `time` axis, one series, axis = `table.key[0]`, value = `rows[i][claim.field]` |
-| `investment_theme_share` | The deployment's flag is on (CHAOS-12521). The served family is `investment_allocation` (for an organization frame or a team's `children_of_scope` frame with the goal set exactly `{allocate_investment}`, the scope-anchor allocation route serves it from the anchor's own fact, with no member cohort, and that frame is not cohort intent here; CHAOS-12585, CHAOS-12606), the plan authorizes `treemap`, exactly one investment breakdown on a repository, a team or the organization (the organization's words say "Share of effort linked to a repository", because its unattributed effort is outside the mix; CHAOS-12585): claims that carry a declared `theme_breakdown` table with the same fact id (the same id, or none on both), subject, declaration and rows are one breakdown, because every claim on a fact carries that fact's rows, and the chart cites the first of them; a claim with no fact id beside one that names a fact is a second breakdown (CHAOS-12591), every row is a canonical theme with a numeric share, and at least 2 shares are above 0 | `treemap` with a `value_unit` of `ratio`: one series, one point for every row, the value is the row's `share`, the label is the served word of the row's `theme` |
-| `comparison_side_by_side` | The deployment's flag is on (CHAOS-12513). The served family is `explicit_comparison`, this turn's frame asks for a comparison, the plan authorizes `table`, 2 to 8 subjects of one kind are committed, and the answer claims one measure for every side. A cell needs a declared `window` field, or a `latest_day` field that proves the same `day` on every side that holds it | `table` with no `value_unit`: one series per subject, keyed by its canonical id, one point per measure, the label is the served `fact_field` word of the measure, the value is the claim's own value (`claimed_fact_value`). A measure a side lacks has no point, never a zero |
-| `investment_subcategory_share` | Declared ahead of its producer (CHAOS-12554); no emit yet. A claim names a declared `subcategory_breakdown` table: every canonical subcategory once, each under its own theme, with `share` and `theme_share` | `sunburst` with a `value_unit` of `ratio`: an inner series keyed `themes`, one point per theme citing its `theme_share`, labelled with the theme's word; one series per theme, keyed by its token, one point per subcategory citing its `share`, labelled with the subcategory's registry word (`subcategory:<token>`). A theme's subcategory shares add up to its `theme_share` within 1e-12 relative; every plotted number is an exact copy of its cell |
-| `investment_repository_flow` | Declared by CHAOS-12578 (the CHAOS-4610 sankey) and emitted behind `ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED`, default off (CHAOS-12582). The team investment fact serves its table on a single-team read (CHAOS-12580): owned repositories whole, project-reached repositories by their linked pull requests only, each named by its handle, under a row bound of 320 (64 repositories × 5 themes). The producer (CHAOS-12582) emits it only on this turn's frame that asks by repository (`children_of_scope`, member kind `repository`) with the one goal `allocate_investment`, on the `investment_allocation` family, for the one investment claim that names the table; the shape is proved against the contract before it is attached. The answer-size row cut withholds the table whole and says so (`ContextFabricRepositoryFlowWithheldLimitation`), never cuts it: a cut can take every link of one theme while every other theme still adds up. On this route the answer's allocation requirement is the anchor team's own, `allocation_breakdown/subject/team`, never one per member repository, because no member set is read (CHAOS-12885): the team's fact read satisfies it, and an answer whose table the row cut withheld is `partial`. An answer on this route that claims no `repository_theme_breakdown` table at all states `ContextFabricRepositorySplitUnclaimedLimitation` in `finalizeResult`, keyed on the route, once, whatever its status (complete, partial or degraded; a refusal is left alone), and a `complete` one is floored to `partial` (CHAOS-12890; an answer already partial for another cause says both); like other status-only floors its `completeness.state` still counts outcome rows, so `terminal_status` and the limitation carry the disclosure. A withheld table keeps its claim, so it keeps its own sentence and gets no second one. A model limitation that cites a detail table the finalized answer SERVES (by its field name, its display noun or its row count) is replaced in `finalizeResult` by `ContextFabricDetailTableServedLimitation`, because the model is given a table's row count and never its rows (synthesis prompt v32) and can write that the rows were not supplied beside a drawn table (CHAOS-12887); the rule runs on every finalize, so a table the size cut then withholds loses the sentence again and keeps the withheld one, and it never changes the status. The validator holds what the answer itself shows: an investment claim whose subject is a team, and whose table is a declared `repository_theme_breakdown`: one row per (repository, theme) link, with `weighted_effort`, the team's `theme_weighted_effort` and the repository's word | `sankey` with no `value_unit`: one series per theme with effort, keyed by its token and labelled with its word; one point per link with effort above 0, citing its `weighted_effort`, labelled with the repository's word. 2 to 64 repositories with effort, else no shape (never an "other" node); every node a repository or a theme, no two sharing a word. A theme's links add up to its `theme_weighted_effort` within 1e-12 relative; every plotted number is an exact copy of its cell |
-| `landscape_position` | Declared by CHAOS-12623 (the CHAOS-4611 quadrant) and emitted by CHAOS-12626 behind `ACR_CONTEXT_FABRIC_LANDSCAPE_QUADRANT_ENABLED` (default off). It fires when the plan authorizes `quadrant`, the interpretation's own fact requirements hold `landscape`, every committed side is a team, and 2 or more teams each claim both measures from one fact whose one `area_breakdown` row holds those values and at least 2 identities; the teams that give a point must share one `as_of_day`, or there is no quadrant. A team with no point is counted (`render_shape_landscape_sides_left_out`), never drawn as zero. The answer then serves one service-authored line: the quadrant locates teams and does not explain them. The validator holds what the answer itself shows: two series, `churn_loc_30d` (x) then `delivery_units_30d` (y), labelled with their served words, which are also the axis words; one point per team, with the same labels in the same order on both, at least 2; each value one stated landscape claim about a team and the raw integer cell of its row, which a point carries exactly; each label the team's label; the x and y of a label about one team, no team twice; every claim carrying its fact's `area_breakdown` row, all of them on one `as_of_day`; values 0 or more; a category axis and no `value_unit`. Raw values only: no normalized coordinate, percentile or score | `quadrant`: one series per axis, one point per team, value = the team claim's own value |
+| `investment_theme_share` | The deployment's flag is on. The served family is `investment_allocation` (for an organization frame or a team's `children_of_scope` frame with the goal set exactly `{allocate_investment}`, the scope-anchor allocation route serves it from the anchor's own fact, with no member cohort, and that frame is not cohort intent here; the organization treemap change), the plan authorizes `treemap`, exactly one investment breakdown on a repository, a team or the organization (the organization's words say "Share of effort linked to a repository", because its unattributed effort is outside the mix; the organization treemap change): claims that carry a declared `theme_breakdown` table with the same fact id (the same id, or none on both), subject, declaration and rows are one breakdown, because every claim on a fact carries that fact's rows, and the chart cites the first of them; a claim with no fact id beside one that names a fact is a second breakdown, every row is a canonical theme with a numeric share, and at least 2 shares are above 0 | `treemap` with a `value_unit` of `ratio`: one series, one point for every row, the value is the row's `share`, the label is the served word of the row's `theme` |
+| `comparison_side_by_side` | The deployment's flag is on. The served family is `explicit_comparison`, this turn's frame asks for a comparison, the plan authorizes `table`, 2 to 8 subjects of one kind are committed, and the answer claims one measure for every side. A cell needs a declared `window` field, or a `latest_day` field that proves the same `day` on every side that holds it | `table` with no `value_unit`: one series per subject, keyed by its canonical id, one point per measure, the label is the served `fact_field` word of the measure, the value is the claim's own value (`claimed_fact_value`). A measure a side lacks has no point, never a zero |
+| `investment_subcategory_share` | Declared ahead of its producer; no emit yet. A claim names a declared `subcategory_breakdown` table: every canonical subcategory once, each under its own theme, with `share` and `theme_share` | `sunburst` with a `value_unit` of `ratio`: an inner series keyed `themes`, one point per theme citing its `theme_share`, labelled with the theme's word; one series per theme, keyed by its token, one point per subcategory citing its `share`, labelled with the subcategory's registry word (`subcategory:<token>`). A theme's subcategory shares add up to its `theme_share` within 1e-12 relative; every plotted number is an exact copy of its cell |
+| `investment_repository_flow` | Declared by the sankey declaration (the theme-share declaration sankey) and emitted behind `ACR_CONTEXT_FABRIC_INVESTMENT_SANKEY_ENABLED`, default off. The team investment fact serves its table on a single-team read: owned repositories whole, project-reached repositories by their linked pull requests only, each named by its handle, under a row bound of 320 (64 repositories × 5 themes). The producer emits it only on this turn's frame that asks by repository (`children_of_scope`, member kind `repository`) with the one goal `allocate_investment`, on the `investment_allocation` family, for the one investment claim that names the table; the shape is proved against the contract before it is attached. The answer-size row cut withholds the table whole and says so (`ContextFabricRepositoryFlowWithheldLimitation`), never cuts it: a cut can take every link of one theme while every other theme still adds up. On this route the answer's allocation requirement is the anchor team's own, `allocation_breakdown/subject/team`, never one per member repository, because no member set is read: the team's fact read satisfies it, and an answer whose table the row cut withheld is `partial`. An answer on this route that claims no `repository_theme_breakdown` table at all states `ContextFabricRepositorySplitUnclaimedLimitation` in `finalizeResult`, keyed on the route, once, whatever its status (complete, partial or degraded; a refusal is left alone), and a `complete` one is floored to `partial` (an answer already partial for another cause says both); like other status-only floors its `completeness.state` still counts outcome rows, so `terminal_status` and the limitation carry the disclosure. A withheld table keeps its claim, so it keeps its own sentence and gets no second one. A model limitation that cites a detail table the finalized answer SERVES (by its field name, its display noun or its row count) is replaced in `finalizeResult` by `ContextFabricDetailTableServedLimitation`, because the model is given a table's row count and never its rows (synthesis prompt v32) and can write that the rows were not supplied beside a drawn table; the rule runs on every finalize, so a table the size cut then withholds loses the sentence again and keeps the withheld one, and it never changes the status. The validator holds what the answer itself shows: an investment claim whose subject is a team, and whose table is a declared `repository_theme_breakdown`: one row per (repository, theme) link, with `weighted_effort`, the team's `theme_weighted_effort` and the repository's word | `sankey` with no `value_unit`: one series per theme with effort, keyed by its token and labelled with its word; one point per link with effort above 0, citing its `weighted_effort`, labelled with the repository's word. 2 to 64 repositories with effort, else no shape (never an "other" node); every node a repository or a theme, no two sharing a word. A theme's links add up to its `theme_weighted_effort` within 1e-12 relative; every plotted number is an exact copy of its cell |
+| `landscape_position` | Declared by the landscape-quadrant declaration (the quadrant design quadrant) and emitted by the quadrant emission behind `ACR_CONTEXT_FABRIC_LANDSCAPE_QUADRANT_ENABLED` (default off). It fires when the plan authorizes `quadrant`, the interpretation's own fact requirements hold `landscape`, every committed side is a team, and 2 or more teams each claim both measures from one fact whose one `area_breakdown` row holds those values and at least 2 identities; the teams that give a point must share one `as_of_day`, or there is no quadrant. A team with no point is counted (`render_shape_landscape_sides_left_out`), never drawn as zero. The answer then serves one service-authored line: the quadrant locates teams and does not explain them. The validator holds what the answer itself shows: two series, `churn_loc_30d` (x) then `delivery_units_30d` (y), labelled with their served words, which are also the axis words; one point per team, with the same labels in the same order on both, at least 2; each value one stated landscape claim about a team and the raw integer cell of its row, which a point carries exactly; each label the team's label; the x and y of a label about one team, no team twice; every claim carrying its fact's `area_breakdown` row, all of them on one `as_of_day`; values 0 or more; a category axis and no `value_unit`. Raw values only: no normalized coordinate, percentile or score | `quadrant`: one series per axis, one point per team, value = the team claim's own value |
 | — anything else — | | no shape |
 
 Two negatives are as load-bearing as the positives:
@@ -825,7 +825,7 @@ always fails. There is no tolerance to argue about because there is no
 legitimate arithmetic for a shape to do — a derived number belongs in a
 canonical fact first, where it gets provenance and coverage of its own.
 
-This is §5a's grounding rule and CHAOS-4347/4355's Rows discipline (rows are
+This is §5a's grounding rule and the status-category fact-kind work and producer-rows synthesis change's Rows discipline (rows are
 attached server-side from the cited canonical fact, never model-authored),
 carried into chart space. A model cannot author a shape at all: there is no
 `SynthesisDraft` field for one, and selection runs after
@@ -888,13 +888,13 @@ Review challenged rule 3 for firing on row shape alone: should a
 `single_subject` answer that happens to carry dated rows get a chart it was
 not asked for? Two things settled it at the time.
 
-The rule was the ruling. §Scope item 2 of CHAOS-4415 and chris's 2026-08-29
+The rule was the ruling. §Scope item 2 of the conditional-render-shapes work and chris's 2026-08-29
 report both state it as "facts with dated records → time series", naming the
 absent readiness/workload trend as part of the reported defect.
 
 And the premise did not hold: a trend was not an additional, unasked chart.
 It rendered inside the fact's own rows panel and REPLACED the client-side
-heuristic chart CHAOS-4355 already drew for those same rows, and it only ever
+heuristic chart the producer-rows synthesis change already drew for those same rows, and it only ever
 fired on a CLAIMED fact the answer's own drivers cite. So the rule changed
 how evidence the answer already relies on is drawn, not whether an unrelated
 chart appears.
@@ -904,7 +904,7 @@ because a row table cannot say which of its columns are measures, not because
 it fired on the wrong questions. The cohort rules, where the risk of
 answering an unasked question is real, do gate on `interpretation.shape`.
 
-### 10.3c `dated_fact_trend`: withdrawn (CHAOS-4616), returned declaration-driven (CHAOS-4637)
+### 10.3c `dated_fact_trend`: withdrawn, returned declaration-driven
 
 Rule 3 shipped in slice 1 and was withdrawn the same day. The history is the
 point, because it is what determined the shape of the fix.
@@ -947,9 +947,9 @@ chart is a claimed fact.
 the withdrawal, so the returning producer needed no contract change — and it
 did not need one.
 
-**The return (CHAOS-4637 / S6, 2026-08-31).** The information was never
-missing; it was never carried. CHAOS-4633 gave every producer's table a
-declared `FactTable` and CHAOS-4645 gave health/readiness/workload/flow their
+**The return (the declaration-driven render-shapes work / S6, 2026-08-31).** The information was never
+missing; it was never carried. FactTable declaration change gave every producer's table a
+declared `FactTable` and the team and project time-series change gave health/readiness/workload/flow their
 team and project time series. S6 carries that declaration to the wire as
 `ContextFabricClaimedFact.table` and deletes the inference:
 
@@ -967,11 +967,11 @@ is unrepresentable rather than merely guarded.
 
 Exactly ONE measure is plotted. Several declared measures on one value axis
 would assert a commensurability nothing on the wire states; that is
-CHAOS-4625's own designed comparison shape, and it is expressible *because*
+Comparison-shape design's own designed comparison shape, and it is expressible *because*
 `measures` is a declared list. A table with no declaration at all is never
 charted — the safe default, and the behaviour before the return.
 
-Each rule now exits through exactly one recorded outcome (CHAOS-4621).
+Each rule now exits through exactly one recorded outcome.
 `trend_rule_withdrawn` is gone; in its place the trend rule records the
 FURTHEST stage any fact reached — `no_declared_table`, `no_time_series_table`,
 `claim_field_not_a_measure`, `no_plottable_measure`, or `not_plan_authorized`
@@ -981,7 +981,7 @@ what is missing".
 
 **What this does NOT remove.** This withdraws a *server assertion* only.
 Consumers still render a claimed fact's row table with their own generic
-visualization (ask-dev's CHAOS-4355 chart), presented as a view of the rows
+visualization (ask-dev's the producer-rows synthesis change chart), presented as a view of the rows
 rather than as a trend the service vouches for. Nothing disappears from a
 reader's screen; what disappears is the service's claim about what the rows
 mean. The declared-shape contract that would let the rule return was tracked
