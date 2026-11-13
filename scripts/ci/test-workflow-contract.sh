@@ -303,6 +303,76 @@ check_main_runs_get_a_verdict() {
   esac
 }
 
+# A label change must start no run of a workflow whose checks gate a merge. A
+# run started by a label posts a fresh `verify` for the same head -- `skipped`
+# when its jobs are gated off (that reads as passing, so a red pull request
+# turns mergeable), failed when verify runs over skipped lanes -- and its
+# concurrency group cancels the run in progress. ci-full.yml is the only
+# workflow a label starts; it calls ci.yml and fullstack-acceptance.yml, whose
+# groups take a `-ci-full` suffix so that call never cancels the pull
+# request's own run.
+# shellcheck disable=SC2016
+ci_full_group_suffix='${{ github.event.action == '"'"'labeled'"'"' && '"'"'-ci-full'"'"' || '"'"''"'"' }}'
+ci_full_caller_if='    if: github.event.label.name == '"'"'ci-full'"'"' && github.event.pull_request.draft'
+
+on_block() {
+  awk '/^("on"|on|'"'"'on'"'"'):[[:space:]]*$/ { in_on=1; next } in_on && /^[^[:space:]#]/ { in_on=0 } in_on { print }' "$1" \
+    | sed '/^[[:space:]]*#/d;/^[[:space:]]*$/d'
+}
+
+check_no_label_trigger() {
+  local file="$1" status=0 on group
+  on="$(on_block "$file")"
+  if grep -qE '(^|[^a-z_])(un)?labeled([^a-z_]|$)' <<<"$on"; then
+    printf '%s: a label change starts this workflow; only ci-full.yml may trigger on labeled\n' "${file##*/}" >&2
+    status=1
+  fi
+  if ! grep -qE '^  workflow_call:[[:space:]]*$' <<<"$on"; then
+    printf '%s: no workflow_call trigger, so ci-full.yml cannot run it\n' "${file##*/}" >&2
+    status=1
+  fi
+  group="$(awk '/^concurrency:/ { g=1; next } g && /^[^[:space:]#]/ { g=0 } g' "$file" \
+    | sed -n -E 's/^[[:space:]]*group:[[:space:]]*(.*[^[:space:]])[[:space:]]*$/\1/p' | head -n1)"
+  if [ "${group%"$ci_full_group_suffix"}" = "$group" ]; then
+    printf '%s: concurrency group does not end with the -ci-full suffix, so a ci-full run would cancel the pull request run: %s\n' \
+      "${file##*/}" "$group" >&2
+    status=1
+  fi
+  return "$status"
+}
+
+check_ci_full_caller() {
+  local file="$1" status=0 on job block uses callees=""
+  on="$(on_block "$file")"
+  if [ "$on" != $'  pull_request:\n    types: [labeled]' ]; then
+    printf '%s: must trigger on pull_request labeled only, got:\n%s\n' "${file##*/}" "$on" >&2
+    status=1
+  fi
+  if grep -qE '^concurrency:' "$file"; then
+    printf '%s: carries a top-level concurrency group; a skipped label run must join no group\n' "${file##*/}" >&2
+    status=1
+  fi
+  while IFS= read -r job; do
+    [ -n "$job" ] || continue
+    block="$(job_block "$file" "$job" | grep -vE '^[[:space:]]*#')"
+    if ! grep -qxF "$ci_full_caller_if" <<<"$block" || [ "$(grep -cE '^    if:' <<<"$block")" -ne 1 ]; then
+      printf '%s: job %s does not run only for the ci-full label on a draft\n' "${file##*/}" "$job" >&2
+      status=1
+    fi
+    if ! grep -qE '^    name: ci-full( [A-Za-z0-9_-]+)?[[:space:]]*$' <<<"$block"; then
+      printf '%s: job %s is not named ci-full[ <word>], so its checks could take a required check name\n' "${file##*/}" "$job" >&2
+      status=1
+    fi
+    uses="$(sed -n -E 's/^    uses:[[:space:]]*(.*[^[:space:]])[[:space:]]*$/\1/p' <<<"$block")"
+    callees="$callees$uses "
+  done < <(list_jobs "$file")
+  if [ "$callees" != './.github/workflows/ci.yml ./.github/workflows/fullstack-acceptance.yml ' ]; then
+    printf '%s: jobs must call exactly ci.yml then fullstack-acceptance.yml, got: %s\n' "${file##*/}" "$callees" >&2
+    status=1
+  fi
+  return "$status"
+}
+
 check_go_cache() {
   local file="$1"
   local status=0
@@ -2071,6 +2141,11 @@ printf 'PASS: go-modcache action and tool pins satisfy the module cache checks\n
 fullstack_workflow="$repo_root/.github/workflows/fullstack-acceptance.yml"
 check_gomod_proxy_fallback "$fullstack_workflow"
 printf 'PASS: %s carries the GOPROXY fallback\n' "$fullstack_workflow"
+ci_full_workflow="$repo_root/.github/workflows/ci-full.yml"
+check_no_label_trigger "$workflow"
+check_no_label_trigger "$fullstack_workflow"
+check_ci_full_caller "$ci_full_workflow"
+printf 'PASS: only ci-full.yml starts on a label, only for ci-full on a draft, and the runs it calls cancel no pull request run\n'
 ops_checkout_action="$repo_root/.github/actions/ops-checkout/action.yml"
 fullstack_ops_pin="$repo_root/ci/fullstack-ops.pin"
 check_fullstack_ops_pin "$fullstack_ops_pin"
@@ -2698,7 +2773,9 @@ assert_check_fails 'routed a job of another workflow file through the variable' 
 # is exercised on a copy that routes one job through the retired fork-guarded line
 # (a copy every other check above rejects); that copy must itself pass it.
 routed_base="$tmpdir/routed-base.yml"
-awk -v routed="$routed_runs_on" '!done && /^    runs-on: ubuntu-latest$/ { print routed; done=1; next } { print }' "$workflow" > "$routed_base"
+# The routed copy keeps only the pull_request and push triggers the guard
+# covers; ci.yml's workflow_call (ci-full.yml) is not one of them.
+awk -v routed="$routed_runs_on" '!done && /^    runs-on: ubuntu-latest$/ { print routed; done=1; next } /^  workflow_call:[[:space:]]*$/ { next } { print }' "$workflow" > "$routed_base"
 cmp -s "$workflow" "$routed_base" && { printf 'NEGATIVE CONTROL SETUP FAILED: routed_base did not change the workflow\n' >&2; exit 1; }
 check_routed_workflow_triggers "$routed_base" || { printf 'NEGATIVE CONTROL SETUP FAILED: the routed copy does not pass the trigger check\n' >&2; exit 1; }
 for trigger in 'pull_request_target:' 'workflow_dispatch:' 'issue_comment:'; do
@@ -2973,6 +3050,48 @@ awk '
 ' "$workflow" > "$no_concurrency"
 assert_check_fails 'removed the concurrency block' \
   check_main_runs_get_a_verdict "$no_concurrency"
+
+# (i7) a label starts ci.yml or fullstack-acceptance.yml again, a called run
+# shares the pull request group, or the workflow is no longer callable. A sed
+# that matches nothing leaves a passing file, so an inert mutation fails here.
+for base in "$workflow" "$fullstack_workflow"; do
+  name="${base##*/}"
+  for types_edit in 'ready_for_review, labeled]' 'ready_for_review, unlabeled]' 'ready_for_review, labeled, unlabeled]'; do
+    mutated="$tmpdir/label-trigger-$name"
+    sed -E "/^    types: \[opened, synchronize, reopened, ready_for_review\]/ s/ready_for_review\]/$types_edit/" "$base" > "$mutated"
+    assert_check_fails "re-added a label type ($types_edit) to $name" check_no_label_trigger "$mutated"
+  done
+  mutated="$tmpdir/no-suffix-$name"
+  sed -E '/^  group: / s/\$\{\{ github\.event\.action == .labeled. && .-ci-full. \|\| .. \}\}$//' "$base" > "$mutated"
+  assert_check_fails "dropped the -ci-full group suffix from $name" check_no_label_trigger "$mutated"
+  mutated="$tmpdir/no-call-$name"
+  awk '!/^  workflow_call:[[:space:]]*$/' "$base" > "$mutated"
+  assert_check_fails "removed workflow_call from $name" check_no_label_trigger "$mutated"
+done
+
+# (i8) the ci-full caller widens what a label starts or what it may post.
+mutated="$tmpdir/ci-full-unlabeled.yml"
+sed 's/^    types: \[labeled\]$/    types: [labeled, unlabeled]/' "$ci_full_workflow" > "$mutated"
+assert_check_fails 'ci-full.yml also starts on unlabeled' check_ci_full_caller "$mutated"
+mutated="$tmpdir/ci-full-synchronize.yml"
+sed 's/^    types: \[labeled\]$/    types: [labeled, synchronize]/' "$ci_full_workflow" > "$mutated"
+assert_check_fails 'ci-full.yml also starts on synchronize' check_ci_full_caller "$mutated"
+mutated="$tmpdir/ci-full-any-label.yml"
+sed '0,/^    if: / s/^    if: .*/    if: github.event.pull_request.draft/' "$ci_full_workflow" > "$mutated"
+assert_check_fails 'ci-full.yml runs for any label' check_ci_full_caller "$mutated"
+mutated="$tmpdir/ci-full-no-draft-gate.yml"
+sed '0,/^    if: / s/ && github\.event\.pull_request\.draft$//' "$ci_full_workflow" > "$mutated"
+assert_check_fails 'ci-full.yml runs for ci-full on a ready pull request' check_ci_full_caller "$mutated"
+mutated="$tmpdir/ci-full-named-verify.yml"
+sed '0,/^    name: / s/^    name: .*/    name: verify/' "$ci_full_workflow" > "$mutated"
+assert_check_fails 'ci-full.yml names a caller job verify' check_ci_full_caller "$mutated"
+mutated="$tmpdir/ci-full-concurrency.yml"
+# shellcheck disable=SC2016
+sed 's/^jobs:$/concurrency:\n  group: ci-${{ github.event.pull_request.number }}\n  cancel-in-progress: true\njobs:/' "$ci_full_workflow" > "$mutated"
+assert_check_fails 'ci-full.yml carries a top-level concurrency group' check_ci_full_caller "$mutated"
+mutated="$tmpdir/ci-full-no-fullstack.yml"
+sed 's#^    uses: ./.github/workflows/fullstack-acceptance.yml$#    uses: ./.github/workflows/ci.yml#' "$ci_full_workflow" > "$mutated"
+assert_check_fails 'ci-full.yml no longer calls fullstack-acceptance.yml' check_ci_full_caller "$mutated"
 
 # (i2) shrink the UNIT matrix to 3 shards while test-shard.sh is still called
 # with total 4. Mutating only the unit job's own line matters here: the (d)/

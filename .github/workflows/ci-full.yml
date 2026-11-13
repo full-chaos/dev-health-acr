@@ -1,0 +1,31 @@
+---
+name: ci-full
+
+# A draft pull request runs only the light lanes of ci.yml and none of
+# fullstack-acceptance.yml. Adding the `ci-full` label to a draft runs both in
+# full once on its current head; every later push reads the label from its own
+# payload. Any other label, and every label removal, starts neither workflow.
+#
+# The checks this file creates are named "ci-full", "ci-full fullstack" and
+# "<that name> / <job>", never a required check name (`verify`, `pr-title`), so
+# a skipped job here can never stand in for the required `verify`. No
+# concurrency here: a skipped job joins no group, and the called workflows key
+# their own groups with a `-ci-full` suffix.
+"on":
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+  packages: read
+  actions: read
+
+jobs:
+  ci:
+    name: ci-full
+    if: github.event.label.name == 'ci-full' && github.event.pull_request.draft
+    uses: ./.github/workflows/ci.yml
+  fullstack:
+    name: ci-full fullstack
+    if: github.event.label.name == 'ci-full' && github.event.pull_request.draft
+    uses: ./.github/workflows/fullstack-acceptance.yml

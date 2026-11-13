@@ -5,10 +5,15 @@ name: ci
   pull_request:
     # ready_for_review is NOT a default pull_request type; without it a draft
     # marked ready would never start the heavy jobs the draft skipped.
-    # labeled/unlabeled start a run when the `ci-full` opt-in label moves.
-    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    # No labeled/unlabeled here: a run started by a label would post a fresh
+    # `verify` for the same head (skipped reads as passing, a real run with
+    # its lanes skipped reads as failing). ci-full.yml calls this workflow
+    # when the `ci-full` label is added to a draft; its checks carry a
+    # "ci-full / " prefix, so a label never replaces the required `verify`.
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
+  workflow_call:
 
 permissions:
   contents: read
@@ -42,7 +47,11 @@ concurrency:
   # main CI rather than one at a time. That is the price of every main sha
   # having a verdict; scripts/ci/test-workflow-contract.sh pins the shape
   # so it cannot quietly revert to a shared main group.
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  #
+  # A ci-full run (called by ci-full.yml, so event.action is `labeled`) gets
+  # its own group: it never cancels the pull request's own run, whose
+  # `verify` is the required check. A later push does not cancel it either.
+  group: ci-${{ github.event.pull_request.number || github.sha }}${{ github.event.action == 'labeled' && '-ci-full' || '' }}
   cancel-in-progress: true
 
 env:
