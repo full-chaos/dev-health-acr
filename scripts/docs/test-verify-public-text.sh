@@ -22,6 +22,8 @@ for case_and_label in \
   'record-checksum:record checksum' \
   'local-path:local path' \
   'internal-host:internal host' \
+  'lowercase-tracker-id:tracker id' \
+  'sha256-digest:sha256 digest' \
   'old-rollback:drill record name'; do
   fixture="${case_and_label%%:*}"
   label="${case_and_label#*:}"
@@ -46,6 +48,16 @@ set -e
 for label in 'drill record name' 'record checksum' 'run id'; do
   grep -qF "FAIL: docs/page.md:1: $label" <<<"$old" || { printf 'old-rollback fixture missed the %s hit\n%s\n' "$label" "$old" >&2; exit 1; }
 done
+
+# A listed file that does not exist must fail, not be skipped.
+set +e
+missing="$("$check" --root "$fixtures/missing-file" --list "$fixtures/missing-file/files.txt" 2>&1)"
+missing_code=$?
+set -e
+if [ "$missing_code" -ne 1 ] || ! grep -qF 'FAIL: docs/absent.md is listed but does not exist' <<<"$missing"; then
+  printf 'expected the missing listed file to fail with the does-not-exist line, got %s\n%s\n' "$missing_code" "$missing" >&2
+  exit 1
+fi
 
 # An empty list scans 0 files and must fail.
 set +e

@@ -50,11 +50,12 @@ root="$(cd "$root" && pwd)"
 # class|extended regular expression (the backticks in the checksum class are literal)
 # shellcheck disable=SC2016
 classes=(
-  'tracker id|CHAOS-[0-9]+'
+  'tracker id|[Cc][Hh][Aa][Oo][Ss]-[0-9]+'
   'drill record name|RECORD-[0-9]+'
   'lane name|(^|[^A-Za-z0-9])lane-[0-9]+'
   'run id|run-[a-z0-9]+-[0-9]+'
   'record checksum|`[0-9a-f]{12}`'
+  'sha256 digest|(^|[^0-9A-Fa-f])[0-9a-f]{64}([^0-9A-Fa-f]|$)'
   'local path|(/var/lib/|/home/[a-z]|/Users/[A-Za-z]|/tmp/)'
   'internal host|(bigboy|[A-Za-z0-9-]+\.internal([^A-Za-z0-9]|$))'
 )

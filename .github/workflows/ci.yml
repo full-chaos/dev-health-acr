@@ -410,6 +410,8 @@ jobs:
         run: shellcheck -x scripts/docs/verify-mermaid.sh scripts/docs/test-verify-mermaid.sh
       - name: Render every fenced mermaid block under docs/**, and prove the check rejects a broken one
         run: scripts/docs/test-verify-mermaid.sh
+      - name: Run the offline docs gate (claims, links including docs/runbooks and docs/release-notes) and its planted fixtures
+        run: scripts/docs/test-verify.sh
       - name: Shellcheck the public-text check
         run: shellcheck -x scripts/docs/verify-public-text.sh scripts/docs/test-verify-public-text.sh
       - name: Scan the listed public pages for internal text, and prove the check rejects every planted class and an empty list
