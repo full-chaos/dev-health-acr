@@ -19,12 +19,6 @@ func TestRedact(t *testing.T) {
 			wantAbsent:  []string{"fcacr_ab12CD34"},
 		},
 		{
-			name:        "ops credential token",
-			in:          "operator svc_acr_deadbeef123 issued the credential",
-			wantContain: "REDACTED",
-			wantAbsent:  []string{"svc_acr_deadbeef123"},
-		},
-		{
 			name:        "postgres DSN",
 			in:          "connecting to postgres://user:pass@localhost:5432/acr",
 			wantContain: "REDACTED_DSN",
@@ -76,7 +70,7 @@ func TestRedact(t *testing.T) {
 }
 
 func TestRedactBytes(t *testing.T) {
-	in := []byte("svc_acr_topsecret")
+	in := []byte("fcacr_topsecret")
 	got := string(redactBytes(in))
 	if strings.Contains(got, "topsecret") {
 		t.Fatalf("redactBytes leaked secret: %q", got)

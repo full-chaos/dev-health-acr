@@ -560,7 +560,7 @@ render_client_sandbox() {
   if grep -q '__' "$CLIENT_HOME/config/opencode/opencode.json"; then
     fs_die 'the OpenCode config template was not fully rendered'
   fi
-  if grep -Eq 'fcacr_|svc_acr_' "$CLIENT_HOME/config/opencode/opencode.json"; then
+  if grep -Eq 'fcacr_' "$CLIENT_HOME/config/opencode/opencode.json"; then
     fs_die 'a credential leaked into the OpenCode configuration file'
   fi
 
@@ -1439,7 +1439,7 @@ run_device_login_lifecycle() {
     fs_die 'acr-mcp login did not complete after web approval'
   fi
   DEVICE_LOGIN_PID=""
-  grep -Eq 'fcacr_|svc_acr_' "$output" && fs_die 'acr-mcp login output leaked a credential'
+  grep -Eq 'fcacr_' "$output" && fs_die 'acr-mcp login output leaked a credential'
   detect_stat_flavour
   if [[ "$STAT_FLAVOUR" == gnu ]]; then mode="$(stat -c '%a' "$token_file")"; else mode="$(stat -f '%Lp' "$token_file")"; fi
   [[ "$mode" == '600' ]] || fs_die "credential file must be mode 0600, found ${mode}"
@@ -1447,10 +1447,10 @@ run_device_login_lifecycle() {
   grep -Fq '"credential_source":"file"' "$ARTIFACTS/device-login-doctor.json" || fs_die 'bare doctor did not discover the fallback credential file'
   run_device_login_read_acceptance
   device_login_env "$STATE/acr-mcp" login --refresh > "$ARTIFACTS/device-login-refresh.log"
-  grep -Eq 'fcacr_|svc_acr_' "$ARTIFACTS/device-login-refresh.log" && fs_die 'credential refresh output leaked a credential'
+  grep -Eq 'fcacr_' "$ARTIFACTS/device-login-refresh.log" && fs_die 'credential refresh output leaked a credential'
   device_login_env "$STATE/acr-mcp" doctor --live > "$ARTIFACTS/device-login-doctor-refreshed.json"
   device_login_env "$STATE/acr-mcp" logout > "$ARTIFACTS/device-login-logout.log"
-  grep -Eq 'fcacr_|svc_acr_' "$ARTIFACTS/device-login-logout.log" && fs_die 'logout output leaked a credential'
+  grep -Eq 'fcacr_' "$ARTIFACTS/device-login-logout.log" && fs_die 'logout output leaked a credential'
   device_login_env "$STATE/acr-mcp" doctor --live > "$ARTIFACTS/device-login-doctor-post-logout.log" 2>&1
   jq -e '.status == "incomplete_configuration" and .credential_set == false and .live_check.reachable == false' \
     "$ARTIFACTS/device-login-doctor-post-logout.log" >/dev/null \

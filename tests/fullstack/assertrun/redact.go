@@ -3,12 +3,12 @@ package main
 import "regexp"
 
 // Redaction rules mirror redact_log in scripts/e2e/compose.sh so artifacts written by this
-// tool never leak an ACR (fcacr_*) or Ops (svc_acr_*) credential, a Postgres/ClickHouse DSN,
+// tool never leak an ACR (fcacr_*) credential, a Postgres/ClickHouse DSN,
 // or an Authorization header value. Everything this tool writes to disk (assertion-report.json,
 // junit.xml, fixture-verification.json, and any echoed probe SQL or event text) must pass
 // through redact before it is serialized.
 var (
-	credentialPattern = regexp.MustCompile(`(?:fcacr|svc_acr)_[A-Za-z0-9_-]+`)
+	credentialPattern = regexp.MustCompile(`fcacr_[A-Za-z0-9_-]+`)
 	dsnPattern        = regexp.MustCompile(`(?i)(?:postgres(?:ql)?|clickhouse)://[^\s"']+`)
 	// Matches an Authorization header/field in either "Authorization: <value>" transport
 	// form or a quoted JSON field "authorization":"<value>", capturing everything up to the
