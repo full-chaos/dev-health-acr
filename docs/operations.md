@@ -160,6 +160,9 @@ rejected at once. The audit event records actor type `operator` (actor id
 defaults to `operator`) and the reason. An unknown id exits non-zero with
 `not found`; an already-revoked id exits non-zero with `already revoked`.
 
+The steps, the checks and the numbers measured in a drill are in the
+[credential revoke runbook](runbooks/credential-revoke.md).
+
 ### Context Fabric projection worker (`acr-projector`, CHAOS-3753)
 
 `cmd/acr-projector` is a dedicated binary, independently deployed and scaled
@@ -2575,6 +2578,9 @@ and its `-out` refuses a file that exists. Keep the `credential=<id>` line it pr
   Without a live credential acr-api keeps running: no readiness check depends on the exchange.
 
 `down -v` deletes the volume.
+
+The rotation and revoke steps, with the numbers measured in a drill, are in the
+[workload rotation runbook](runbooks/workload-rotation.md).
 
 ### CHAOS-4076: NetworkPolicy apiserver egress and in-release FalkorDB PodSecurity
 

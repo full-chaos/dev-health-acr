@@ -136,9 +136,9 @@ It logs deleted `aggregates` and `rows` counts. A failed run deletes nothing.
 
 The rollback is the image rollback. Run `helm rollback` of the acr release to
 the previous revision, then roll forward again when the fault is fixed. The
-rehearsal 143 -> 142 -> 143 passed (row A1, fcdev RECORD-11241-1, sha256
-`d955471080f1`, run `run-a1v3-1`): revoked credentials stayed revoked, a removed
-member stayed refused, and `/readyz` returned 200 after each step.
+rehearsal 143 -> 142 -> 143 passed on a private Compose project at the
+production image pins: revoked credentials stayed revoked, a removed member
+stayed refused, and `/readyz` returned 200 after each step.
 
 Not rehearsed: `acr-projector` 143 -> 142, and a rollback while go-api is down.
 
