@@ -611,9 +611,9 @@ seed_synthetic_evidence() {
 
 # probe_ops_principal_access proves go-api's own ClickHouse login serves the principal access
 # read end to end (CHAOS-12183): the read for this run's organization, with the acr-api workload
-# token, answers acr_principal_access.v1 with the seeded repositories as its inventory
-# (kind repos, not none), which go-api reads with SELECT on repos. Any user id works: the
-# inventory is the organization's. It runs after the seed hook, whatever corpus that seeds.
+# token, answers acr_principal_access.v1 from the user's read listing (CHAOS-13616), not the
+# organization inventory: the user below holds no membership, so the answer is member false and
+# repository_scope exactly {"kind":"none"}. It runs after the seed hook, whatever corpus that seeds.
 probe_ops_principal_access() {
   local org_id user_id output body
   org_id="$(<"$STATE/org-id")"
@@ -623,11 +623,11 @@ probe_ops_principal_access() {
     die 'the Go ops api principal access read failed (is its ClickHouse login configured?)'
   fi
   body="$(probe_body "$output")"
-  if ! jq -e '.schema_version == "acr_principal_access.v1" and .repository_scope.kind == "repos" and (.repository_scope.repos | length) > 0' <<<"$body" >/dev/null; then
+  if ! jq -e '.schema_version == "acr_principal_access.v1" and .member == false and .repository_scope == {"kind":"none"}' <<<"$body" >/dev/null; then
     printf '%s\n' "$body" | redact_log >&2
-    die 'the Go ops api principal access read did not serve the seeded repository inventory'
+    die 'the Go ops api principal access read did not answer member false with repository scope none for the no-membership user'
   fi
-  note "go-api principal access read served the repository inventory (repos: $(jq -r '.repository_scope.repos | length' <<<"$body"))"
+  note "go-api principal access read answered member false with repository scope none for the no-membership user"
 }
 
 grant_clickhouse_reader() {
