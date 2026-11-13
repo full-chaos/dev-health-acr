@@ -1,4 +1,4 @@
-# ADR-0005: CodeGraph 1.2.0 local-index CLI contract for CHAOS-3007
+# ADR-0005: CodeGraph 1.2.0 local-index CLI contract for the local CodeGraph federation work
 
 **Status:** Accepted
 **Date:** 2026-07-19
@@ -14,7 +14,7 @@ refers to this file.
 
 ## Context
 
-CHAOS-3007 (Tasks 2-11) will add a `LocalIndexProvider` that federates
+Local CodeGraph federation work (Tasks 2-11) will add a `LocalIndexProvider` that federates
 bounded local CodeGraph evidence into ACR's hosted context packet. Before any
 of that code exists, this task pins the exact, narrow CodeGraph CLI surface
 that implementation is allowed to depend on, so:

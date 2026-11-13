@@ -71,7 +71,7 @@ The column lists below are exhaustive for `migrations/postgres/0001_acr_core.sql
 
 | Fields | Class | Retention requirement |
 | --- | --- | --- |
-| `context_packet_id`, `org_id`, `repo_id`, `request_id`, `schema_version`, `query_version`, `ranking_version`, `scope_resolution`, `status`, `generated_at`, `expires_at`, `created_at` | Internal | `expires_at` is mandatory. The migration records 30 days as the default; CHAOS-2917 must set and enforce expiry and purge. |
+| `context_packet_id`, `org_id`, `repo_id`, `request_id`, `schema_version`, `query_version`, `ranking_version`, `scope_resolution`, `status`, `generated_at`, `expires_at`, `created_at` | Internal | `expires_at` is mandatory. The migration records 30 days as the default; the context-snapshot persistence work must set and enforce expiry and purge. |
 | `repo_slug`, `payload` | Confidential | Same snapshot expiry. Payload redaction/purge cannot silently recompute a packet. |
 
 Snapshot `payload` logical fields are Confidential when they contain the goal, task reference, repository/branch/commit/files, item titles/summaries, evidence excerpts or references, next steps, and required checks. Schema/query/ranking versions, coverage, freshness, and unavailable-source status are Internal unless combined with confidential source identifiers.
@@ -101,7 +101,7 @@ Retention classes are contract values, not suggestions:
 
 ## Redaction and purge semantics
 
-CHAOS-2904 and CHAOS-2917 implement these rules without changing v1 wire semantics silently:
+Agent-episode persistence work and context-snapshot persistence work implement these rules without changing v1 wire semantics silently:
 
 1. `active` records are readable only after independent org/repo authorization.
 2. Episode redaction changes `redaction_state` to `redacted`, records `redacted_at`, and writes an audit event whose allowlisted metadata carries the administrative reason. A readable redacted projection preserves required IDs, repository/scope, client, timestamps, outcome, and retention metadata; replaces `goal` and `summary` with a fixed redacted marker; clears optional task reference and artifact arrays; and sets transcript mode to `none`. The projection must validate as `agent_episode.v1`.
@@ -122,9 +122,9 @@ CHAOS-2904 and CHAOS-2917 implement these rules without changing v1 wire semanti
 
 - URI fields may contain absolute server-generated HTTPS/provider references allowed by the v1 schemas. They are references only.
 - ACR never dereferences or fetches an evidence URI discovered in source content. Evidence expansion resolves opaque IDs through typed, authorized server-side adapters.
-- CHAOS-2906 allowlists provider URI generation and bounds excerpts/structured fields. It strips hidden provider fields and never exposes credentials or transcript bodies.
+- Evidence-expansion work allowlists provider URI generation and bounds excerpts/structured fields. It strips hidden provider fields and never exposes credentials or transcript bodies.
 - `dev-health-web` sanitizes untrusted Markdown/HTML and external links before rendering. No source text becomes executable HTML, JavaScript, shell, prompt, or tool instruction.
-- Public demos and fixtures require explicit synthetic/public-safe review. CHAOS-2918 owns the fixed corpus and hash manifest.
+- Public demos and fixtures require explicit synthetic/public-safe review. Evaluation-corpus work owns the fixed corpus and hash manifest.
 
 ## Local CodeGraph privacy boundary
 
@@ -208,33 +208,33 @@ no network operation. No lifecycle operation is reachable from another host.
 
 Validation is not proof of runtime enforcement. The following are required downstream:
 
-- CHAOS-2905 enforces actual item/token/serialized-byte truncation and labeled empty/partial/degraded results.
-- `expanded_evidence.v1` currently caps an excerpt at 1,000 characters. CHAOS-2906 must enforce that wire limit and add bounded structured-output tests.
-- CHAOS-2907 enforces HTTP body limits, cancellation, timeouts, authorization, and safe error mapping.
-- CHAOS-2927 enforces separate authentication/context/evidence/snapshot/episode limits, per-org concurrency, and safe retry hints. A positive configured RPM value alone is not enforcement.
-- CHAOS-2904 enforces `no_persist`, retention expiry, artifact/summary limits, and rejects transcript representations outside the contract.
+- Evidence-assembler work enforces actual item/token/serialized-byte truncation and labeled empty/partial/degraded results.
+- `expanded_evidence.v1` currently caps an excerpt at 1,000 characters. Evidence-expansion work must enforce that wire limit and add bounded structured-output tests.
+- Trusted-proxy-chain work enforces HTTP body limits, cancellation, timeouts, authorization, and safe error mapping.
+- Bounded-controls work enforces separate authentication/context/evidence/snapshot/episode limits, per-org concurrency, and safe retry hints. A positive configured RPM value alone is not enforcement.
+- Agent-episode persistence work enforces `no_persist`, retention expiry, artifact/summary limits, and rejects transcript representations outside the contract.
 
 ## Negative-test ownership matrix
 
 | Control | Status and evidence | Owner before close |
 | --- | --- | --- |
-| Reject Dev Health license/malformed token as ACR bearer | Current: `internal/auth/token_test.go` | CHAOS-2924 (Done) |
-| Explicit repository-scope denial and independent permission denial | Current: `internal/auth/middleware_test.go`; external response is forbidden | CHAOS-2924 (Done) |
-| Unknown/revoked/expired credential reason does not leak | Current: `internal/auth/middleware_test.go` | CHAOS-2924 (Done) |
-| Foreign/unknown opaque evidence ID is non-enumerating generic not-found | Future integration test in evidence resolver/API packages | CHAOS-2906 + CHAOS-2907 |
-| Packet request schema bounds and unknown fields | Current golden/schema profile; add boundary cases in `internal/contracts/v1/contracts_test.go` | CHAOS-2905 + CHAOS-2907 |
-| Deterministic truncation, timeout, empty/partial/degraded behavior | Future assembler tests using `internal/evalfixture` | CHAOS-2905 |
-| Prompt-injection text remains data and cannot alter rules/tools | Future assembler/resolver golden negative cases | CHAOS-2905 + CHAOS-2906 |
-| Malicious Markdown/HTML/URL is sanitized and never fetched | Future resolver tests plus web rendering tests | CHAOS-2906 + CHAOS-2910/CHAOS-2911 |
-| Evidence excerpt/structured-output and safe-URI bounds | Future resolver boundary/allowlist tests | CHAOS-2906 |
-| Cross-org snapshot round trip and stable replay after source change | Future memory/Postgres store tests | CHAOS-2917 |
-| Episode retention class, `no_persist`, duplicate conflict, cross-org access | Future memory/Postgres service tests | CHAOS-2904 |
-| Redaction/purge leaves an auditable tombstone and hides public payload | Future store/service tests with audit assertion | CHAOS-2904 + CHAOS-2925 |
-| Bearer, token hash, raw evidence, and transcript never enter logs/traces | Future log-sink/telemetry capture tests | CHAOS-2927 |
-| Per-org concurrency, endpoint quotas, retry hints, oversized HTTP body | Future limiter/API tests | CHAOS-2927 + CHAOS-2907 |
-| Write tool is disabled by default and requires local enablement plus server scope | Future API/MCP tests | CHAOS-2909 |
-| Synthetic/public-safe fixture provenance and hashes | Current after PR #2: `internal/evalfixture/verify_test.go` validates `testdata/evaluation/v1` | CHAOS-2918 (Done) |
+| Reject Dev Health license/malformed token as ACR bearer | Current: `internal/auth/token_test.go` | Scoped-client-credentials work (Done) |
+| Explicit repository-scope denial and independent permission denial | Current: `internal/auth/middleware_test.go`; external response is forbidden | Scoped-client-credentials work (Done) |
+| Unknown/revoked/expired credential reason does not leak | Current: `internal/auth/middleware_test.go` | Scoped-client-credentials work (Done) |
+| Foreign/unknown opaque evidence ID is non-enumerating generic not-found | Future integration test in evidence resolver/API packages | Evidence-expansion work and trusted-proxy-chain work |
+| Packet request schema bounds and unknown fields | Current golden/schema profile; add boundary cases in `internal/contracts/v1/contracts_test.go` | Evidence-assembler work and trusted-proxy-chain work |
+| Deterministic truncation, timeout, empty/partial/degraded behavior | Future assembler tests using `internal/evalfixture` | Evidence-assembler work |
+| Prompt-injection text remains data and cannot alter rules/tools | Future assembler/resolver golden negative cases | Evidence-assembler work and evidence-expansion work |
+| Malicious Markdown/HTML/URL is sanitized and never fetched | Future resolver tests plus web rendering tests | Evidence-expansion work, the resolver-tests work and web-rendering-tests work |
+| Evidence excerpt/structured-output and safe-URI bounds | Future resolver boundary/allowlist tests | Evidence-expansion work |
+| Cross-org snapshot round trip and stable replay after source change | Future memory/Postgres store tests | Context-snapshot persistence work |
+| Episode retention class, `no_persist`, duplicate conflict, cross-org access | Future memory/Postgres service tests | Agent-episode persistence work |
+| Redaction/purge leaves an auditable tombstone and hides public payload | Future store/service tests with audit assertion | Agent-episode persistence work and data-handling contract |
+| Bearer, token hash, raw evidence, and transcript never enter logs/traces | Future log-sink/telemetry capture tests | Bounded-controls work |
+| Per-org concurrency, endpoint quotas, retry hints, oversized HTTP body | Future limiter/API tests | Bounded-controls work and trusted-proxy-chain work |
+| Write tool is disabled by default and requires local enablement plus server scope | Future API/MCP tests | Episode-writeback work |
+| Synthetic/public-safe fixture provenance and hashes | Current after PR #2: `internal/evalfixture/verify_test.go` validates `testdata/evaluation/v1` | Evaluation-corpus work (Done) |
 
 ## Release gate for dependent issues
 
-CHAOS-2904, CHAOS-2906, CHAOS-2907, CHAOS-2917, CHAOS-2927, and CHAOS-2909 may close only when their rows above have executable tests. Passing `make verify` before those implementations exist proves contract consistency, not that future security controls are already enforced.
+Agent-episode persistence work, the evidence-expansion work, the trusted-proxy-chain work, the context-snapshot persistence work and bounded-controls work, and the episode-writeback work may close only when their rows above have executable tests. Passing `make verify` before those implementations exist proves contract consistency, not that future security controls are already enforced.

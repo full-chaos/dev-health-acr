@@ -1,5 +1,0 @@
-# Pages that reach readers outside the team; scripts/docs/verify-public-text.sh scans each one.
-docs/acr-api-workload-token.md
-docs/runbooks/credential-revoke.md
-docs/runbooks/workload-rotation.md
-docs/release-notes/credential-lifecycle.md

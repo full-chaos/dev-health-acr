@@ -1,15 +1,15 @@
-# Context Fabric: CHAOS-3896 hand-off (CHAOS-3898 S3)
+# Context Fabric: the shadow-mode evidence round hand-off (the graph-lifecycle design S3)
 
-Short design note for the final CHAOS-3898 slice: design brief v4.1 §6's
+Short design note for the final the graph-lifecycle design slice: design brief v4.1 §6's
 S3 row -- "uniform bridge fns + injectivity pins + `anchor_collision`.
 S2a+S2+S3 unblocks 3896 Slices B and C." This closes the precondition
-CHAOS-3896's own design brief v6 §1.4 states verbatim: "for every census
+Shadow-mode evidence round's own design brief v6 §1.4 states verbatim: "for every census
 kind, (source natural key) <-> (graph canonical id) is injective...
 delivered and pinned by 3898."
 
 ## What existed before this slice
 
-CHAOS-3899 (merged, PR #144) shipped 3896 Slice A: the census registry
+Shadow-mode evidence round (merged, PR #144) shipped 3896 Slice A: the census registry
 (`chaos3899_census_registry.go`), the aggregate-first protocol
 (`chaos3899_census.go`), and the shadow evidence round
 (`chaos3899_evidence_round.go`). Slice A performs **no graph read at all**
@@ -33,7 +33,7 @@ expression -- `RunCensus`'s row statement returns it as ONE string
 (`CensusResult.SatisfierNaturalKey`). The bridge must invert that
 concatenation to recover the segments `identity.Derive` needs. The naive
 `strings.Split(s, ":")` is wrong: `work_items.work_item_id` can itself
-contain a colon (`"linear:CHAOS-3896"`, the same shape
+contain a colon (`"linear:the shadow-mode evidence round"`, the same shape
 `ticketKeyAlias`/`workItemTicketKeyPredicate` already handle elsewhere in
 this package), and a naive split would fragment it. `splitCensusNaturalKey`
 uses `strings.SplitN(s, ":", wantSegments+1)` instead -- only the first
@@ -45,7 +45,7 @@ picked up automatically.
 Four kinds bridge through `identity.Derive` (ci_pipeline_run, work_item,
 pull_request_review -- the three changed census kinds -- using the exact
 segment order `identity.Registry` already declares). `pull_request` is
-grandfathered onto the pre-CHAOS-3898 scheme (design brief §1.2: "injective,
+grandfathered onto the pre-graph-lifecycle-design scheme (design brief §1.2: "injective,
 colon-free by type") and bridges via plain string concatenation, never
 calling `identity.Derive` and never omitting.
 
@@ -92,7 +92,7 @@ SOURCE id). It is not yet in 3896 brief v6's own §4 vocabulary table;
 ## 3. What this slice does not do
 
 - **Does not wire either primitive into `RunShadowEvidenceRound`.**
-  CHAOS-3899's shadow round is shipped, stable production-adjacent code;
+  Shadow-mode evidence round's shadow round is shipped, stable production-adjacent code;
   consuming these two primitives inside its control flow (the keyed graph
   existence read for `ShadowWouldCommit`, and gating a project anchor on
   `AnchorCollision` before `BuildCensusDiscriminator`) is 3896 Slice B/C's
@@ -100,8 +100,8 @@ SOURCE id). It is not yet in 3896 brief v6's own §4 vocabulary table;
   pins + the anchor_collision surface... exposed where 3896's Slice B/C
   will consume it").
 - **Does not touch `graph_missing_satisfier`.** That DegradationReason
-  already exists (CHAOS-3899); producing it for real requires the keyed
+  already exists; producing it for real requires the keyed
   `nodeByKindID` read Slice C performs using this slice's bridge -- the
   read itself, and its own projection-lag fixture, stay Slice C's to build
-  (CHAOS-3899's own PR description already flagged this as deliberately
+  (the shadow-mode evidence round's own PR description already flagged this as deliberately
   deferred, not a gap papered over here).

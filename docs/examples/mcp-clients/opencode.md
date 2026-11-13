@@ -74,7 +74,7 @@ override. Start OpenCode from an environment that supplies the same
 `ACR_API_URL` (and optional CA bundle); only the credential is persisted.
 
 Windows has a signed `.zip` asset, but Cursor's Windows/NTFS lifecycle remains
-deferred to CHAOS-3058 and is not a Task19 blocker. The current exercised
+deferred to the Windows/NTFS lifecycle follow-up and is not a Task19 blocker. The current exercised
 clean-room path is Unix/Linux/macOS. The release workflow signs the published artifacts;
 Task19 did not itself create or claim a production release.
 
@@ -102,7 +102,7 @@ writes for org members — hand-editing your config is the public equivalent.
 
 ## Install and register the package
 
-**Internal use only (CHAOS-6211):** this script path needs a checkout of
+**Internal use only:** this script path needs a checkout of
 this (private) repository. Public readers install the sidecar binary above
 and register it manually instead (see
 [Register manually (local STDIO)](#register-manually-local-stdio) above);

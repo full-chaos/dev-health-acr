@@ -3,7 +3,7 @@
 ACR product entitlement and ACR API authentication are separate controls.
 
 - `agent_context_runtime` answers whether an organization purchased or was granted the product.
-- `acr_service_model` (AI features on) and `platform_model_fallback` (a platform admin grant) together let an organization with no model configuration of its own run an investigation on the service's own model. An organization with a saved configuration runs on its own model while `acr_service_model` is ON (ops serves ON for a saved configuration unless the organization's own override says OFF; OFF refuses with `ai_features_turned_off`); a saved configuration an organization admin turned off counts as no usable own model (the service's model only with both flags, else `own_model_turned_off`); a caller that supplies its own interpretation and synthesis is decided on the same rule before any model is bound (the same refusals apply: the gate decides them before the caller's model is read, and a refused turn makes no model call), and with no model configuration and no grant it is served with the deployment model withheld. There is no deployment-wide switch that grants every organization the platform model: `ACR_MCP_SERVICE_MODEL_DEFAULT` was removed (CHAOS-12997) and is ignored with one start-up WARN.
+- `acr_service_model` (AI features on) and `platform_model_fallback` (a platform admin grant) together let an organization with no model configuration of its own run an investigation on the service's own model. An organization with a saved configuration runs on its own model while `acr_service_model` is ON (ops serves ON for a saved configuration unless the organization's own override says OFF; OFF refuses with `ai_features_turned_off`); a saved configuration an organization admin turned off counts as no usable own model (the service's model only with both flags, else `own_model_turned_off`); a caller that supplies its own interpretation and synthesis is decided on the same rule before any model is bound (the same refusals apply: the gate decides them before the caller's model is read, and a refused turn makes no model call), and with no model configuration and no grant it is served with the deployment model withheld. There is no deployment-wide switch that grants every organization the platform model: `ACR_MCP_SERVICE_MODEL_DEFAULT` was removed and is ignored with one start-up WARN.
 - An `fcacr_` credential identifies a machine client and grants explicit repository and operation scopes.
 - A Dev Health self-hosted license key is never accepted as an ACR bearer credential.
 
@@ -30,7 +30,7 @@ data:read
 
 Permissions are independent. `episode:write` does not imply either read permission. Credentials default to the two read scopes only.
 
-`data:read` (CHAOS-7071, decision K4 of the CHAOS-7036 design) gates the direct data routes that serve product analytics (`POST /api/v1/context-fabric/data/operations`, the `run_operation` tool; `POST /api/v1/context-fabric/data/graphql`, the `graphql_query` tool). It is never implied: `context:read` does not include it, an OAuth request that names no scope does not get it, no workload role carries it, and a credential issued before it existed never gains it. An OAuth client gets it only by asking for it in the `scope` parameter: in the authorization-code flow (the consent page lists it) or in the RFC 8628 device grant (`POST /device_authorization` with `scope=... data:read`). A device approval authorizes the whole requestable set as a ceiling, and the credential carries only the scopes the grant asked for, so a device grant without `data:read` never gets it. The legacy `acr-mcp login` device flow has no scope parameter and always issues the default pair. The catalogue, subject lookup, fact read and relationship read routes under `/api/v1/context-fabric/data/` need `context:read`.
+`data:read` (decision K4 of the data:read design design) gates the direct data routes that serve product analytics (`POST /api/v1/context-fabric/data/operations`, the `run_operation` tool; `POST /api/v1/context-fabric/data/graphql`, the `graphql_query` tool). It is never implied: `context:read` does not include it, an OAuth request that names no scope does not get it, no workload role carries it, and a credential issued before it existed never gains it. An OAuth client gets it only by asking for it in the `scope` parameter: in the authorization-code flow (the consent page lists it) or in the RFC 8628 device grant (`POST /device_authorization` with `scope=... data:read`). A device approval authorizes the whole requestable set as a ceiling, and the credential carries only the scopes the grant asked for, so a device grant without `data:read` never gets it. The legacy `acr-mcp login` device flow has no scope parameter and always issues the default pair. The catalogue, subject lookup, fact read and relationship read routes under `/api/v1/context-fabric/data/` need `context:read`.
 
 Every direct data route also passes the direct-read subject gate (`internal/contextfabric/directread`) on every request: each subject id is checked live against the caller's own organization graph and repository grant, and a subject the caller may not read answers `denied_or_not_found`, the same answer as an id that does not exist.
 
@@ -62,7 +62,7 @@ authorization.
 
 An approval (`POST /api/v1/oauth/device_approval` and the consent `approve`)
 names at most 256 repositories, the ops decision point's allowlist bound
-(`contractsv1.MaxRepositoryScopes`, CHAOS-13562); the device hints and an issued
+(`contractsv1.MaxRepositoryScopes`); the device hints and an issued
 credential carry the same bound. 257 or more is refused by name: the device
 approval answers `400 invalid_request` with `details.reason`
 `too_many_repositories` and `details.max_repository_scopes` 256, the consent
@@ -78,11 +78,11 @@ when its body names `repository_scopes`: it filters the hints by that list, the
 claim is optional, a present claim must equal it, and 257 is
 `too_many_repositories`. A preview body without the list is the
 **compatibility form**: the claim carries the grant, and the preview answers
-exactly as before CHAOS-13562 (pinned by
+exactly as before the 256-repository device-approval change (pinned by
 `TestCHAOS13562_PreviewClaimFormAnswersAsBefore`, run on the old and the new
 code with the same output). It exists only for the web that is live today,
 which sends no list on the preview. acr drops the compatibility form only after
-the web build of CHAOS-13564 (which sends the list) is LIVE, in its own PR. A
+the web build of the web repository-list change (which sends the list) is LIVE, in its own PR. A
 null list, or neither list nor claim, is `400`. Every other route refuses an
 assertion without the claim.
 
@@ -96,22 +96,22 @@ Authorization is evaluated when middleware looks up the credential. A request au
 
 Successful use updates last-used metadata outside downstream business transactions and emits an audit event. Rejected token lookups cannot safely disclose or attribute credential state, so they are recorded in structured security logs instead of the organization audit table.
 
-### Issuance provenance (CHAOS-12083)
+### Issuance provenance
 
 Every credential row records how, and for whom, it was issued (migration `0058`):
 
 | Column | Meaning |
 | --- | --- |
-| `client_class` | Derived by the credential lifecycle from the issuance path, never chosen by a caller: `org_bearer` (the `acr-api credentials` command, D6530; migration `0063` relabelled the rows the CLI had written as `operator`, and `operator` stays in the vocabulary with no writer), `workload` (RFC 8693 workload exchange), `native_device` (legacy device flow), `oauth_user` (OAuth authorization code or RFC 8628 device grant; it always names its client), `browser` (the first-party web browser client's code exchange, CHAOS-12123: the OAuth service names the class for a configured browser client, and the lifecycle accepts it only on an OAuth exchange that carries the session, the family and both expiries). |
+| `client_class` | Derived by the credential lifecycle from the issuance path, never chosen by a caller: `org_bearer` (the `acr-api credentials` command, D6530; migration `0063` relabelled the rows the CLI had written as `operator`, and `operator` stays in the vocabulary with no writer), `workload` (RFC 8693 workload exchange), `native_device` (legacy device flow), `oauth_user` (OAuth authorization code or RFC 8628 device grant; it always names its client), `browser` (the first-party web browser client's code exchange, the browser-class credential change: the OAuth service names the class for a configured browser client, and the lifecycle accepts it only on an OAuth exchange that carries the session, the family and both expiries). |
 | `approving_user_id` | The web-session subject that approved the device or OAuth authorization. The device-authorization store copies it from the locked authorization row inside the redemption transaction. Empty for `org_bearer`, `operator` and `workload`. |
 | `client_id` | The OAuth client the credential was issued to. |
-| `session_id`, `family_id`, `family_expires_at` | Browser class only (CHAOS-12123): the web session (`sid`) the approval was made in -- the store copies it from the locked device-authorization row (`approving_session_id`, migration `0061`), never from the caller -- the token family the credential starts, and the family's absolute end (issuance + 12 h). |
+| `session_id`, `family_id`, `family_expires_at` | Browser class only: the web session (`sid`) the approval was made in -- the store copies it from the locked device-authorization row (`approving_session_id`, migration `0061`), never from the caller -- the token family the credential starts, and the family's absolute end (issuance + 12 h). |
 
 The values are written once at issuance. Every rotation (operator rotate and self-rotate) copies them from the source row; no rotation or lifecycle request can set them, and a database trigger refuses an `UPDATE` that changes a set value. `created_by` stays an audit actor only: a self-rotation writes the rotating credential's id there, which is why it cannot identify the approving user. Authentication copies `client_class` and `approving_user_id` onto the `Principal`; policy that depends on how a credential was issued reads them, never a request header or `Origin`.
 
 The migration classifies existing rows only where the issuance records prove it: a row with a workload binding is `workload`; a row a device authorization redeemed takes that authorization's approver (and `oauth_user` when it is bound to a resource); a rotation successor inherits through the `credential_rotated` audit edge. Every other legacy row keeps a NULL class.
 
-## Credential listing for reconciliation (CHAOS-11200)
+## Credential listing for reconciliation
 
 `GET /internal/v1/credentials/lifecycle[?limit=1..500&after=<credential id>]` is the read-only listing the Auth Control Plane reconciliation reads. It answers one page of `{credential_id, revision, status}` (schema `credential_lifecycle_list.v1`) for the caller's own organization, ordered by credential id in byte order; `next_after` is the id to pass as `after`, or `null` on the last page. Nothing else about a credential is on the wire: no token, prefix, hash, scope or name. No other query parameter is accepted (400 `invalid_request`).
 
@@ -307,7 +307,7 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   anything else the OAuth error redirect. The error page names why the client
   was refused in plain words (the `client_refusal` classes below) and never
   repeats a value from the request or the client's document.
-- `POST /authorize/first-party` (CHAOS-12568) is the same authorize for the
+- `POST /authorize/first-party` is the same authorize for the
   first-party browser client only, sent by web's server for its signed-in
   user. The parameters are an `application/x-www-form-urlencoded` body of
   authorization parameters only; a web assertion over that exact body
@@ -350,7 +350,7 @@ Routes: `GET /.well-known/oauth-authorization-server`, `GET /authorize`,
   A credential without a binding (org_bearer, operator, device, workload) is unaffected.
 - The header is caller-set, so a holder of an MCP-bound credential could call
   acr-api directly with the MCP resource value. With `ACR_MCP_HOP_REQUIRED=true`
-  (CHAOS-12094, default off) acr-api admits a credential bound to an MCP
+  (default off) acr-api admits a credential bound to an MCP
   resource (any bound resource other than `ACR_OAUTH_ISSUER`) only on a call
   that also carries acr-mcp's hop proof in `X-ACR-MCP-Hop`: a projected
   ServiceAccount token of acr-mcp, which acr-api checks with Kubernetes
@@ -506,7 +506,7 @@ statement:
   own eligibility rules, so it shows a delete that misses rows the rules
   select, not a rule that is wrong.
 
-## First-party browser client (CHAOS-12123)
+## First-party browser client
 
 The Dev Health web app's browser calls acr-api directly with an ACR OAuth
 credential of class `browser`. The class is set by configuration only:
@@ -538,7 +538,7 @@ What the class changes:
 | RFC 8628 device grant | refused (`unauthorized_client`) | as before |
 | Rotation (self or operator) | refused: it renews only by its refresh grant (below) | as before |
 
-**`/authorize` request limit (CHAOS-12156).** Every user of the web app
+**`/authorize` request limit.** Every user of the web app
 shares the browser client's public `client_id`, so a per-client bucket would
 put every login of every organization, and anyone who knows the id, in one
 bucket of 10 a minute. A browser client's `/authorize` presents no secret, so
@@ -577,7 +577,7 @@ grant), `rotation_not_allowed` (step `credential_rotate`). A refused typed-code
 approval writes one Info line `device approval refused` with
 `reason=impersonating`.
 
-### Browser refresh grant and family revocation (CHAOS-12124)
+### Browser refresh grant and family revocation
 
 A browser-class code exchange also returns `refresh_token`: an opaque,
 single-use token (`acrrt_` + 43 base64url characters, never a bearer) bound to
@@ -615,7 +615,7 @@ revocation.
   access token of the browser client is not a refresh token and revokes
   nothing there. Served only with a browser client for refresh tokens.
 - `POST /revoke` also takes an access token (`fcacr_...`) of any OAuth client
-  (CHAOS-12825). The credential must have been issued to the `client_id`
+. The credential must have been issued to the `client_id`
   presented. It revokes that one credential through the same path as
   `self/revoke` (audit `credential_revoked`, actor the credential) and answers
   `200 {}` for any token, known or not, of another client or not. Holding the
@@ -623,10 +623,10 @@ revocation.
   acr-mcp (the hop), which forwards no lifecycle route, so this is its
   holder-side revoke. The endpoint is always served when OAuth is on.
 - Credential class: `acr_browser_refresh_token` in the ops credential-class
-  contract (`contracts/auth/v1/credential-classes.json`, ops CHAOS-12141). The
+  contract (`contracts/auth/v1/credential-classes.json`, ops the ops side of credential-class contract change). The
   endpoint profiles (`contracts/auth/v1/endpoint-profiles.acr.json`) list it as
   issued on `POST /token` and accepted on `POST /token` and `POST /revoke`
-  (CHAOS-12174, CHAOS-12187). `POST /token` picks the class by the `grant_type`
+. `POST /token` picks the class by the `grant_type`
   form field: its row names the selector `class_disambiguator: grant_type /
   refresh_token`, owned by this class alone; the other grants
   (`authorization_code`, the device-code grant) are `acr_device_flow_code`.
@@ -657,7 +657,7 @@ revocation.
   them on its siblings, if any; the credential revoked directly carries the
   operator's reason text instead.
 
-### Browser family purge (CHAOS-12140)
+### Browser family purge
 
 Each refresh adds one refresh row and one browser credential row, so an active
 session adds about 73 of each over its 12 hours. With a browser client
@@ -695,7 +695,7 @@ rows per statement.
   `browser family purge tick failed; retrying on next tick` with the error class
   and table only.
 
-## Approver decision at approval (CHAOS-13586)
+## Approver decision at approval
 
 `ACR_DEVICE_APPROVAL_PDP` (`off` by default, `shadow`, `enforce`) makes a device
 approval (`POST /api/v1/oauth/device_approval`) and a consent approve
@@ -733,7 +733,7 @@ sequence and component diagrams and the table of every signed token, is
   seconds it proves only that the user's session is live and may issue in the
   organization, and only acr-api may present it.
 
-## Per-call access re-check (CHAOS-12092)
+## Per-call access re-check
 
 A user-class credential (class `browser`, `oauth_user` or `native_device`) is
 re-checked live on **every** protected call: every route behind the runtime
@@ -759,7 +759,7 @@ There is no cache across calls; inside one request the read is reused. The
 | not a member; impersonating (`impersonating` or `session.impersonating`); browser session not live; Dev Health 404 `acr_organization_unknown` (a user Dev Health does not know is `member: false`) or 400 `acr_access_invalid_sid`; a user-class row without an approving user, or a browser row without a session | 403 `access_denied`. One code for every reason, so the answer says nothing about which exists; the reason is on the Info line `principal access read refused` and on the `access_denied` audit row |
 | `agent_context_runtime` off, or `ask_dev` off for the browser class | 403 `feature_not_enabled` (audit `entitlement_denied`, `source=principal_access`), on every route but capabilities: `GET /api/v1/agent-context/capabilities` is how a client learns what is enabled, so it answers 200 with `entitlements.agent_context_runtime` from this read (false, no tool enabled) and still refuses the rows above |
 | effective scope empty | 409 `no_repository` |
-| an inventory above its limit: a 503 with `acr_access_project_scope_over_limit` or `acr_access_repository_scope_over_limit`; a read listing above its cap: a 503 with `acr_access_repository_allowlist_too_large` (CHAOS-13566) | 503 `upstream_unavailable`, `retryable: false`, audit `access_denied` and an Info `principal access read refused` line with reason `project_scope_over_limit`, `repository_scope_over_limit` or `repository_allowlist_too_large`. Nothing is admitted, and a retry cannot clear it |
+| an inventory above its limit: a 503 with `acr_access_project_scope_over_limit` or `acr_access_repository_scope_over_limit`; a read listing above its cap: a 503 with `acr_access_repository_allowlist_too_large` | 503 `upstream_unavailable`, `retryable: false`, audit `access_denied` and an Info `principal access read refused` line with reason `project_scope_over_limit`, `repository_scope_over_limit` or `repository_allowlist_too_large`. Nothing is admitted, and a retry cannot clear it |
 | read failed: transport, timeout, a 404 without `acr_organization_unknown` (a route this Dev Health does not serve), any other status, a body that is not exactly `acr_principal_access.v1` for this org, user and session | 503 `upstream_unavailable` (Error line `principal access read failed` with the rejection reason); never 401, never a stale answer |
 
 A granted read writes one Debug line, `principal access read granted`, with
@@ -768,7 +768,7 @@ A granted read writes one Debug line, `principal access read granted`, with
 `elapsed_ms`, and no id but the request id. A project-only principal's
 granted read writes the same line at Info instead, with three more fields:
 `grant_class` (`project_only`), `project_scope_count` and `grant_digest_class`
-(`project`), never a project id or the digest value (CHAOS-12300; see
+(`project`), never a project id or the digest value (the project-only decision-visibility change; see
 [the project-only design](design/context-fabric-project-only-scope.md#observability)).
 
 **Effective scope.** The credential's repository grant within the
@@ -779,10 +779,10 @@ deny-all, refused 409 `no_repository` before any handler: the principal's
 scopes are never set to `[]`, which reads as unrestricted downstream. The one
 exception is an organization with no repository inventory whose read carries
 `project_scope`: a `*` grant becomes `project_only` on those projects, and every
-other grant stays 409 `no_repository` (CHAOS-12301; see
+other grant stays 409 `no_repository` (the project-only principal decode change; see
 [the project-only design](design/context-fabric-project-only-scope.md#admission)).
 
-**Kind `organization`** (CHAOS-13566). A read whose `repository_scope` is
+**Kind `organization`**. A read whose `repository_scope` is
 `{"kind":"organization"}` (no `repos` key) says the user may read every
 repository of an organization that has repositories. A `*` grant stays `*`, as
 with a non-empty inventory. A grant that names repositories or owners is kept
@@ -832,7 +832,7 @@ Both gates key on the client address, resolved the same way: the TCP peer addres
 | acr-mcp | `ACR_MCP_TRUSTED_PROXY_CIDRS` (comma-separated CIDRs and `!<address>` exclusions; chart `acrMcp.trustedProxyCidrs`) | every proxy between the caller and acr-mcp (ingress controller and, where the tunnel or node-network source address is not the caller, that address) |
 | acr-api | `ACR_TRUSTED_PROXY_CIDRS` (comma-separated CIDRs and `!<address>` exclusions; chart `config.trustedProxyCidrs`; the render refuses the same variable in `deployment.extraEnv` while it is set) | the acr-mcp pod address range; with a first-party browser client, also the proxies between the browser and acr-api (its `/authorize` limit keys on this address) |
 
-Both lists take the exclusion form go-api and auth-service read (CHAOS-11734): `!<address>` is one IP address, never a network, inside a listed network, and is never a trusted proxy. A node pod range holds the node's own addresses (on single-node k3s `10.42.0.0` and the bridge `10.42.0.1`), from which a host process or a hostNetwork pod reaches acr, so a pod-range list excludes them: `10.42.0.0/24,!10.42.0.0,!10.42.0.1`. A malformed exclusion, or one outside every listed network, refuses start. acr-api logs `trusted proxies` (Info) with `networks` and `exclusions` at startup, and acr-mcp's serving line carries `trusted_proxy_networks` and `trusted_proxy_exclusions`.
+Both lists take the exclusion form go-api and auth-service read: `!<address>` is one IP address, never a network, inside a listed network, and is never a trusted proxy. A node pod range holds the node's own addresses (on single-node k3s `10.42.0.0` and the bridge `10.42.0.1`), from which a host process or a hostNetwork pod reaches acr, so a pod-range list excludes them: `10.42.0.0/24,!10.42.0.0,!10.42.0.1`. A malformed exclusion, or one outside every listed network, refuses start. acr-api logs `trusted proxies` (Info) with `networks` and `exclusions` at startup, and acr-mcp's serving line carries `trusted_proxy_networks` and `trusted_proxy_exclusions`.
 
 acr-mcp states the address it resolved to acr-api as a single `X-Forwarded-For` value on every call it makes with a caller's bearer; it never relays the caller's own header. Without the acr-api setting, acr-api ignores that header and keys every MCP-forwarded failure on the acr-mcp pod address: one bucket for all MCP callers, so 20 bad tokens from anyone would answer `429` to every MCP caller. Without the acr-mcp setting, acr-mcp keys on the peer (the ingress), the same defect at the edge; it logs a `Warn` at startup ("edge gate keys on the peer address") so this is visible. The ingress must also pass `X-Forwarded-For` through (ingress-nginx drops it unless `use-forwarded-headers` is enabled).
 

@@ -412,6 +412,10 @@ jobs:
         run: scripts/docs/test-verify-mermaid.sh
       - name: Run the offline docs gate (claims, links including docs/runbooks and docs/release-notes) and its planted fixtures
         run: scripts/docs/test-verify.sh
+      - name: Shellcheck the mermaid structure check
+        run: shellcheck -x scripts/docs/verify-mermaid-structure.sh scripts/docs/test-verify-mermaid-structure.sh
+      - name: Prove the mermaid structure check ignores a label edit and rejects a dropped edge
+        run: scripts/docs/test-verify-mermaid-structure.sh
       - name: Shellcheck the public-text check
         run: shellcheck -x scripts/docs/verify-public-text.sh scripts/docs/test-verify-public-text.sh
       - name: Scan the listed public pages for internal text, and prove the check rejects every planted class and an empty list

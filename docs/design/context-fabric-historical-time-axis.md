@@ -1,4 +1,4 @@
-# CHAOS-3781 — historical time axis: design note
+# Historical time axis: design note
 
 Status: IMPLEMENTED. All six decisions ruled by team-lead; see §7 for what
 was decided and §9 for what changed relative to the proposal.
@@ -13,7 +13,7 @@ Verified against the live stack, not assumed.
 **P1 — the graph carries NO canonical validity windows today.**
 `internal/contextfabric/devhealthsource/**` never sets `ValidFrom`/`ValidTo` on any
 `ContextFabricEntityProjection` or `ContextFabricRelationshipProjection` (zero hits in the whole
-package). CHAOS-3785 made the owned write authoritative, so a `nil` is now written as an explicit
+package). Linear work-item projection change made the owned write authoritative, so a `nil` is now written as an explicit
 Cypher null. Result: every canonical node and edge in a projected graph has
 `valid_from_ns`/`valid_to_ns` **absent**. The only exception is the episode node
 (`falkorgraph/projection.go:358`), which sets them from `StartedAt`/`EndedAt`.
@@ -77,9 +77,9 @@ correct shape per axis:
 - `valid_time` / `observed_time` — `as_of` required and non-zero; `start`/`end` forbidden.
 - `range` — ordered `start`/`end` both required; `as_of` forbidden.
 
-The axis is therefore already fully activated by existing fields. CHAOS-3781 adds **service-level**
+The axis is therefore already fully activated by existing fields. Historical-time-axis work adds **service-level**
 bounds the contract deliberately does not own: the wire contract's accepted axes are unchanged, and
-what CHAOS-3781 changed is this engine's ability to answer them.
+what the historical-time-axis work changed is this engine's ability to answer them.
 
 As shipped, all three historical axes ARE answered. The sentinel that used to refuse them,
 `ErrUnsupportedTimeAxis`, is retired and deliberately not replaced by an equivalent (see its
@@ -115,7 +115,7 @@ unchanged; only the verdict changes from "refuse" to "bind the as-of and label i
 
 ### 2.1 The precondition: projection must write validity windows
 
-Given P1, filtering alone delivers nothing. **CHAOS-3781 must first populate `ValidFrom`/`ValidTo`
+Given P1, filtering alone delivers nothing. **Historical-time-axis work must first populate `ValidFrom`/`ValidTo`
 in `devhealthsource` from source interval columns.** Proposed mapping (all columns confirmed to
 exist in §0 probes):
 
@@ -137,7 +137,7 @@ The edge rule is the conservative one: a relationship is valid only while **both
 **Operational consequence, flagged for the lead:** this changes what `devhealthsource` emits, so
 `ClickHouseSourceVersion` must bump (v3 → v4). Per `ErrProjectionSourceVersionChanged`, every
 already-projected organization's worker then refuses every tick until an operator runs
-`acr-projector rebuild --org`. CHAOS-3785 just did v2 → v3, so this is the second forced rebuild in
+`acr-projector rebuild --org`. Linear work-item projection change just did v2 → v3, so this is the second forced rebuild in
 two changes. Until the rebuild lands, historical graph reads have no windows to filter on and must
 report reduced coverage — they must not silently return the unwindowed graph.
 
@@ -170,7 +170,7 @@ returned at `T`. This makes adjacent intervals partition cleanly with no double-
 | case | meaning | ruling |
 |---|---|---|
 | `valid_to_ns` absent | open-ended: still valid | **valid at every `T >= valid_from`.** Standard SCD convention, and it is what the write side means. |
-| `valid_from_ns` absent | unbounded start | **valid at every `T <= valid_to`.** CHAOS-3785 made a nil an *assertion* by the canonical source, not an omission, so this is "no lower bound", not "unknown". |
+| `valid_from_ns` absent | unbounded start | **valid at every `T <= valid_to`.** Linear work-item projection change made a nil an *assertion* by the canonical source, not an omission, so this is "no lower bound", not "unknown". |
 | both absent | no validity bound at all | **admitted at every `T`, and recorded.** |
 
 The "both absent" case is the honest hard part. Excluding it empties the graph for every
@@ -325,14 +325,14 @@ Temporal *ContextFabricTemporalLabel `json:"temporal,omitempty"`
 
 Contract-first unit, all in one change: Go types → JSON Schema → canonical OpenAPI JSON + generated
 YAML mirror → golden fixtures → parity tests. MCP definitions are touched **only if** the field is
-exposed through MCP — and `internal/mcp/**` is lane-3746's. See §7-E.
+exposed through MCP — and `internal/mcp/**` is the answer-surface work's. See §7-E.
 
 Degradation continues to ride the existing `Coverage.Sources[].State/Reason`, `Coverage.Partial`,
 `DegradedReasons`, and `Limitations`. No new mechanism.
 
 ---
 
-## 5. Answer reuse interaction (CHAOS-3782) — a correctness bug if missed
+## 5. Answer reuse interaction — a correctness bug if missed
 
 **The problem.** `ReuseKey` is `{QuestionHash, ContractVersion, ProjectionVersion, ModelIdentity}`.
 `QuestionHash` is `SHA-256(CanonicalizeQuestion(question))` — **question text only**. Today every
@@ -355,7 +355,7 @@ Canonicalization of `TimeAxisKey` (deterministic, total, no wall clock):
 
 **The trap, stated so it cannot be reintroduced:** `current` must map to a fixed literal, never to
 `now`. Substituting a wall clock would make every current-axis key unique and silently reduce the
-reuse rate to zero — CHAOS-3782 would still pass its own tests while delivering nothing.
+reuse rate to zero — the answer-reuse work would still pass its own tests while delivering nothing.
 
 Nanoseconds, not a formatted string: the same instant must produce the same key byte-for-byte, and
 this matches the `_ns` convention AC-3781-7 requires everywhere else.
@@ -375,7 +375,7 @@ Condition 6 (authorization recheck) also stays as is. It re-resolves subjects th
 `TimeContext` — so the recheck runs on the same axis the candidate was built on, with no change
 needed.
 
-**Collision with lane-3786.** They are adding a reuse-key dimension for fallback binding. Both
+**Collision with the model-identity reuse binding.** They are adding a reuse-key dimension for fallback binding. Both
 changes are additive and independent (a new key field + a new column + inclusion in the same unique
 index). Whoever lands second rebases: one migration number and one struct literal. Alternative if
 team-lead prefers: one of us lands the `ReuseKey` struct change with both fields and the other
@@ -392,11 +392,11 @@ merge-order dependency in the acceptance tests too. **Team-lead's call.**
    append-only graph log. `observed_time` degrades honestly (P4) rather than inventing a store.
 3. Counterfactual or predictive answers. A future `as_of` is refused.
 4. Deleted subjects. The graph holds only the current projection (§2.4) — stated as a limitation.
-5. `answerprojection/`, `internal/mcp/`, and the API routes' response shaping — lane-3746 owns
+5. `answerprojection/`, `internal/mcp/`, and the API routes' response shaping — the answer-surface work owns
    them. If the §4 temporal label needs to reach the MCP surface or the API projection, that is a
    **post-3746-merge integration step**, listed as such and not attempted here.
-6. Vector/semantic retrieval, edge-vocabulary expansion, provider pruning (CHAOS-3778/3779/3783).
-7. Relaxing any CHAOS-3782 reuse condition (§5).
+6. Vector/semantic retrieval, edge-vocabulary expansion, provider pruning (the vector-retrieval work, the closed-relationship-vocabulary work and fact-provider pruning change).
+7. Relaxing any the answer-reuse work reuse condition (§5).
 8. Per-organization retention configuration. The retention floor is derived from data, not
    configured.
 
@@ -422,13 +422,13 @@ existing `Interpretation.TimeContext` round-trip and add nothing?
 
 **E. The route refusal (§0 P6, AC-3781-6).** `internal/api/context_fabric_routes.go:106` maps
 `ErrUnsupportedTimeAxis` to a 400. AC-3781-6 requires it removed in the **same change** as the
-engine and providers, but lane-3746 owns the API routes. That is a direct conflict between the AC
-and the ownership boundary. Options: (i) I make the one-hunk deletion in that file with lane-3746
-notified; (ii) lane-3746 takes it and we land together; (iii) I land engine+providers and the route
+engine and providers, but the answer-surface work owns the API routes. That is a direct conflict between the AC
+and the ownership boundary. Options: (i) I make the one-hunk deletion in that file with the answer-surface work
+notified; (ii) the answer-surface work takes it and we land together; (iii) I land engine+providers and the route
 deletion follows immediately. **(i) is the smallest and best preserves AC-3781-6; team-lead's
 call.**
 
-**F. Reuse-key sequencing with lane-3786 (§5).** Sequence (my preference) or share the struct
+**F. Reuse-key sequencing with the model-identity reuse binding (§5).** Sequence (my preference) or share the struct
 change?
 
 ---
@@ -460,12 +460,12 @@ All six decisions in §7 were approved as recommended:
 
 | # | Decision | Ruling |
 |---|---|---|
-| A | Populate `ValidFrom`/`ValidTo`, bump v3 → v4 | **Yes.** Team-lead owns the rebuild sweep; CHAOS-3785's v3 had not deployed, so one org-wide rebuild lands at v4, not two. |
+| A | Populate `ValidFrom`/`ValidTo`, bump v3 → v4 | **Yes.** Team-lead owns the rebuild sweep; the Linear work-item projection change's v3 had not deployed, so one org-wide rebuild lands at v4, not two. |
 | B | `observed_time` accepted with zero fact coverage | **Yes.** AC-3781-1 wins; P4 makes the near-empty answer the only honest one. |
 | C | Tier B derived-state providers | **In.** |
 | D | Additive `ContextFabricTemporalLabel` | **Yes.** |
-| E | Route refusal removed in this changeset | **Option (i).** lane-3746 merges last and rebases over it. |
-| F | Reuse-key sequencing with lane-3786 | **Sequential.** 3786 lands first and now carries migration `0012` (its reuse-epoch cutover), so `TimeAxisKey` is migration `0013` and rebases over it. |
+| E | Route refusal removed in this changeset | **Option (i).** the answer-surface work merges last and rebases over it. |
+| F | Reuse-key sequencing with the model-identity reuse binding | **Sequential.** 3786 lands first and now carries migration `0012` (its reuse-epoch cutover), so `TimeAxisKey` is migration `0013` and rebases over it. |
 
 ### Deltas from the proposal
 
@@ -500,10 +500,10 @@ These are places the implementation is deliberately different from §1-§6.
    and the end backward, so the effective window always sits inside the
    requested one — the direction the contract validates.
 
-### Migration numbering and the CHAOS-3786 rebase
+### Migration numbering and the model-identity reuse binding rebase
 
 `TimeAxisKey`'s migration is **0013**, not 0012 as §5 originally proposed:
-CHAOS-3786 now carries 0012 (its one-time reuse-epoch cutover) and merges
+Model-identity reuse binding now carries 0012 (its one-time reuse-epoch cutover) and merges
 first.
 
 Until that merge reaches this branch, this worktree's applied set is
@@ -552,7 +552,7 @@ migration registration, and the unbounded-count surfacing.
 |---|---|---|---|
 | F1 | High | Every answered source labeled day grain, but Tier B answers from EXACT timestamps — a PR merged at 14:00Z serialized as midnight | Grain is now per PROVIDER (`FactProviderResult.Grain`); the registry keeps the coarsest among providers that CONTRIBUTED, and only that reaches the label |
 | F2 | High | Incident severity was current-row data emitted under a historical label | Severity is EXCLUDED from historical incident facts entirely, with the omission named in the provider's reason. Status stays — it derives from immutable columns |
-| F3 | High | Referenced stubs inherited the window of the relationship or episode that mentioned them; projection ORDER decided which won | Stubs carry no validity window at all. Only the authoritative entity write states validity — CHAOS-3785's stub discipline |
+| F3 | High | Referenced stubs inherited the window of the relationship or episode that mentioned them; projection ORDER decided which won | Stubs carry no validity window at all. Only the authoritative entity write states validity — the Linear work-item projection change's stub discipline |
 | F4 | High | Deployment→incident edges were unbounded, so admitted at every requested time | Window derives from both endpoints (incident interval ∩ deployment validity), joined LEFT so an unresolvable endpoint leaves it absent for the admit-count-label path |
 | F5 | Med | Dependency-edge window came from the SOURCE endpoint only, asserting validity while the target did not exist | Both endpoints intersect. The target join is LEFT because `target_work_item_id` may name a cross-system reference; an unresolved target contributes no bound |
 | F6 | Med | Lookup keyed from the wire request, Save keyed from the interpretation — an interpreter axis flip saved under an unreachable key | BOTH sides key from the wire request, threaded to `Save` as an explicit parameter. Interpretation identity stays covered by condition 6 |
@@ -699,7 +699,7 @@ paren balancer by reading it, because judging one's own parser by
 inspection is the same audit shape that had already failed repeatedly here.
 Round 10 found a real defect in exactly that code — through execution.
 
-## 14. CHAOS-3825 — disjoint endpoint windows wedge a projection
+## 14. Empty-intersection fix — disjoint endpoint windows wedge a projection
 
 `edgeValidity` (`internal/contextfabric/devhealthsource/validity.go`) derives a
 relationship's window as the intersection of its two endpoints': the later
@@ -751,7 +751,7 @@ guard, not by this derivation.
 **No source-version bump.** `ClickHouseSourceVersion` stays at
 `devhealthsource.clickhouse.v4`. A bump exists to force a REBUILD when
 already-written graph state would otherwise be wrong (see
-`ClickHouseSourceVersion`'s doc comment and CHAOS-3781's bump to v4). Nothing
+`ClickHouseSourceVersion`'s doc comment and the historical-time-axis work's bump to v4). Nothing
 wrong was written here: a rejected batch is rejected in full, before any write,
 and the coordinator then holds the checkpoint — so a wedged organization is
 missing the poisoned page and everything after it, never holding a bad window.

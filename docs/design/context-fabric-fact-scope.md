@@ -1,10 +1,10 @@
-# Context Fabric fact-read scope resolution (CHAOS-4099)
+# Context Fabric fact-read scope resolution
 
 Short reference note. Covers: the defect the pruner's own proof concealed,
 the ratified architecture, the invariants binding on the implementation, what
 stage 1 ships, and what stage 2 must prove before it activates.
 
-Companion to `context-fabric-fact-planning.md` (CHAOS-3783), which this note
+Companion to `context-fabric-fact-planning.md`, which this note
 amends rather than replaces.
 
 ## 1. The defect
@@ -15,7 +15,7 @@ committed project subject prunes *every* capability -- `pull_requests`,
 `reviews` and `metrics` included. The fact read returns zero facts and the
 model honestly reports `no_match`.
 
-Observed as ext65 corpus index 60 (`sha8 64f16228`). Before CHAOS-4098 it
+Observed as ext65 corpus index 60 (`sha8 64f16228`). Before the clarification-status change it
 surfaced as a 500; after it, as a `false_no_match`.
 
 The load-bearing part is not the missing facts. It is the claim the system
@@ -43,7 +43,7 @@ The facts are reachable. The planner simply had no step that reached them,
 and reported the gap as a proof of absence.
 
 **`team` shares the identical gap** -- confirmed during the design spike,
-tracked as CHAOS-4101 and activated per §10.
+tracked as the team-attribution basis change and activated per §10.
 
 ## 2. Premise correction
 
@@ -121,12 +121,12 @@ keeps its single auditable rule and providers keep their declared
 `project_work_item_pull_request_review_v1`,
 `team_primary_attribution_repository_v1`,
 `team_primary_attribution_pull_request_v1`,
-`team_primary_attribution_pull_request_review_v1` (CHAOS-4101, §10), plus
+`team_primary_attribution_pull_request_review_v1` (§10), plus
 `none` for an expansion-eligible pair with no policy defined — every
 disclosure-only project/team row (health, status, work, etc.; see §6).
 
 **Basis** (`FactScopeBasis`): `direct` | `activity_proxy` |
-`attributed_primary_team` (CHAOS-4101, §10 — per-target, team-origin only).
+`attributed_primary_team` (§10 — per-target, team-origin only).
 
 **Outcome** (`FactScopeExpansionOutcome`): `not_needed`, `policy_unavailable`,
 `attempted_empty`, `matched_unauthorized`, `target_kind_mismatch`,
@@ -166,7 +166,7 @@ sentence with no token in it.
 
 `factScopeEligibility` declares every (requirement kind, origin kind) pair for
 which a missing capability is a **reachable gap** rather than a proof of
-irrelevance. A pair absent from it keeps CHAOS-3783's honest prune.
+irrelevance. A pair absent from it keeps the fact-provider pruning change's honest prune.
 
 **Admission criterion (ruling, 2026-08-22): a verified typed chain, cited.** A
 row exists only where the traversal chain exists in prod code *and* the row
@@ -178,7 +178,7 @@ reachability nobody has shown.
 
 **Why disclosure is wider than the activation policies.** Invariant 7 is
 controlling: `SourcePruned` asserts "proven nothing missing," and on a
-reachable chain that assertion is **false**. CHAOS-3783's argument for a
+reachable chain that assertion is **false**. Fact-provider pruning change's argument for a
 non-degrading prune is about not degrading where pruning is genuinely sound;
 it cannot justify keeping a false proof of absence. Where the two conflict,
 honesty wins. Concretely, work-item status is *one* typed hop from a project —
@@ -210,7 +210,7 @@ The team `pull_requests` row expands only when the request asks for pull request
 - Team-target families from a *project* origin (workload, investment,
   readiness, operational_deficiencies). The chain would run
   `project <- work_item -OWNED_BY_TEAM-> team`, through the same computed
-  attribution CHAOS-4101 is holding back — approaching it from the other
+  attribution the team-attribution basis change is holding back — approaching it from the other
   direction does not make it stronger.
 - incidents, deployments, continuous_integration. Chains plausibly exist;
   none was traced end to end, and an uncited row is what the criterion
@@ -224,7 +224,7 @@ activation is a product commitment about what a fact family *means* for a
 subject that does not own it, and each needs its own preconditions. Every
 widened row not covered by an activated policy carries policy `none`, never
 traverses, and emits `policy_unavailable`. Activation scope is the three
-ruled project policies plus (CHAOS-4101, §10) the three ruled team-origin
+ruled project policies plus (§10) the three ruled team-origin
 policies — six total, never more; `TestChaos4099_OnlyTheSixRuledPoliciesAreEverActivatable`
 pins the closed set.
 
@@ -232,7 +232,7 @@ pins the closed set.
 
 `EngineTelemetry.RecordFactScopeExpansion` — declared on the interface
 itself, not an optional side interface, so a sink that drops it fails to
-compile. (CHAOS-4085 shipped telemetry behind an optional interface nothing
+compile. (the no-commit refusal change shipped telemetry behind an optional interface nothing
 implemented, and every event vanished silently.)
 
 One event per (requirement, origin kind, policy) triple that needed a
@@ -241,7 +241,7 @@ decision; **none** for a requirement answerable directly from its roots.
 Fields: `RequirementKind`, `OriginKind`, `TargetKind`, `Policy`, `Basis`,
 `Outcome`, `OriginCount`, `CandidateCount`, `AdmittedCount`,
 `AuthorizationDroppedCount`, `TemporalDroppedCount`, `MissingNextHopCount`,
-`TargetKindMismatchCount`, `Truncated`, `FailureClass`, and (CHAOS-4101, §10)
+`TargetKindMismatchCount`, `Truncated`, `FailureClass`, and (§10)
 `AttributionSourceCounts` — a closed-vocabulary count map for team-origin
 expansions only, `nil` for every project-origin one. Closed vocabularies and
 counts only.
@@ -523,16 +523,16 @@ what the answer *says* about the facts it did not get.
   `Coverage.Partial`. The activity-proxy disclosure is wired and tested,
   though no stage-1 path admits a derived subject to trigger it.
 - Non-current axes refuse **before** traversing.
-- Ineligible pairs keep CHAOS-3783's non-degrading prune.
+- Ineligible pairs keep the fact-provider pruning change's non-degrading prune.
 
-Stage 1 also moved five CHAOS-3783 tests off `metrics × team` as their
-"everything prunes" fixture — that pair is now precisely the CHAOS-4101
+Stage 1 also moved five the fact-provider pruning change tests off `metrics × team` as their
+"everything prunes" fixture — that pair is now precisely the team-attribution basis change
 disclosed gap — onto a genuinely ineligible pair. The invariants they pin are
 unchanged.
 
 ## 9. Stage 2 preconditions
 
-**Status (2026-08-22): RESOLVED — stage 2 is activated.** CHAOS-4108 (the
+**Status (2026-08-22): RESOLVED — stage 2 is activated.** Project-id join fix (the
 blocker below) shipped Done: ACR's own join (`queryWorkItemProjects` and the
 census project anchor) was joining `projects.id` only, when a gitlab work
 item's `project_id` genuinely carries `projects.project_key` by Ops design
@@ -561,15 +561,15 @@ body:
   ClickHouse integration tests against a real container
   (`devhealthfacts/chaos4099_scope_expander_integration_test.go`), not a live
   graph read: proves the widened project-key join arm, zero-UUID exclusion,
-  and orphan exclusion each independently, per CHAOS-4108's own evidence
+  and orphan exclusion each independently, per the project-id join fix's own evidence
   discipline. The oracle side of this precondition is ClickHouse itself —
   the `ScopeExpander` reads no second source to compare against, so there is
   no separate graph-vs-ClickHouse divergence to prove; deliberately NOT
   validated against the standing FalkorDB graph, whose rebuild is held
-  pending CHAOS-3916's re-measure run and still carries the pre-CHAOS-4108
+  pending the graph-cutover slice's re-measure run and still carries the pre-project-id-join-fix
   identity shape.
 - Canonical-ID alignment across all four producers, without parsing
-  relationship IDs. — **Satisfied** by CHAOS-4108's own fix and audit.
+  relationship IDs. — **Satisfied** by the project-id join fix's own fix and audit.
 - Authorization filtering proven at every hop with mixed
   authorized/unauthorized repos. — **Satisfied**: `ScopeExpander` authorizes
   at the repository hop via `graphrank.AuthorizedAttributes` (the same
@@ -586,7 +586,7 @@ body:
 - Product sign-off on the `activity_proxy` disclosure semantic — **GRANTED**
   (chris, 2026-08-22).
 - Current axis **only** — **GRANTED for v1** (chris, 2026-08-22), with a
-  **required** fast-follow ticket (CHAOS-4109) for temporal/as-of edges, not
+  **required** fast-follow ticket for temporal/as-of edges, not
   merely a deferral. The `work_item -> project` edge carries `ObservedAt`
   but no `ValidFrom`/`ValidTo`, so an as-of expansion would silently answer
   with today's membership under a historical label.
@@ -599,7 +599,7 @@ sentinel regression test whose edge removal flips the outcome
 (`TestScopeExpander_ProjectToRepository_ZeroUUIDNeverAdmitsEvenIfARepoRowClaimsIt`,
 hand-verified: reverting the guard makes it fail, restored via content diff).
 
-## 10. Team activation (CHAOS-4101, ruled 2026-08-24)
+## 10. Team activation (ruled 2026-08-24)
 
 **Status: RESOLVED — team origin is activated,** with `Basis` decided **per
 target** rather than per policy. This section records the ruling that
@@ -612,7 +612,7 @@ through `manual_fallback` (`ops/src/dev_health_ops/metrics/compute_work_items.py
 asserted — Linear teams only; jira/github/gitlab work items carry
 `native_team_key=None`, so every one of their rows resolves through a
 lower-ranked, Ops-*computed* source instead (the Python `team_autoimport_*`
-populators, CHAOS-4198, still unported to Go as of this ruling). A single
+populators, the work-item populators, still unported to Go as of this ruling). A single
 `FactScopeBasis` fixed on the policy rule cannot express that a team-origin
 traversal can admit one repository on solid footing and another on
 heuristic footing in the SAME call. `FactScopeExpansionResult.TargetBasis`
@@ -680,7 +680,7 @@ always one row of Ops' own precedence-resolved output, even when it wins on
 a native_team basis).
 
 **Telemetry.** `FactScopeExpansionEvent`/`FactScopeExpansionCounts` gained
-`AttributionSourceCounts map[string]int` (CHAOS-4101): a closed-vocabulary
+`AttributionSourceCounts map[string]int`: a closed-vocabulary
 count of ADMITTED targets by their winning `work_item_team_attributions.source`
 value, `nil` for every project-origin event. `RecordFactScopeExpansion`
 logs it unconditionally (nil included), the same "a zero/absent count must
@@ -695,14 +695,14 @@ and `TestScopeExpander_TeamToPullRequest_InheritsRepositoryBasisAndDropsUnauthor
 (`chaos4101_team_scope_expander_integration_test.go`).
 
 **Corpus.** ext65 index 61 is the only existing team-kind case and is the
-CHAOS-4085 never-commit sentinel — unusable for measuring this activation.
+No-commit refusal change never-commit sentinel — unusable for measuring this activation.
 A new answerable team-kind case (and its oracle annex entry) is a follow-up
 once the standing kiac dataset is free for authoring against; not part of
 this change.
 
-## 11. CHAOS-4347 — FactMetrics widened by real join, not by this resolver
+## 11. Status-category fact-kind work — FactMetrics widened by real join, not by this resolver
 
-CHAOS-4347 (ruling 2026-08-26 17:52) widens `MetricsProvider.SupportedSubjectKinds`
+Status-category fact-kind work (ruling 2026-08-26 17:52) widens `MetricsProvider.SupportedSubjectKinds`
 to `[repository, team, project]` directly on the provider
 (`internal/contextfabric/devhealthfacts/metrics.go`), **not** through
 `FactReadScopeResolver`. This is deliberately outside §6's eligibility
@@ -715,7 +715,7 @@ matters:
   reachable chain) or an attributed-team inference. The capability never
   gains the subject kind itself; the resolver grants it a narrow,
   disclosed detour.
-- CHAOS-4347's widening is the opposite shape: `MetricsProvider` gained a
+- Status-category fact-kind work's widening is the opposite shape: `MetricsProvider` gained a
   **genuine second and third source** for the SAME fact kind —
   `team_metrics_daily` is directly about the team, and the project number
   is a disclosed sum over `team_project_ownership`'s current membership,
@@ -728,7 +728,7 @@ matters:
 `TestChaos4099_NoCanonicalFactCapabilityAnswersForAProject` are updated
 accordingly, with `FactMetrics` named as the one deliberate exception in
 both — see that file's own comments for the full reasoning. Every other
-capability's CHAOS-4099 premise (§1's defect, §6's closed eligibility
+capability's the unreachable-fact-family disclosure change premise (§1's defect, §6's closed eligibility
 table) is unchanged: a capability that still has no team/project-native
 source keeps routing through this resolver exactly as before.
 

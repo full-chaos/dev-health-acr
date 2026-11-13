@@ -290,5 +290,5 @@ directory is removed, the unrelated `.cursor/mcp.json` and rules remain, and
 the `acr` entry is gone. Package/fixture validation always runs. Native Cursor
 validation runs only when installed and reports `cursor_client=installed` or
 `cursor_client=not_installed`; Windows/NTFS lifecycle remains deferred to
-CHAOS-3058 and is not a blocker. The clean-room automation exercises the
+Windows/NTFS lifecycle follow-up and is not a blocker. The clean-room automation exercises the
 Unix/Linux/macOS path in temporary config roots.

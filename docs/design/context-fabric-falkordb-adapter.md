@@ -11,7 +11,7 @@
   explicitly what happens to `zepgraph` (kept in-tree, selectable by config,
   per current instructions — not superseded or deleted yet).
 - **Provenance note:** this note and `internal/contextfabric/graphrank` were
-  produced by two sessions working the same CHAOS-3752 investigation
+  produced by two sessions working the same the FalkorDB graph-adapter work investigation
   concurrently (a session-compaction artifact, not a deliberate split) and
   collided on this exact seam (§7, §10.5). The team lead resolved it: one
   session continues as sole driver, this note is folded in as design input,
@@ -25,8 +25,8 @@
 
 ### 1.1 Server
 
-- Image `falkordb/falkordb:latest`, digest
-  `sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3`
+- Image `falkordb/falkordb:latest`, pinned as
+  `falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3`
   (created 2026-08-09, arm64).
 - `redis_version:8.6.3`, `redis_mode:standalone`.
 - `MODULE LIST` → `name graph`, `ver 42002` (4.20.2),
@@ -319,7 +319,7 @@ Two consequences worth writing down:
 })
 ```
 
-`projection_owned` (CHAOS-12649) is written by the owned writer
+`projection_owned` is written by the owned writer
 (`projectEntity`) and never by the stub a relationship creates for an endpoint
 the batch does not carry. The projection count check counts marked nodes only,
 so a referenced stub never reads as a projected node. The source's
@@ -327,7 +327,7 @@ so a referenced stub never reads as a projected node. The source's
 from zero on (later batches keep it). Until then every owned node of that source
 may predate the marker, so its count check reads `unknown`, never a gap.
 
-`property_source_synced_at_ns` (CHAOS-12649) is the row's `last_synced`, the
+`property_source_synced_at_ns` is the row's `last_synced`, the
 column the projection walk pages on, written by the producer of a table that
 pages on its rows' own `last_synced` (repositories, work items, pull requests,
 deployments, pull request reviews, CI runs). The count check compares source
@@ -535,7 +535,7 @@ real data rather than assumed:
 Without the 0.75 rung, a single relevant lexical hit never reaches 0.72 and
 every such question degrades to a clarification prompt — a visible regression.
 
-**Shipped (D11 / AC-3778-0, precondition of CHAOS-3778):** the field-level
+**Shipped (D11 / AC-3778-0, precondition of the vector-retrieval work):** the field-level
 ladder above was not reproducible as written — the fulltext index covers one
 merged `search_text` property (§4.1), with no separate label/alias/body
 fields to key a match reason on. What shipped instead is a coverage-based
@@ -555,7 +555,7 @@ rung's intent; a partial match scales down toward the 0.50 floor. This is an
 ABSOLUTE, per-candidate function — never relative to what else came back in
 the same query's result set, and never relative to which of possibly
 several independent `Search()` calls produced it (Codex round-2 review,
-CHAOS-3778 fix: an earlier per-call-relative max-normalization both let a
+Vector-retrieval work fix: an earlier per-call-relative max-normalization both let a
 weak or truncation-artifact lone hit read as the ceiling regardless of its
 real strength, and produced confidences that were only meaningful within
 one call, then compared apples-to-oranges against another call's own
@@ -604,7 +604,7 @@ The cost is over-fetching rows that are then filtered out. Bound it with the
 existing `MaxResults` / `LIMIT` and accept it. The org predicate itself needs
 no pushdown at all — it is structural.
 
-### 6.5 Rank before truncate — a per-hop approximation, not a global sort (Codex CHAOS-3752 review, rounds 2–3)
+### 6.5 Rank before truncate — a per-hop approximation, not a global sort (Codex the FalkorDB graph-adapter work review, rounds 2–3)
 
 A graph-walked edge (as opposed to a full-text search hit) has no real
 relevance score — `Relevance`/`Score` are always nil, so
@@ -906,7 +906,7 @@ verified hazard:
    documented obligation is on callers of the *interface*, `zepgraph` still
    needs it, and batch-level ordering across entities is a separate concern
    from single-node attribute merging. `falkorgraph` should note that it
-   satisfies the attribute-merge half independently — but the CHAOS-3753 worker
+   satisfies the attribute-merge half independently — but the projection-pipeline work worker
    should keep serializing. Flagging it because silently weakening a documented
    safety precondition would be exactly the wrong kind of change to make
    quietly.

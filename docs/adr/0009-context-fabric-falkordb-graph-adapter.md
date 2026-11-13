@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-12
 - Decision owners: Context Fabric / ACR (Chris, final backend call)
-- Implements: CHAOS-3752 (supersedes [ADR 0007](0007-context-fabric-zep-graph-adapter.md))
+- Implements: the FalkorDB graph-adapter work (supersedes [ADR 0007](0007-context-fabric-zep-graph-adapter.md))
 - Design record: [docs/design/context-fabric-falkordb-adapter.md](../design/context-fabric-falkordb-adapter.md)
 
 ## Context
@@ -11,7 +11,7 @@
 ADR 0007 selected Zep v3 through its official Go SDK. That SDK's wire
 protocol is Zep Cloud-only; there is no supportable self-hosted server for
 it, making a Zep Cloud account and API key an external, environment-owned
-dependency this repository could not provision. CHAOS-3752 was re-scoped
+dependency this repository could not provision. FalkorDB graph-adapter work was re-scoped
 twice against real infrastructure, not assumption:
 
 1. **Local self-hosted Graphiti (the OSS FastAPI server), zep-go/v3
@@ -123,7 +123,7 @@ provider IDs/properties, so it cannot clobber what an entity-sourced write
 already set, with no read, no COALESCE trick, and no separate round trip.
 This closes the specific race ADR 0007 flagged as unfixable at the adapter
 level for the attribute-merge case (single-statement server-side merge
-under the row's own lock); the CHAOS-3753 projection worker's per-organization
+under the row's own lock); the projection-pipeline work projection worker's per-organization
 serialization requirement is unchanged and still required for other
 batch-level ordering reasons, not relaxed as a side effect of this change.
 
@@ -150,7 +150,7 @@ Projection batches are idempotent through deterministic identities and
 FalkorDB's own unique constraints (verified: a duplicate `(org_id,
 subject_kind, canonical_id)` or `relationship_id` is rejected). Checkpoints
 advance only after a durable backend receipt, unchanged from ADR 0007.
-**Concurrency precondition unchanged from ADR 0007:** the CHAOS-3753
+**Concurrency precondition unchanged from ADR 0007:** the projection-pipeline work
 projection worker must still serialize `ApplyProjectionBatch` calls per
 organization.
 
@@ -182,7 +182,7 @@ belong to the caller's organization. With one graph per organization, every
 lookup this adapter makes is already structurally scoped to the calling
 principal's own graph key -- there is no second-hop concept to fake, and the
 shared ranking package (`internal/contextfabric/graphrank`, extracted from
-`zepgraph` as CHAOS-3752 prep so both backends share one implementation of
+`zepgraph` as the FalkorDB graph-adapter work prep so both backends share one implementation of
 the backend-neutral ranking/ambiguity/evidence-budget logic) deliberately
 does not carry this machinery: `graphrank.AdmitEdges` takes
 already-endpoint-resolved edges and owns only the pure admission decision.
@@ -271,7 +271,7 @@ that picks one is a separate, not-yet-scoped change.
   `GRAPH.DELETE` itself also returns).
 - A rebuild purges the organization graph, resets the ACR checkpoint, and
   replays canonical projection batches -- unchanged composition from ADR
-  0007, still CHAOS-3753 worker-orchestration scope, not a `falkorgraph`
+  0007, still the projection-pipeline work worker-orchestration scope, not a `falkorgraph`
   method.
 - **A write after purge re-bootstraps correctly.** Schema bootstrap
   (index + unique constraint creation, polled to `OPERATIONAL`) is
@@ -335,19 +335,19 @@ against a real backend, in CI, with no external credential gate:
   a deployment dependency (a container image), not as linked code -- the
   Go client itself (`falkordb-go/v2`) is BSD-3-Clause.
 - `zepgraph` stayed in-tree, fully tested, and selectable by config through
-  this ADR's initial merge; the CHAOS-3771 addendum below records its
+  this ADR's initial merge; the falkorgraph cutover addendum below records its
   deletion.
 - Helm chart wiring and hosted runtime composition (which backend
   `cmd/acr-projector`/`cmd/acr-api` actually construct) remained open at
   this ADR's initial merge, explicitly flagged above rather than silently
-  assumed done; the CHAOS-3771 addendum below records them closing.
+  assumed done; the falkorgraph cutover addendum below records them closing.
 
-## Addendum (CHAOS-3771, 2026-08-12): runtime cutover and zepgraph deletion
+## Addendum (2026-08-12): runtime cutover and zepgraph deletion
 
-This ADR's initial merge (CHAOS-3752) shipped the `falkorgraph` adapter
+This ADR's initial merge shipped the `falkorgraph` adapter
 behind the existing ports but left three things explicitly open, listed
 above: Helm wiring, hosted runtime composition, and `zepgraph`'s fate.
-CHAOS-3771 closes all three.
+Falkorgraph cutover closes all three.
 
 ### Runtime composition
 
@@ -381,14 +381,14 @@ recorded so it is not mistaken for done.
 
 ### `zepgraph` deletion
 
-Chris's ruling (CHAOS-3771 Linear comment, 2026-08-12): **delete, not keep
+Chris's ruling (the falkorgraph cutover Linear comment, 2026-08-12): **delete, not keep
 dormant.** "The Zep backend and anything Python-prototype-derived is
 deprecated/reference-only." `internal/contextfabric/zepgraph` (8 files:
 `adapter_test.go`, `config.go`, `config_test.go`,
 `engine_org_isolation_test.go`, `identity.go`, `identity_test.go`,
 `projection.go`, `reader.go`) is removed outright, along with
 `ACR_CONTEXT_FABRIC_ZEP_*` env/config and the `github.com/getzep/zep-go/v3`
-dependency (`go mod tidy`, no other dependency churn). CHAOS-3773
+dependency (`go mod tidy`, no other dependency churn). Zep removal
 (a zepgraph attribution-edge scope gap) is closed as moot on this basis --
 there is nothing left to fix it in. `internal/contextfabric/graphrank`
 stays: it is backend-neutral and `falkorgraph` depends on it directly.
@@ -496,6 +496,6 @@ independently constructed `falkorgraph.Adapter` -- built the same way
 `internal/runtime/hosted/open.go`'s `buildContextFabricInvestigator` builds
 one -- resolves the just-projected subject back out. The investigation HTTP
 endpoint itself still returns 503 without a model runtime configured
-(CHAOS-3770's scope, not this one); this test proves the graph
+(the model-runtime (BYO-LLM) work's scope, not this one); this test proves the graph
 projection-and-retrieval half of Context Fabric works against the real,
 composed backend, independent of answer synthesis.
