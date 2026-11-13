@@ -81,7 +81,30 @@ var wcgInputs = map[string]wcgInput{
 var wcgPublicCarrierAnswers = map[string]string{
 	"POST /token [dev-health-acr-api] baseline:authorization": "the token endpoint reads Authorization as RFC 6749 §2.3.1 client authentication " +
 		"and refuses any non-Basic scheme invalid_request (tokenClientID, internal/api/oauth_routes.go:1156)",
+	// The JSON twin of a body-field class is a one-field application/json body.
+	// These routes answer by body shape before any field value is read.
+	"POST /api/v1/oauth/device_authorization [dev-health-acr-api] baseline:body:refresh_token":      wcgUnknownJSONField,
+	"POST /api/v1/oauth/device_authorization [dev-health-acr-api] baseline:body:refresh_credential": wcgUnknownJSONField,
+	"POST /api/v1/oauth/token [dev-health-acr-api] baseline:body:refresh_token":                     wcgDeviceTokenJSON,
+	"POST /api/v1/oauth/token [dev-health-acr-api] baseline:body:refresh_credential":                wcgDeviceTokenJSON,
+	"POST /register [dev-health-acr-api] baseline:body:refresh_token":                               wcgRegisterJSON,
+	"POST /register [dev-health-acr-api] baseline:body:refresh_credential":                          wcgRegisterJSON,
+	"POST /token [dev-health-acr-api] baseline:body:refresh_token":                                  wcgFormOnlyJSON,
+	"POST /token [dev-health-acr-api] baseline:body:refresh_credential":                             wcgFormOnlyJSON,
+	"POST /device_authorization [dev-health-acr-api] baseline:body:refresh_token":                   wcgFormOnlyJSON,
+	"POST /device_authorization [dev-health-acr-api] baseline:body:refresh_credential":              wcgFormOnlyJSON,
 }
+
+const (
+	wcgUnknownJSONField = "decodeJSONBody (internal/api/read_decode.go) refuses the unknown field invalid_request with details.field; " +
+		"no body is refused with details.reason"
+	wcgDeviceTokenJSON = "handleDeviceToken (internal/api/device_routes.go) picks the grant by Content-Type: a JSON body is the device-code grant, " +
+		"which refuses a missing device_code invalid_grant; an empty form goes to the token-exchange branch"
+	wcgRegisterJSON = "handleOAuthRegister (internal/api/oauth_routes.go) refuses no body invalid_client_metadata; " +
+		"a JSON body with no redirect_uris is invalid_redirect_uri"
+	wcgFormOnlyJSON = "parseOAuthForm (internal/api/oauth_routes.go) refuses a JSON body invalid_request; " +
+		"an empty form gets the route's own answer for a missing grant_type or client_id"
+)
 
 type wcgReplays struct {
 	mu    sync.Mutex
