@@ -62,6 +62,12 @@ in `deviceApprovalHandler` (see the JSON row), not a genuinely different
 validator. This is the strongest posture of the three repos in this
 inventory; nothing else to flag here as a cross-cutting finding.
 
+Each `reachable_validators[]` entry carries two booleans, `earlier_auth_gate`
+and `foreign_class_validator` (the ops schema split of the old
+`reachable_but_not_owner`, CHAOS-13624). Every acr entry is an intended
+validator, so both are `false`. `foreign_class_validator: true` is the defect
+count to watch; `earlier_auth_gate: true` records defence in depth, not a defect.
+
 One real asymmetry, not a defect: `POST /api/v1/agent-context/episodes` sets
 `allowWebAssertions=false` — mutating episode writes require a bearer
 `fcacr_` credential; web's `AcrRuntimeClient` never

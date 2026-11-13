@@ -107,7 +107,8 @@
             "note": "func (a *Authenticator) authenticateWebAssertion("
           },
           "is_intended_validator": true,
-          "reachable_but_not_owner": false
+          "earlier_auth_gate": false,
+          "foreign_class_validator": false
         }
       ],
       "action": "agent_context.capabilities.read",
@@ -167,7 +168,8 @@
             "note": "func (a *Authenticator) authenticateWebAssertion("
           },
           "is_intended_validator": true,
-          "reachable_but_not_owner": false
+          "earlier_auth_gate": false,
+          "foreign_class_validator": false
         }
       ],
       "action": "agent_context.context_packet.create",
@@ -229,7 +231,8 @@
             "note": "func (a *Authenticator) authenticateWebAssertion("
           },
           "is_intended_validator": true,
-          "reachable_but_not_owner": false
+          "earlier_auth_gate": false,
+          "foreign_class_validator": false
         }
       ],
       "action": "agent_context.evidence.read",
@@ -1145,7 +1148,8 @@
             "note": "len(r.Header.Values(auth.WebAssertionHeader)) != 1 || len(r.Header.Values(\"Authorization\")) != 0"
           },
           "is_intended_validator": true,
-          "reachable_but_not_owner": false
+          "earlier_auth_gate": false,
+          "foreign_class_validator": false
         }
       ],
       "action": "oauth.device_approval",
@@ -1536,7 +1540,8 @@
             "note": "func (s *OAuthService) ApproveConsent("
           },
           "is_intended_validator": true,
-          "reachable_but_not_owner": false
+          "earlier_auth_gate": false,
+          "foreign_class_validator": false
         }
       ],
       "action": "oauth.authorize.consent",
@@ -1610,7 +1615,8 @@
             "note": "func (s *OAuthService) Authorize("
           },
           "is_intended_validator": true,
-          "reachable_but_not_owner": false
+          "earlier_auth_gate": false,
+          "foreign_class_validator": false
         }
       ],
       "action": "oauth.authorize.start",
@@ -1655,7 +1661,8 @@
             "note": "func (s *OAuthService) ExchangeDeviceCode("
           },
           "is_intended_validator": true,
-          "reachable_but_not_owner": false
+          "earlier_auth_gate": false,
+          "foreign_class_validator": false
         },
         {
           "description": "OAuthService.Refresh -- the refresh_token grant branch (form grant_type=refresh_token, CHAOS-12124): browser clients only (any other client is unauthorized_client). BrowserRefreshService.Refresh checks the acrrt_ shape and rotates the presented token under its family's lock: a live token rotates, an unused successor presented again within the 30-second grace returns the same pair, a reused token revokes the family, and an ended or revoked family is invalid_grant. Rate limited by AllowTokenRequest, keyed for a browser client by the hash of the presented refresh token (oauthTokenLimitKey).",
@@ -1666,7 +1673,8 @@
             "note": "func (s *OAuthService) Refresh("
           },
           "is_intended_validator": true,
-          "reachable_but_not_owner": false
+          "earlier_auth_gate": false,
+          "foreign_class_validator": false
         }
       ],
       "tenant_requirement": "org_scoped",

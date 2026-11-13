@@ -1859,7 +1859,8 @@ func anchorKindsRow() map[string]any {
 				"note": "func healthzHandler(",
 			},
 			"is_intended_validator":   true,
-			"reachable_but_not_owner": false,
+			"earlier_auth_gate":       false,
+			"foreign_class_validator": false,
 		}},
 		"issued_credential": []any{map[string]any{
 			"class_id":  "acr_client_credential",
