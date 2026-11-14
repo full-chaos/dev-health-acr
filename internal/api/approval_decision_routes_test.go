@@ -124,7 +124,7 @@ func (referenceAllow) Decide(ctx context.Context, req pep.Request) pep.Decision 
 		return pepfake.New().Decide(ctx, req)
 	}
 	return pepfake.New(pepfake.Rule{PrincipalReference: req.PrincipalReference, Action: req.Action, ResourceType: req.ResourceType,
-		ResourceKey: req.ResourceKey, OrganizationID: req.OrganizationID, TenantScope: approvalTestOrg}).Decide(ctx, req)
+		ResourceKey: req.ResourceKey, OrganizationID: req.OrganizationID, TenantScope: approvalTestOrg, RepositoryScope: "organization"}).Decide(ctx, req)
 }
 
 func (r referenceAllow) DecideBatch(ctx context.Context, reqs []pep.Request) []pep.Decision {
