@@ -58,7 +58,16 @@ func (s *splitDiffSeed) unit(id string, computedAt, from, to time.Time, repoLabe
 	if repoLabel != "" {
 		repo = repoUUID(repoLabel)
 	}
-	s.rows = append(s.rows, []any{id, from, to, repo, effort, themes, map[string]float64{readers.BugfixSubcategoryKey: 0.25}, splitDiffEvidence(prs, issues), computedAt, s.org})
+	// The bugfix share differs between versions and between the two versions
+	// of a computed_at tie, so a read of another version's share is seen.
+	bugfix := 0.25
+	if computedAt.Hour() == 0 {
+		bugfix = 0.75
+	}
+	if len(prs)%2 == 1 {
+		bugfix += 0.125
+	}
+	s.rows = append(s.rows, []any{id, from, to, repo, effort, themes, map[string]float64{readers.BugfixSubcategoryKey: bugfix}, splitDiffEvidence(prs, issues), computedAt, s.org})
 	if !slices.Contains(s.units, id) {
 		s.units = append(s.units, id)
 	}
@@ -90,7 +99,9 @@ func pr(label string, number int) string { return fmt.Sprintf("%s#pr%d", repoUUI
 // unresolved and duplicate references, and high fan-out units (16 references
 // over 16 repositories each). Every value is dyadic, so equal rows
 // are equal bytes whatever the summation order. The organization statements
-// keep their text (TestWholeOrganizationSplitTextIsUnchanged).
+// read the bugfix share as one map key of the latest version and must return
+// the old rows too, including for a unit whose older version is in its own
+// part.
 func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
@@ -144,6 +155,7 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 	s.unit("e19-prior-only", v2, ts(2026, 7, 15, 0, 0, 0), ts(2026, 7, 16, 0, 0, 0), "", 19, half, []string{pr("sd-r2", 80), pr("sd-r1", 81)}, nil)
 	s.unit("e20-duplicate-key", v2, in, inTo, "", 20, risk, []string{pr("sd-r1", 90), pr("sd-r1", 90)}, []string{"ghpr:acme/r1#90"})
 	s.unit("e21-linked-only", v2, in, inTo, "", 21, half, []string{pr("sd-r3", 7)}, nil)
+	s.unit("e22-older-version-own-part", v2, in, inTo, "", 22, half, []string{pr("sd-r1", 95)}, nil)
 	for i := 0; i < 1500; i++ {
 		b := func(k int) string { return fmt.Sprintf("sd-b%d", (i+k)%16) }
 		id := fmt.Sprintf("bulk-%04d", i)
@@ -168,6 +180,12 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 		s.exec(`INSERT INTO work_unit_supersessions (org_id, superseded_work_unit_id, superseded_at) VALUES (?,?,?)`, splitDiffOrg, id, s.at)
 	}
 	s.unit("e16-outside-run", v2, in, inTo, "", 1000, risk, []string{pr("sd-r1", 60)}, nil)
+	s.batch(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)`, s.rows)
+	// One INSERT block keeps only the newest version of a unit
+	// (optimize_on_insert), so an older version a latest-row read must pass
+	// over is written as its own, later part.
+	s.rows = nil
+	s.unit("e22-older-version-own-part", v1, in, inTo, "", 22, half, []string{pr("sd-r1", 95)}, nil)
 	s.batch(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)`, s.rows)
 	s.exec(`INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?,?,?)`, splitDiffOrg, "run-1", s.at)
 	var members [][]any
@@ -246,17 +264,18 @@ func TestInvestmentSplitStatementsMatchTheirOldTextOnRealClickHouse(t *testing.T
 			t.Fatalf("no ids for split statement %q", p.Name)
 		}
 		if p.Old == p.New {
-			if p.Name != "organization mix" && p.Name != "organization unit listing" {
-				t.Fatalf("%s: the old and new statements are the same text", p.Name)
-			}
-			continue
+			t.Fatalf("%s: the old and new statements are the same text", p.Name)
 		}
-		if oldTypes, newTypes := columnTypes(p.Name+" (old)", p.Old, ids, p.Bindings), columnTypes(p.Name+" (new)", p.New, ids, p.Bindings); withoutNullable(oldTypes) != newTypes {
+		if oldTypes, newTypes := columnTypes(p.Name+" (old)", p.Old, ids, p.Bindings), columnTypes(p.Name+" (new)", p.New, ids, p.Bindings); oldTypes != newTypes && withoutNullable(oldTypes) != newTypes {
 			t.Errorf("%s: column types differ from the old statement: old %v, new %v", p.Name, oldTypes, newTypes)
 		}
 		old := rows(p.Name+" (old)", p.Old, ids, p.Bindings)
 		got := rows(p.Name+" (new)", p.New, ids, p.Bindings)
-		if len(old) < 2 {
+		minRows := 2
+		if p.Name == "organization mix" {
+			minRows = 1 // one row for the organization
+		}
+		if len(old) < minRows {
 			t.Errorf("%s: the old statement returned %d rows; the fixture proves nothing", p.Name, len(old))
 		}
 		if !slices.Equal(old, got) {
@@ -363,15 +382,21 @@ func TestInvestmentSplitStatementsPickTheSameVersionOnAComputedAtTieOnRealClickH
 
 	idsFor := map[string][]string{
 		"repository mix": {repoUUID("sd-r1")}, "repository unit listing": {repoUUID("sd-r1")}, "team linked pull request mix": {"team-1"},
+		"organization mix": {},
 	}
-	const oneThread = "\nSETTINGS max_threads = 1"
+	oneThread := func(statement string) string {
+		if strings.Contains(statement, "\nSETTINGS ") {
+			return statement + ", max_threads = 1"
+		}
+		return statement + "\nSETTINGS max_threads = 1"
+	}
 	for _, p := range devhealthfacts.InvestmentSplitStatementPairs(ts(2026, 8, 1, 0, 0, 0), ts(2026, 9, 1, 0, 0, 0), 900) {
 		ids, ok := idsFor[p.Name]
 		if !ok {
 			continue
 		}
-		old := splitDiffRows(t, ctx, query, org, p.Name+" (old)", p.Old+oneThread, ids, p.Bindings)
-		got := splitDiffRows(t, ctx, query, org, p.Name+" (new)", p.New+oneThread, ids, p.Bindings)
+		old := splitDiffRows(t, ctx, query, org, p.Name+" (old)", oneThread(p.Old), ids, p.Bindings)
+		got := splitDiffRows(t, ctx, query, org, p.Name+" (new)", oneThread(p.New), ids, p.Bindings)
 		if len(old) == 0 {
 			t.Errorf("%s: the old statement returned no rows; the tie was not read", p.Name)
 		}

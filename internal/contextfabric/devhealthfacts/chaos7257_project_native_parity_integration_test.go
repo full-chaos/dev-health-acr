@@ -181,18 +181,20 @@ func seedCHAOS7257Native(t *testing.T, ctx context.Context, direct clickhousedri
 	unit("nu-t", []string{"linear:T-1"}, one(7, th("feature_delivery", 1.0)))
 	unit("nu-old", []string{"linear:A-2"}, version{computedAt: at, effort: 9, themes: th("maintenance", 1.0), from: at.Add(-40 * day), to: at.Add(-35 * day)})
 
-	// Values a Go map cannot hold (raw entries): a theme key twice and a
-	// duplicated bugfix key, and an empty map. The native mix reads one entry per
-	// key (a lookup), before and after; the rows must not move.
-	insertRawUnit(t, ctx, direct, orgID, "nu-dup", "", 5, rawMapSQL("feature_delivery", 0.2, "feature_delivery", 0.3, "risk", 0.5),
-		rawMapSQL(readers.BugfixSubcategoryKey, 0.1, readers.BugfixSubcategoryKey, 0.4), `{"issues":["linear:A-1"],"prs":[]}`, from, to, at)
+	// Raw entries: a unit written through the raw path, and an empty map. No
+	// map here holds a key twice: which entry of a repeated key a read returns
+	// is not defined, so a parity cell over one would compare two undefined
+	// reads (CHAOS-13741; the repeated key has its own cell,
+	// TestCHAOS13741ProjectMixDuplicateBugfixKeyKeepsEveryUnitAgainstRealClickHouse).
+	insertRawUnit(t, ctx, direct, orgID, "nu-raw", "", 5, rawMapSQL("feature_delivery", 0.5, "risk", 0.5),
+		rawMapSQL(readers.BugfixSubcategoryKey, 0.4, "other", 0.6), `{"issues":["linear:A-1"],"prs":[]}`, from, to, at)
 	insertRawUnit(t, ctx, direct, orgID, "nu-emptyraw", "", 4, rawMapSQL(), rawMapSQL(), `{"issues":["linear:A-2"],"prs":[]}`, from, to, at)
 
 	exec("run-1", `INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?,?,?)`, orgID, "run-1", at.Add(-2*day))
 	exec("run-2", `INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?,?,?)`, orgID, "run-2", at.Add(-day))
 	exec("member out", `INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?,?,?,?,?,?,?,?)`,
 		orgID, "issue", "ISS-out", "nu-out", "theme", "risk", at.Add(-2*day), "run-1")
-	for _, id := range []string{"nu-1", "nu-2", "nu-3", "nu-4", "nu-5", "nu-6", "nu-7", "nu-8", "nu-9", "nu-neg", "nu-sup", "nu-empty", "nu-mp", "nu-re", "nu-t", "nu-old", "nu-dup", "nu-emptyraw"} {
+	for _, id := range []string{"nu-1", "nu-2", "nu-3", "nu-4", "nu-5", "nu-6", "nu-7", "nu-8", "nu-9", "nu-neg", "nu-sup", "nu-empty", "nu-mp", "nu-re", "nu-t", "nu-old", "nu-raw", "nu-emptyraw"} {
 		exec("member "+id, `INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?,?,?,?,?,?,?,?)`,
 			orgID, "issue", "ISS-"+id, id, "theme", "feature_delivery", at.Add(-day), "run-2")
 	}
@@ -242,7 +244,7 @@ func TestProjectNativeSinglePassMatchesTheMultiReferenceOracleAgainstRealClickHo
 	// exercising a branch fails here instead of comparing two thin answers.
 	oracle := runNativeStatement(t, ctx, query, "OracleProjectNative", devhealthfacts.OracleProjectNativeStatement(devhealthfacts.ProjectMixWindow{}, rowLimit), orgID, ids, devhealthfacts.ProjectMixWindow{})
 	want := map[string]struct{ units, effortUnits, spanning, multi uint64 }{
-		// nu-1,2,3,4,5,empty,old,mp,dup,emptyraw (A-1/A-2/M-1); nu-2 and nu-mp count once for
+		// nu-1,2,3,4,5,empty,old,mp,raw,emptyraw (A-1/A-2/M-1); nu-2 and nu-mp count once for
 		// two items; spanning: nu-3 (n-p2) and nu-4 (n-p4, unrequested);
 		// multi-placed: nu-5 and nu-mp.
 		"linear:n-p1": {10, 10, 2, 2},
@@ -257,5 +259,65 @@ func TestProjectNativeSinglePassMatchesTheMultiReferenceOracleAgainstRealClickHo
 		if r.WorkUnits != w.units || r.EffortUnits != w.effortUnits || r.Spanning != w.spanning || r.MultiPlaced != w.multi {
 			t.Errorf("oracle %s = units %d effort %d spanning %d multi %d, want %+v", r.Key, r.WorkUnits, r.EffortUnits, r.Spanning, r.MultiPlaced, w)
 		}
+	}
+}
+
+// The phased native mix serves the bugfix share of each unit's LATEST version:
+// an older version with another share, in its own earlier part, must not move
+// the answer. This organization holds no duplicate-key map, so the oracle's
+// read of the share is fixed.
+func TestProjectNativePhasedReadsTheLatestBugfixShareAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	query, direct := newScopedCHAOS7257Client(t, nil)
+	createCHAOS7257Tables(t, ctx, direct)
+	const orgID = "org-7257-native-bugfix-version"
+	at := ts(2026, 9, 18, 0, 0, 0)
+	day := 24 * time.Hour
+	exec := func(what, statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed %s: %v", what, err)
+		}
+	}
+	exec("stop merges", `SYSTEM STOP MERGES work_unit_investments`)
+	exec("project", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"n-v", orgID, "linear", nil, "Project n-v", uint8(1), "active", "", at)
+	exec("work item", `INSERT INTO work_items (repo_id, work_item_id, provider, title, type, status, project_key, project_id, native_team_key, project_name, created_at, updated_at, completed_at, parent_id, url, last_synced, org_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"00000000-0000-0000-0000-000000000000", "linear:V-1", "linear", "title", "issue", "open", "", "n-v", "", "", at, at, nil, "", "", at, orgID)
+	from := at.Add(-3 * day)
+	// Each version is its own INSERT, so its own part: one INSERT block would
+	// keep only the newest version of a unit.
+	version := func(id string, computedAt time.Time, bugfix float64) {
+		exec("unit "+id, `INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?)`,
+			id, from, from, 1.0, map[string]float64{"feature_delivery": 1.0}, map[string]float64{readers.BugfixSubcategoryKey: bugfix, "other": 1 - bugfix}, `{"issues":["linear:V-1"],"prs":[]}`, computedAt, orgID)
+	}
+	version("nv-1", at.Add(-2*time.Hour), 0.875)
+	version("nv-1", at, 0.25)
+	version("nv-2", at, 0.5)
+	exec("run", `INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?,?,?)`, orgID, "run-v", at.Add(-day))
+	for _, id := range []string{"nv-1", "nv-2"} {
+		exec("member "+id, `INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?,?,?,?,?,?,?,?)`,
+			orgID, "issue", "ISS-"+id, id, "theme", "feature_delivery", at.Add(-day), "run-v")
+	}
+
+	ids := []string{"linear:n-v"}
+	const rowLimit = 201
+	for _, tc := range []struct {
+		name   string
+		window devhealthfacts.ProjectMixWindow
+	}{
+		{"current axis", devhealthfacts.ProjectMixWindow{}},
+		{"range over the last 10 days", devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: at.Add(-10 * day), End: at}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oracle := runNativeStatement(t, ctx, query, "OracleProjectNative", devhealthfacts.OracleProjectNativeStatement(tc.window, rowLimit), orgID, ids, tc.window)
+			if len(oracle) != 1 || oracle[0].Key != "linear:n-v" || oracle[0].WorkUnits != 2 || oracle[0].Bugfix != 0.75 {
+				t.Fatalf("oracle %+v, want one n-v row of 2 units with bugfix 0.25 + 0.5 = 0.75 (the latest shares)", oracle)
+			}
+			if err := nativeRowsDiffer(oracle, runNativePhased(t, ctx, query, orgID, ids, tc.window, rowLimit)); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

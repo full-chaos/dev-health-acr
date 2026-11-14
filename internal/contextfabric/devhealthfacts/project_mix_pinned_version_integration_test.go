@@ -10,6 +10,7 @@ package devhealthfacts_test
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -62,7 +63,7 @@ func TestProjectNativeMixKeepsAPinnedUnitThroughARecomputeAndAMergeAgainstRealCl
 		t.Fatalf("control: the identical recompute changed the single statement's answer: %v", diff)
 	}
 	if diff := nativeRowsDiffer(after, nativeRowsOf(got)); diff != nil {
-		t.Fatalf("the phased answer lost the pinned unit after its version was merged away: %v\nwant %+v\ngot  %+v", diff, after, nativeRowsOf(got))
+		t.Fatalf("after the pinned version was merged away, the phased answer %s: %v\nwant %+v\ngot  %+v", pinnedPhaseDifference(nativePinnedReads(after), nativePinnedReads(nativeRowsOf(got))), diff, after, nativeRowsOf(got))
 	}
 }
 
@@ -107,8 +108,49 @@ func TestProjectRollupMixKeepsAPinnedUnitThroughARecomputeAndAMergeAgainstRealCl
 		t.Fatalf("control: the identical recompute changed the single statement's answer: %v", diff)
 	}
 	if diff := rollupRowsDiffer(after, rollupRowsOf(got)); diff != nil {
-		t.Fatalf("the phased roll-up lost the pinned unit after its version was merged away: %v", diff)
+		t.Fatalf("after the pinned version was merged away, the phased roll-up %s: %v", pinnedPhaseDifference(rollupPinnedReads(after), rollupPinnedReads(rollupRowsOf(got))), diff)
 	}
+}
+
+type pinnedRead struct {
+	key       string
+	workUnits uint64
+	bugfix    float64
+}
+
+func nativePinnedReads(rows []nativeRow) []pinnedRead {
+	out := make([]pinnedRead, len(rows))
+	for i, r := range rows {
+		out[i] = pinnedRead{r.Key, r.WorkUnits, r.Bugfix}
+	}
+	return out
+}
+
+func rollupPinnedReads(rows []rollupRow) []pinnedRead {
+	out := make([]pinnedRead, len(rows))
+	for i, r := range rows {
+		out[i] = pinnedRead{r.Key, r.WorkUnits, r.Bugfix}
+	}
+	return out
+}
+
+// pinnedPhaseDifference names what differs: only a lost row or a WorkUnits
+// count is a lost unit; a bugfix share that differs over the same units is not.
+func pinnedPhaseDifference(want, got []pinnedRead) string {
+	if len(want) != len(got) {
+		return "lost the pinned unit (row count differs)"
+	}
+	for i := range want {
+		if want[i].key != got[i].key || want[i].workUnits != got[i].workUnits {
+			return "lost the pinned unit (WorkUnits differs)"
+		}
+	}
+	for i := range want {
+		if math.Abs(want[i].bugfix-got[i].bugfix) > 1e-12*math.Max(1, math.Max(math.Abs(want[i].bugfix), math.Abs(got[i].bugfix))) {
+			return "bugfix share differs"
+		}
+	}
+	return "differs (same units, same bugfix share)"
 }
 
 // A pinned version lost on EVERY attempt exhausts the bounded retry into the
