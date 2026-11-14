@@ -110,7 +110,7 @@ func TestPhasedProjectMixStatementsReadOneWideColumnGroupEach(t *testing.T) {
 				t.Errorf("%s / %s: reads work_unit_investments %d times, want 1", name, boundName, got)
 			}
 			for _, column := range wide {
-				named := strings.Contains(c.statement, "argMax("+column) || strings.Contains(c.statement, "("+column+",")
+				named := strings.Contains(c.statement, "argMax("+column) || strings.Contains(c.statement, "("+column+",") || strings.Contains(c.statement, "("+column+"[")
 				if named != (column == c.wide) {
 					t.Errorf("%s / %s: reads %s = %v, want %v (one wide column group per phase)", name, boundName, column, named, column == c.wide)
 				}

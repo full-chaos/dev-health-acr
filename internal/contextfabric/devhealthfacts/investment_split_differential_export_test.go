@@ -195,8 +195,8 @@ func InvestmentSplitStatementPairs(start, end time.Time, unitLimit int) []SplitS
 		{Name: "repository unit listing", Bindings: unitBindings,
 			New: investmentUnitsStatementFor(current, false, scope, false),
 			Old: legacyRepositoryUnitsStatement(current, scope)},
-		{Name: "organization unit listing", Bindings: unitBindings, New: orgUnits, Old: orgUnits},
-		{Name: "organization mix", Bindings: boundReaderBindings(current), New: orgMix, Old: orgMix},
+		{Name: "organization unit listing", Bindings: unitBindings, New: orgUnits, Old: legacyOrganizationUnitsStatement(current, false, scope)},
+		{Name: "organization mix", Bindings: boundReaderBindings(current), New: orgMix, Old: legacyOrganizationMixStatement(current)},
 		{Name: "team linked pull request mix", Bindings: boundReaderBindings(current), New: linked,
 			Old: legacyLinkedPullRequestMixStatement(current, scope, 1000)},
 	}
@@ -224,11 +224,19 @@ func TeamLinkedMixSentForTest(ctx context.Context, client contextpacket.ClickHou
 	return sent, linkedPullRequestMixStatement(current, subqueryMembershipScope, linkedMixTeamChunk+1), boundReaderBindings(current), nil
 }
 
-// ReachDefects are, per statement on the folded split, its reach with one
-// clause removed; the differential must tell each apart from the old
-// statement.
+// ReachDefects are, per statement, the defects the differential must tell
+// apart from the old statement: on the folded split, its reach with one
+// clause removed; on the organization mix, the bugfix share read from the
+// oldest version. The organization unit listing serves no bugfix share.
 func ReachDefects(statement string) map[string][2]string {
-	if statement == "team linked pull request mix" {
+	switch statement {
+	case "organization unit listing":
+		return nil
+	case "organization mix":
+		return map[string][2]string{
+			"bugfix share of the oldest version": {"argMax(ifNull(subcategory_distribution_json[", "argMin(ifNull(subcategory_distribution_json["},
+		}
+	case "team linked pull request mix":
 		return map[string][2]string{
 			"direct references dropped": {"(hasAny(direct_refs,", "(0 AND hasAny(direct_refs,"},
 			"lookup references dropped": {"OR hasAny(lookup_refs,", "OR 0 AND hasAny(lookup_refs,"},
@@ -304,6 +312,14 @@ FROM (
 ORDER BY share DESC, work_unit_id ASC, repo_uuid ASC
 LIMIT {` + unitLimitParam + `:UInt32}`
 	return readers.WithSettings(statement, readers.Settings{MaxMemoryUsage: 512 << 20})
+}
+
+// bugfixKeyRead is a frozen split text with the bugfix share read as the
+// latest version's one map key instead of the latest version's whole map.
+func bugfixKeyRead(statement string) string {
+	key := "ifNull(subcategory_distribution_json['" + readers.BugfixSubcategoryKey + "'], 0.0)"
+	statement = strings.Replace(statement, key+" AS bugfix_share,", "bugfix_share,", 1)
+	return strings.Replace(statement, "argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,", "argMax("+key+", computed_at) AS bugfix_share,", 1)
 }
 
 // orgRefs is the organization's reference list: a unit with no reference and
