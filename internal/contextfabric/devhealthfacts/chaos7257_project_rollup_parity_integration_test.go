@@ -458,3 +458,68 @@ func TestProjectRollupDuplicateThemeKeysServeTheSummedShareAgainstRealClickHouse
 		}
 	}
 }
+
+// The phased roll-up serves the bugfix share of each unit's LATEST version: an
+// older version with another share, in its own earlier part, must not move the
+// answer. This organization holds no duplicate-key map, so the oracle's read of
+// the share is fixed.
+func TestProjectRollupPhasedReadsTheLatestBugfixShareAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	query, direct := newScopedCHAOS7257Client(t, nil)
+	createCHAOS7257Tables(t, ctx, direct)
+	const orgID = "org-7257-bugfix-version"
+	at := ts(2026, 9, 18, 0, 0, 0)
+	day := 24 * time.Hour
+	long := at.Add(-100 * day)
+	exec := func(what, statement string, args ...any) {
+		t.Helper()
+		if err := direct.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed %s: %v", what, err)
+		}
+	}
+	exec("stop merges", `SYSTEM STOP MERGES work_unit_investments`)
+	exec("project", `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, url, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		"proj-v", orgID, "linear", nil, "Project proj-v", uint8(1), "active", "", at)
+	exec("team", `INSERT INTO teams (id, name, description, updated_at, org_id, provider, project_keys, is_active) VALUES (?, ?, NULL, ?, ?, ?, [], ?)`,
+		"team-v", "team-v", at, orgID, "linear", uint8(1))
+	exec("project ownership", `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?)`,
+		orgID, "linear", "team-v", "proj-v", nil, "native", long, nil, at)
+	exec("repo", `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`, repoUUID("rv"), orgID, "acme/rv", "github", at)
+	exec("repo ownership", `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		orgID, "linear", "team-v", repoUUID("rv"), "acme/rv", "exact", "native", uint8(1), uint16(100), int32(0), long, nil, at)
+	from := at.Add(-3 * day)
+	// Each version is its own INSERT, so its own part: one INSERT block would
+	// keep only the newest version of a unit.
+	version := func(id string, computedAt time.Time, bugfix float64) {
+		exec("unit "+id, `INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+			id, from, from, repoUUID("rv"), 1.0, map[string]float64{"feature_delivery": 1.0}, map[string]float64{readers.BugfixSubcategoryKey: bugfix, "other": 1 - bugfix}, `{"issues":[],"prs":[]}`, computedAt, orgID)
+	}
+	version("wu-v1", at.Add(-2*time.Hour), 0.875)
+	version("wu-v1", at, 0.25)
+	version("wu-v2", at, 0.5)
+	exec("run", `INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?,?,?)`, orgID, "run-v", at.Add(-day))
+	for _, id := range []string{"wu-v1", "wu-v2"} {
+		exec("member "+id, `INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?,?,?,?,?,?,?,?)`,
+			orgID, "issue", "ISS-"+id, id, "theme", "feature_delivery", at.Add(-day), "run-v")
+	}
+
+	ids := []string{"linear:proj-v"}
+	for _, tc := range []struct {
+		name   string
+		window devhealthfacts.ProjectMixWindow
+	}{
+		{"current axis", devhealthfacts.ProjectMixWindow{}},
+		{"range over the last 10 days", devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: at.Add(-10 * day), End: at}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oracle := runRollupStatement(t, ctx, query, "OracleProjectRollup", devhealthfacts.OracleProjectRollupStatement(tc.window), orgID, ids, tc.window)
+			if len(oracle) != 1 || oracle[0].Key != "linear:proj-v" || oracle[0].WorkUnits != 2 || oracle[0].Bugfix != 0.75 {
+				t.Fatalf("oracle %+v, want one proj-v row of 2 units with bugfix 0.25 + 0.5 = 0.75 (the latest shares)", oracle)
+			}
+			if err := rollupRowsDiffer(oracle, runRollupPhased(t, ctx, query, orgID, ids, tc.window)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
