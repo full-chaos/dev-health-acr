@@ -38,10 +38,10 @@ import (
 // phase 0; so is the roll-up's project -> repository / team link table, handed
 // to the later phases as bound data.
 //
-//	roll-up:  repo arm      repo_id, effort, theme map, subcategory map
+//	roll-up:  repo arm      repo_id, effort, theme map, bugfix key of the subcategory map
 //	          evidence arm  repo_id, structural_evidence_json
 //	native:   placement     structural_evidence_json (issue refs), presence view
-//	          unit values   effort, theme map, subcategory map
+//	          unit values   effort, theme map, bugfix key of the subcategory map
 //
 // The roll-up's two arms are disjoint (repo_id IS NOT NULL vs IS NULL) and the
 // arm the old statement counted as excluded_no_repo_link never carried a theme
@@ -457,14 +457,13 @@ SELECT
 	concat(l.project_provider, ':', l.project_id) AS project_key,
 	sumIf(u.bugfix_share * u.effort_value, l.link_kind = 'repo' AND NOT u.gated) AS bugfix_weighted
 FROM (
-	SELECT work_unit_id, repo_id, effort_value, gated,
-		ifNull(subcategory_distribution_json['` + readers.BugfixSubcategoryKey + `'], 0.0) AS bugfix_share,
+	SELECT work_unit_id, repo_id, effort_value, gated, bugfix_share,
 		concat('r:', toString(repo_id)) AS link_key
 	FROM (
 		SELECT *, unit_size_weight AS effort_value
 		FROM ` + sizedUnits(`SELECT work_unit_id, org_id,
 			(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
-			argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
+			argMax(ifNull(subcategory_distribution_json['`+readers.BugfixSubcategoryKey+`'], 0.0), computed_at) AS bugfix_share,
 			`+latestUnitGatedSQL+` AS gated
 		FROM work_unit_investments
 		WHERE org_id = {org_id:String}`+projectMixPinnedFilter+projectMixChunkRangeFilter+`
@@ -716,10 +715,10 @@ FROM (
 func projectNativeBugfixValuesStatement() string {
 	return `SELECT groupArray(work_unit_id), groupArray(bugfix_share)
 FROM (
-    SELECT work_unit_id, ifNull(subcategory_distribution_json[{bugfix_key:String}], 0.0) AS bugfix_share
+    SELECT work_unit_id, bugfix_share
     FROM (
         SELECT work_unit_id,
-            argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json
+            argMax(ifNull(subcategory_distribution_json[{bugfix_key:String}], 0.0), computed_at) AS bugfix_share
         FROM work_unit_investments
         WHERE org_id = {org_id:String}` + projectMixPinnedFilter + projectMixChunkRangeFilter + `
         GROUP BY work_unit_id
