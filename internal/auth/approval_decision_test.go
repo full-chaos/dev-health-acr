@@ -48,9 +48,15 @@ func approvalPrincipal() storage.Principal {
 	return principal
 }
 
+// allowRule is an allow of the approver action: a nil allowlist is the repository_scope "organization" the
+// decision point sends an unrestricted approver; a non-nil one is the allowlist of its repositories.
 func allowRule(allowlist []string, tenant string) pepfake.Rule {
-	return pepfake.Rule{PrincipalReference: approvalTestReference, Action: "acr.credential.issue", ResourceType: "organization",
+	rule := pepfake.Rule{PrincipalReference: approvalTestReference, Action: "acr.credential.issue", ResourceType: "organization",
 		ResourceKey: deviceFlowTestOrgID, OrganizationID: deviceFlowTestOrgID, TenantScope: tenant, RepositoryAllowlist: allowlist}
+	if allowlist == nil {
+		rule.RepositoryScope = "organization"
+	}
+	return rule
 }
 
 func newDecisions(t *testing.T, mode ApprovalDecisionMode, decider pep.Decider) (*ApprovalDecisions, *bytes.Buffer) {

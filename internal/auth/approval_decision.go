@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/full-chaos/dev-health-go/pep"
 	"go.opentelemetry.io/otel"
@@ -142,6 +143,12 @@ func (d *ApprovalDecisions) decide(ctx context.Context, principal storage.Princi
 	obligations := decision.Obligations()
 	if !obligations.TenantAllows(principal.OrgID) {
 		return approvalOutcomeObligation, "tenant_scope"
+	}
+	if slices.Equal(repositories, []string{"*"}) {
+		if !obligations.RepositoryScopeOrganization() {
+			return approvalOutcomeObligation, "repository_scope"
+		}
+		return approvalOutcomeAllowed, reason
 	}
 	for _, repository := range repositories {
 		if !obligations.RepositoryAllowed(repository) {
