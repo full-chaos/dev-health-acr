@@ -290,15 +290,18 @@ func seedCHAOS7257Parity(t *testing.T, ctx context.Context, direct clickhousedri
 	for k := 0; k < 6; k++ {
 		unit(fmt.Sprintf("wu-t3-%d", k), version{computedAt: at, effort: 5, themes: themes(fd, 1.0), evidence: evidence([]string{fmt.Sprintf("linear:T3-%d", k)})})
 	}
-	// Maps a Go map cannot hold (raw entries): a theme key TWICE (the old
-	// statement summed every entry of the key, effort x (0.2 + 0.3)), an empty
-	// map, and a duplicated bugfix key. wu-dupnull has no repo_id: it is reached
-	// only by its evidence vote (team-1).
-	dupThemes := rawMapSQL(fd, 0.2, fd, 0.3, rk, 0.5)
-	dupSub := rawMapSQL(readers.BugfixSubcategoryKey, 0.1, readers.BugfixSubcategoryKey, 0.4, "other", 0.5)
-	insertRawUnit(t, ctx, direct, orgID, "wu-dup", "r1b", 10, dupThemes, dupSub, `{"issues":[],"prs":[]}`, from, to, at)
+	// Raw entries: units written through the raw path, and an empty map.
+	// wu-rawnull has no repo_id: it is reached only by its evidence vote
+	// (team-1). No map here holds a key twice: which entry of a repeated key a
+	// lookup returns is not defined, so a parity cell over one would compare two
+	// undefined reads (CHAOS-13741; the repeated keys have their own cells,
+	// TestCHAOS13741ProjectMixDuplicateBugfixKeyKeepsEveryUnitAgainstRealClickHouse
+	// and TestProjectRollupDuplicateThemeKeysServeTheSummedShareAgainstRealClickHouse).
+	rawThemes := rawMapSQL(fd, 0.5, rk, 0.5)
+	rawSub := rawMapSQL(readers.BugfixSubcategoryKey, 0.4, "other", 0.6)
+	insertRawUnit(t, ctx, direct, orgID, "wu-raw", "r1b", 10, rawThemes, rawSub, `{"issues":[],"prs":[]}`, from, to, at)
 	insertRawUnit(t, ctx, direct, orgID, "wu-emptyraw", "r2a", 6, rawMapSQL(), rawMapSQL(), `{"issues":[],"prs":[]}`, from, to, at)
-	insertRawUnit(t, ctx, direct, orgID, "wu-dupnull", "", 5, dupThemes, dupSub, evidence(nil, pr("r1a", 30)), from, to, at)
+	insertRawUnit(t, ctx, direct, orgID, "wu-rawnull", "", 5, rawThemes, rawSub, evidence(nil, pr("r1a", 30)), from, to, at)
 
 	attribute := func(workItem, teamID string, primary uint8, computedAt time.Time) {
 		exec("attribution "+workItem, `INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, team_id, team_name, source, is_primary, confidence, computed_at) VALUES (?,?,?,?,?,?,?,?,?)`,
@@ -335,7 +338,7 @@ func seedCHAOS7257Parity(t *testing.T, ctx context.Context, direct clickhousedri
 	exec("member out", `INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?,?,?,?,?,?,?,?)`,
 		orgID, "issue", "ISS-out", "wu-out", "theme", "risk", at.Add(-2*day), "run-1")
 	for _, id := range []string{"wu-1", "wu-2", "wu-3", "wu-4", "wu-5", "wu-sup", "wu-empty", "wu-zero", "wu-old", "wu-span", "wu-r6", "wu-moved",
-		"wu-n1", "wu-n2", "wu-n3", "wu-n4", "wu-n5", "wu-n6", "wu-n7", "wu-n8", "wu-n9", "wu-n10", "wu-r7", "wu-dup", "wu-emptyraw", "wu-dupnull",
+		"wu-n1", "wu-n2", "wu-n3", "wu-n4", "wu-n5", "wu-n6", "wu-n7", "wu-n8", "wu-n9", "wu-n10", "wu-r7", "wu-raw", "wu-emptyraw", "wu-rawnull",
 		"wu-t3-0", "wu-t3-1", "wu-t3-2", "wu-t3-3", "wu-t3-4", "wu-t3-5"} {
 		exec("member "+id, `INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?,?,?,?,?,?,?,?)`,
 			orgID, "issue", "ISS-"+id, id, "theme", "feature_delivery", at.Add(-day), "run-2")
@@ -387,7 +390,7 @@ func TestProjectRollupSinglePassMatchesTheMultiReferenceOracleAgainstRealClickHo
 	// than turning the parity check into a comparison of two empty answers.
 	oracle := runRollupStatement(t, ctx, query, "OracleProjectRollup", devhealthfacts.OracleProjectRollupStatement(devhealthfacts.ProjectMixWindow{}), orgID, ids, devhealthfacts.ProjectMixWindow{})
 	want := map[string]struct{ units, repos, teams, excluded uint64 }{
-		"linear:proj-1": {8, 3, 1, 3},  // wu-1,2,3,empty,5,old,span,dup; votes: n1, n10, dupnull (team-1)
+		"linear:proj-1": {8, 3, 1, 3},  // wu-1,2,3,empty,5,old,span,raw; votes: n1, n10, rawnull (team-1)
 		"linear:proj-2": {4, 2, 1, 5},  // wu-4,zero,5,emptyraw;           votes: n2, n6, n7, n8, moved (team-2 wins the ties)
 		"linear:proj-3": {11, 4, 2, 8}, // both teams' units, r-shared once; every team-1/team-2 vote
 	}

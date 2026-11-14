@@ -181,18 +181,20 @@ func seedCHAOS7257Native(t *testing.T, ctx context.Context, direct clickhousedri
 	unit("nu-t", []string{"linear:T-1"}, one(7, th("feature_delivery", 1.0)))
 	unit("nu-old", []string{"linear:A-2"}, version{computedAt: at, effort: 9, themes: th("maintenance", 1.0), from: at.Add(-40 * day), to: at.Add(-35 * day)})
 
-	// Values a Go map cannot hold (raw entries): a theme key twice and a
-	// duplicated bugfix key, and an empty map. The native mix reads one entry per
-	// key (a lookup), before and after; the rows must not move.
-	insertRawUnit(t, ctx, direct, orgID, "nu-dup", "", 5, rawMapSQL("feature_delivery", 0.2, "feature_delivery", 0.3, "risk", 0.5),
-		rawMapSQL(readers.BugfixSubcategoryKey, 0.1, readers.BugfixSubcategoryKey, 0.4), `{"issues":["linear:A-1"],"prs":[]}`, from, to, at)
+	// Raw entries: a unit written through the raw path, and an empty map. No
+	// map here holds a key twice: which entry of a repeated key a read returns
+	// is not defined, so a parity cell over one would compare two undefined
+	// reads (CHAOS-13741; the repeated key has its own cell,
+	// TestCHAOS13741ProjectMixDuplicateBugfixKeyKeepsEveryUnitAgainstRealClickHouse).
+	insertRawUnit(t, ctx, direct, orgID, "nu-raw", "", 5, rawMapSQL("feature_delivery", 0.5, "risk", 0.5),
+		rawMapSQL(readers.BugfixSubcategoryKey, 0.4, "other", 0.6), `{"issues":["linear:A-1"],"prs":[]}`, from, to, at)
 	insertRawUnit(t, ctx, direct, orgID, "nu-emptyraw", "", 4, rawMapSQL(), rawMapSQL(), `{"issues":["linear:A-2"],"prs":[]}`, from, to, at)
 
 	exec("run-1", `INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?,?,?)`, orgID, "run-1", at.Add(-2*day))
 	exec("run-2", `INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?,?,?)`, orgID, "run-2", at.Add(-day))
 	exec("member out", `INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?,?,?,?,?,?,?,?)`,
 		orgID, "issue", "ISS-out", "nu-out", "theme", "risk", at.Add(-2*day), "run-1")
-	for _, id := range []string{"nu-1", "nu-2", "nu-3", "nu-4", "nu-5", "nu-6", "nu-7", "nu-8", "nu-9", "nu-neg", "nu-sup", "nu-empty", "nu-mp", "nu-re", "nu-t", "nu-old", "nu-dup", "nu-emptyraw"} {
+	for _, id := range []string{"nu-1", "nu-2", "nu-3", "nu-4", "nu-5", "nu-6", "nu-7", "nu-8", "nu-9", "nu-neg", "nu-sup", "nu-empty", "nu-mp", "nu-re", "nu-t", "nu-old", "nu-raw", "nu-emptyraw"} {
 		exec("member "+id, `INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, computed_at, run_id) VALUES (?,?,?,?,?,?,?,?)`,
 			orgID, "issue", "ISS-"+id, id, "theme", "feature_delivery", at.Add(-day), "run-2")
 	}
@@ -242,7 +244,7 @@ func TestProjectNativeSinglePassMatchesTheMultiReferenceOracleAgainstRealClickHo
 	// exercising a branch fails here instead of comparing two thin answers.
 	oracle := runNativeStatement(t, ctx, query, "OracleProjectNative", devhealthfacts.OracleProjectNativeStatement(devhealthfacts.ProjectMixWindow{}, rowLimit), orgID, ids, devhealthfacts.ProjectMixWindow{})
 	want := map[string]struct{ units, effortUnits, spanning, multi uint64 }{
-		// nu-1,2,3,4,5,empty,old,mp,dup,emptyraw (A-1/A-2/M-1); nu-2 and nu-mp count once for
+		// nu-1,2,3,4,5,empty,old,mp,raw,emptyraw (A-1/A-2/M-1); nu-2 and nu-mp count once for
 		// two items; spanning: nu-3 (n-p2) and nu-4 (n-p4, unrequested);
 		// multi-placed: nu-5 and nu-mp.
 		"linear:n-p1": {10, 10, 2, 2},
