@@ -170,7 +170,7 @@ func repoSplitCoreScoped(memberships []string, unitCols, unitAgg string, spanSen
 					ref.1 AS uuid_direct, ref.2 AS lookup_provider, ref.3 AS lookup_repo, ref.4 AS pr_number, ref.5 AS ref_text
 				FROM (
 					SELECT work_unit_id, repo_id, theme_distribution_json, from_ts AS span_from, gated,`+unitCols+`
-						ifNull(subcategory_distribution_json['`+readers.BugfixSubcategoryKey+`'], 0.0) AS bugfix_share,
+						bugfix_share,
 						`+wins+` AS wins,
 						`+prRefsExpression+` AS pr_refs,
 						`+repoRefsExpression+` AS refs
@@ -180,7 +180,7 @@ func repoSplitCoreScoped(memberships []string, unitCols, unitAgg string, spanSen
 							argMax(from_ts, computed_at) AS from_ts,
 							argMax(to_ts, computed_at) AS to_ts,
 							argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
-							argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
+							argMax(ifNull(subcategory_distribution_json['`+readers.BugfixSubcategoryKey+`'], 0.0), computed_at) AS bugfix_share,
 							argMax(structural_evidence_json, computed_at) AS structural_evidence_json,
 							`+latestUnitGatedSQL+` AS gated
 						FROM work_unit_investments
