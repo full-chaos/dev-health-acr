@@ -61,7 +61,7 @@ func TestApprovalDecisions_consentThroughTheRealService(t *testing.T) {
 	}
 
 	decider.next = pepfake.New(pepfake.Rule{PrincipalReference: approvalTestReference, Action: "acr.credential.issue", ResourceType: "organization",
-		ResourceKey: testOrg, OrganizationID: testOrg, TenantScope: testOrg})
+		ResourceKey: testOrg, OrganizationID: testOrg, TenantScope: testOrg, RepositoryScope: "organization"})
 	decision, err := h.oauth.ApproveConsent(context.Background(), authorization.Handle, principal, []string{"org/repo"})
 	if err != nil || codeFrom(t, decision.RedirectURL) == "" {
 		t.Fatalf("allow after a deny and an outage = %v %q; want an approval (the request stayed pending)", err, decision.RedirectURL)
