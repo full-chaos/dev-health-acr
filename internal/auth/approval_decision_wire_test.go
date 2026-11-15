@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -51,6 +52,7 @@ func TestApprovalDecisions_wireObligationCells(t *testing.T) {
 		{"7a platform admin allow", true, "allowed_by_platform_admin", `{` + tenant + `,"repository_scope":"organization"}`, star, approvalOutcomeAllowed},
 		{"7b platform admin code on a deny", false, "allowed_by_platform_admin", "", star, approvalOutcomeUnavailable},
 		{"8 allowlist too large deny", false, "repository_allowlist_too_large", "", star, approvalOutcomeDenied},
+		{"9 repository unresolved deny", false, "repository_unresolved", "", named, approvalOutcomeDenied},
 	} {
 		t.Run(cell.name, func(t *testing.T) {
 			decisions, _ := newDecisions(t, ApprovalDecisionEnforce, pdpWire(t, cell.allowed, cell.reason, cell.obligations))
@@ -60,5 +62,19 @@ func TestApprovalDecisions_wireObligationCells(t *testing.T) {
 				t.Fatalf("outcome = %s (%s); want %s", outcome, reason, cell.outcome)
 			}
 		})
+	}
+}
+
+// A well-formed PDP deny with the reason repository_unresolved is the PDP's own deny: the decision reads it as a deny with that
+// reason, and enforce mode refuses the approval as not permitted, not as an unavailable decision.
+func TestApprovalDecisions_repositoryUnresolvedDenyIsADeny(t *testing.T) {
+	decisions, _ := newDecisions(t, ApprovalDecisionEnforce, pdpWire(t, false, "repository_unresolved", ""))
+	outcome, reason := decisions.decide(t.Context(), approvalPrincipal(), []string{"acme/api"})
+	if outcome != approvalOutcomeDenied || reason != "repository_unresolved" {
+		t.Fatalf("decide = %s (%s); want %s (repository_unresolved)", outcome, reason, approvalOutcomeDenied)
+	}
+	err := decisions.Check(t.Context(), approvalPrincipal(), []string{"acme/api"})
+	if !errors.Is(err, ErrApprovalNotPermitted) || errors.Is(err, ErrApprovalDecisionUnavailable) {
+		t.Fatalf("Check = %v; want ErrApprovalNotPermitted", err)
 	}
 }
