@@ -2,6 +2,8 @@ package factoracle
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -73,6 +75,46 @@ func Shapes(policy *directread.GraphQLPolicy) ([]Shape, error) {
 				}
 			}
 		}
+	}
+	return out, nil
+}
+
+// withoutCapturePredates drops, from every shape of each listed operation, the
+// output paths the capture predates (Oracle.CapturePredates).
+func withoutCapturePredates(shapes []Shape, predates map[string][]string) ([]Shape, error) {
+	for _, name := range slices.Sorted(maps.Keys(predates)) {
+		paths := predates[name]
+		var all *Shape
+		for i := range shapes {
+			if shapes[i].Operation == name && shapes[i].Name == "all" {
+				all = &shapes[i]
+				break
+			}
+		}
+		if all == nil {
+			return nil, fmt.Errorf("operation %s is listed as predated by the capture, but no root has it as a candidate", name)
+		}
+		if len(paths) == 0 {
+			return nil, fmt.Errorf("operation %s is listed as predated by the capture with no path", name)
+		}
+		for _, path := range paths {
+			if !slices.Contains(all.Paths, path) {
+				return nil, fmt.Errorf("operation %s: %s is listed as predated by the capture, but it is not an output path of the operation", name, path)
+			}
+		}
+	}
+	out := make([]Shape, 0, len(shapes))
+	for _, s := range shapes {
+		drop := predates[s.Operation]
+		if len(drop) == 0 {
+			out = append(out, s)
+			continue
+		}
+		s.Paths = slices.DeleteFunc(slices.Clone(s.Paths), func(p string) bool { return slices.Contains(drop, p) })
+		if len(s.Paths) == 0 {
+			return nil, fmt.Errorf("shape %s selects only paths the capture predates", s.ID())
+		}
+		out = append(out, s)
 	}
 	return out, nil
 }

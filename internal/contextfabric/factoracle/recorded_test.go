@@ -47,8 +47,8 @@ var contractsAtCapture = map[string]string{
 	// CHAOS-12808 records all three.
 	"investmentBreakdown": "sha256:dcaf3bfe8899a3ba1fff623bb9dff5380212d515c51f073c1f2eb670f1c353df",
 	// The two scoped candidates are advanced past the capture: ops f67b568a registers them with
-	// analytics.evidenceQualityStats.sizedUnitCount, which the recorded replies lack and valuePaths excludes;
-	// retake the capture on the next venue move.
+	// analytics.evidenceQualityStats.sizedUnitCount, which the recorded replies lack (capturePredates) and
+	// valuePaths excludes; retake the capture on the next venue move.
 	"investmentBreakdownRepository": "sha256:7eedeea132fc8a31c8c1f2c6af506b587119aa75ece405425df15abff43b2026",
 	"investmentBreakdownTeam":       "sha256:67f8a9744d92d26d7363e88b2c1189a090fa329d0f00813adaaf0e298a32dd02",
 	"investmentFull":                "sha256:961a15df3b4a1ee6ecd80c0a66a7d856256e97b475039d58d08fbfcd82176dd3",
@@ -60,6 +60,14 @@ var contractsAtCapture = map[string]string{
 	"workGraphEdges":                "sha256:22f4a10da08615255631c5f866313fdeda9c65bd17a6b621f332984e61ce602e",
 	"workGraphFlow":                 "sha256:d442757b8633c7f9542f48a92a34ef1dbcfacdd994e68c76ad7a31cce1428cf1",
 	"workItemTeamAttributions":      "sha256:e3e1700f64773540a6192f8239068aac3b780a4d5cf37c5252f766bf819dda58",
+}
+
+// capturePredates are the output paths ops registered after the capture, per
+// operation (Oracle.CapturePredates): the recorded run asks for the selection
+// the capture recorded. Remove an entry when the capture is taken again.
+var capturePredates = map[string][]string{
+	"investmentBreakdownRepository": {"analytics.evidenceQualityStats.sizedUnitCount"},
+	"investmentBreakdownTeam":       {"analytics.evidenceQualityStats.sizedUnitCount"},
 }
 
 func requireCaptureContractsUnchanged(t *testing.T, policy *directread.GraphQLPolicy, recorded, pinned string) {
@@ -138,7 +146,7 @@ func oracleFor(t *testing.T, manifest Manifest, planes Planes, reference *Extrac
 	if err != nil {
 		t.Fatalf("reference store: %v", err)
 	}
-	return &Oracle{Policy: policy, Planes: planes, Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, NotRecorded: notRecordedOperations,
+	return &Oracle{Policy: policy, Planes: planes, Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, NotRecorded: notRecordedOperations, CapturePredates: capturePredates,
 		ListenerDark: manifest.ListenerDark, OperationDark: manifest.OperationDark, DeniedTeams: manifest.DeniedTeams}
 }
 

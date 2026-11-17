@@ -11,7 +11,7 @@
   "venue_fact_query_versions": [
     "devhealthfacts.clickhouse.v275"
   ],
-  "fact_query_version": "devhealthfacts.clickhouse.v276",
+  "fact_query_version": "devhealthfacts.clickhouse.v290",
   "rows": {
     "capacity_forecasts": 127,
     "compounding_risk_daily": 231,
@@ -2393,6 +2393,7 @@
         }
       ],
       "unmeasured": [
+        "analytics.evidenceQualityStats.sizedUnitCount",
         "analytics.sankey.__typename",
         "analytics.sankey.coverage.__typename",
         "analytics.sankey.coverage.repoCoverage",

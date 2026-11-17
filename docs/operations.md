@@ -1117,7 +1117,7 @@ path). One operation name serves one basis: the four investment operations keep
 forcing `useInvestment` true and refuse dimension `TEAM`. A team with no work item
 completed in the window has no row, which is not a zero. The vendored registry
 (`contracts/mcp/ops-catalogue/registry.v1.json`) holds the ops f67b568a rows, as
-`go run ./cmd/registrydump` prints them there. At f67b568a the three scoped
+the ops registry dump command prints them there. At f67b568a the three scoped
 documents (`investmentBreakdownTeam`, `investmentBreakdownRepository`,
 `teamWorkItemBreakdown`) select `analytics.evidenceQualityStats.sizedUnitCount`;
 the O4 capture predates it, so the oracle excludes that path and the capture is
