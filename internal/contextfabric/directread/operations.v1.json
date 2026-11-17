@@ -3,10 +3,10 @@
   "generator": "cmd/operationpolicy",
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "0b763a859e3e5c0df154d133738b20eb23d78fbb",
+    "commit": "f67b568a35cae84336de9b39a609476bf76036b2",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
-    "schema_digest": "sha256:6d40791c0e2a28c2e0284a3330d1b30ddc3e9b24d397d9ceb237c398d4cd106c",
-    "registry_sha256": "e1f33bd244aa68e7a14d3f16d5b5069e0a4ef4f6d99943f32274482c32b1ca88",
+    "schema_digest": "sha256:76218f99d03ba1ca80c91c8d45c1ecf38570f2c139d27593415734c096fb6ec7",
+    "registry_sha256": "2055faefaef801bfd1c996a8178ad4bd82b6d068f341f3e7245747d543e177a2",
     "registry_rows": 67
   },
   "person_name_tokens": [
@@ -3770,8 +3770,8 @@
       "name": "investmentBreakdownRepository",
       "document_operation_name": "InvestmentBreakdownRepository",
       "kind": "query",
-      "digest": "d896c57f2425e5eb54262cbb01fdd7d0bf6c17249b8c0d4c140d4d33b492a3e6",
-      "document_text": "query InvestmentBreakdownRepository($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
+      "digest": "edfb61859b399c52a1b1c155c496c5452226da916e63ec0c88992d24738ad1fb",
+      "document_text": "query InvestmentBreakdownRepository($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      sizedUnitCount\n      __typename\n    }\n    __typename\n  }\n}",
       "cost_class": "analytics_batch",
       "deadline_seconds": 30,
       "variables": [
@@ -4699,6 +4699,11 @@
           "leaf": "scalar"
         },
         {
+          "path": "analytics.evidenceQualityStats.sizedUnitCount",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
           "path": "analytics.evidenceQualityStats.__typename",
           "type": "String",
           "leaf": "typename"
@@ -4716,8 +4721,8 @@
       "name": "investmentBreakdownTeam",
       "document_operation_name": "InvestmentBreakdownTeam",
       "kind": "query",
-      "digest": "41128827a7bb7324a6fe3b4f771830ab39b236b237ab182406c30c5151aaf722",
-      "document_text": "query InvestmentBreakdownTeam($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
+      "digest": "be9f839cc9628f6a3d9599975673177224a17600942ddb5817101e0a68e7afe2",
+      "document_text": "query InvestmentBreakdownTeam($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      sizedUnitCount\n      __typename\n    }\n    __typename\n  }\n}",
       "cost_class": "analytics_batch",
       "deadline_seconds": 30,
       "variables": [
@@ -5642,6 +5647,11 @@
         },
         {
           "path": "analytics.evidenceQualityStats.uncategorizedCount",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.sizedUnitCount",
           "type": "Int",
           "leaf": "scalar"
         },
@@ -7217,8 +7227,8 @@
       "name": "teamWorkItemBreakdown",
       "document_operation_name": "TeamWorkItemBreakdown",
       "kind": "query",
-      "digest": "875c9197af4bf566516a679569a59ed30a2763117d6d5c61ba9a362c94be2fd8",
-      "document_text": "query TeamWorkItemBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
+      "digest": "3d30092f9b8c3d6c820d6a18c8632e835e87d3b4129149982cbfbca448004a31",
+      "document_text": "query TeamWorkItemBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      sizedUnitCount\n      __typename\n    }\n    __typename\n  }\n}",
       "cost_class": "analytics_batch",
       "deadline_seconds": 30,
       "variables": [
@@ -8120,6 +8130,11 @@
         },
         {
           "path": "analytics.evidenceQualityStats.uncategorizedCount",
+          "type": "Int",
+          "leaf": "scalar"
+        },
+        {
+          "path": "analytics.evidenceQualityStats.sizedUnitCount",
           "type": "Int",
           "leaf": "scalar"
         },
@@ -9848,28 +9863,21 @@
     {
       "name": "testOpsCoverage",
       "kind": "query",
-      "digest": "0b94aef78a67da6a837174b6915d38e7a38c0ae7a84b5070cca46812a1ab5b09",
+      "digest": "a741913fdc25474415a1fe4e459bf657d7ca2dbc00e71f32d3bbfc43264cc93d",
       "code": "unknown_operation",
       "reason": "no scope rule or no honest status yet (design D.3)"
     },
     {
       "name": "testOpsPipeline",
       "kind": "query",
-      "digest": "e164c9da32dbdd7768614d1ba0747e303ba05135709189035465e429501ced38",
-      "code": "unknown_operation",
-      "reason": "no scope rule or no honest status yet (design D.3)"
-    },
-    {
-      "name": "testOpsTest",
-      "kind": "query",
-      "digest": "20eeea67bfc1cfa0f809188878476a0fe40565bc583009151e1f7c8cf2f3be5c",
+      "digest": "fa5806f2b3e2d5c8db0669e7ec76315b42dada3a3562a004d80a8c91b41c9dc5",
       "code": "unknown_operation",
       "reason": "no scope rule or no honest status yet (design D.3)"
     },
     {
       "name": "testopsJobFailures",
       "kind": "query",
-      "digest": "3966554a57e957978b5777cbb8b51bf6e0f41feb2181b89f7ad138e1c81c67c9",
+      "digest": "6fdbbd6e192c9762821da038c9944099973d1b4f7f19cd36c18c935800e1c5ab",
       "code": "unknown_operation",
       "reason": "no scope rule or no honest status yet (design D.3)"
     },
@@ -9877,6 +9885,13 @@
       "name": "testopsRisk",
       "kind": "query",
       "digest": "72c3e61ea17ba9550d5ab96ae298879f4559e08de8c0d6742c394b9a7b93d13e",
+      "code": "unknown_operation",
+      "reason": "no scope rule or no honest status yet (design D.3)"
+    },
+    {
+      "name": "testopsTestWindow",
+      "kind": "query",
+      "digest": "614e1da8cdd06f40b68d5c57011462c5b3a8c2dbffa465ed95bc98d782389354",
       "code": "unknown_operation",
       "reason": "no scope rule or no honest status yet (design D.3)"
     },

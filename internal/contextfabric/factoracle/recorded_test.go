@@ -45,9 +45,12 @@ var contractsAtCapture = map[string]string{
 	// analytics.evidenceQualityStats.uncategorizedCount); investmentBreakdownTeam and
 	// investmentBreakdownRepository are the scoped candidates of root analytics (CHAOS-12698). The capture of
 	// CHAOS-12808 records all three.
-	"investmentBreakdown":           "sha256:dcaf3bfe8899a3ba1fff623bb9dff5380212d515c51f073c1f2eb670f1c353df",
-	"investmentBreakdownRepository": "sha256:0535d2800c3017e3f9494e3da384e6ff96eb340f286372c812e220c00c73802c",
-	"investmentBreakdownTeam":       "sha256:fbc2c1b16914b5f673bc4700d4dd351a6390b804270a0b70c232c4b14681aa90",
+	"investmentBreakdown": "sha256:dcaf3bfe8899a3ba1fff623bb9dff5380212d515c51f073c1f2eb670f1c353df",
+	// The two scoped candidates are advanced past the capture: ops f67b568a registers them with
+	// analytics.evidenceQualityStats.sizedUnitCount, which the recorded replies lack and valuePaths excludes;
+	// retake the capture on the next venue move.
+	"investmentBreakdownRepository": "sha256:7eedeea132fc8a31c8c1f2c6af506b587119aa75ece405425df15abff43b2026",
+	"investmentBreakdownTeam":       "sha256:67f8a9744d92d26d7363e88b2c1189a090fa329d0f00813adaaf0e298a32dd02",
 	"investmentFull":                "sha256:961a15df3b4a1ee6ecd80c0a66a7d856256e97b475039d58d08fbfcd82176dd3",
 	"recommendations":               "sha256:2a2a5d0a1c1dcddae195d7c4d7d73517e4113694e6396620222c28a250003ee1",
 	"securityOverview":              "sha256:df174e0fc36768a4385f9a9337e64f4e38f1a782704d8394e2e98253dccee9cb",

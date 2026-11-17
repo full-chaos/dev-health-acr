@@ -1,7 +1,7 @@
 {
   "contract": "acr.mcp.graphql_roots.v1",
   "generator": "cmd/operationpolicy",
-  "schema_digest": "sha256:6d40791c0e2a28c2e0284a3330d1b30ddc3e9b24d397d9ceb237c398d4cd106c",
+  "schema_digest": "sha256:76218f99d03ba1ca80c91c8d45c1ecf38570f2c139d27593415734c096fb6ec7",
   "operations_source": "contracts/mcp/operations.v1.json",
   "limits": {
     "max_query_bytes": 8192,
@@ -228,6 +228,7 @@
     "sourceHealth",
     "testopsJobFailures",
     "testopsRisk",
+    "testopsTestWindow",
     "workItemTeamAttributions",
     "workUnitTeamAttributions"
   ],

@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "0b763a859e3e5c0df154d133738b20eb23d78fbb",
+    "commit": "f67b568a35cae84336de9b39a609476bf76036b2",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
     "schema_path": "contracts/graphql/v1/schema.graphql"
   },
@@ -470,17 +470,33 @@
     },
     {
       "operation": "investmentBreakdownRepository",
-      "document": "query InvestmentBreakdownRepository($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query InvestmentBreakdownRepository($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      sizedUnitCount\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredInvestmentBreakdownRepositoryDocument",
+      "digest": "edfb61859b399c52a1b1c155c496c5452226da916e63ec0c88992d24738ad1fb",
+      "kind": "query"
+    },
+    {
+      "operation": "investmentBreakdownRepository",
+      "document": "query InvestmentBreakdownRepository($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredInvestmentBreakdownRepositoryV1Document",
       "digest": "d896c57f2425e5eb54262cbb01fdd7d0bf6c17249b8c0d4c140d4d33b492a3e6",
+      "kind": "query",
+      "legacy": true
+    },
+    {
+      "operation": "investmentBreakdownTeam",
+      "document": "query InvestmentBreakdownTeam($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      sizedUnitCount\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredInvestmentBreakdownTeamDocument",
+      "digest": "be9f839cc9628f6a3d9599975673177224a17600942ddb5817101e0a68e7afe2",
       "kind": "query"
     },
     {
       "operation": "investmentBreakdownTeam",
       "document": "query InvestmentBreakdownTeam($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
-      "const_name": "registeredInvestmentBreakdownTeamDocument",
+      "const_name": "registeredInvestmentBreakdownTeamV1Document",
       "digest": "41128827a7bb7324a6fe3b4f771830ab39b236b237ab182406c30c5151aaf722",
-      "kind": "query"
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "investmentEvidenceQuality",
@@ -659,16 +675,24 @@
     },
     {
       "operation": "teamWorkItemBreakdown",
-      "document": "query TeamWorkItemBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query TeamWorkItemBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      sizedUnitCount\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredTeamWorkItemBreakdownDocument",
-      "digest": "875c9197af4bf566516a679569a59ed30a2763117d6d5c61ba9a362c94be2fd8",
+      "digest": "3d30092f9b8c3d6c820d6a18c8632e835e87d3b4129149982cbfbca448004a31",
       "kind": "query"
     },
     {
+      "operation": "teamWorkItemBreakdown",
+      "document": "query TeamWorkItemBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredTeamWorkItemBreakdownV1Document",
+      "digest": "875c9197af4bf566516a679569a59ed30a2763117d6d5c61ba9a362c94be2fd8",
+      "kind": "query",
+      "legacy": true
+    },
+    {
       "operation": "testOpsCoverage",
-      "document": "query TestOpsCoverage($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    timeseries {\n      dimension\n      dimensionValue\n      scope\n      measure\n      buckets {\n        date\n        value\n        __typename\n      }\n      __typename\n    }\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        label\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query TestOpsCoverage($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    timeseries {\n      dimension\n      dimensionValue\n      scope\n      measure\n      buckets {\n        date\n        value\n        __typename\n      }\n      __typename\n    }\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        label\n        __typename\n      }\n      __typename\n    }\n    filterEmptyReason\n    __typename\n  }\n}",
       "const_name": "registeredTestOpsCoverageDocument",
-      "digest": "0b94aef78a67da6a837174b6915d38e7a38c0ae7a84b5070cca46812a1ab5b09",
+      "digest": "a741913fdc25474415a1fe4e459bf657d7ca2dbc00e71f32d3bbfc43264cc93d",
       "kind": "query"
     },
     {
@@ -680,10 +704,18 @@
       "legacy": true
     },
     {
+      "operation": "testOpsCoverage",
+      "document": "query TestOpsCoverage($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    timeseries {\n      dimension\n      dimensionValue\n      scope\n      measure\n      buckets {\n        date\n        value\n        __typename\n      }\n      __typename\n    }\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        label\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredTestOpsCoverageV2Document",
+      "digest": "0b94aef78a67da6a837174b6915d38e7a38c0ae7a84b5070cca46812a1ab5b09",
+      "kind": "query",
+      "legacy": true
+    },
+    {
       "operation": "testOpsPipeline",
-      "document": "query TestOpsPipeline($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    timeseries {\n      dimension\n      dimensionValue\n      scope\n      measure\n      buckets {\n        date\n        value\n        __typename\n      }\n      __typename\n    }\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query TestOpsPipeline($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    timeseries {\n      dimension\n      dimensionValue\n      scope\n      measure\n      buckets {\n        date\n        value\n        __typename\n      }\n      __typename\n    }\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    filterEmptyReason\n    __typename\n  }\n}",
       "const_name": "registeredTestOpsPipelineDocument",
-      "digest": "e164c9da32dbdd7768614d1ba0747e303ba05135709189035465e429501ced38",
+      "digest": "fa5806f2b3e2d5c8db0669e7ec76315b42dada3a3562a004d80a8c91b41c9dc5",
       "kind": "query"
     },
     {
@@ -695,18 +727,27 @@
       "legacy": true
     },
     {
-      "operation": "testOpsTest",
-      "document": "query TestOpsTest($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    timeseries {\n      dimension\n      dimensionValue\n      measure\n      buckets {\n        date\n        value\n        __typename\n      }\n      __typename\n    }\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
-      "const_name": "registeredTestOpsTestDocument",
-      "digest": "20eeea67bfc1cfa0f809188878476a0fe40565bc583009151e1f7c8cf2f3be5c",
+      "operation": "testOpsPipeline",
+      "document": "query TestOpsPipeline($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    timeseries {\n      dimension\n      dimensionValue\n      scope\n      measure\n      buckets {\n        date\n        value\n        __typename\n      }\n      __typename\n    }\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredTestOpsPipelineV2Document",
+      "digest": "e164c9da32dbdd7768614d1ba0747e303ba05135709189035465e429501ced38",
+      "kind": "query",
+      "legacy": true
+    },
+    {
+      "operation": "testopsJobFailures",
+      "document": "query TestOpsJobFailures($orgId: String!, $input: TestOpsJobFailuresInput!) {\n  testopsJobFailures(orgId: $orgId, input: $input) {\n    groups {\n      workflowName\n      jobName\n      provider\n      runs\n      failedRuns\n      failureRate\n      __typename\n    }\n    totalCount\n    truncated\n    filterEmptyReason\n    __typename\n  }\n}",
+      "const_name": "registeredTestopsJobFailuresDocument",
+      "digest": "6fdbbd6e192c9762821da038c9944099973d1b4f7f19cd36c18c935800e1c5ab",
       "kind": "query"
     },
     {
       "operation": "testopsJobFailures",
       "document": "query TestOpsJobFailures($orgId: String!, $input: TestOpsJobFailuresInput!) {\n  testopsJobFailures(orgId: $orgId, input: $input) {\n    groups {\n      workflowName\n      jobName\n      provider\n      runs\n      failedRuns\n      failureRate\n      __typename\n    }\n    totalCount\n    truncated\n    __typename\n  }\n}",
-      "const_name": "registeredTestopsJobFailuresDocument",
+      "const_name": "registeredTestopsJobFailuresV1Document",
       "digest": "3966554a57e957978b5777cbb8b51bf6e0f41feb2181b89f7ad138e1c81c67c9",
-      "kind": "query"
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "testopsRisk",
@@ -720,6 +761,21 @@
       "document": "query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {\n  testopsRisk(orgId: $orgId, input: $input) {\n    releaseConfidence\n    qualityDragHours\n    pipelineStability\n    timeseries {\n      date\n      riskScore\n      __typename\n    }\n    qualityDragBreakdown {\n      category\n      hours\n      __typename\n    }\n    quadrantData {\n      id\n      pipelineSuccessRate\n      testPassRate\n      __typename\n    }\n    confidenceSpark {\n      ts\n      value\n      __typename\n    }\n    confidenceDelta\n    dragSpark {\n      ts\n      value\n      __typename\n    }\n    dragDelta\n    stabilitySpark {\n      ts\n      value\n      __typename\n    }\n    stabilityDelta\n    __typename\n  }\n}",
       "const_name": "registeredTestopsRiskV1Document",
       "digest": "de0e6a96f2f917aa3a785993b5b35c4f003f974d638097f5702b3b8a56fa0bf7",
+      "kind": "query",
+      "legacy": true
+    },
+    {
+      "operation": "testopsTestWindow",
+      "document": "query TestOpsTestWindow($orgId: String!, $input: TestOpsTestWindowInput!) {\n  testopsTestWindow(orgId: $orgId, input: $input) {\n    sinceDate\n    untilDate\n    coverage {\n      completedRuns\n      runsWithTests\n      sharePct\n      __typename\n    }\n    cases {\n      passed\n      failed\n      skipped\n      quarantined\n      total\n      __typename\n    }\n    passRatePct\n    failureRatePct\n    flakeRatePct\n    filterEmptyReason\n    __typename\n  }\n}",
+      "const_name": "registeredTestopsTestWindowDocument",
+      "digest": "614e1da8cdd06f40b68d5c57011462c5b3a8c2dbffa465ed95bc98d782389354",
+      "kind": "query"
+    },
+    {
+      "operation": "testopsTestWindow",
+      "document": "query TestOpsTestWindow($orgId: String!, $input: TestOpsTestWindowInput!) {\n  testopsTestWindow(orgId: $orgId, input: $input) {\n    sinceDate\n    untilDate\n    coverage {\n      completedRuns\n      runsWithTests\n      sharePct\n      __typename\n    }\n    cases {\n      passed\n      failed\n      skipped\n      quarantined\n      total\n      __typename\n    }\n    passRatePct\n    failureRatePct\n    flakeRatePct\n    __typename\n  }\n}",
+      "const_name": "registeredTestopsTestWindowV1Document",
+      "digest": "80397810a4c9c1aa724b0a1828ec6cfa2235fd9ad4b320124149dd68a623faa0",
       "kind": "query",
       "legacy": true
     },
