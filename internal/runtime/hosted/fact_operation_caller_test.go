@@ -2,11 +2,17 @@ package hosted
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
@@ -111,5 +117,40 @@ func TestBindSourceHealthOperations(t *testing.T) {
 		if tc.holder != nil && tc.holder.IsSet() != tc.wantSet {
 			t.Errorf("%s: holder set = %v, want %v", tc.name, tc.holder.IsSet(), tc.wantSet)
 		}
+	}
+}
+
+// Path F names the browser user to the query service: a browser-class credential's fact call sends
+// X-DH-Internal-Principal-Id as prn_ and the unpadded base64url of the approving user's uuid.
+func TestFactOperationCallerNamesTheBrowserUserToTheQueryService(t *testing.T) {
+	const approvingUser = "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+	var headers [][]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headers = append(headers, r.Header.Values("X-DH-Internal-Principal-Id"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":{"sourceHealth":[]}}`)
+	}))
+	defer server.Close()
+	client, err := directread.NewHTTPQueryClientWithHTTP(server.URL, 5*time.Second, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, _ := sourceHealthRunner(t, client)
+	raw, err := uuid.Parse(approvingUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "prn_" + base64.RawURLEncoding.EncodeToString(raw[:])
+	principal := storage.Principal{
+		OrgID:                "11111111-1111-4111-8111-111111111111",
+		AuthenticationMethod: storage.AuthenticationMethodCredential,
+		ClientClass:          storage.CredentialClientClassBrowser,
+		ApprovingUserID:      approvingUser,
+	}
+	if _, err := newFactOperationCaller(runner).CallOperation(context.Background(), principal, devhealthfacts.SourceHealthOperationName, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(headers) != 1 || len(headers[0]) != 1 || headers[0][0] != want {
+		t.Fatalf("principal header per call = %v, want one call with [%s]", headers, want)
 	}
 }
