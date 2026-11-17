@@ -203,6 +203,31 @@ const RunOperationPath = "/query/run-operation"
 // the whole signal. Not in the MCP listener's vocabulary (mcpListenerReasons).
 const ListenerReasonInternal401 = "internal_401"
 
+// carriesTypedRefusal reports whether any error entry names a typed listener code. Each entry is read on
+// its own, so an unrelated entry with odd metadata (a numeric code, an object reason) cannot hide it.
+func carriesTypedRefusal(body []byte) bool {
+	var answer struct {
+		Errors []json.RawMessage `json:"errors"`
+	}
+	if json.Unmarshal(body, &answer) != nil {
+		return false
+	}
+	for _, raw := range answer.Errors {
+		var entry struct {
+			Extensions struct {
+				Code string `json:"code"`
+			} `json:"extensions"`
+		}
+		if json.Unmarshal(raw, &entry) != nil {
+			continue
+		}
+		if entry.Extensions.Code == MCPRefusedCode || entry.Extensions.Code == MCPReadBudgetExceededCode {
+			return true
+		}
+	}
+	return false
+}
+
 // MCPRefusedCode is the extensions.code of every other MCP listener refusal.
 const MCPRefusedCode = "MCP_REFUSED"
 
@@ -373,9 +398,12 @@ type QueryClient interface {
 
 // HTTPQueryClient is the production QueryClient.
 type HTTPQueryClient struct {
-	endpoint  string
-	path      string
-	userAgent string
+	endpoint string
+	// onRunOperationRoute: the request path actually sent (base path plus configured path) is exactly
+	// RunOperationPath.
+	onRunOperationRoute bool
+	path                string
+	userAgent           string
 	// readsTypedRefusals: the MCP listener client reads a bounded error
 	// body to recognise the read-budget refusal. Every client reads a
 	// bounded 404 body for the listener's not-found reason and a bounded
@@ -495,10 +523,11 @@ func newHTTPQueryClient(baseURL string, timeout time.Duration, path, userAgent s
 		DisableCompression: true,
 	}
 	return &HTTPQueryClient{
-		endpoint:  u.String(),
-		path:      path,
-		userAgent: userAgent,
-		timeout:   timeout,
+		endpoint:            u.String(),
+		onRunOperationRoute: u.Path == RunOperationPath,
+		path:                path,
+		userAgent:           userAgent,
+		timeout:             timeout,
 		client: &http.Client{
 			Transport: transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -599,7 +628,7 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		qerr.GraphQLCode, qerr.Variable = parseUpstreamGraphQLError(body)
 		qerr.ListenerRefusal, qerr.ListenerReason = listenerRefusalOf(body)
-		if qerr.ListenerRefusal == "" && resp.StatusCode == http.StatusUnauthorized && c.path == RunOperationPath {
+		if qerr.ListenerRefusal == "" && resp.StatusCode == http.StatusUnauthorized && c.onRunOperationRoute && !carriesTypedRefusal(body) {
 			qerr.ListenerRefusal, qerr.ListenerReason = ListenerRefusalCarrier, ListenerReasonInternal401
 		}
 		if c.readsTypedRefusals {
