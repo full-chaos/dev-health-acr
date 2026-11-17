@@ -194,6 +194,15 @@ func ListenerRefusalIsPrecheckGap(reason string) bool {
 	return mcpListenerReasons[reason].precheck
 }
 
+// RunOperationPath is the ops internal route run_operation posts to. The internal listener answers a
+// refused identity carrier there with a bare text 401, not a typed MCP_REFUSED body.
+const RunOperationPath = "/query/run-operation"
+
+// ListenerReasonInternal401 is the logged reason of a bare 401 on RunOperationPath. acr sets every
+// identity header of that call itself, and the route answers 401 only for the carrier, so the status is
+// the whole signal. Not in the MCP listener's vocabulary (mcpListenerReasons).
+const ListenerReasonInternal401 = "internal_401"
+
 // MCPRefusedCode is the extensions.code of every other MCP listener refusal.
 const MCPRefusedCode = "MCP_REFUSED"
 
@@ -590,6 +599,9 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		qerr.GraphQLCode, qerr.Variable = parseUpstreamGraphQLError(body)
 		qerr.ListenerRefusal, qerr.ListenerReason = listenerRefusalOf(body)
+		if qerr.ListenerRefusal == "" && resp.StatusCode == http.StatusUnauthorized && c.path == RunOperationPath {
+			qerr.ListenerRefusal, qerr.ListenerReason = ListenerRefusalCarrier, ListenerReasonInternal401
+		}
 		if c.readsTypedRefusals {
 			qerr.ReadBudget = ReadBudgetOf(body)
 		}
