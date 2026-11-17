@@ -6,8 +6,10 @@ package directread
 //	POST <internal service URL>/query
 //	{"query": <vendored document text>, "variables": {...}}
 //
-// with the four internal identity headers built from the principal and
-// nothing else that names a caller. The header names are the ops contract
+// with the four internal identity headers built from the principal, the
+// optional principal header (CHAOS-13945: the approving user of a user-class
+// credential, NamedPrincipal) and nothing else that names a caller. The
+// header names are the ops contract
 // in ops internal/queryapi/internalidentity/internalidentity.go:28-33 (at
 // ops 9dffd5f77); all four must be present exactly once (:71-98) and the
 // two flags must be exactly "true" or "false" (:100-108). The role is a
@@ -54,7 +56,11 @@ const (
 	HeaderInternalRole                = "X-DH-Internal-Role"
 	HeaderInternalSuperuser           = "X-DH-Internal-Superuser"
 	HeaderInternalImpersonationActive = "X-DH-Internal-Impersonation-Active"
-	HeaderRequestID                   = "X-Request-Id"
+	// HeaderInternalPrincipalID names the user behind a user-class credential
+	// (CHAOS-13945, ops internalidentity HeaderPrincipalID): optional, at most
+	// once, the ops principal wire id.
+	HeaderInternalPrincipalID = "X-DH-Internal-Principal-Id"
+	HeaderRequestID           = "X-Request-Id"
 )
 
 // Constant identity values. Superuser and impersonation are never derived
@@ -146,6 +152,7 @@ var mcpListenerReasons = map[string]struct {
 	"duplicate_header":     {ListenerRefusalCarrier, false},
 	"not_a_boolean":        {ListenerRefusalCarrier, false},
 	"invalid_org":          {ListenerRefusalCarrier, false},
+	"not_a_principal":      {ListenerRefusalCarrier, true},
 	// 403
 	"elevated_claim":         {ListenerRefusalCarrier, false},
 	"invalid_org_argument":   {ListenerRefusalCarrier, true},
@@ -338,6 +345,9 @@ type QueryCall struct {
 	OrgID     string
 	Document  string
 	Variables map[string]any
+	// PrincipalID is the principal the call names (NamedPrincipal), "" for
+	// none. Set, it must be a principal wire id, else nothing is sent.
+	PrincipalID string
 }
 
 // QueryResult is the raw GraphQL answer body (status 2xx), at most
@@ -532,6 +542,9 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 	if strings.TrimSpace(call.OrgID) == "" || strings.TrimSpace(call.Document) == "" {
 		return QueryResult{}, &QueryError{Class: QueryErrorRequestInvalid}
 	}
+	if call.PrincipalID != "" && !wirePrincipalID(call.PrincipalID) {
+		return QueryResult{}, &QueryError{Class: QueryErrorRequestInvalid}
+	}
 	body, err := EncodeQueryBody(call)
 	if err != nil || len(body) > MaxQueryRequestBytes {
 		return QueryResult{}, &QueryError{Class: QueryErrorRequestInvalid}
@@ -553,6 +566,9 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 	req.Header.Set(HeaderInternalRole, InternalRoleLeast)
 	req.Header.Set(HeaderInternalSuperuser, internalSuperuserValue)
 	req.Header.Set(HeaderInternalImpersonationActive, internalImpersonatingFlag)
+	if call.PrincipalID != "" {
+		req.Header.Set(HeaderInternalPrincipalID, call.PrincipalID)
+	}
 	if requestID, ok := observability.RequestIDFromContext(ctx); ok && string(requestID) != "" {
 		req.Header.Set(HeaderRequestID, string(requestID))
 	}

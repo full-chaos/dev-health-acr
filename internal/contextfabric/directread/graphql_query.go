@@ -637,7 +637,7 @@ func (x *gqlRun) execute(ctx context.Context, req GraphQLRequest) (GraphQLRespon
 	}
 
 	// 8.
-	result, err := r.client.Execute(callCtx, QueryCall{OrgID: x.principal.OrgID, Document: text, Variables: outVars})
+	result, err := r.client.Execute(callCtx, QueryCall{OrgID: x.principal.OrgID, Document: text, Variables: outVars, PrincipalID: NamedPrincipal(x.principal)})
 	if err != nil {
 		return x.mapCallError(err, maxBytes), nil
 	}

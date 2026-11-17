@@ -877,7 +877,7 @@
       "entitlement_requirement": "agentContextRuntimeEntitlement",
       "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
       "gaps": [
-        "CHAOS-7072 (S1a) serves run_operation over the internal ops query service (four X-DH-Internal-* headers, no Authorization). A policy refusal is HTTP 200 with call=refused and a typed refusal code; 501 feature_not_enabled (details.reason=data_query_not_configured) when ACR_DATA_QUERY_URL is unset or the policy did not load; 503 when the subject gate is unavailable. Needs the data:read scope (decision K4), never implied by context:read.",
+        "CHAOS-7072 (S1a) serves run_operation over the internal ops query service (four X-DH-Internal-* headers, plus X-DH-Internal-Principal-Id naming the approving user of a user-class credential (CHAOS-13945), no Authorization). A policy refusal is HTTP 200 with call=refused and a typed refusal code; 501 feature_not_enabled (details.reason=data_query_not_configured) when ACR_DATA_QUERY_URL is unset or the policy did not load; 503 when the subject gate is unavailable. Needs the data:read scope (decision K4), never implied by context:read.",
         "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:91 reaches was not traced; not determined."
       ]
     },
@@ -921,7 +921,7 @@
       "entitlement_requirement": "agentContextRuntimeEntitlement",
       "disclosure_behavior": "writeError() closed envelope; a subject the caller may not read answers denied_or_not_found, identical for denied and absent.",
       "gaps": [
-        "CHAOS-7075 (S1b) serves graphql_query over GWC's MCP listener (CHAOS-7085, own port, POST /query; four X-DH-Internal-* headers, no Authorization). acr validates the query against the vendored SDL and the derived root policy and sends only its own rebuilt text. A refusal is HTTP 200 with call=refused and a typed refusal code; 501 feature_not_enabled (details.reason=data_graphql_not_configured) when ACR_DATA_GRAPHQL_URL is unset or the root policy did not derive; 503 when the subject gate is unavailable. Needs the data:read scope (decision K4), never implied by context:read.",
+        "CHAOS-7075 (S1b) serves graphql_query over GWC's MCP listener (CHAOS-7085, own port, POST /query; four X-DH-Internal-* headers, plus X-DH-Internal-Principal-Id naming the approving user of a user-class credential (CHAOS-13945), no Authorization). acr validates the query against the vendored SDL and the derived root policy and sends only its own rebuilt text. A refusal is HTTP 200 with call=refused and a typed refusal code; 501 feature_not_enabled (details.reason=data_graphql_not_configured) when ACR_DATA_GRAPHQL_URL is unset or the root policy did not derive; 503 when the subject gate is unavailable. Needs the data:read scope (decision K4), never implied by context:read.",
         "current_state_cache_behavior: searched internal for Cache-Control writes (shared writers set no-store at internal/api/response.go:81 and internal/api/read_decode.go:46); which of them the handler registered at internal/api/app.go:92 reaches was not traced; not determined."
       ]
     },
