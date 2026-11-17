@@ -109,8 +109,8 @@ const (
 )
 
 // UpstreamErrorClassVocabulary is the closed set of upstream error classes.
-func UpstreamErrorClassVocabulary() [8]UpstreamErrorClass {
-	return [8]UpstreamErrorClass{UpstreamGraphQLErrors, UpstreamDecode, UpstreamHTTPStatus, UpstreamTransport, UpstreamCanceled, UpstreamTimeout, UpstreamNotFound, UpstreamConcurrency}
+func UpstreamErrorClassVocabulary() [9]UpstreamErrorClass {
+	return [9]UpstreamErrorClass{UpstreamGraphQLErrors, UpstreamDecode, UpstreamHTTPStatus, UpstreamTransport, UpstreamCanceled, UpstreamTimeout, UpstreamNotFound, UpstreamConcurrency, UpstreamCarrierRefused}
 }
 
 // ScopeClass says how the request's repository scope was decided.
@@ -940,7 +940,29 @@ func (x *run) logNotFound(err error) {
 	)
 }
 
+// OperationListenerRefusedLog is the line for an MCP listener carrier refusal
+// on run_operation: the closed listener reason, never upstream text.
+const OperationListenerRefusedLog = "context fabric run_operation was refused by the MCP listener"
+
+// carrierRefused maps a typed MCP carrier refusal as graphql_query does:
+// acr never sends a refused carrier, so it is a defect or a tampered hop.
+func (x *run) carrierRefused(qe *QueryError) OperationResponse {
+	x.r.logger.Error(OperationListenerRefusedLog,
+		"org_id", contextfabric.SanitizeLogAttr(x.principal.OrgID),
+		"operation", contextfabric.SanitizeLogAttr(x.read.Operation),
+		"error_class", contextfabric.SanitizeLogAttr(string(UpstreamCarrierRefused)),
+		"listener_reason", contextfabric.SanitizeLogAttr(qe.ListenerReason),
+		"acr_precheck_gap", ListenerRefusalIsPrecheckGap(qe.ListenerReason),
+		"status", qe.StatusCode,
+	)
+	return x.upstream(CallUpstreamError, UpstreamCarrierRefused)
+}
+
 func (x *run) mapCallError(err error, maxBytes int) OperationResponse {
+	var qe *QueryError
+	if errors.As(err, &qe) && qe.ListenerRefusal == ListenerRefusalCarrier {
+		return x.carrierRefused(qe)
+	}
 	switch QueryErrorClassOf(err) {
 	case QueryErrorNotFound:
 		x.logNotFound(err)

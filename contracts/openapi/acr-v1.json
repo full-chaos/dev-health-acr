@@ -3210,7 +3210,8 @@
                     "canceled",
                     "timeout",
                     "not_found",
-                    "concurrency_wait"
+                    "concurrency_wait",
+                    "carrier_refused"
                   ]
                 },
                 "status": {

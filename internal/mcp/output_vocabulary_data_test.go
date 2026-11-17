@@ -329,7 +329,7 @@ func init() {
 			kind:           vocabAdditive,
 			clientValidate: "none: the sidecar passes data tool responses through as raw JSON and validates no field of them",
 			sites:          []string{"run_operation:errors.items.class"},
-			// schema: "graphql_errors", "decode", "http_status", "transport", "canceled", "timeout", "not_found", "concurrency_wait"
+			// schema: "graphql_errors", "decode", "http_status", "transport", "canceled", "timeout", "not_found", "concurrency_wait", "carrier_refused"
 			goSet:      fromList(directread.UpstreamErrorClassVocabulary()),
 			exhaustive: true,
 		},

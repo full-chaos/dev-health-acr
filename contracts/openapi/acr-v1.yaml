@@ -1,5 +1,5 @@
 # Generated from acr-v1.json by `go run ./cmd/contractcheck -write`. DO NOT EDIT.
-# canonical-content-sha256: 4aa08e5bc77dd2acbe6ea9ded43203b2e3f66f9190b1f9b3b8a2e274bd498d88
+# canonical-content-sha256: 5987cadd857d1e94f29306dc271c18adbe6d05087e9eaf72ef1b6060cf042a9f
 openapi: "3.1.0"
 info:
   description: "Private hosted API for evidence-backed agent context packets, authorized provenance expansion, replay snapshots, and opt-in episode writeback. External Push is a separate API plane."
@@ -2364,6 +2364,7 @@ components:
                   - "timeout"
                   - "not_found"
                   - "concurrency_wait"
+                  - "carrier_refused"
               graphql_code:
                 description: "The GraphQL error code the query service returned, as a closed token; other for any code not listed."
                 enum:
