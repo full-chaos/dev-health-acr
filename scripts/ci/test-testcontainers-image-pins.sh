@@ -101,11 +101,11 @@ mirrored_repo_digests="$(printf '%s\n' "$mirrored_refs" | awk -F'@' '
 ' | sort -u)"
 
 is_mirrored_repo_digest() {
-  printf '%s\n' "$mirrored_repo_digests" | grep -qxF "$1"
+  grep -qxF "$1" <<<"$mirrored_repo_digests"
 }
 
 is_mirrored_exact_ref() {
-  printf '%s\n' "$mirrored_refs" | grep -qxF "$1"
+  grep -qxF "$1" <<<"$mirrored_refs"
 }
 
 # resolve_identifier looks up `const <ident> = "<value>"` or
