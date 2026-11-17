@@ -162,7 +162,7 @@ const (
 func GraphQLUpstreamErrorClasses() []UpstreamErrorClass {
 	out := []UpstreamErrorClass{}
 	for _, c := range UpstreamErrorClassVocabulary() {
-		if c != UpstreamTimeout {
+		if c != UpstreamTimeout && c != UpstreamCarrierRefused {
 			out = append(out, c)
 		}
 	}

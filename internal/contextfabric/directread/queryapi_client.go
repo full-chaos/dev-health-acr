@@ -369,7 +369,8 @@ type HTTPQueryClient struct {
 	userAgent string
 	// readsTypedRefusals: the MCP listener client reads a bounded error
 	// body to recognise the read-budget refusal. Every client reads a
-	// bounded 404 body for the listener's not-found reason.
+	// bounded 404 body for the listener's not-found reason and a bounded
+	// non-2xx body for the listener's MCP_REFUSED reason.
 	readsTypedRefusals bool
 	timeout            time.Duration
 	client             *http.Client
@@ -588,9 +589,9 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 		qerr := &QueryError{Class: QueryErrorHTTPStatus, StatusCode: resp.StatusCode}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		qerr.GraphQLCode, qerr.Variable = parseUpstreamGraphQLError(body)
+		qerr.ListenerRefusal, qerr.ListenerReason = listenerRefusalOf(body)
 		if c.readsTypedRefusals {
 			qerr.ReadBudget = ReadBudgetOf(body)
-			qerr.ListenerRefusal, qerr.ListenerReason = listenerRefusalOf(body)
 		}
 		drain(resp.Body)
 		return QueryResult{}, qerr

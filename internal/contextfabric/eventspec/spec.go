@@ -5067,7 +5067,7 @@ var (
 		"basis_dependent_shape", "no_granted_scope", "operation_not_served_for_caller", "response_budget",
 		"invalid_request", "scope_required", "row_outside_grant", "policy_stale", "denied_or_not_found", "team_inactive",
 	}
-	operationReadErrorClasses = []string{"graphql_errors", "decode", "http_status", "transport", "canceled", "timeout", "not_found", "concurrency_wait"}
+	operationReadErrorClasses = []string{"graphql_errors", "decode", "http_status", "transport", "canceled", "timeout", "not_found", "concurrency_wait", "carrier_refused"}
 	operationReadGraphQLCodes = []string{"graphql_validation_failed", "graphql_parse_failed", "mcp_refused", "mcp_read_budget_exceeded", "other"}
 )
 

@@ -177,7 +177,7 @@
         "properties": {
           "class": {
             "type": "string",
-            "description": "Safe error class. Open vocabulary; documented values: graphql_errors, decode, http_status, transport, canceled, timeout, not_found, concurrency_wait. A client must tolerate values it does not know.",
+            "description": "Safe error class. Open vocabulary; documented values: graphql_errors, decode, http_status, transport, canceled, timeout, not_found, concurrency_wait, carrier_refused. carrier_refused: the data service refused acr's identity carrier (a defect or drift on the service path, not something to retry). A client must tolerate values it does not know.",
             "x-documented-values": [
               "graphql_errors",
               "decode",
@@ -186,7 +186,8 @@
               "canceled",
               "timeout",
               "not_found",
-              "concurrency_wait"
+              "concurrency_wait",
+              "carrier_refused"
             ]
           },
           "status": {
