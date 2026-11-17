@@ -568,7 +568,7 @@ func (x *run) execute(ctx context.Context, class CallerClass, req OperationReque
 	}
 
 	// 8: the internal call.
-	result, err := r.client.Execute(callCtx, QueryCall{OrgID: x.principal.OrgID, Document: op.DocumentText, Variables: tree})
+	result, err := r.client.Execute(callCtx, QueryCall{OrgID: x.principal.OrgID, Document: op.DocumentText, Variables: tree, PrincipalID: NamedPrincipal(x.principal)})
 	if err != nil {
 		return x.mapCallError(err, maxBytes), nil
 	}
