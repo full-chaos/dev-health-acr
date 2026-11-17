@@ -1088,6 +1088,7 @@ func TestGraphQLEveryListenerRefusalReasonIsMapped(t *testing.T) {
 		{401, "duplicate_header", carrier, directread.CallUpstreamError, false},
 		{401, "not_a_boolean", carrier, directread.CallUpstreamError, false},
 		{401, "invalid_org", carrier, directread.CallUpstreamError, false},
+		{401, "not_a_principal", carrier, directread.CallUpstreamError, true},
 		{403, "elevated_claim", carrier, directread.CallUpstreamError, false},
 		{403, "invalid_org_argument", carrier, directread.CallUpstreamError, true},
 		{403, "org_mismatch", carrier, directread.CallUpstreamError, true},
