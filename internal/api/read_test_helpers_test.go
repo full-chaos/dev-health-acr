@@ -24,11 +24,11 @@ func newHostedTestApp(t *testing.T, provider CapabilitiesProvider, hooks *observ
 // hostedTestApprovalDecisions is the approver check the hosted test app wires (CHAOS-13586); nil asks nothing.
 var hostedTestApprovalDecisions *auth.ApprovalDecisions
 
-func newHostedTestAppWithWebAssertions(t *testing.T, provider CapabilitiesProvider, hooks *observability.Hooks, scopes []string, entitlements EntitlementProvider, store storage.EvidenceStore, webAssertions *auth.WebAssertionVerifier) (*App, string) {
-	return newHostedTestAppWithUsageTelemetry(t, provider, hooks, scopes, entitlements, store, webAssertions, nil)
+func newHostedTestAppWithWebAssertions(t *testing.T, provider CapabilitiesProvider, hooks *observability.Hooks, scopes []string, entitlements EntitlementProvider, store storage.EvidenceStore, webAssertions *auth.WebAssertionVerifier, configure ...func(*RuntimeDependencies)) (*App, string) {
+	return newHostedTestAppWithUsageTelemetry(t, provider, hooks, scopes, entitlements, store, webAssertions, nil, configure...)
 }
 
-func newHostedTestAppWithUsageTelemetry(t *testing.T, provider CapabilitiesProvider, hooks *observability.Hooks, scopes []string, entitlements EntitlementProvider, store storage.EvidenceStore, webAssertions *auth.WebAssertionVerifier, usageTelemetry *auth.UsageTelemetry) (*App, string) {
+func newHostedTestAppWithUsageTelemetry(t *testing.T, provider CapabilitiesProvider, hooks *observability.Hooks, scopes []string, entitlements EntitlementProvider, store storage.EvidenceStore, webAssertions *auth.WebAssertionVerifier, usageTelemetry *auth.UsageTelemetry, configure ...func(*RuntimeDependencies)) (*App, string) {
 	t.Helper()
 	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
 	audit := memory.NewAuditStore()
@@ -63,14 +63,17 @@ func newHostedTestAppWithUsageTelemetry(t *testing.T, provider CapabilitiesProvi
 		Now: func() time.Time { return now }, ServiceVersion: "test", MinimumSidecarVersion: "0.1.0",
 		Observer: observability.NewAssemblyObserver(*hooks), StoreBackend: contextpacket.StoreBackendMemory,
 	})
+	runtimeDeps := &RuntimeDependencies{
+		Credentials: credentials, Audit: audit, Entitlements: entitlements, Assembler: assembler, Evidence: store,
+		DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device", DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(func() time.Time { return now })),
+		ReadinessChecks: exactRuntimeChecks(), DataStoreChecks: exactDataStoreChecks(),
+	}
+	for _, apply := range configure {
+		apply(runtimeDeps)
+	}
 	app, err := NewApp(AppConfig{ServiceName: "acr", ServiceVersion: "test", RequestTimeout: time.Second}, Dependencies{
 		Capabilities: provider, Observability: hooks, Limits: manager, Now: func() time.Time { return now }, WebAssertions: webAssertions, UsageTelemetry: usageTelemetry,
-		ApprovalDecisions: hostedTestApprovalDecisions,
-		Runtime: &RuntimeDependencies{
-			Credentials: credentials, Audit: audit, Entitlements: entitlements, Assembler: assembler, Evidence: store,
-			DeviceAuthorizations: devices, DeviceVerificationURL: "https://verify.example.test/device", DeviceAuthorizationLimiter: NewDeviceAuthorizationLimiter(ClockFunc(func() time.Time { return now })),
-			ReadinessChecks: exactRuntimeChecks(), DataStoreChecks: exactDataStoreChecks(),
-		},
+		ApprovalDecisions: hostedTestApprovalDecisions, Runtime: runtimeDeps,
 	}, testLogger(&bytes.Buffer{}))
 	if err != nil {
 		t.Fatal(err)
