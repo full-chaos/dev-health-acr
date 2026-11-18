@@ -189,10 +189,7 @@ func episodeCandidate(row storage.EpisodeProjectionRecord) candidate {
 	if summary == "" {
 		summary = "(episode summary unavailable)"
 	}
-	label := goal
-	if len(label) > 500 {
-		label = label[:500]
-	}
+	label := strings.TrimSpace(headRunes(goal, contractsv1.ContextFabricSubjectRefLabelMaxLength))
 	episode := contractsv1.ContextFabricEpisodeProjection{
 		EpisodeID: canonicalID,
 		Subject:   contractsv1.ContextFabricSubjectRef{Kind: contractsv1.ContextFabricSubjectEpisode, CanonicalID: canonicalID, Label: label},

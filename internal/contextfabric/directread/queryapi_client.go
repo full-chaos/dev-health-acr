@@ -194,6 +194,26 @@ func ListenerRefusalIsPrecheckGap(reason string) bool {
 	return mcpListenerReasons[reason].precheck
 }
 
+// RunOperationPath is the ops internal route run_operation posts to. The internal listener answers a
+// refused identity carrier there with a bare text 401, not a typed MCP_REFUSED body.
+const RunOperationPath = "/query/run-operation"
+
+// ListenerReasonInternal401 is the logged reason of a bare 401 on RunOperationPath. acr sets every
+// identity header of that call itself, and the route answers 401 only for the carrier, so the status is
+// the whole signal. Not in the MCP listener's vocabulary (mcpListenerReasons).
+const ListenerReasonInternal401 = "internal_401"
+
+// carriesTypedRefusal reports whether any error entry names a typed listener code. Each entry is read on
+// its own, so an unrelated entry with odd metadata (a numeric code, an object reason) cannot hide it.
+func carriesTypedRefusal(body []byte) bool {
+	for _, entry := range errorEntriesOf(body) {
+		if entry.code == MCPRefusedCode || entry.code == MCPReadBudgetExceededCode {
+			return true
+		}
+	}
+	return false
+}
+
 // MCPRefusedCode is the extensions.code of every other MCP listener refusal.
 const MCPRefusedCode = "MCP_REFUSED"
 
@@ -221,27 +241,49 @@ func ListenerRefusalClassVocabulary() [2]ListenerRefusalClass {
 // closed map; an unknown reason is the query class, reported as "unknown".
 // A body without MCP_REFUSED yields "", "".
 func listenerRefusalOf(body []byte) (ListenerRefusalClass, string) {
-	var answer struct {
-		Errors []struct {
-			Extensions struct {
-				Code   string `json:"code"`
-				Reason string `json:"reason"`
-			} `json:"extensions"`
-		} `json:"errors"`
-	}
-	if json.Unmarshal(body, &answer) != nil {
-		return "", ""
-	}
-	for _, e := range answer.Errors {
-		if e.Extensions.Code != MCPRefusedCode {
+	for _, entry := range errorEntriesOf(body) {
+		if entry.code != MCPRefusedCode {
 			continue
 		}
-		if known, ok := mcpListenerReasons[e.Extensions.Reason]; ok {
-			return known.class, e.Extensions.Reason
+		if known, ok := mcpListenerReasons[entry.reason]; ok {
+			return known.class, entry.reason
 		}
 		return ListenerRefusalQuery, "unknown"
 	}
 	return "", ""
+}
+
+// errorEntry is the extensions.code and extensions.reason of one GraphQL error, each kept only when it is a
+// JSON string (a numeric code or an object reason leaves it empty).
+type errorEntry struct{ code, reason string }
+
+// errorEntriesOf decodes each entry of the answer's errors list on its own, so an entry with metadata of an
+// unexpected type never hides a typed refusal in the same list (CHAOS-13999). A body that is not a JSON object
+// with an errors array yields nothing.
+func errorEntriesOf(body []byte) []errorEntry {
+	var answer struct {
+		Errors []json.RawMessage `json:"errors"`
+	}
+	if json.Unmarshal(body, &answer) != nil {
+		return nil
+	}
+	entries := make([]errorEntry, 0, len(answer.Errors))
+	for _, raw := range answer.Errors {
+		var entry struct {
+			Extensions struct {
+				Code   json.RawMessage `json:"code"`
+				Reason json.RawMessage `json:"reason"`
+			} `json:"extensions"`
+		}
+		if json.Unmarshal(raw, &entry) != nil {
+			continue
+		}
+		var parsed errorEntry
+		_ = json.Unmarshal(entry.Extensions.Code, &parsed.code)
+		_ = json.Unmarshal(entry.Extensions.Reason, &parsed.reason)
+		entries = append(entries, parsed)
+	}
+	return entries
 }
 
 // Closed reasons of a listener 404 (ops mcp_route.go): a root the routing
@@ -364,9 +406,12 @@ type QueryClient interface {
 
 // HTTPQueryClient is the production QueryClient.
 type HTTPQueryClient struct {
-	endpoint  string
-	path      string
-	userAgent string
+	endpoint string
+	// onRunOperationRoute: the request path actually sent (base path plus configured path) is exactly
+	// RunOperationPath.
+	onRunOperationRoute bool
+	path                string
+	userAgent           string
 	// readsTypedRefusals: the MCP listener client reads a bounded error
 	// body to recognise the read-budget refusal. Every client reads a
 	// bounded 404 body for the listener's not-found reason and a bounded
@@ -486,10 +531,11 @@ func newHTTPQueryClient(baseURL string, timeout time.Duration, path, userAgent s
 		DisableCompression: true,
 	}
 	return &HTTPQueryClient{
-		endpoint:  u.String(),
-		path:      path,
-		userAgent: userAgent,
-		timeout:   timeout,
+		endpoint:            u.String(),
+		onRunOperationRoute: u.Path == RunOperationPath,
+		path:                path,
+		userAgent:           userAgent,
+		timeout:             timeout,
 		client: &http.Client{
 			Transport: transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -590,6 +636,9 @@ func (c *HTTPQueryClient) Execute(ctx context.Context, call QueryCall) (QueryRes
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 		qerr.GraphQLCode, qerr.Variable = parseUpstreamGraphQLError(body)
 		qerr.ListenerRefusal, qerr.ListenerReason = listenerRefusalOf(body)
+		if qerr.ListenerRefusal == "" && resp.StatusCode == http.StatusUnauthorized && c.onRunOperationRoute && !carriesTypedRefusal(body) {
+			qerr.ListenerRefusal, qerr.ListenerReason = ListenerRefusalCarrier, ListenerReasonInternal401
+		}
 		if c.readsTypedRefusals {
 			qerr.ReadBudget = ReadBudgetOf(body)
 		}

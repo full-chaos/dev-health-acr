@@ -38,7 +38,7 @@ func (s *ClickHouseEvidenceStore) ResolveEvidence(ctx context.Context, principal
 		}
 		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
 	}
-	if len(candidates) == 0 || len(candidates) > maxEvidenceCandidateRepos {
+	if len(candidates) == 0 || len(candidates) > MaxEvidenceCandidateRepos {
 		return contractsv1.ExpandedEvidence{}, storage.ErrNotFound
 	}
 	routed, ok := s.routeEvidenceHandle(principal, handle, candidates)
