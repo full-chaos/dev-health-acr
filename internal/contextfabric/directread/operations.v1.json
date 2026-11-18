@@ -3,10 +3,10 @@
   "generator": "cmd/operationpolicy",
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "f67b568a35cae84336de9b39a609476bf76036b2",
+    "commit": "b0f621e5268d9a5f3b6d99968d51d144054daef4",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
-    "schema_digest": "sha256:76218f99d03ba1ca80c91c8d45c1ecf38570f2c139d27593415734c096fb6ec7",
-    "registry_sha256": "2055faefaef801bfd1c996a8178ad4bd82b6d068f341f3e7245747d543e177a2",
+    "schema_digest": "sha256:c3340e3a18800084eb8eccee7c7bb916153cc5ef6a6c4ae07ce35e85d0c8a4d7",
+    "registry_sha256": "d1d431efeba9cc66127d8613a388be677aaecac9fad286db473f170c4a015788",
     "registry_rows": 67
   },
   "person_name_tokens": [
@@ -8169,8 +8169,8 @@
       "name": "throughputForecast",
       "document_operation_name": "ThroughputForecast",
       "kind": "query",
-      "digest": "fc08dea094ec832290b4f528141eacb5bbc463beea45794cf205fe43952379f9",
-      "document_text": "query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {\n  throughputForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    historyWeeks\n    p50Weeks\n    p75Weeks\n    p90Weeks\n    insufficientHistory\n    rollingWindows {\n      windowWeeks\n      meanWeeklyThroughput\n      sampleCount\n      insufficientHistory\n      __typename\n    }\n    primaryRisk {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestion {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    staleWip {\n      p50AgeHours\n      p90AgeHours\n      __typename\n    }\n    estimateCoverage {\n      ratio\n      estimatedCount\n      unestimatedCount\n      backlogSize\n      __typename\n    }\n    reviewBottleneck {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    incidentLoad {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    __typename\n  }\n}",
+      "digest": "a265a9550e4cdab2bc77395257777ec366ac554b19c617af094de47c7a9e2b03",
+      "document_text": "query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {\n  throughputForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    backlogState\n    backlogAsOfDay\n    degradedReason\n    historyWeeks\n    p50Weeks\n    p75Weeks\n    p90Weeks\n    insufficientHistory\n    rollingWindows {\n      windowWeeks\n      meanWeeklyThroughput\n      sampleCount\n      insufficientHistory\n      __typename\n    }\n    primaryRisk {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestion {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    staleWip {\n      p50AgeHours\n      p90AgeHours\n      __typename\n    }\n    estimateCoverage {\n      ratio\n      estimatedCount\n      unestimatedCount\n      backlogSize\n      grainCount\n      __typename\n    }\n    reviewBottleneck {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    incidentLoad {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    __typename\n  }\n}",
       "cost_class": "series",
       "deadline_seconds": 30,
       "variables": [
@@ -8241,16 +8241,16 @@
         {
           "caller": "unrestricted",
           "served": true,
-          "basis": "[ops] throughputforecast clickhouse.go:44-63 apply teamIds (RM §14)"
+          "basis": "[ops] throughputforecast clickhouse.go:60-89 apply teamIds (RM §14)"
         },
         {
           "caller": "restricted",
           "served": false,
           "refusal": {
             "code": "operation_not_served_for_caller",
-            "reason": "no repository scope; reviewBottleneck and incidentLoad are org-wide ([ops] throughputforecast/resolve.go:145-152; clickhouse.go:395-411,492-510; RM §14); REFUSED until the K2 team path is read"
+            "reason": "no repository scope; reviewBottleneck and incidentLoad are org-wide ([ops] throughputforecast/resolve.go:148-155; clickhouse.go:448-460,577-589; RM §14); REFUSED until the K2 team path is read"
           },
-          "basis": "no repository scope; reviewBottleneck and incidentLoad are org-wide ([ops] throughputforecast/resolve.go:145-152; clickhouse.go:395-411,492-510; RM §14); REFUSED until the K2 team path is read"
+          "basis": "no repository scope; reviewBottleneck and incidentLoad are org-wide ([ops] throughputforecast/resolve.go:148-155; clickhouse.go:448-460,577-589; RM §14); REFUSED until the K2 team path is read"
         }
       ],
       "outputs": [
@@ -8277,6 +8277,21 @@
         {
           "path": "throughputForecast.backlogSize",
           "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.backlogState",
+          "type": "ThroughputBacklogState!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.backlogAsOfDay",
+          "type": "Date",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.degradedReason",
+          "type": "String",
           "leaf": "scalar"
         },
         {
@@ -8435,6 +8450,11 @@
           "leaf": "scalar"
         },
         {
+          "path": "throughputForecast.estimateCoverage.grainCount",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
           "path": "throughputForecast.estimateCoverage.__typename",
           "type": "String",
           "leaf": "typename"
@@ -8520,10 +8540,16 @@
         {
           "path": "throughputForecast.insufficientHistory",
           "rule": "partial_when_true"
+        },
+        {
+          "path": "throughputForecast.degradedReason",
+          "rule": "partial_when_non_null"
         }
       ],
       "notes": [
-        "reviewBottleneck and incidentLoad stay org-wide even with teamIds (RM §14)"
+        "reviewBottleneck and incidentLoad stay org-wide even with teamIds (RM §14)",
+        "backlogState STALE: backlogSize is read from backlogAsOfDay, a day before the window; NO_ROWS: no work-item row to read it from ([ops] throughputforecast/clickhouse.go:507); degradedReason carries STALE or NO_ROWS and is null for MEASURED or SUPPLIED ([ops] throughputforecast/resolve.go:270-273), so either state answers declared_partial with reason degraded",
+        "estimateCoverage.grainCount 0 = the scope has no estimate-coverage row: the zero counts and ratio 0 in estimateCoverage are not a measurement; the forecast itself is unaffected"
       ]
     },
     {
@@ -9793,7 +9819,7 @@
     {
       "name": "operatingReview",
       "kind": "query",
-      "digest": "986a912f2997f08d2f83197e2ce866ca2b14be1a99522ca2c2a1f4ce2f2020e4",
+      "digest": "7b310f7a497f6d659d88b838920b3511170645b449727f65466612f771c2ada7",
       "code": "unknown_operation",
       "reason": "its investment part reads investment_metrics_daily, neither the acr basis nor the canonical mix ([ops] operatingreview/operatingreview.go:840; K14 ruling, table K14-A)"
     },
@@ -9884,7 +9910,7 @@
     {
       "name": "testopsRisk",
       "kind": "query",
-      "digest": "72c3e61ea17ba9550d5ab96ae298879f4559e08de8c0d6742c394b9a7b93d13e",
+      "digest": "a4821707fd5bb38f6a4250b093963768a1f72ec8b41983f1bfec66493415a1a9",
       "code": "unknown_operation",
       "reason": "no scope rule or no honest status yet (design D.3)"
     },

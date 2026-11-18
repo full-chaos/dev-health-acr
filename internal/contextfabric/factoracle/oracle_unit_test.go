@@ -1237,11 +1237,11 @@ func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
 	}
 	count := func(rr *RootReport) int { return rr.ByClass[ClassLatestDayVsWindow] }
 
-	// The covered values are the same for both histories: four counted
+	// The covered values are the same for both histories: three counted
 	// differences, one per covered path, nothing expired.
 	same := fakeRun(t, "throughputForecast", recordedThroughput(t, echo), nil)
 	rr := same.Root("throughputForecast")
-	if count(rr) != 4 || len(same.Expired()) != 0 || len(rr.CodeRead) != 0 {
+	if count(rr) != 3 || len(same.Expired()) != 0 || len(rr.CodeRead) != 0 {
 		t.Fatalf("a latest-day value under two histories: %d differences, expired %v, code read %v", count(rr), same.Expired(), rr.CodeRead)
 	}
 	for _, d := range rr.Differences {
@@ -1250,15 +1250,25 @@ func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
 		}
 	}
 
-	// The backlog now follows the requested history: that path expires, the
-	// other three are still measured.
-	follows := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+	// backlogSize is not covered: it is the value of backlogAsOfDay, a day the
+	// answer states, so a backlog that follows the history expires nothing.
+	backlog := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
 		echo(variables, forecast)
 		forecast["backlogSize"] = 100 + historyOf(variables, "historyWeeks")
 	}), nil)
+	if expired := backlog.Expired(); len(expired) != 0 || count(backlog.Root("throughputForecast")) != 3 {
+		t.Fatalf("a backlog that follows the history: expired %v, %d differences", expired, count(backlog.Root("throughputForecast")))
+	}
+
+	// The WIP overlay now follows the requested history: that path expires,
+	// the other two are still measured.
+	follows := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+		echo(variables, forecast)
+		forecast["wipCongestion"] = map[string]any{"__typename": "ThroughputRiskOverlay", "active": false, "kind": "wip", "label": "h-e3696e6a81516f0b", "score": 0.8, "threshold": 1.25, "value": float64(historyOf(variables, "historyWeeks"))}
+	}), nil)
 	expired := follows.Expired()
-	if len(expired) != 1 || !strings.Contains(expired[0], "throughputForecast.backlogSize is another value") || count(follows.Root("throughputForecast")) != 3 {
-		t.Fatalf("a backlog that follows the history: expired %v, %d differences", expired, count(follows.Root("throughputForecast")))
+	if len(expired) != 1 || !strings.Contains(expired[0], "throughputForecast.wipCongestion is another value") || count(follows.Root("throughputForecast")) != 2 {
+		t.Fatalf("a WIP overlay that follows the history: expired %v, %d differences", expired, count(follows.Root("throughputForecast")))
 	}
 	if follows.Err() == nil {
 		t.Fatal("a run with an allowance that expired by measurement is not an error")
@@ -1319,7 +1329,7 @@ func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
 		forecast["estimateCoverage"] = nil
 	}), nil)
 	rr = null.Root("throughputForecast")
-	if count(rr) != 3 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 1 || !strings.Contains(probeInvalid(rr)[0], "throughputForecast.estimateCoverage") || null.Err() == nil {
+	if count(rr) != 2 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 1 || !strings.Contains(probeInvalid(rr)[0], "throughputForecast.estimateCoverage") || null.Err() == nil {
 		t.Fatalf("a covered block that is null: %d differences, code read %v, invalid %v", count(rr), rr.CodeRead, rr.Invalid)
 	}
 
@@ -1946,7 +1956,7 @@ func TestAShortHistoryIsProbedWithWindowsTheDataCanTellApart(t *testing.T) {
 	}
 	same := fakeRun(t, "throughputForecast", recordedThroughput(t, clamp), nil)
 	rr := same.Root("throughputForecast")
-	if count(rr) != 4 || len(same.Expired()) != 0 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 0 {
+	if count(rr) != 3 || len(same.Expired()) != 0 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 0 {
 		t.Fatalf("a short history, windows told apart: %d differences, expired %v, code read %v, invalid %v", count(rr), same.Expired(), rr.CodeRead, rr.Invalid)
 	}
 	for _, d := range rr.Differences {
@@ -1956,10 +1966,10 @@ func TestAShortHistoryIsProbedWithWindowsTheDataCanTellApart(t *testing.T) {
 	}
 	follows := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
 		clamp(variables, forecast)
-		forecast["backlogSize"] = 100 + historyOf(variables, "historyWeeks")
+		forecast["staleWip"] = map[string]any{"__typename": "StaleWipSignal", "p50AgeHours": float64(historyOf(variables, "historyWeeks")), "p90AgeHours": 9.5}
 	}), nil)
-	if expired := follows.Expired(); len(expired) != 1 || !strings.Contains(expired[0], "throughputForecast.backlogSize is another value") {
-		t.Fatalf("a short history, backlog follows the window: expired %v", expired)
+	if expired := follows.Expired(); len(expired) != 1 || !strings.Contains(expired[0], "throughputForecast.staleWip is another value") {
+		t.Fatalf("a short history, stale WIP follows the window: expired %v", expired)
 	}
 	stuck := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
 		forecast["historyWeeks"] = held

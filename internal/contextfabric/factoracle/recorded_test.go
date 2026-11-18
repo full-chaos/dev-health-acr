@@ -70,6 +70,7 @@ var contractsAtCapture = map[string]string{
 var advancedPastCapture = map[string]string{
 	"investmentBreakdownRepository": "the capture predates analytics.evidenceQualityStats.sizedUnitCount, which ops f67b568a registers on this document; retake the capture on the next venue move",
 	"investmentBreakdownTeam":       "the capture predates analytics.evidenceQualityStats.sizedUnitCount, which ops f67b568a registers on this document; retake the capture on the next venue move",
+	"throughputForecast":            "the capture predates backlogState, backlogAsOfDay, estimateCoverage.grainCount and degradedReason, which ops b0f621e5 registers on this document; retake the capture on the next venue move (ticket CHAOS-14023)",
 }
 
 // recordedNotRecorded is Oracle.NotRecorded of a recorded run: the operations

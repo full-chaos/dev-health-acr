@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "f67b568a35cae84336de9b39a609476bf76036b2",
+    "commit": "b0f621e5268d9a5f3b6d99968d51d144054daef4",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
     "schema_path": "contracts/graphql/v1/schema.graphql"
   },
@@ -536,9 +536,9 @@
     },
     {
       "operation": "operatingReview",
-      "document": "query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {\n  operatingReview(orgId: $orgId, input: $input) {\n    orgId\n    teamId\n    weekStart\n    priorWeekStart\n    sections {\n      key\n      title\n      changed\n      improved\n      worsened\n      sizing {\n        measure\n        sizingCoverage\n        unsizedUnitCount\n        workUnitCount\n        __typename\n      }\n      metrics {\n        key\n        label\n        value\n        unit\n        hasData\n        scope\n        rateState\n        changeFailureEvidence {\n          basis\n          deployments\n          deploymentsWithStatus\n          coverage\n          unknownReason\n          __typename\n        }\n        delta {\n          value\n          priorValue\n          absolute\n          percent\n          status\n          hasPriorData\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    recommendations\n    recommendationsEmptyState\n    __typename\n  }\n}",
+      "document": "query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {\n  operatingReview(orgId: $orgId, input: $input) {\n    orgId\n    teamId\n    weekStart\n    priorWeekStart\n    sections {\n      key\n      title\n      changed\n      improved\n      worsened\n      sizing {\n        measure\n        sizingCoverage\n        unsizedUnitCount\n        workUnitCount\n        __typename\n      }\n      metrics {\n        key\n        label\n        value\n        unit\n        hasData\n        scope\n        rateState\n        changeFailureEvidence {\n          basis\n          deployments\n          deploymentsWithStatus\n          coverage\n          unknownReason\n          __typename\n        }\n        degradedReason\n        delta {\n          value\n          priorValue\n          absolute\n          percent\n          status\n          hasPriorData\n          degradedReason\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    recommendations\n    recommendationsEmptyState\n    __typename\n  }\n}",
       "const_name": "registeredOperatingReviewDocument",
-      "digest": "986a912f2997f08d2f83197e2ce866ca2b14be1a99522ca2c2a1f4ce2f2020e4",
+      "digest": "7b310f7a497f6d659d88b838920b3511170645b449727f65466612f771c2ada7",
       "kind": "query"
     },
     {
@@ -578,6 +578,14 @@
       "document": "query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {\n  operatingReview(orgId: $orgId, input: $input) {\n    orgId\n    teamId\n    weekStart\n    priorWeekStart\n    sections {\n      key\n      title\n      changed\n      improved\n      worsened\n      metrics {\n        key\n        label\n        value\n        unit\n        hasData\n        scope\n        rateState\n        changeFailureEvidence {\n          basis\n          deployments\n          deploymentsWithStatus\n          coverage\n          unknownReason\n          __typename\n        }\n        delta {\n          value\n          priorValue\n          absolute\n          percent\n          status\n          hasPriorData\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    recommendations\n    recommendationsEmptyState\n    __typename\n  }\n}",
       "const_name": "registeredOperatingReviewV5Document",
       "digest": "0ba2df77565f6c9c91564108fb182f72928b6d3a3a6f850659c7d8216eecabd6",
+      "kind": "query",
+      "legacy": true
+    },
+    {
+      "operation": "operatingReview",
+      "document": "query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {\n  operatingReview(orgId: $orgId, input: $input) {\n    orgId\n    teamId\n    weekStart\n    priorWeekStart\n    sections {\n      key\n      title\n      changed\n      improved\n      worsened\n      sizing {\n        measure\n        sizingCoverage\n        unsizedUnitCount\n        workUnitCount\n        __typename\n      }\n      metrics {\n        key\n        label\n        value\n        unit\n        hasData\n        scope\n        rateState\n        changeFailureEvidence {\n          basis\n          deployments\n          deploymentsWithStatus\n          coverage\n          unknownReason\n          __typename\n        }\n        delta {\n          value\n          priorValue\n          absolute\n          percent\n          status\n          hasPriorData\n          __typename\n        }\n        __typename\n      }\n      __typename\n    }\n    recommendations\n    recommendationsEmptyState\n    __typename\n  }\n}",
+      "const_name": "registeredOperatingReviewV6Document",
+      "digest": "986a912f2997f08d2f83197e2ce866ca2b14be1a99522ca2c2a1f4ce2f2020e4",
       "kind": "query",
       "legacy": true
     },
@@ -751,9 +759,9 @@
     },
     {
       "operation": "testopsRisk",
-      "document": "query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {\n  testopsRisk(orgId: $orgId, input: $input) {\n    releaseConfidence\n    qualityDragHours\n    pipelineStability\n    timeseries {\n      date\n      riskScore\n      __typename\n    }\n    qualityDragBreakdown {\n      category\n      hours\n      __typename\n    }\n    quadrantData {\n      id\n      name\n      pipelineSuccessRate\n      testPassRate\n      __typename\n    }\n    confidenceSpark {\n      ts\n      value\n      __typename\n    }\n    confidenceDelta\n    dragSpark {\n      ts\n      value\n      __typename\n    }\n    dragDelta\n    stabilitySpark {\n      ts\n      value\n      __typename\n    }\n    stabilityDelta\n    __typename\n  }\n}",
+      "document": "query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {\n  testopsRisk(orgId: $orgId, input: $input) {\n    releaseConfidence\n    qualityDragHours\n    pipelineStability\n    timeseries {\n      date\n      riskScore\n      __typename\n    }\n    qualityDragBreakdown {\n      category\n      hours\n      __typename\n    }\n    qualityDragPartial\n    quadrantData {\n      id\n      name\n      pipelineSuccessRate\n      testPassRate\n      __typename\n    }\n    confidenceSpark {\n      ts\n      value\n      __typename\n    }\n    confidenceDelta\n    dragSpark {\n      ts\n      value\n      __typename\n    }\n    dragDelta\n    stabilitySpark {\n      ts\n      value\n      __typename\n    }\n    stabilityDelta\n    __typename\n  }\n}",
       "const_name": "registeredTestopsRiskDocument",
-      "digest": "72c3e61ea17ba9550d5ab96ae298879f4559e08de8c0d6742c394b9a7b93d13e",
+      "digest": "a4821707fd5bb38f6a4250b093963768a1f72ec8b41983f1bfec66493415a1a9",
       "kind": "query"
     },
     {
@@ -761,6 +769,14 @@
       "document": "query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {\n  testopsRisk(orgId: $orgId, input: $input) {\n    releaseConfidence\n    qualityDragHours\n    pipelineStability\n    timeseries {\n      date\n      riskScore\n      __typename\n    }\n    qualityDragBreakdown {\n      category\n      hours\n      __typename\n    }\n    quadrantData {\n      id\n      pipelineSuccessRate\n      testPassRate\n      __typename\n    }\n    confidenceSpark {\n      ts\n      value\n      __typename\n    }\n    confidenceDelta\n    dragSpark {\n      ts\n      value\n      __typename\n    }\n    dragDelta\n    stabilitySpark {\n      ts\n      value\n      __typename\n    }\n    stabilityDelta\n    __typename\n  }\n}",
       "const_name": "registeredTestopsRiskV1Document",
       "digest": "de0e6a96f2f917aa3a785993b5b35c4f003f974d638097f5702b3b8a56fa0bf7",
+      "kind": "query",
+      "legacy": true
+    },
+    {
+      "operation": "testopsRisk",
+      "document": "query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {\n  testopsRisk(orgId: $orgId, input: $input) {\n    releaseConfidence\n    qualityDragHours\n    pipelineStability\n    timeseries {\n      date\n      riskScore\n      __typename\n    }\n    qualityDragBreakdown {\n      category\n      hours\n      __typename\n    }\n    quadrantData {\n      id\n      name\n      pipelineSuccessRate\n      testPassRate\n      __typename\n    }\n    confidenceSpark {\n      ts\n      value\n      __typename\n    }\n    confidenceDelta\n    dragSpark {\n      ts\n      value\n      __typename\n    }\n    dragDelta\n    stabilitySpark {\n      ts\n      value\n      __typename\n    }\n    stabilityDelta\n    __typename\n  }\n}",
+      "const_name": "registeredTestopsRiskV2Document",
+      "digest": "72c3e61ea17ba9550d5ab96ae298879f4559e08de8c0d6742c394b9a7b93d13e",
       "kind": "query",
       "legacy": true
     },
@@ -781,10 +797,26 @@
     },
     {
       "operation": "throughputForecast",
-      "document": "query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {\n  throughputForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    historyWeeks\n    p50Weeks\n    p75Weeks\n    p90Weeks\n    insufficientHistory\n    rollingWindows {\n      windowWeeks\n      meanWeeklyThroughput\n      sampleCount\n      insufficientHistory\n      __typename\n    }\n    primaryRisk {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestion {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    staleWip {\n      p50AgeHours\n      p90AgeHours\n      __typename\n    }\n    estimateCoverage {\n      ratio\n      estimatedCount\n      unestimatedCount\n      backlogSize\n      __typename\n    }\n    reviewBottleneck {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    incidentLoad {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {\n  throughputForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    backlogState\n    backlogAsOfDay\n    degradedReason\n    historyWeeks\n    p50Weeks\n    p75Weeks\n    p90Weeks\n    insufficientHistory\n    rollingWindows {\n      windowWeeks\n      meanWeeklyThroughput\n      sampleCount\n      insufficientHistory\n      __typename\n    }\n    primaryRisk {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestion {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    staleWip {\n      p50AgeHours\n      p90AgeHours\n      __typename\n    }\n    estimateCoverage {\n      ratio\n      estimatedCount\n      unestimatedCount\n      backlogSize\n      grainCount\n      __typename\n    }\n    reviewBottleneck {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    incidentLoad {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredThroughputForecastDocument",
-      "digest": "fc08dea094ec832290b4f528141eacb5bbc463beea45794cf205fe43952379f9",
+      "digest": "a265a9550e4cdab2bc77395257777ec366ac554b19c617af094de47c7a9e2b03",
       "kind": "query"
+    },
+    {
+      "operation": "throughputForecast",
+      "document": "query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {\n  throughputForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    historyWeeks\n    p50Weeks\n    p75Weeks\n    p90Weeks\n    insufficientHistory\n    rollingWindows {\n      windowWeeks\n      meanWeeklyThroughput\n      sampleCount\n      insufficientHistory\n      __typename\n    }\n    primaryRisk {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestion {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    staleWip {\n      p50AgeHours\n      p90AgeHours\n      __typename\n    }\n    estimateCoverage {\n      ratio\n      estimatedCount\n      unestimatedCount\n      backlogSize\n      __typename\n    }\n    reviewBottleneck {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    incidentLoad {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredThroughputForecastV1Document",
+      "digest": "fc08dea094ec832290b4f528141eacb5bbc463beea45794cf205fe43952379f9",
+      "kind": "query",
+      "legacy": true
+    },
+    {
+      "operation": "throughputForecast",
+      "document": "query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {\n  throughputForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    backlogState\n    backlogAsOfDay\n    historyWeeks\n    p50Weeks\n    p75Weeks\n    p90Weeks\n    insufficientHistory\n    rollingWindows {\n      windowWeeks\n      meanWeeklyThroughput\n      sampleCount\n      insufficientHistory\n      __typename\n    }\n    primaryRisk {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestion {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    staleWip {\n      p50AgeHours\n      p90AgeHours\n      __typename\n    }\n    estimateCoverage {\n      ratio\n      estimatedCount\n      unestimatedCount\n      backlogSize\n      grainCount\n      __typename\n    }\n    reviewBottleneck {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    incidentLoad {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredThroughputForecastV2Document",
+      "digest": "933efa3840bb7afb600135bc4470d6523842a908f0ffb949a35439e15a76e09d",
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "triggerReport",

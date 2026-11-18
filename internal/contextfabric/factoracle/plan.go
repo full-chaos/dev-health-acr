@@ -117,6 +117,10 @@ var valuePaths = map[string][]pathRule{
 		{Path: "throughputForecast.estimateCoverage.estimatedCount"},
 		{Path: "throughputForecast.estimateCoverage.unestimatedCount"},
 		{Path: "throughputForecast.estimateCoverage.backlogSize"},
+		{Path: "throughputForecast.estimateCoverage.grainCount", Reason: "not compared yet: the store reading counts no estimate-coverage grains (ticket CHAOS-14141)"},
+		{Path: "throughputForecast.backlogState", Reason: "how ops read the backlog (MEASURED, STALE, NO_ROWS, SUPPLIED); no acr fact"},
+		{Path: "throughputForecast.backlogAsOfDay", Reason: "the day ops read the backlog from; no acr fact"},
+		{Path: "throughputForecast.degradedReason", Reason: "the backlogState value when it is STALE or NO_ROWS; acr discloses it as declared_partial, no acr fact"},
 		{Path: "throughputForecast.forecastId", Reason: byDesign},
 		{Path: "throughputForecast.computedAt", Reason: byDesign},
 		{Path: "throughputForecast.teamId", Reason: "the team of the request"},
@@ -606,8 +610,8 @@ type temporaryAllowance struct {
 var temporaryAllowances = map[string]temporaryAllowance{
 	"throughputForecast": {
 		Operation: "throughputForecast", Window: "input.historyWeeks", Narrow: 4, Echo: "throughputForecast.historyWeeks",
-		Paths:    []string{"throughputForecast.backlogSize", "throughputForecast.wipCongestion", "throughputForecast.staleWip", "throughputForecast.estimateCoverage"},
-		Contract: "sha256:ad5d774fa899197d84842001d2f9fcee48155c5356a27238e1d726e1aff4db51",
+		Paths:    []string{"throughputForecast.wipCongestion", "throughputForecast.staleWip", "throughputForecast.estimateCoverage"},
+		Contract: "sha256:080099573a1f73dd8f739ed711627f037cddc166b3e2bdc5ba97ada243d0c24f",
 	},
 	"capacityForecast": {
 		Operation: "capacityForecast", Window: "input.historyDays", Narrow: 30, Echo: "capacityForecast.historyDays", WideStated: 91, NarrowStated: 31,
