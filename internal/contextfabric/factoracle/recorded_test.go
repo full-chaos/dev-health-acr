@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"reflect"
@@ -45,12 +46,9 @@ var contractsAtCapture = map[string]string{
 	// analytics.evidenceQualityStats.uncategorizedCount); investmentBreakdownTeam and
 	// investmentBreakdownRepository are the scoped candidates of root analytics (CHAOS-12698). The capture of
 	// CHAOS-12808 records all three.
-	"investmentBreakdown": "sha256:dcaf3bfe8899a3ba1fff623bb9dff5380212d515c51f073c1f2eb670f1c353df",
-	// The two scoped candidates are advanced past the capture: ops f67b568a registers them with
-	// analytics.evidenceQualityStats.sizedUnitCount, which the recorded replies lack (capturePredates) and
-	// valuePaths excludes; retake the capture on the next venue move.
-	"investmentBreakdownRepository": "sha256:7eedeea132fc8a31c8c1f2c6af506b587119aa75ece405425df15abff43b2026",
-	"investmentBreakdownTeam":       "sha256:67f8a9744d92d26d7363e88b2c1189a090fa329d0f00813adaaf0e298a32dd02",
+	"investmentBreakdown":           "sha256:dcaf3bfe8899a3ba1fff623bb9dff5380212d515c51f073c1f2eb670f1c353df",
+	"investmentBreakdownRepository": "sha256:0535d2800c3017e3f9494e3da384e6ff96eb340f286372c812e220c00c73802c",
+	"investmentBreakdownTeam":       "sha256:fbc2c1b16914b5f673bc4700d4dd351a6390b804270a0b70c232c4b14681aa90",
 	"investmentFull":                "sha256:961a15df3b4a1ee6ecd80c0a66a7d856256e97b475039d58d08fbfcd82176dd3",
 	"recommendations":               "sha256:2a2a5d0a1c1dcddae195d7c4d7d73517e4113694e6396620222c28a250003ee1",
 	"securityOverview":              "sha256:df174e0fc36768a4385f9a9337e64f4e38f1a782704d8394e2e98253dccee9cb",
@@ -62,12 +60,37 @@ var contractsAtCapture = map[string]string{
 	"workItemTeamAttributions":      "sha256:e3e1700f64773540a6192f8239068aac3b780a4d5cf37c5252f766bf819dda58",
 }
 
-// capturePredates are the output paths ops registered after the capture, per
-// operation (Oracle.CapturePredates): the recorded run asks for the selection
-// the capture recorded. Remove an entry when the capture is taken again.
-var capturePredates = map[string][]string{
-	"investmentBreakdownRepository": {"analytics.evidenceQualityStats.sizedUnitCount"},
-	"investmentBreakdownTeam":       {"analytics.evidenceQualityStats.sizedUnitCount"},
+// advancedPastCapture are the operations whose contract moved after the
+// capture: the recorded replies answer an older document. A recorded run
+// leaves their cases out and states each one on its root (Oracle.NotRecorded),
+// so it never replays a reply to a request it did not record. Each entry must
+// have a case in the capture and a contract that is not the one in
+// contractsAtCapture (TestAdvancedPastCaptureEntriesAreRecordedAndAdvanced), so
+// the list cannot outlive a capture taken again.
+var advancedPastCapture = map[string]string{
+	"investmentBreakdownRepository": "the capture predates analytics.evidenceQualityStats.sizedUnitCount, which ops f67b568a registers on this document; retake the capture on the next venue move",
+	"investmentBreakdownTeam":       "the capture predates analytics.evidenceQualityStats.sizedUnitCount, which ops f67b568a registers on this document; retake the capture on the next venue move",
+}
+
+// recordedNotRecorded is Oracle.NotRecorded of a recorded run: the operations
+// the capture has no case for and the operations advanced past it.
+func recordedNotRecorded() map[string]string {
+	out := maps.Clone(notRecordedOperations)
+	maps.Copy(out, advancedPastCapture)
+	return out
+}
+
+// withoutAdvancedCases returns the shape cases of the capture without those of
+// the operations advanced past it.
+func withoutAdvancedCases(cases []ShapeCase) []ShapeCase {
+	return slices.DeleteFunc(slices.Clone(cases), func(c ShapeCase) bool {
+		parts := strings.SplitN(c.ShapeID, "/", 3)
+		if len(parts) < 2 {
+			return false
+		}
+		_, advanced := advancedPastCapture[parts[1]]
+		return advanced
+	})
 }
 
 func requireCaptureContractsUnchanged(t *testing.T, policy *directread.GraphQLPolicy, recorded, pinned string) {
@@ -99,6 +122,9 @@ func operationsWithChangedContract(policy *directread.GraphQLPolicy, baseline ma
 	var changed []string
 	for _, op := range policy.Catalogue().Operations(directread.CallerUnrestricted) {
 		if _, notRecorded := notRecordedOperations[op.Name]; notRecorded {
+			continue
+		}
+		if _, advanced := advancedPastCapture[op.Name]; advanced {
 			continue
 		}
 		if baseline[op.Name] != contractDigest(op) {
@@ -146,7 +172,7 @@ func oracleFor(t *testing.T, manifest Manifest, planes Planes, reference *Extrac
 	if err != nil {
 		t.Fatalf("reference store: %v", err)
 	}
-	return &Oracle{Policy: policy, Planes: planes, Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, NotRecorded: notRecordedOperations, CapturePredates: capturePredates,
+	return &Oracle{Policy: policy, Planes: planes, Store: store, Window: manifest.Window, ShapeCases: withoutAdvancedCases(manifest.ShapeCases), NotRecorded: recordedNotRecorded(),
 		ListenerDark: manifest.ListenerDark, OperationDark: manifest.OperationDark, DeniedTeams: manifest.DeniedTeams}
 }
 
@@ -198,10 +224,26 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	}
 	unusedSet := map[string]bool{}
 	var live []string
+	advancedUnused := map[string]int{}
 	for _, key := range unused {
 		unusedSet[key] = true
+		if op := advancedKeyOperation(key); op != "" {
+			advancedUnused[op]++
+			continue
+		}
 		if !darkKeys[key] && !isNotRecordedKey(t, key, skipped) {
 			live = append(live, key)
+		}
+	}
+	// The exclusion is measured: every advanced operation has recorded replies, and none was replayed.
+	for key := range recording.Replies {
+		if op := advancedKeyOperation(key); op != "" && !unusedSet[key] {
+			t.Fatalf("the recorded reply %s of %s, which is advanced past the capture, was replayed", key, op)
+		}
+	}
+	for op := range advancedPastCapture {
+		if advancedUnused[op] == 0 {
+			t.Fatalf("the capture holds no recorded reply of %s, which is listed as advanced past it: the exclusion measured nothing", op)
 		}
 	}
 	for key := range darkKeys {
@@ -514,6 +556,20 @@ func rootsExcept(t *testing.T, skipped []string) []string {
 // root: a graphql_query key starts with the root, a run_operation key with
 // run_operation and the operation, which is matched against the operations
 // of the skipped roots.
+// advancedKeyOperation is the operation of a recorded reply key (a shape key
+// root/operation/shape#vars or a run_operation key run_operation/operation/...)
+// when that operation is advanced past the capture, else "".
+func advancedKeyOperation(key string) string {
+	parts := strings.Split(strings.SplitN(key, "#", 2)[0], "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	if _, advanced := advancedPastCapture[parts[1]]; advanced {
+		return parts[1]
+	}
+	return ""
+}
+
 func isNotRecordedKey(t *testing.T, key string, skipped []string) bool {
 	t.Helper()
 	parts := strings.Split(strings.SplitN(key, "#", 2)[0], "/")

@@ -2319,8 +2319,8 @@
     "analytics": {
       "mode": "value",
       "listener": "served",
-      "shapes_run": 72,
-      "leaves": 1182,
+      "shapes_run": 24,
+      "leaves": 390,
       "compared": 76,
       "matches": 71,
       "by_class": {
@@ -2331,10 +2331,10 @@
         "investment: team team-66d62bb19c3d6b7d is denied to the venue token"
       ],
       "run_operation": "served",
-      "operations_run": 18,
-      "operation_leaves": 591,
-      "cross_paths": 591,
-      "cross_matches": 591,
+      "operations_run": 6,
+      "operation_leaves": 195,
+      "cross_paths": 195,
+      "cross_matches": 195,
       "differences": [
         {
           "pair": "investment_org",

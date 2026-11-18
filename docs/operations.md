@@ -1120,8 +1120,9 @@ completed in the window has no row, which is not a zero. The vendored registry
 the ops registry dump command prints them there. At f67b568a the three scoped
 documents (`investmentBreakdownTeam`, `investmentBreakdownRepository`,
 `teamWorkItemBreakdown`) select `analytics.evidenceQualityStats.sizedUnitCount`;
-the O4 capture predates it, so the oracle excludes that path and the capture is
-taken again on the next venue move. The O4 oracle lists the operation in
+the O4 capture predates it, so the recorded O4 run leaves the team and
+repository investment operations out (`advancedPastCapture`), the value plan
+excludes the path, and the capture is taken again on the next venue move. The O4 oracle lists the operation in
 `notRecordedOperations` until the venue serves the document and the capture is
 taken again. A new `devhealthfacts.QueryVersion` marks the widening.
 

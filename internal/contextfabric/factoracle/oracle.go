@@ -93,14 +93,6 @@ type Oracle struct {
 	// full. A listed operation with a case is an error, so the list cannot
 	// outlive the capture that records the operation.
 	NotRecorded map[string]string
-	// CapturePredates names, per operation, the output paths the recorded
-	// capture predates (a field ops registered after the capture). Every shape
-	// of a listed operation drops those paths, so the run asks for the
-	// selection the capture recorded. A listed operation that is not a
-	// candidate, or a path that is not one of its outputs, is an error; an
-	// answer that holds a listed path is a finding (path not in the
-	// selection), so the list cannot outlive a capture that records it.
-	CapturePredates map[string][]string
 	// RepositoryEffort is, after Run, the acr repository mix per repository
 	// id and theme.
 	RepositoryEffort map[string]map[string]float64
@@ -425,9 +417,6 @@ func (o *Oracle) Run(ctx context.Context) (*Report, error) {
 	}
 	shapes, err := Shapes(o.Policy)
 	if err != nil {
-		return nil, err
-	}
-	if shapes, err = withoutCapturePredates(shapes, o.CapturePredates); err != nil {
 		return nil, err
 	}
 	o.shapes, o.answers, o.opAnswers, o.Calls, o.OperationCalls = shapes, map[string]json.RawMessage{}, map[string]json.RawMessage{}, nil, nil
