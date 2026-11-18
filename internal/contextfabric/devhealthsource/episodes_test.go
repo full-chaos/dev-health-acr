@@ -325,6 +325,8 @@ func TestEpisodesProjectionSourceCapsLabelOnARuneBoundary(t *testing.T) {
 		"two-byte runes past cap": strings.Repeat("é", limit+50),
 		"four-byte runes at cap":  strings.Repeat("😀", limit+1),
 		"exactly at the bound":    strings.Repeat("é", limit),
+		"space at the cut":        strings.Repeat("a", limit-1) + " tail",
+		"spaces at the cut":       strings.Repeat("é", limit-2) + "\n\u3000x",
 	}
 	for name, goal := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -343,8 +345,9 @@ func TestEpisodesProjectionSourceCapsLabelOnARuneBoundary(t *testing.T) {
 			if !utf8.ValidString(label) {
 				t.Fatalf("label is not valid UTF-8: %q", label[len(label)-8:])
 			}
-			if n := utf8.RuneCountInString(label); n > limit || n != min(utf8.RuneCountInString(goal), limit) {
-				t.Fatalf("label runes = %d, want %d", n, min(utf8.RuneCountInString(goal), limit))
+			want := strings.TrimSpace(string([]rune(goal)[:min(utf8.RuneCountInString(goal), limit)]))
+			if label != want {
+				t.Fatalf("label runes = %d, want %d", utf8.RuneCountInString(label), utf8.RuneCountInString(want))
 			}
 			if err := batch.Validate(); err != nil {
 				t.Fatalf("batch failed contract validation: %v", err)
