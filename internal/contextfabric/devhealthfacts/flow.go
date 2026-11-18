@@ -147,11 +147,14 @@ const (
 // read the same. work_item_measure_capability keeps that fact apart, one
 // answer per (provider, measure, window_end); the answer for day D is the row
 // with window_end = D, deduplicated by argMax on computed_at, and a day with no
-// row is unknown -- never an earlier window's answer.
+// row is unknown -- never an earlier window's answer. A newest row with
+// item_count = 0 is the retirement marker: HAVING drops the key, so it reads
+// unknown too (computed rows always carry item_count >= 1).
 const flowCapabilityAnswersSQL = `SELECT provider, window_end, measure, argMax(tracked, computed_at) AS answer
 		FROM work_item_measure_capability
 		WHERE org_id = {org_id:String}
-		GROUP BY provider, window_end, measure`
+		GROUP BY provider, window_end, measure
+		HAVING argMax(item_count, computed_at) > 0`
 
 // flowMeasureTrackedSQL / flowMeasureKnownSQL are the row predicates over a
 // metrics row (alias prefix "" or "wm."): the provider tracks the measure on
