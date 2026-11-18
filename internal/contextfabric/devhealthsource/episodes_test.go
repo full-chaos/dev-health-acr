@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
@@ -311,5 +313,45 @@ func TestEpisodesProjectionSourceReportsTheVersionItsBatchesRecord(t *testing.T)
 	current := versioned.CurrentProjectionSourceVersion()
 	if current == "" || current != batch.SourceVersion {
 		t.Fatalf("CurrentProjectionSourceVersion() = %q, batch records %q; want the same non-empty version", current, batch.SourceVersion)
+	}
+}
+
+func TestEpisodesProjectionSourceCapsLabelOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 1, 14, 12, 0, 0, 0, time.UTC)
+	limit := contractsv1.ContextFabricSubjectRefLabelMaxLength
+	cases := map[string]string{
+		"rune straddles byte 500": strings.Repeat("a", 499) + "€€€",
+		"two-byte runes past cap": strings.Repeat("é", limit+50),
+		"four-byte runes at cap":  strings.Repeat("😀", limit+1),
+		"exactly at the bound":    strings.Repeat("é", limit),
+		"space at the cut":        strings.Repeat("a", limit-1) + " tail",
+		"spaces at the cut":       strings.Repeat("é", limit-2) + "\n\u3000x",
+	}
+	for name, goal := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			source, err := devhealthsource.NewEpisodesProjectionSource(&fakeEpisodeRows{rows: []storage.EpisodeProjectionRecord{
+				{EpisodeID: "ep-1", RepoSlug: "example-org/widget-service", Goal: goal, Outcome: "succeeded", Summary: "s", StartedAt: at, EndedAt: at.Add(time.Minute), CreatedAt: at, UpdatedAt: at, RedactionState: "active"},
+			}})
+			if err != nil {
+				t.Fatalf("new source: %v", err)
+			}
+			batch, available, err := source.NextProjectionBatch(context.Background(), contextfabric.ProjectionCheckpoint{OrgID: "org-1", Source: devhealthsource.EpisodesSourceName})
+			if err != nil || !available {
+				t.Fatalf("batch available=%v err=%v", available, err)
+			}
+			label := batch.Episodes[0].Subject.Label
+			if !utf8.ValidString(label) {
+				t.Fatalf("label is not valid UTF-8: %q", label[len(label)-8:])
+			}
+			want := strings.TrimSpace(string([]rune(goal)[:min(utf8.RuneCountInString(goal), limit)]))
+			if label != want {
+				t.Fatalf("label runes = %d, want %d", utf8.RuneCountInString(label), utf8.RuneCountInString(want))
+			}
+			if err := batch.Validate(); err != nil {
+				t.Fatalf("batch failed contract validation: %v", err)
+			}
+		})
 	}
 }
