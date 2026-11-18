@@ -12,8 +12,12 @@ import (
 	"strings"
 )
 
+// MaxEvidenceCandidateRepos bounds the organization repository listing a
+// handle is routed over: its tag is a keyed MAC, so routing reads every
+// repository the caller may see. Far below the hosted client's MaxResultRows.
+const MaxEvidenceCandidateRepos = 10_000
+
 const (
-	maxEvidenceCandidateRepos   = 64
 	evidenceRepositoryTagLength = 16
 	evidenceIDVersionV1         = "ev1"
 	evidenceIDVersionV2         = "ev2"
