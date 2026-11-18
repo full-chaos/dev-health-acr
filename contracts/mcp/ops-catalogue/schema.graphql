@@ -438,6 +438,8 @@ type AnalyticsResult {
   evidenceQualityDistribution: JSON
   evidenceQualityStats: EvidenceQualityStats
   evidenceQualityByGroup: [EvidenceQualityGroup!]
+  "Why the answer is empty, one value for the whole answer, set by the server and never derived by a client (CHAOS-9098). team_owns_no_repository: the request's team scope selects teams that together own no repository (team_repo_ownership, as of now), so every series and breakdown of the team scope is empty. Null when the request has no team scope, when the selected teams own one or more repositories (also when the window has no rows), and when the batch holds a request that does not read repository ownership (a stored team column) or a sankey or flow matrix. Never a value of 0 and never a healthy answer. The ORG series is not changed by it."
+  filterEmptyReason: String
 }
 
 """
@@ -897,6 +899,8 @@ type EvidenceQualityStats {
   bandCounts: JSON!
   """Units of the window under the evidence gate (too little text); the theme mix leaves them out and total still counts them. Null when the window has no unit."""
   uncategorizedCount: Int
+  """Categorized units of the window (not under the evidence gate) that carry a positive issue size; the rest count as one unit each in ISSUE_SIZE. Null when the window has no unit."""
+  sizedUnitCount: Int
 }
 
 type EvidenceRef {
@@ -1153,7 +1157,7 @@ type HomeResult {
   dataConfidence: HomeDataConfidence!
   """Coverage and ingestion quality for the selected repository scope; distinct from org-wide dataConfidence."""
   scopeDataConfidence: HomeScopeDataConfidence!
-  "Why the repositories the request names (a repo-level scope's ids, or what.repos) matched nothing, one value for the whole answer (CHAOS-9098). repository_not_in_team: every named repository exists and none is held by the selected teams. repository_not_found: a named repository resolved to nothing and no named repository matched. Null when the request names no repository and whenever something matched: also when only part of the named repositories is in the team or resolves (the value covers the part that matched), and when the scope resolved and the window has no rows. Filters AND and never widen."
+  "Why the repositories the request names (a repo-level scope's ids, or what.repos) matched nothing, one value for the whole answer (CHAOS-9098). repository_not_in_team: every named repository exists and none is held by the selected teams. repository_not_found: a named repository resolved to nothing and no named repository matched. Null when the request names no repository and whenever something matched: also when only part of the named repositories is in the team or resolves (the value covers the part that matched), and when the scope resolved and the window has no rows. Filters AND and never widen. An unresolved service or developer scope (its ids name nothing) answers no rows and says service_not_found or developer_not_found (CHAOS-13707)."
   filterEmptyReason: String
 }
 
@@ -1752,6 +1756,11 @@ type Query {
   testopsJobFailures(orgId: String!, input: TestOpsJobFailuresInput!): TestOpsJobFailuresResult!
 
   """
+  Test data coverage and window rates of the TestOps Tests tab (CHAOS-13773): the share of completed CI runs that report tests, and the pass, failure and flake rates over the window. Computed at read time; the rates are weighted over the window (summed counts, never a mean of rates). Missing is not zero: a value with nothing to divide by is null.
+  """
+  testopsTestWindow(orgId: String!, input: TestOpsTestWindowInput!): TestOpsTestWindowResult!
+
+  """
   Each repository's coverage baseline (CHAOS-8111): its own mean coverage over the 30 days before ``endDate`` (``endDate`` itself is not included). Not a set target. One row per repository with a stored coverage row in those 30 days, in ``repoId`` order.
   """
   coverageBaselines(orgId: String!, endDate: Date!, repoIds: [String!] = null, teamIds: [String!] = null): [RepoCoverageBaseline!]!
@@ -2227,6 +2236,62 @@ type TestOpsJobFailuresResult {
   totalCount: Int!
   """True = ``totalCount`` is above the number of ``groups`` served."""
   truncated: Boolean!
+  "Why the answer is empty, one value for the whole answer, set by the server and never derived by a client (CHAOS-9098). team_owns_no_repository: ``teamIds`` selects teams that together own no repository (team_repo_ownership, as of now). Null when ``teamIds`` is not set, and when the selected teams own one or more repositories, also when the window has no rows."
+  filterEmptyReason: String
+}
+
+input TestOpsTestWindowInput {
+  """First day of the window (UTC), included."""
+  sinceDate: Date!
+  """Last day of the window (UTC), included. At most 90 days after ``sinceDate``; a later day, or a day before ``sinceDate``, is an error, not a cut answer."""
+  untilDate: Date!
+  repoIds: [String!] = null
+  """
+  Team ids. Narrows to the repositories these teams OWN (team_repo_ownership, as of now); person membership is never read. With ``repoIds`` both apply.
+  """
+  teamIds: [String!] = null
+}
+
+"""
+How much of CI reports tests. A run counts when it is completed (success, failure, error or timeout, every workflow); cancelled, skipped, queued and running runs are not in it.
+"""
+type TestOpsTestCoverage {
+  """Completed CI runs whose start day is in the window, in scope, from every workflow and provider."""
+  completedRuns: Int!
+  """Of those, the runs with at least one stored test suite that holds at least one test case."""
+  runsWithTests: Int!
+  """``runsWithTests`` as a percent of ``completedRuns`` (0 to 100). Null = no completed run in scope (not 0)."""
+  sharePct: Float
+}
+
+"""The test cases of the window, summed over its repository days, by status."""
+type TestOpsTestCaseCounts {
+  passed: Int!
+  """Failed and errored cases."""
+  failed: Int!
+  skipped: Int!
+  quarantined: Int!
+  """Every case of the window, including skipped and quarantined."""
+  total: Int!
+}
+
+type TestOpsTestWindowResult {
+  sinceDate: Date!
+  untilDate: Date!
+  coverage: TestOpsTestCoverage!
+  cases: TestOpsTestCaseCounts!
+  """
+  ``passed / (passed + failed)`` over the window, as a percent (0 to 100); skipped and quarantined cases are not in the denominator. Null = no passed or failed case.
+  """
+  passRatePct: Float
+  """``failed / (passed + failed)`` over the window, as a percent (0 to 100). Null = no passed or failed case."""
+  failureRatePct: Float
+  """
+  Summed flaky case names over summed distinct case names of the window, as a percent (0 to 100). Null = no distinct case, or a day stored without the counts (the whole window is then unavailable, not a smaller one).
+  """
+  flakeRatePct: Float
+  "Why the answer is empty, one value for the whole answer, set by the server and never derived by a client (CHAOS-9098). team_owns_no_repository: ``teamIds`` selects teams that together own no repository (team_repo_ownership, as of now). Null when ``teamIds`` is not set, and when the selected teams own one or more repositories, also when the window has no rows."
+  filterEmptyReason: String
 }
 
 type TestOpsRiskBreakdownItem {
@@ -2353,7 +2418,7 @@ input TimeseriesRequestInput {
 }
 
 """
-Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). Today the measures PIPELINE_SUCCESS_RATE, COVERAGE_LINE_PCT and TEST_FLAKE_RATE carry an ORG series, on the non-investment path; every other measure carries DIMENSION series only.
+Which series a TimeseriesResult is. DIMENSION is one series per value of the requested dimension (a team, a repository). ORG is the one org-level series of a measure that has one: a true org rate, the org's numerator summed over the org's denominator per bucket, never a mean of the dimension series (CHAOS-9736). The measures with an ORG series are PIPELINE_SUCCESS_RATE, PIPELINE_FAILURE_RATE, PIPELINE_RERUN_RATE, PIPELINE_DURATION_P95, PIPELINE_QUEUE_TIME, TEST_PASS_RATE, TEST_FAILURE_RATE, TEST_FLAKE_RATE, TEST_SUITE_DURATION_P95 and COVERAGE_LINE_PCT, on the non-investment path; every other measure carries DIMENSION series only. A P95 duration and the queue time are pooled over the raw runs (never a mean of the dimension series), and past the pooled row bound the answer is unavailable.
 """
 enum TimeseriesScope {
   DIMENSION

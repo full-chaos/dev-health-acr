@@ -50,6 +50,8 @@ var valuePaths = map[string][]pathRule{
 		// The V2 count of evidence-gated units, against the units the store
 		// reading gates (CHAOS-12836).
 		{Path: "analytics.evidenceQualityStats.uncategorizedCount"},
+		// Selected by the team and repository documents only.
+		{Path: "analytics.evidenceQualityStats.sizedUnitCount", Reason: "not compared yet: the store reading counts no sized units (acr's mix fact carries unsized_unit_count)"},
 		{Path: "analytics.sankey", Reason: "refused shape (design K14-A): sankey is null"},
 	},
 	"capacityForecasts": {

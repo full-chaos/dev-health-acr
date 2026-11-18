@@ -95,16 +95,21 @@ func TestGraphQLTwoOperationRootOverlapIsPinned(t *testing.T) {
 			if restricted := s.Scope(directread.CallerRestricted); restricted.Served && !restricted.AggregateOnly || s.CostClass != a.CostClass || s.DeadlineSeconds != a.DeadlineSeconds || s.MaxInFlightPerOrg != a.MaxInFlightPerOrg {
 				t.Fatalf("%s: caller class, cost, deadline or concurrency differs from %s", name, a.Name)
 			}
+			// Every scoped candidate selects sizedUnitCount, which the strict org entry does not
+			// (ops registers the scoped documents with it, the org document without it).
+			if extra := keyDiff(outputSet(s), outputSet(a)); !slices.Equal(extra, []string{"analytics.evidenceQualityStats.sizedUnitCount"}) {
+				t.Errorf("%s: outputs beyond %s: %v, want only analytics.evidenceQualityStats.sizedUnitCount", name, a.Name, extra)
+			}
+			missing := keyDiff(outputSet(a), outputSet(s))
+			sort.Strings(missing)
 			if name == "teamWorkItemBreakdown" {
-				// Its outputs are the strict entry's but the two evidence-quality JSON outputs, withheld on the
-				// work-item basis (CHAOS-13018).
-				want := keyDiff(outputSet(a), outputSet(s))
-				sort.Strings(want)
-				if !slices.Equal(want, []string{"analytics.evidenceQualityDistribution", "analytics.evidenceQualityStats.bandCounts"}) || len(keyDiff(outputSet(s), outputSet(a))) != 0 {
-					t.Errorf("%s: outputs differ from %s by %v, want only the two evidence-quality JSON outputs", name, a.Name, want)
+				// Its outputs lack the two evidence-quality JSON outputs, withheld on the work-item basis
+				// (CHAOS-13018).
+				if !slices.Equal(missing, []string{"analytics.evidenceQualityDistribution", "analytics.evidenceQualityStats.bandCounts"}) {
+					t.Errorf("%s: outputs of %s it lacks: %v, want only the two evidence-quality JSON outputs", name, a.Name, missing)
 				}
-			} else if got := keyDiff(outputSet(a), outputSet(s)); len(got) != 0 || len(keyDiff(outputSet(s), outputSet(a))) != 0 {
-				t.Errorf("%s: outputs differ from %s", name, a.Name)
+			} else if len(missing) != 0 {
+				t.Errorf("%s: outputs of %s it lacks: %v", name, a.Name, missing)
 			}
 			va, vs := normalizedRules(a), normalizedRules(s)
 			var differ []string

@@ -80,9 +80,14 @@ func TestScopedInvestmentEntriesDifferFromInvestmentBreakdownOnlyInScope(t *test
 			if op.DocumentOperationName != tc.document {
 				t.Fatalf("document %s, want %s", op.DocumentOperationName, tc.document)
 			}
-			// The document is the InvestmentBreakdown body under its own name.
-			if got, want := strings.Replace(op.DocumentText, tc.document, "X", 1), strings.Replace(org.DocumentText, "InvestmentBreakdown", "X", 1); got != want {
-				t.Fatalf("document body differs from InvestmentBreakdown's")
+			// The document is the InvestmentBreakdown body under its own name, plus the one
+			// sizedUnitCount selection ops registers on the scoped documents only.
+			const sized = "      sizedUnitCount\n"
+			if strings.Count(op.DocumentText, sized) != 1 || strings.Contains(org.DocumentText, "sizedUnitCount") {
+				t.Fatalf("want sizedUnitCount selected once in %s and not in InvestmentBreakdown", tc.document)
+			}
+			if got, want := strings.Replace(strings.Replace(op.DocumentText, sized, "", 1), tc.document, "X", 1), strings.Replace(org.DocumentText, "InvestmentBreakdown", "X", 1); got != want {
+				t.Fatalf("document body differs from InvestmentBreakdown's beyond sizedUnitCount")
 			}
 			level := ruleAt(t, op, "batch.filters.scope.level")
 			if !slices.Equal(level.AllowedValues, []string{tc.level}) {
@@ -114,6 +119,13 @@ func TestScopedInvestmentEntriesDifferFromInvestmentBreakdownOnlyInScope(t *test
 			normalized.Name, normalized.DocumentOperationName = org.Name, org.DocumentOperationName
 			normalized.Digest, normalized.DocumentText = org.Digest, org.DocumentText
 			normalized.Constraints = org.Constraints
+			// The one output the scoped documents add (pinned with the document text above).
+			normalized.Outputs = slices.DeleteFunc(slices.Clone(op.Outputs), func(o directread.OutputPath) bool {
+				return o.Path == "analytics.evidenceQualityStats.sizedUnitCount"
+			})
+			if len(normalized.Outputs) != len(op.Outputs)-1 {
+				t.Fatalf("%s: want exactly one sizedUnitCount output", tc.name)
+			}
 			normalized.Variables = slices.Clone(op.Variables)
 			for i, v := range normalized.Variables {
 				if v.Path == "batch.filters.scope.level" || v.Path == "batch.filters.scope.ids" || v.Path == "batch.breakdowns[*].measure" {

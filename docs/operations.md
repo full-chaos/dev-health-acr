@@ -1116,11 +1116,15 @@ work-unit values 439.9 and 103.2 the same breakdown gives on the investment
 path). One operation name serves one basis: the four investment operations keep
 forcing `useInvestment` true and refuse dimension `TEAM`. A team with no work item
 completed in the window has no row, which is not a zero. The vendored registry
-(`contracts/mcp/ops-catalogue/registry.v1.json`) holds the ops 0b763a85 rows plus
-this one row from ops 5c321277; a full re-vendor is a separate chore (the SDL
-moved with it, which invalidates the O4 capture). The O4 oracle lists the
-operation in `notRecordedOperations` until the venue serves the document and the
-capture is taken again. A new `devhealthfacts.QueryVersion` marks the widening.
+(`contracts/mcp/ops-catalogue/registry.v1.json`) holds the ops f67b568a rows, as
+the ops registry dump command prints them there. At f67b568a the three scoped
+documents (`investmentBreakdownTeam`, `investmentBreakdownRepository`,
+`teamWorkItemBreakdown`) select `analytics.evidenceQualityStats.sizedUnitCount`;
+the O4 capture predates it, so the recorded O4 run leaves the team and
+repository investment operations out (`advancedPastCapture`), the value plan
+excludes the path, and the capture is taken again on the next venue move. The O4 oracle lists the operation in
+`notRecordedOperations` until the venue serves the document and the capture is
+taken again. A new `devhealthfacts.QueryVersion` marks the widening.
 
 **The investment sunburst.** `ACR_CONTEXT_FABRIC_INVESTMENT_SUNBURST_ENABLED`
 (chart: `contextFabric.investmentSunburstEnabled`, default `false`) is the one
