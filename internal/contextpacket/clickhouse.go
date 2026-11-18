@@ -3,9 +3,11 @@ package contextpacket
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/logsanitize"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
@@ -93,7 +95,11 @@ func (r *CatalogClickHouseRows) AuthorizedRepositories(ctx context.Context, orgI
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate authorized repositories: %w", err)
 	}
-	if len(result) == 0 || len(result) > MaxEvidenceCandidateRepos {
+	if len(result) > MaxEvidenceCandidateRepos {
+		slog.WarnContext(ctx, "evidence repository listing hit its bound", "org_id", logsanitize.SanitizeLogAttr(orgID), "repositories_read", len(result), "repository_bound", MaxEvidenceCandidateRepos)
+		return nil, storage.ErrNotFound
+	}
+	if len(result) == 0 {
 		return nil, storage.ErrNotFound
 	}
 	return result, nil
