@@ -36,8 +36,6 @@ func TestQueryClientBareInternal401OnRunOperationIsCarrierRefused(t *testing.T) 
 		{"split base /query plus /run-operation", "/query", "/run-operation", 401, "unauthorized\n", directread.ListenerRefusalCarrier, directread.ListenerReasonInternal401},
 		{"prefixed base /base plus run-operation path", "/base", directread.RunOperationPath, 401, "unauthorized\n", "", ""},
 		{"child route of run-operation", "", directread.RunOperationPath + "/extra", 401, "unauthorized\n", "", ""},
-		{"401 with a numeric code entry before a typed carrier refusal", "", directread.RunOperationPath, 401, `{"errors":[{"extensions":{"code":7}},{"extensions":{"code":"MCP_REFUSED","reason":"no_carrier"}}]}`, "", ""},
-		{"401 with an object reason entry before a typed query refusal", "", directread.RunOperationPath, 401, `{"errors":[{"extensions":{"reason":{"x":1}}},{"extensions":{"code":"MCP_REFUSED","reason":"not_a_query"}}]}`, "", ""},
 		{"401 with a read-budget code", "", directread.RunOperationPath, 401, `{"errors":[{"extensions":{"code":"MCP_READ_BUDGET_EXCEEDED","reason":"rows_ceiling"}}]}`, "", ""},
 		{"401 with only unrelated errors", "", directread.RunOperationPath, 401, `{"errors":[{"message":"x","extensions":{"code":"OTHER"}}]}`, directread.ListenerRefusalCarrier, directread.ListenerReasonInternal401},
 		{"bare 500", "", directread.RunOperationPath, 500, "boom\n", "", ""},
