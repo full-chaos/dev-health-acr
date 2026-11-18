@@ -206,22 +206,8 @@ const ListenerReasonInternal401 = "internal_401"
 // carriesTypedRefusal reports whether any error entry names a typed listener code. Each entry is read on
 // its own, so an unrelated entry with odd metadata (a numeric code, an object reason) cannot hide it.
 func carriesTypedRefusal(body []byte) bool {
-	var answer struct {
-		Errors []json.RawMessage `json:"errors"`
-	}
-	if json.Unmarshal(body, &answer) != nil {
-		return false
-	}
-	for _, raw := range answer.Errors {
-		var entry struct {
-			Extensions struct {
-				Code string `json:"code"`
-			} `json:"extensions"`
-		}
-		if json.Unmarshal(raw, &entry) != nil {
-			continue
-		}
-		if entry.Extensions.Code == MCPRefusedCode || entry.Extensions.Code == MCPReadBudgetExceededCode {
+	for _, entry := range errorEntriesOf(body) {
+		if entry.code == MCPRefusedCode || entry.code == MCPReadBudgetExceededCode {
 			return true
 		}
 	}
@@ -255,27 +241,49 @@ func ListenerRefusalClassVocabulary() [2]ListenerRefusalClass {
 // closed map; an unknown reason is the query class, reported as "unknown".
 // A body without MCP_REFUSED yields "", "".
 func listenerRefusalOf(body []byte) (ListenerRefusalClass, string) {
-	var answer struct {
-		Errors []struct {
-			Extensions struct {
-				Code   string `json:"code"`
-				Reason string `json:"reason"`
-			} `json:"extensions"`
-		} `json:"errors"`
-	}
-	if json.Unmarshal(body, &answer) != nil {
-		return "", ""
-	}
-	for _, e := range answer.Errors {
-		if e.Extensions.Code != MCPRefusedCode {
+	for _, entry := range errorEntriesOf(body) {
+		if entry.code != MCPRefusedCode {
 			continue
 		}
-		if known, ok := mcpListenerReasons[e.Extensions.Reason]; ok {
-			return known.class, e.Extensions.Reason
+		if known, ok := mcpListenerReasons[entry.reason]; ok {
+			return known.class, entry.reason
 		}
 		return ListenerRefusalQuery, "unknown"
 	}
 	return "", ""
+}
+
+// errorEntry is the extensions.code and extensions.reason of one GraphQL error, each kept only when it is a
+// JSON string (a numeric code or an object reason leaves it empty).
+type errorEntry struct{ code, reason string }
+
+// errorEntriesOf decodes each entry of the answer's errors list on its own, so an entry with metadata of an
+// unexpected type never hides a typed refusal in the same list (CHAOS-13999). A body that is not a JSON object
+// with an errors array yields nothing.
+func errorEntriesOf(body []byte) []errorEntry {
+	var answer struct {
+		Errors []json.RawMessage `json:"errors"`
+	}
+	if json.Unmarshal(body, &answer) != nil {
+		return nil
+	}
+	entries := make([]errorEntry, 0, len(answer.Errors))
+	for _, raw := range answer.Errors {
+		var entry struct {
+			Extensions struct {
+				Code   json.RawMessage `json:"code"`
+				Reason json.RawMessage `json:"reason"`
+			} `json:"extensions"`
+		}
+		if json.Unmarshal(raw, &entry) != nil {
+			continue
+		}
+		var parsed errorEntry
+		_ = json.Unmarshal(entry.Extensions.Code, &parsed.code)
+		_ = json.Unmarshal(entry.Extensions.Reason, &parsed.reason)
+		entries = append(entries, parsed)
+	}
+	return entries
 }
 
 // Closed reasons of a listener 404 (ops mcp_route.go): a root the routing

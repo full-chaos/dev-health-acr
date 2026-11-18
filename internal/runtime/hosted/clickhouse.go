@@ -80,7 +80,8 @@ func clickHouseClientOptions(cfg config.Config, tlsConfig *tls.Config) runtimecl
 		// maxFactRowsPerQuery (200), every shared readers.ReadXxx carries
 		// readers.WithRowLimit's DefaultRowLimit (also 200), the
 		// ScopeExpander's own statements carry LIMIT limitPlusOne, and
-		// contextpacket's catalog reads carry LIMIT 65/501/2. Each of
+		// contextpacket's catalog reads carry LIMIT 65/501/2 and its
+		// evidence-handle repository listing MaxEvidenceCandidateRepos+1. Each of
 		// those fires long before this ceiling, so raising it relaxes no
 		// other reader's safety margin. The PR this shipped under carries
 		// the full per-query accounting.

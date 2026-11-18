@@ -5,6 +5,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/config"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -45,5 +46,14 @@ func TestClickHouseClientOptionsSetMaxResultRowsAboveTheDocumentedWorstCase(t *t
 	if *shipped < worstCase {
 		t.Fatalf("shipped MaxResultRows = %d, want >= %d (ContextFabricMaxCohortMembersLimit=%d x MetricsSeriesPerRepositoryRowCap=%d) -- readRepositoryMetrics carries no query-wide LIMIT of its own, so a cohort-shaped request at both ceilings is the real row count this client must be able to return",
 			*shipped, worstCase, contractsv1.ContextFabricMaxCohortMembersLimit, devhealthfacts.MetricsSeriesPerRepositoryRowCap)
+	}
+}
+
+// The evidence-handle repository listing must hit its own LIMIT, a generic
+// not found, before the client-wide MaxResultRows turns it into a query error.
+func TestClickHouseClientOptionsMaxResultRowsAboveEvidenceRepositoryListing(t *testing.T) {
+	shipped := clickHouseClientOptions(config.Config{}, nil).MaxResultRows
+	if shipped == nil || *shipped <= uint(contextpacket.MaxEvidenceCandidateRepos+1) {
+		t.Fatalf("shipped MaxResultRows = %v, want above MaxEvidenceCandidateRepos+1 = %d", shipped, contextpacket.MaxEvidenceCandidateRepos+1)
 	}
 }
