@@ -100,7 +100,7 @@ func TestClickHouseEvidenceStore_hides_unknown_boundaries_and_candidate_overflow
 	if err != nil {
 		t.Fatalf("encode handle: %v", err)
 	}
-	overflow := make([]contractsv1.ResolvedScope, 65)
+	overflow := make([]contractsv1.ResolvedScope, contextpacket.MaxEvidenceCandidateRepos+1)
 	for index := range overflow {
 		overflow[index] = contractsv1.ResolvedScope{RepoID: fmt.Sprintf("repo-%d", index), RepoSlug: "example-org/widget-service"}
 	}

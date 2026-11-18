@@ -3,6 +3,7 @@ package contextpacket
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
@@ -23,6 +24,8 @@ type EvidenceReferenceRows interface {
 	AuthorizedRepositories(context.Context, string, []string) ([]contractsv1.ResolvedScope, error)
 	ResolveEvidenceReference(context.Context, string, contractsv1.ResolvedScope, string, string) ([]EvidenceReference, error)
 }
+
+var authorizedRepositoriesStatement = `SELECT toString(id), repo FROM repos FINAL WHERE org_id = {org_id:String} AND arrayExists(scope -> scope = '*' OR scope = repo OR (endsWith(scope, '/*') AND startsWith(repo, left(scope, length(scope) - 1))), {repository_scopes:Array(String)}) ORDER BY repo ASC LIMIT ` + strconv.Itoa(MaxEvidenceCandidateRepos+1)
 
 type CatalogClickHouseRows struct {
 	resolver *ClickHouseScopeResolver
@@ -74,7 +77,7 @@ func (r *CatalogClickHouseRows) AuthorizedRepositories(ctx context.Context, orgI
 	if r == nil || r.client == nil {
 		return nil, storage.ErrNotFound
 	}
-	rows, err := r.client.Query(ctx, `SELECT toString(id), repo FROM repos FINAL WHERE org_id = {org_id:String} AND arrayExists(scope -> scope = '*' OR scope = repo OR (endsWith(scope, '/*') AND startsWith(repo, left(scope, length(scope) - 1))), {repository_scopes:Array(String)}) ORDER BY repo ASC LIMIT 65`, []ClickHouseBinding{{Name: "org_id", Value: orgID}, {Name: "repository_scopes", Value: scopes}})
+	rows, err := r.client.Query(ctx, authorizedRepositoriesStatement, []ClickHouseBinding{{Name: "org_id", Value: orgID}, {Name: "repository_scopes", Value: scopes}})
 	if err != nil {
 		return nil, fmt.Errorf("resolve authorized repositories: %w", err)
 	}
@@ -90,7 +93,7 @@ func (r *CatalogClickHouseRows) AuthorizedRepositories(ctx context.Context, orgI
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate authorized repositories: %w", err)
 	}
-	if len(result) == 0 || len(result) > maxEvidenceCandidateRepos {
+	if len(result) == 0 || len(result) > MaxEvidenceCandidateRepos {
 		return nil, storage.ErrNotFound
 	}
 	return result, nil
