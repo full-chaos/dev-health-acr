@@ -199,6 +199,8 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 	dark := darkOperations(t)
 	manifest = withoutDarkRoots(t, manifest, dark)
 	manifest, skipped := withoutNotRecordedRoots(t, manifest)
+	manifest, advanced := withoutAdvancedRoots(t, manifest)
+	skipped = append(skipped, advanced...)
 	planes := localPlanes(t, seedStore(t, extract), &recording)
 	oracle := oracleFor(t, manifest, planes, extract)
 	oracle.OnlyRoots = rootsExcept(t, skipped)
@@ -296,8 +298,11 @@ func recordedVenueRunReproducesTheVenue(t *testing.T) {
 			}
 		}
 	}
-	if valueRoots != 5 {
-		t.Fatalf("%d value roots were compared, want 5 (analytics, capacityForecasts, catalog, compoundingRisk, throughputForecast)", valueRoots)
+	measured := slices.DeleteFunc([]string{"analytics", "capacityForecasts", "catalog", "compoundingRisk", "throughputForecast"}, func(root string) bool {
+		return slices.Contains(advanced, root)
+	})
+	if valueRoots != len(measured) {
+		t.Fatalf("%d value roots were compared, want %d (%s; not measured: %v)", valueRoots, len(measured), strings.Join(measured, ", "), advanced)
 	}
 	for theme, want := range manifest.Residual {
 		if got := oracle.Residual[theme]; math.Abs(got-want) > themeTolerance(got, want) {
@@ -540,6 +545,69 @@ func withoutNotRecordedRoots(t *testing.T, manifest Manifest) (Manifest, []strin
 	}
 	manifest.ShapeCases, manifest.Expect = cases, expect
 	return manifest, skipped
+}
+
+// recaptureTicket re-captures the venue, so the roots advanced past the
+// capture are measured again.
+const recaptureTicket = "14023"
+
+// advancedRoots are the roots every operation of which is in advanced: a
+// recorded run has no case for any of them. A root that keeps one operation
+// not in advanced is not one: it runs, and a missing case of it still stops
+// the run.
+func advancedRoots(policy *directread.GraphQLPolicy, advanced map[string]string) []string {
+	var out []string
+	for _, root := range policy.Roots() {
+		ops := root.Operations()
+		if len(ops) == 0 {
+			continue
+		}
+		all := true
+		for _, op := range ops {
+			if _, ok := advanced[op]; !ok {
+				all = false
+				break
+			}
+		}
+		if all {
+			out = append(out, root.Field)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// notMeasuredLine is how a recorded run states a root it skips because every
+// operation of it is advanced past the capture.
+func notMeasuredLine(root string) string {
+	return fmt.Sprintf("%s: NOT MEASURED (advanced past capture; re-capture %s)", root, recaptureTicket)
+}
+
+// withoutAdvancedRoots returns the manifest without the shape cases and the
+// pinned outcome of the roots every operation of which is advanced past the
+// capture, and the sorted names of those roots, each stated by name as not
+// measured. Such a root is not coverage: it is left out of the run and of
+// every count, never read as a pass.
+func withoutAdvancedRoots(t *testing.T, manifest Manifest) (Manifest, []string) {
+	t.Helper()
+	roots := advancedRoots(mustPolicy(t), advancedPastCapture)
+	for _, root := range roots {
+		t.Log(notMeasuredLine(root))
+	}
+	cases := make([]ShapeCase, 0, len(manifest.ShapeCases))
+	for _, c := range manifest.ShapeCases {
+		if !slices.Contains(roots, strings.SplitN(c.ShapeID, "/", 2)[0]) {
+			cases = append(cases, c)
+		}
+	}
+	expect := map[string]RootExpectation{}
+	for root, want := range manifest.Expect {
+		if !slices.Contains(roots, root) {
+			expect[root] = want
+		}
+	}
+	manifest.ShapeCases, manifest.Expect = cases, expect
+	return manifest, roots
 }
 
 func rootsExcept(t *testing.T, skipped []string) []string {
