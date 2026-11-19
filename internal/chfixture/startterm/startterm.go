@@ -4,6 +4,9 @@
 //
 // It also starts again, a bounded number of times and with a log line each time, a start whose create the daemon
 // refused because the image is not there after testcontainers' pull (CHAOS-12855): see ImageMissingAtCreate.
+//
+// A start that the caller's context ends is logged and its error names the last lifecycle stage it reached, so a
+// stalled image pull, create, start or readiness wait is told apart from the deadline alone: see endedByCaller.
 package startterm
 
 import (
@@ -12,7 +15,9 @@ import (
 	"fmt"
 	"log"
 	"reflect"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/containerd/errdefs"
@@ -97,8 +102,13 @@ func Terminate(c testcontainers.Container) error {
 
 func generic(ctx context.Context, req testcontainers.GenericContainerRequest, create genericFunc) (testcontainers.Container, error) {
 	return startUntilImageServes(ctx, func() (testcontainers.Container, error) {
-		c, err := create(ctx, req)
+		stage := &startStage{}
+		began := time.Now()
+		tracked := req
+		tracked.LifecycleHooks = append(slices.Clone(req.LifecycleHooks), stage.hooks())
+		c, err := create(ctx, tracked)
 		if err != nil {
+			err = endedByCaller(ctx, req.Image, began, stage, err)
 			err = TerminateFailed(c, err)
 		}
 		return c, err
@@ -107,12 +117,77 @@ func generic(ctx context.Context, req testcontainers.GenericContainerRequest, cr
 
 func postgresRun(ctx context.Context, image string, opts []testcontainers.ContainerCustomizer, run postgresFunc) (*tcpostgres.PostgresContainer, error) {
 	return startUntilImageServes(ctx, func() (*tcpostgres.PostgresContainer, error) {
-		pc, err := run(ctx, image, opts...)
+		stage := &startStage{}
+		began := time.Now()
+		tracked := append(slices.Clone(opts), testcontainers.WithAdditionalLifecycleHooks(stage.hooks()))
+		pc, err := run(ctx, image, tracked...)
+		if err != nil {
+			err = endedByCaller(ctx, image, began, stage, err)
+		}
 		if err != nil && pc != nil {
 			err = TerminateFailed(pc, err)
 		}
 		return pc, err
 	})
+}
+
+// Stages of one start, in lifecycle order. A stage is entered at the hook that precedes it: testcontainers runs a
+// caller's PreCreates hook right before the create call and a caller's PostStarts hook before its own readiness
+// wait, so a start that ends in a stage ended inside that step. The image inspect and pull run before any hook.
+const (
+	stagePull int32 = iota
+	stageCreate
+	stageStart
+	stageReadiness
+	stageReady
+)
+
+var stageNames = [...]string{
+	stagePull:      "image inspect or pull (no create hook ran)",
+	stageCreate:    "container create",
+	stageStart:     "container start",
+	stageReadiness: "readiness wait",
+	stageReady:     "post-ready hooks",
+}
+
+// startStage records the last lifecycle stage one start reached.
+type startStage struct{ reached atomic.Int32 }
+
+func (s *startStage) name() string { return stageNames[s.reached.Load()] }
+
+func (s *startStage) hooks() testcontainers.ContainerLifecycleHooks {
+	enter := func(stage int32) func() { return func() { s.reached.Store(stage) } }
+	onRequest := func(enter func()) []testcontainers.ContainerRequestHook {
+		return []testcontainers.ContainerRequestHook{func(context.Context, testcontainers.ContainerRequest) error {
+			enter()
+			return nil
+		}}
+	}
+	onContainer := func(enter func()) []testcontainers.ContainerHook {
+		return []testcontainers.ContainerHook{func(context.Context, testcontainers.Container) error {
+			enter()
+			return nil
+		}}
+	}
+	return testcontainers.ContainerLifecycleHooks{
+		PreCreates:  onRequest(enter(stageCreate)),
+		PostCreates: onContainer(enter(stageStart)),
+		PostStarts:  onContainer(enter(stageReadiness)),
+		PostReadies: onContainer(enter(stageReady)),
+	}
+}
+
+// endedByCaller logs a failed start whose context had ended and names in the error the stage the start was in. A
+// start that ran into its caller's deadline is a fallback path, not a slow start: without the stage, an image pull
+// that never finished and a readiness probe that never passed read the same ("context deadline exceeded").
+func endedByCaller(ctx context.Context, image string, began time.Time, stage *startStage, err error) error {
+	if ctx.Err() == nil {
+		return err
+	}
+	elapsed := time.Since(began).Round(time.Millisecond)
+	logf("startterm: start of %q ended by the caller's context (%v) after %s, during %s: %v",
+		image, context.Cause(ctx), elapsed, stage.name(), err)
+	return fmt.Errorf("start ended by the caller's context (%v) after %s, during %s: %w", context.Cause(ctx), elapsed, stage.name(), err)
 }
 
 // StartUntilImageServes is the retry Generic applies, for the one fixture that hands
