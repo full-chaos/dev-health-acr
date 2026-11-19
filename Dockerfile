@@ -29,6 +29,10 @@ RUN [ -n "${VERSION}" ] || { echo 'VERSION is required: build with --build-arg V
 
 WORKDIR /src
 
+# CHAOS-10745: the comma form of Go's default proxy list falls back to direct only
+# on a 404/410; the pipe falls back on any error (a proxy stream INTERNAL_ERROR).
+# Builder stage only: the shipped runtime images do not carry it.
+ENV GOPROXY=https://proxy.golang.org|direct
 COPY go.mod go.sum ./
 RUN --mount=type=cache,id=acr-go-mod-${BUILD_CACHE_ID},target=/go/pkg/mod,sharing=locked go mod download
 

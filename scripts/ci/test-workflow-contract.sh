@@ -1601,6 +1601,22 @@ check_gomod_proxy_fallback() {
   return "$status"
 }
 
+# The shipped image's builder stage downloads modules too. The same pipe form
+# must be set there (ENV in the build stage only; later stages must not carry it).
+check_dockerfile_gomod_proxy_fallback() {
+  local file="$1" status=0
+  awk '
+    /^FROM / { stage++ }
+    stage == 1 && $0 == "ENV GOPROXY=https://proxy.golang.org|direct" { found=1 }
+    stage == 1 && /^RUN .*go mod download/ { if (!found) early=1 }
+    /GOPROXY/ && stage != 1 { other=1 }
+    END { exit (found && !early && !other) ? 0 : 1 }
+  ' "$file" || {
+    printf '%s: build stage must set ENV GOPROXY=https://proxy.golang.org|direct before go mod download, and no other stage may set GOPROXY\n' "${file##*/}" >&2
+    status=1; }
+  return "$status"
+}
+
 # Container-starting tests run only under ACR_CONTAINER_TESTS=1
 # (internal/chfixture RequireContainers), and a hosted job without it FAILS them.
 # So every job that runs go tests (directly, or through make / the shard and
@@ -2141,6 +2157,12 @@ printf 'PASS: go-modcache action and tool pins satisfy the module cache checks\n
 fullstack_workflow="$repo_root/.github/workflows/fullstack-acceptance.yml"
 check_gomod_proxy_fallback "$fullstack_workflow"
 printf 'PASS: %s carries the GOPROXY fallback\n' "$fullstack_workflow"
+mutation_workflow="$repo_root/.github/workflows/mutation-battery.yml"
+check_gomod_proxy_fallback "$mutation_workflow"
+printf 'PASS: %s carries the GOPROXY fallback\n' "$mutation_workflow"
+dockerfile="$repo_root/Dockerfile"
+check_dockerfile_gomod_proxy_fallback "$dockerfile"
+printf 'PASS: %s carries the GOPROXY fallback in the build stage\n' "$dockerfile"
 ci_full_workflow="$repo_root/.github/workflows/ci-full.yml"
 check_no_label_trigger "$workflow"
 check_no_label_trigger "$fullstack_workflow"
@@ -2577,6 +2599,18 @@ fullstack_comma="$tmpdir/fullstack-comma.yml"
 sed 's/^  GOPROXY: https:\/\/proxy.golang.org|direct$/  GOPROXY: https:\/\/proxy.golang.org,direct/' "$fullstack_workflow" > "$fullstack_comma"
 cmp -s "$fullstack_workflow" "$fullstack_comma" && { printf 'NEGATIVE CONTROL SETUP FAILED: fullstack_comma did not change the workflow\n' >&2; exit 1; }
 assert_check_fails 'put the comma form back on fullstack-acceptance GOPROXY' check_gomod_proxy_fallback "$fullstack_comma"
+mutation_comma="$tmpdir/mutation-comma.yml"
+sed 's/^  GOPROXY: https:\/\/proxy.golang.org|direct$/  GOPROXY: https:\/\/proxy.golang.org,direct/' "$mutation_workflow" > "$mutation_comma"
+cmp -s "$mutation_workflow" "$mutation_comma" && { printf 'NEGATIVE CONTROL SETUP FAILED: mutation_comma did not change the workflow\n' >&2; exit 1; }
+assert_check_fails 'put the comma form back on mutation-battery GOPROXY' check_gomod_proxy_fallback "$mutation_comma"
+docker_comma="$tmpdir/Dockerfile.comma"
+sed 's/^ENV GOPROXY=https:\/\/proxy.golang.org|direct$/ENV GOPROXY=https:\/\/proxy.golang.org,direct/' "$dockerfile" > "$docker_comma"
+cmp -s "$dockerfile" "$docker_comma" && { printf 'NEGATIVE CONTROL SETUP FAILED: docker_comma did not change the Dockerfile\n' >&2; exit 1; }
+assert_check_fails 'put the comma form back on the Dockerfile GOPROXY' check_dockerfile_gomod_proxy_fallback "$docker_comma"
+docker_dropped="$tmpdir/Dockerfile.dropped"
+sed '/^ENV GOPROXY=/d' "$dockerfile" > "$docker_dropped"
+cmp -s "$dockerfile" "$docker_dropped" && { printf 'NEGATIVE CONTROL SETUP FAILED: docker_dropped did not change the Dockerfile\n' >&2; exit 1; }
+assert_check_fails 'dropped GOPROXY from the Dockerfile build stage' check_dockerfile_gomod_proxy_fallback "$docker_dropped"
 
 # (c3b) the container switch: dropped, set to another value, or moved to one
 # job (the other go-test jobs then run without it), in ci.yml and in the
