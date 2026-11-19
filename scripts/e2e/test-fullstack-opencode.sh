@@ -351,13 +351,66 @@ for seed_block in "$(awk '/^seed_web_owner_membership\(\)/,/^}/' "$script")" "$(
     fail 'the web user membership seed must not put a PGPASSWORD value in an exec argv'
   fi
 done
-# The same rule for every script: an exec gets PGPASSWORD by name (`-e PGPASSWORD`) with the value exported in
-# the calling subshell; `-e PGPASSWORD=<value>`, `--env PGPASSWORD=<value>` or `env PGPASSWORD=<value> <cmd>`
-# put the value in an argv.
-pgpassword_argv_re='(^|[[:space:]])(-e|--env)([[:space:]]+|=)["'"'"']?PGPASSWORD=|(^|[[:space:];|&(])env[[:space:]]+([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|-[^[:space:]]+[[:space:]]+)*PGPASSWORD='
-if pgpassword_argv_hits="$(grep -rEn -- "$pgpassword_argv_re" "$root/scripts")"; then
-  printf '%s\n' "$pgpassword_argv_hits" >&2
-  fail 'a script puts a PGPASSWORD value in an exec argv; pass -e PGPASSWORD with the value exported in a subshell'
+# The same rule for every script and every secret: an exec gets a *PASSWORD or *_DSN variable, or a URI that carries
+# a password, by name (`-e NAME`) with the value in its environment only (exported in a subshell, or a
+# `NAME=<value> docker ...` assignment prefix). These put the value in an argv and fail: `-e NAME=<value>` /
+# `--env NAME=<value>` (quoted, attached, or an array element), `env [args] NAME=<value> <cmd>` (`env -S` included),
+# and either form with `NAME=<scheme>://user:<password>@host` where the password holds a shell expansion ($v, ${v},
+# $(..), `..`). Lines joined by a trailing backslash and multi-line array literals are read as one line. The fixed
+# public ClickHouse compose default `CLICKHOUSE_PASSWORD=ch` is not a secret.
+q='["'"'"']?'
+argv_env_flag='(^|[[:space:](=])(-e|--env)([[:space:]]*|=)'"$q"
+argv_env_cmd='(^|[[:space:];|&(])env[[:space:]]+([^[:space:];|&]+[[:space:]]+)*'"$q"
+argv_secret_name='[A-Za-z0-9_]*(PASSWORD|_DSN)='
+argv_secret_uri='[A-Za-z_][A-Za-z0-9_]*='"$q"'[A-Za-z][A-Za-z0-9+.-]*://[^:@/[:space:]"'"'"']*:([^@/[:space:]"'"'"'$`]*([$][(][^)]*[)]|`[^`]*`|[$][{][^}]*[}]|[$][A-Za-z0-9_@*#?$!-]))+[^@/[:space:]"'"'"']*@'
+secret_argv_re="${argv_env_flag}${argv_secret_name}|${argv_env_flag}${argv_secret_uri}|${argv_env_cmd}${argv_secret_name}|${argv_env_cmd}${argv_secret_uri}"
+secret_argv_logical_lines() {
+  awk '
+    function flush() { if (buf != "") print FILENAME ":" start ": " buf; buf = "" }
+    # The array literal ends at a ")" outside quotes, `..`, $(..) / $((..)) and a # comment.
+    function closes_array(s,    i, c, n) {
+      n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (sq) { if (c == "\047") sq = 0; continue }
+        if (c == "\\") { i++; continue }
+        if (bt) { if (c == "`") bt = 0; continue }
+        if (c == "`") { bt = 1; continue }
+        if (c == "#" && !dq && depth == 0 && (i == 1 || substr(s, i - 1, 1) ~ /[ \t(]/)) return 0
+        if (c == "\047" && !dq) { sq = 1; continue }
+        if (c == "\"") { dq = !dq; continue }
+        if (c == "$" && substr(s, i + 1, 1) == "(") { depth++; i++; continue }
+        if (c == "(" && depth > 0) { depth++; continue }
+        if (c == ")") { if (depth > 0) { depth--; continue }; if (!dq) return 1 }
+      }
+      return 0
+    }
+    FNR == 1 { flush(); inarr = 0 }
+    {
+      line = $0
+      if (buf == "") start = FNR
+      if (inarr) { buf = buf " " line; if (closes_array(line)) { inarr = 0; flush() }; next }
+      cont = (line ~ /\\$/)
+      if (cont) sub(/\\$/, "", line)
+      buf = (buf == "" ? line : buf " " line)
+      if (cont) next
+      if (match(line, /[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=\(/)) {
+        sq = 0; dq = 0; bt = 0; depth = 0
+        if (!closes_array(substr(line, RSTART + RLENGTH))) { inarr = 1; next }
+      }
+      flush()
+    }
+    END { flush() }
+  ' "$@"
+}
+secret_argv_files=()
+while IFS= read -r -d '' secret_argv_file; do secret_argv_files+=("$secret_argv_file"); done \
+  < <(find "$root/scripts" -type f -print0 | sort -z)
+if secret_argv_hits="$(secret_argv_logical_lines "${secret_argv_files[@]}" \
+  | sed -E 's/(^|[^A-Za-z0-9_]|-e)CLICKHOUSE_PASSWORD=(["'"'"']?)ch(["'"'"']?)([[:space:]);|&]|$)/\1CLICKHOUSE_PUBLIC_DEFAULT\4/g' \
+  | grep -E -- "$secret_argv_re")"; then
+  printf '%s\n' "$secret_argv_hits" >&2
+  fail 'a script puts a password or DSN value in an exec argv; pass -e NAME with the value in the environment only'
 fi
 
 # go-api mints no token pair at the pinned ops build: the web user signs in only while go-api sends sessions to

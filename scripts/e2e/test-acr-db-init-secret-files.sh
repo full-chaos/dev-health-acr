@@ -34,11 +34,14 @@ done
 run_init() {
   local postgres_password_file="${POSTGRES_PASSWORD_FILE:-$tmp/postgres}"
   if [[ -v POSTGRES_PASSWORD ]]; then
+    # env -i takes its variables as argv: the direct value goes through a 0600 file and the shell's own read.
+    (umask 077; printf '%s' "$POSTGRES_PASSWORD" > "$tmp/direct-password")
     env -i PATH="$tmp/bin:/usr/bin:/bin" POSTGRES_USER=bootstrap \
-      POSTGRES_PASSWORD="$POSTGRES_PASSWORD" POSTGRES_PASSWORD_FILE="$postgres_password_file" \
+      POSTGRES_PASSWORD_FILE="$postgres_password_file" \
       ACR_RUNTIME_DB_USER=acr_runtime ACR_RUNTIME_DB_PASSWORD_FILE="$tmp/runtime" \
       ACR_MIGRATION_DB_USER=acr_migration ACR_MIGRATION_DB_PASSWORD_FILE="$tmp/migration" \
-      sh "$init_script" roles
+      sh -c 'IFS= read -r POSTGRES_PASSWORD < "$1" || [ -n "$POSTGRES_PASSWORD" ]; export POSTGRES_PASSWORD; exec sh "$2" roles' \
+      sh "$tmp/direct-password" "$init_script"
     return
   fi
   env -i PATH="$tmp/bin:/usr/bin:/bin" POSTGRES_USER=bootstrap \

@@ -202,7 +202,7 @@ bootstrap_web_user() {
 }
 
 assert_canonical_account_login() {
-  compose exec -T -e "SVS_WEB_EMAIL=$WEB_EMAIL" -e "SVS_WEB_PASSWORD=$WEB_PASSWORD" web-svs node -e '
+  (export SVS_WEB_PASSWORD="$WEB_PASSWORD"; compose exec -T -e "SVS_WEB_EMAIL=$WEB_EMAIL" -e SVS_WEB_PASSWORD web-svs node -e '
 const email = process.env.SVS_WEB_EMAIL;
 const password = process.env.SVS_WEB_PASSWORD;
 void (async () => {
@@ -217,7 +217,7 @@ void (async () => {
     process.exit(1);
   }
 })().catch(() => process.exit(1));
-' || svs_die 'canonical account did not authenticate against the isolated Ops API'
+') || svs_die 'canonical account did not authenticate against the isolated Ops API'
 }
 
 write_context_request() {

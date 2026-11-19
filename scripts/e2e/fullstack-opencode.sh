@@ -1420,8 +1420,7 @@ run_device_login_lifecycle() {
   sed -nE 's/^Open [^[:space:]]+ and enter code ([ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8})$/\1/p' "$output" > "$code_file"
   chmod 600 "$code_file"
   [[ "$(wc -l < "$code_file" | tr -d '[:space:]')" == '1' ]] || fs_die 'device login did not produce exactly one user code'
-  if ! env \
-    DEVICE_LOGIN_WEB_URL="http://127.0.0.1:${WEB_PORT}" \
+  if ! DEVICE_LOGIN_WEB_URL="http://127.0.0.1:${WEB_PORT}" \
     DEVICE_LOGIN_WEB_EMAIL="$WEB_EMAIL" \
     DEVICE_LOGIN_WEB_PASSWORD="$WEB_PASSWORD" \
     DEVICE_LOGIN_CODE_FILE="$code_file" \
