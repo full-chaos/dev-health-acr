@@ -1478,7 +1478,12 @@ import (
 // investmentBreakdownTeam answers (CHAOS-12690 I2, behind a default-off switch;
 // QueryVersionFor adds "+team_from_ops" while it is on). With the switch off the
 // facts are unchanged, but the bump keeps one version per main merge.
-const QueryVersion = "devhealthfacts.clickhouse.v290"
+//
+// v290 -> v291: every pick of a work unit's latest version in
+// work_unit_investments orders by ops' latest-row key (computed_at, then insert
+// order), the row a merge keeps. An answer saved under v290 may hold an
+// arbitrary pick of two versions stored in the same millisecond.
+const QueryVersion = "devhealthfacts.clickhouse.v291"
 
 // repositoryFromOpsVersionSuffix marks the version of a deployment that reads
 // the repository investment mix from ops (CHAOS-12690): the numbers differ for

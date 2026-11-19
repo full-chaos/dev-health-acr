@@ -76,12 +76,12 @@ func nativePhasedTables(groups ...[]nativePhasedUnit) []fakeTable {
 		}
 	}
 	return []fakeTable{
-		{match: "AS unit_ids", rows: [][]any{{ids, versions, clockSpanStart}}},
+		{match: "AS unit_ids", rows: [][]any{{ids, versions, make([]uint64, len(ids)), clockSpanStart}}},
 		{match: "groupArray(multi_placed)", rows: [][]any{{pUnit, pProvider, pProject, pMulti}}},
 		{match: "groupArray(theme_feature_delivery)", rows: [][]any{{ids, effort, fd, op, zero, zero, zero, froms, sized}}},
 		{match: "groupArray(bugfix_share)", rows: [][]any{{ids, bugfix}}},
 		// Every pinned (unit, version) is still stored.
-		{match: "AS pinned_present", rows: [][]any{{uint64(len(ids))}}},
+		{match: "AS pinned_present", rows: [][]any{{uint64(len(ids)), uint64(0)}}},
 	}
 }
 

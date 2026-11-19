@@ -319,7 +319,18 @@ LIMIT {` + unitLimitParam + `:UInt32}`
 func bugfixKeyRead(statement string) string {
 	key := "ifNull(subcategory_distribution_json['" + readers.BugfixSubcategoryKey + "'], 0.0)"
 	statement = strings.Replace(statement, key+" AS bugfix_share,", "bugfix_share,", 1)
-	return strings.Replace(statement, "argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,", "argMax("+key+", computed_at) AS bugfix_share,", 1)
+	statement = strings.Replace(statement, "argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,", "argMax("+key+", computed_at) AS bugfix_share,", 1)
+	return latestRowKeyRead(statement)
+}
+
+// latestRowKeyRead is a legacy split text with every version pick of
+// work_unit_investments ordered by workUnitVersionKey instead of computed_at.
+func latestRowKeyRead(statement string) string {
+	for _, column := range []string{"tuple(repo_id)", "from_ts", "to_ts", "theme_distribution_json", "structural_evidence_json",
+		"ifNull(subcategory_distribution_json['" + readers.BugfixSubcategoryKey + "'], 0.0)"} {
+		statement = strings.ReplaceAll(statement, "argMax("+column+", computed_at)", "argMax("+column+", "+workUnitVersionKey+")")
+	}
+	return statement
 }
 
 // orgRefs is the organization's reference list: a unit with no reference and

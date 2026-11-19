@@ -59,7 +59,7 @@ func TestEveryWorkUnitInvestmentsReadTakesTheGatePredicateOrIsANamedException(t 
 			name, start, end := enclosingDeclaration(lines, i)
 			key := file + "|" + name
 			seen[key] = true
-			if strings.Contains(strings.Join(lines[start:end], "\n"), "latestUnitGatedSQL") {
+			if decl := strings.Join(lines[start:end], "\n"); strings.Contains(decl, "latestUnitGatedSQL") || strings.Contains(decl, "latestUnitGatedByUnitVersionSQL") {
 				if _, listed := workUnitInvestmentsReadExceptions[key]; listed {
 					t.Errorf("%s takes the gate predicate and is also on the exception list", key)
 				}
@@ -129,8 +129,11 @@ func TestEvidenceGatedStatusesAreTheOpsGateStatuses(t *testing.T) {
 	if evidenceGatedStatuses != "('insufficient_evidence', 'no_text_sources')" {
 		t.Fatalf("gated statuses = %s", evidenceGatedStatuses)
 	}
-	if latestUnitGatedSQL != "argMax(categorization_status, computed_at) IN "+evidenceGatedStatuses {
+	if latestUnitGatedSQL != "argMax(categorization_status, "+workUnitVersionKey+") IN "+evidenceGatedStatuses {
 		t.Fatalf("gate predicate = %s, want the latest row's status", latestUnitGatedSQL)
+	}
+	if latestUnitGatedByUnitVersionSQL != "argMax(categorization_status, unit_version) IN "+evidenceGatedStatuses {
+		t.Fatalf("gate predicate over unit_version = %s, want the latest row's status", latestUnitGatedByUnitVersionSQL)
 	}
 }
 
@@ -153,7 +156,7 @@ func TestInvestmentMixStatementsKeepEvidenceGatedUnitsOutOfTheMix(t *testing.T) 
 		"team linked mix": {linkedPullRequestMixStatement(bound, subqueryMembershipScope, 10), []string{
 			"if(m.gated, 0., v * m.effort)", "AS uncategorized_unit_hashes",
 		}},
-		"repository unit listing":   {investmentUnitsStatement(bound, false), []string{"HAVING argMax(reaches, computed_at) AND NOT gated"}},
+		"repository unit listing":   {investmentUnitsStatement(bound, false), []string{"HAVING argMax(reaches, unit_version) AND NOT gated"}},
 		"organization unit listing": {investmentOrgUnitsStatement(bound, false, subqueryMembershipScope), []string{"WHERE win >= 0 AND NOT gated"}},
 		"project roll-up themes": {projectRollupRepoThemesStatement(), []string{
 			"l.link_kind = 'repo' AND NOT u.gated", "AS uncategorized_units", "HAVING work_units > 0 OR uncategorized_units > 0",
@@ -162,8 +165,8 @@ func TestInvestmentMixStatementsKeepEvidenceGatedUnitsOutOfTheMix(t *testing.T) 
 		"project roll-up evidence": {projectRollupEvidenceArmStatement(), []string{"WHERE repo_id IS NULL AND NOT gated"}},
 		"project native values":    {projectNativeThemeValuesStatement(), []string{"groupArray(gated)"}},
 	} {
-		if strings.Count(c.statement, latestUnitGatedSQL) != 1 {
-			t.Errorf("%s: takes the gate predicate %d times, want once", name, strings.Count(c.statement, latestUnitGatedSQL))
+		if n := strings.Count(c.statement, latestUnitGatedSQL) + strings.Count(c.statement, latestUnitGatedByUnitVersionSQL); n != 1 {
+			t.Errorf("%s: takes the gate predicate %d times, want once", name, n)
 		}
 		for _, want := range c.want {
 			if !strings.Contains(c.statement, want) {
@@ -374,7 +377,7 @@ func TestInvestmentProjectMixesLeaveGatedUnitsOutAndSayHowMany(t *testing.T) {
 	t.Parallel()
 	rollup, gatedOnly, native := uncategorizedProjectSubject(t, "p1"), uncategorizedProjectSubject(t, "p2"), uncategorizedProjectSubject(t, "p3")
 	client := &routeClient{routes: []route{
-		{marker: "groupArrayIf(work_unit_id, in_window)", rows: [][]any{{[]string{"u1", "u2", "u3", "u4", "u5", "u6", "u7", "u8"}, []int64{1, 1, 1, 1, 1, 1, 1, 1}, uncategorizedAt}}},
+		{marker: "groupArrayIf(work_unit_id, in_window)", rows: [][]any{{[]string{"u1", "u2", "u3", "u4", "u5", "u6", "u7", "u8"}, []int64{1, 1, 1, 1, 1, 1, 1, 1}, []uint64{1, 1, 1, 1, 1, 1, 1, 1}, uncategorizedAt}}},
 		{marker: "groupArray(link_kind)", rows: [][]any{{[]string{"linear"}, []string{"p1"}, []string{"repo"}, []string{"r:R"}, [][]string{{"T"}}}}},
 		{marker: "AS first_unit_from", rows: [][]any{
 			{"linear:p1", 1.5, 0.0, 0.5, 0.0, 0.0, uint64(2), uint64(1), uint64(1), uncategorizedAt, uint64(0), uint64(2)},
@@ -388,7 +391,7 @@ func TestInvestmentProjectMixesLeaveGatedUnitsOutAndSayHowMany(t *testing.T) {
 			[]time.Time{uncategorizedAt, uncategorizedAt, uncategorizedAt, uncategorizedAt}, []uint8{0, 0, 0, 0}, []uint8{1, 1, 0, 1},
 		}}},
 		{marker: "groupArray(bugfix_share)", rows: [][]any{{[]string{"u5", "u6", "u7", "u8"}, []float64{0, 0, 0, 0}}}},
-		{marker: "AS pinned_present", rows: [][]any{{uint64(8)}}},
+		{marker: "AS pinned_present", rows: [][]any{{uint64(8), uint64(0)}}},
 	}}
 	result := readInvestmentWith(t, client, rollup, gatedOnly, native)
 	assertUncategorizedCoverage(t, "roll-up", investmentFactOf(result, rollup), 2, 2)
