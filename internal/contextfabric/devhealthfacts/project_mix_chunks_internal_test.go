@@ -1,6 +1,7 @@
 package devhealthfacts
 
 import (
+	"cmp"
 	"fmt"
 	"math/rand"
 	"reflect"
@@ -14,6 +15,7 @@ func chunkScope(ids ...string) projectMixScope {
 	for i, id := range ids {
 		s.unitIDs = append(s.unitIDs, id)
 		s.versionsMs = append(s.versionsMs, int64(1000+i))
+		s.versionRows = append(s.versionRows, uint64(1+i%3))
 	}
 	return s
 }
@@ -23,11 +25,15 @@ func chunkScope(ids ...string) projectMixScope {
 // and hi its first and last id, chunks in key order.
 func checkChunks(t *testing.T, scope projectMixScope, bounds []string, chunks []projectMixChunk) {
 	t.Helper()
-	want := map[string][]int64{}
-	for i, id := range scope.unitIDs {
-		want[id] = append(want[id], scope.versionsMs[i])
+	type version struct {
+		ms   int64
+		rows uint64
 	}
-	got := map[string][]int64{}
+	want := map[string][]version{}
+	for i, id := range scope.unitIDs {
+		want[id] = append(want[id], version{scope.versionsMs[i], scope.versionRows[i]})
+	}
+	got := map[string][]version{}
 	sorted := slices.Clone(bounds)
 	slices.Sort(sorted)
 	sorted = slices.Compact(sorted)
@@ -39,8 +45,8 @@ func checkChunks(t *testing.T, scope projectMixScope, bounds []string, chunks []
 		if len(chunk.pins.unitIDs) == 0 {
 			t.Fatalf("chunk %d is empty", c)
 		}
-		if len(chunk.pins.versionsMs) != len(chunk.pins.unitIDs) {
-			t.Fatalf("chunk %d: %d ids, %d versions", c, len(chunk.pins.unitIDs), len(chunk.pins.versionsMs))
+		if len(chunk.pins.versionsMs) != len(chunk.pins.unitIDs) || len(chunk.pins.versionRows) != len(chunk.pins.unitIDs) {
+			t.Fatalf("chunk %d: %d ids, %d versions, %d row counts", c, len(chunk.pins.unitIDs), len(chunk.pins.versionsMs), len(chunk.pins.versionRows))
 		}
 		if c > 0 && chunks[c-1].hi >= chunk.lo {
 			t.Fatalf("chunk %d starts at %q, not after chunk %d's last id %q", c, chunk.lo, c-1, chunks[c-1].hi)
@@ -57,15 +63,21 @@ func checkChunks(t *testing.T, scope projectMixScope, bounds []string, chunks []
 				t.Fatalf("unit %q lands in chunk %d and chunk %d", id, prev, c)
 			}
 			chunkOf[id] = c
-			got[id] = append(got[id], chunk.pins.versionsMs[i])
+			got[id] = append(got[id], version{chunk.pins.versionsMs[i], chunk.pins.versionRows[i]})
 		}
 		if !slices.Contains(chunk.pins.unitIDs, chunk.lo) || !slices.Contains(chunk.pins.unitIDs, chunk.hi) {
 			t.Fatalf("chunk %d: lo %q / hi %q is not one of its pins", c, chunk.lo, chunk.hi)
 		}
 	}
+	byVersion := func(a, b version) int {
+		if c := cmp.Compare(a.ms, b.ms); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.rows, b.rows)
+	}
 	for id := range want {
-		slices.Sort(want[id])
-		slices.Sort(got[id])
+		slices.SortFunc(want[id], byVersion)
+		slices.SortFunc(got[id], byVersion)
 	}
 	if !reflect.DeepEqual(want, got) {
 		t.Fatalf("pins in chunks %v, want %v", got, want)
@@ -138,7 +150,7 @@ func TestProjectMixChunkBindsItsOwnPinsAndRange(t *testing.T) {
 	for _, b := range chunks[1].bindings() {
 		got[b.Name] = b.Value
 	}
-	want := map[string]any{"pin_json": `[["b",1001],["c",1002]]`, "chunk_lo": "b", "chunk_hi": "c"}
+	want := map[string]any{"pin_json": `[["b",1001,2],["c",1002,3]]`, "chunk_lo": "b", "chunk_hi": "c"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("bindings %v, want %v", got, want)
 	}

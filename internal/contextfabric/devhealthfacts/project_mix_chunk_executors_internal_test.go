@@ -107,7 +107,7 @@ func TestEveryExecutorOfAChunkedProjectMixStatementBindsTheChunkRange(t *testing
 		}
 	}
 	names := map[string]bool{}
-	for _, b := range (projectMixChunk{lo: "a", hi: "b", pins: projectMixScope{unitIDs: []string{"a"}, versionsMs: []int64{1}}}).bindings() {
+	for _, b := range (projectMixChunk{lo: "a", hi: "b", pins: projectMixScope{unitIDs: []string{"a"}, versionsMs: []int64{1}, versionRows: []uint64{1}}}).bindings() {
 		names[b.Name] = true
 	}
 	if !names["chunk_lo"] || !names["chunk_hi"] || !names["pin_json"] {

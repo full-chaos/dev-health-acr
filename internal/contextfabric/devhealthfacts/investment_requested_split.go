@@ -109,7 +109,7 @@ func foldedSplitRows(memberships []string, spanSentinel bool, scope membershipSc
 		wins = "arrayConcat([" + spanSentinelWindow + "], " + wins + ")"
 	}
 	rowCols, unitAgg := "", ""
-	having := "HAVING argMax(reaches, computed_at)"
+	having := "HAVING argMax(reaches, unit_version)"
 	head := `SELECT win, work_unit_id, repo_uuid,
 	countEqual(arrayMap(p -> p.1, pairs), repo_uuid) AS c, length(pairs) AS n,`
 	expand := requestedRepositories
@@ -167,10 +167,10 @@ FROM ` + sizedUnitsForOrg(`SELECT work_unit_id,
 					`+wins+` AS wins
 				FROM (
 					SELECT work_unit_id,
-						argMaxIf(tuple(repo_id, from_ts, to_ts, theme_distribution_json, unit_bugfix_share, pr_refs), computed_at, reaches) AS latest,
-						`+latestUnitGatedSQL+` AS gated
+						argMaxIf(tuple(repo_id, from_ts, to_ts, theme_distribution_json, unit_bugfix_share, pr_refs), unit_version, reaches) AS latest,
+						`+latestUnitGatedByUnitVersionSQL+` AS gated
 					FROM (
-						SELECT work_unit_id, computed_at, repo_id, from_ts, to_ts, theme_distribution_json, categorization_status,
+						SELECT work_unit_id, `+workUnitVersionKey+` AS unit_version, repo_id, from_ts, to_ts, theme_distribution_json, categorization_status,
 							ifNull(subcategory_distribution_json['`+readers.BugfixSubcategoryKey+`'], 0.0) AS unit_bugfix_share,
 							`+referenceKeys+`,
 							`+reaches+` AS reaches,

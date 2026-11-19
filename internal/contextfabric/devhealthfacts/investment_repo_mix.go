@@ -176,12 +176,12 @@ func repoSplitCoreScoped(memberships []string, unitCols, unitAgg string, spanSen
 						`+repoRefsExpression+` AS refs
 					FROM (
 						SELECT work_unit_id,
-							(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
-							argMax(from_ts, computed_at) AS from_ts,
-							argMax(to_ts, computed_at) AS to_ts,
-							argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
-							argMax(ifNull(subcategory_distribution_json['`+readers.BugfixSubcategoryKey+`'], 0.0), computed_at) AS bugfix_share,
-							argMax(structural_evidence_json, computed_at) AS structural_evidence_json,
+							(argMax(tuple(repo_id), `+workUnitVersionKey+`)).1 AS repo_id,
+							argMax(from_ts, `+workUnitVersionKey+`) AS from_ts,
+							argMax(to_ts, `+workUnitVersionKey+`) AS to_ts,
+							argMax(theme_distribution_json, `+workUnitVersionKey+`) AS theme_distribution_json,
+							argMax(ifNull(subcategory_distribution_json['`+readers.BugfixSubcategoryKey+`'], 0.0), `+workUnitVersionKey+`) AS bugfix_share,
+							argMax(structural_evidence_json, `+workUnitVersionKey+`) AS structural_evidence_json,
 							`+latestUnitGatedSQL+` AS gated
 						FROM work_unit_investments
 						WHERE org_id = {org_id:String}`+supersededWorkUnitIDsFilter()+scope.filter()+`
