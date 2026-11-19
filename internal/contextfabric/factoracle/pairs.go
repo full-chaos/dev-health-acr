@@ -930,6 +930,24 @@ func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
 			rr.Compared++
 			rr.find(Finding{Pair: "readiness", Key: key, Detail: fmt.Sprintf("estimate coverage present in ops %t, in acr %t", hasOps, latestDay != "")})
 		default:
+			// grainCount 0 is ops stating no coverage row, so its zero counts are no measurement.
+			grains, grainsErr := typedLeaf(LeafInt, coverage["grainCount"])
+			storeGrains := Leaf{T: LeafInt, V: fmt.Sprint(stored.Grains)}
+			grainPath := coveragePath + "grainCount"
+			rr.Compared++
+			rr.touch(grainPath)
+			switch {
+			case grainsErr != nil:
+				rr.find(Finding{Pair: "readiness", Key: key, Path: grainPath, Detail: "ops value: " + grainsErr.Error()})
+			case grains == Leaf{T: LeafInt, V: "0"}:
+				rr.find(Finding{Pair: "readiness", Key: key, Path: grainPath,
+					Detail: fmt.Sprintf("ops states no coverage row (grainCount 0) for a team with %s store grains; its zero counts and ratio are not compared", storeGrains.V)})
+				continue
+			case grains == storeGrains:
+				rr.Matches++
+			default:
+				rr.find(Finding{Pair: "readiness", Key: key, Path: grainPath, Detail: fmt.Sprintf("ops grainCount %s, store grains %s", grains, storeGrains)})
+			}
 			for _, f := range counts {
 				opsLeaf, opsErr := typedLeaf(LeafInt, coverage[f.ops])
 				rr.leafPair("readiness", key, coveragePath+f.ops, opsLeaf, Leaf{T: LeafInt, V: fmt.Sprint(sums[f.acr])}, opsErr, nil, 0)

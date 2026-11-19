@@ -152,9 +152,9 @@ write_postgres_wrapper() {
   local argv=() entry out="$STATE/pgq.sh"
   while IFS= read -r -d '' entry; do argv+=("$entry"); done < <(compose_argv)
   {
-    printf '#!/usr/bin/env bash\nset -euo pipefail\nexec'
+    printf '#!/usr/bin/env bash\nset -euo pipefail\nexport PGPASSWORD=%q\nexec' "$(<"$STATE/secrets/postgres-password")"
     printf ' %q' "${argv[@]}"
-    printf ' exec -T -e PGPASSWORD=%q postgres psql -h postgres -U devhealth -d %q -q -At -F %q -v ON_ERROR_STOP=1 -f -\n' "$(<"$STATE/secrets/postgres-password")" "$ACR_DB_NAME" $'\t'
+    printf ' exec -T -e PGPASSWORD postgres psql -h postgres -U devhealth -d %q -q -At -F %q -v ON_ERROR_STOP=1 -f -\n' "$ACR_DB_NAME" $'\t'
   } > "$out"
   chmod 700 "$out"
 }

@@ -1573,7 +1573,7 @@ assert_acr_entitlement() {
   # captured and reported rather than discarded: swallowing it is exactly the defect this suite
   # filed against the product in CHAOS-3069, where a failure path recorded no error text.
   set +e
-  entitled="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres \
+  entitled="$(export PGPASSWORD="${POSTGRES_PASSWORD}"; compose exec -T -e PGPASSWORD postgres \
     psql -h postgres -U "$POSTGRES_USER" -d "$OPS_POSTGRES_DB" -At -v ON_ERROR_STOP=1 -c "
     SELECT count(*) FROM org_feature_overrides o
     JOIN feature_flags f ON f.id = o.feature_id
