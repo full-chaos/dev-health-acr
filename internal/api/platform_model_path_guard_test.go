@@ -30,6 +30,8 @@ const (
 	contextFabricPackage = acrModulePath + "/internal/contextfabric"
 	paritytestPackage    = acrModulePath + "/" + paritytestDir
 	plantedPackages      = acrModulePath + "/internal/api/testdata/platformmodelpath"
+	// foreignPlants stands for code outside the module.
+	foreignPlants = plantedPackages + "/foreign"
 )
 
 var platformModelCallNames = []string{"InterpretQuestion", "SynthesizeAnswer", "PhraseStructureOffers"}
@@ -124,6 +126,7 @@ func scanPlatformModelPathTarget(root string, patterns []string, target [2]strin
 		return platformModelPathTargetScan{err: err}
 	}
 	scan := platformModelPathTargetScan{counts: map[platformModelPathSite]int{}, loaded: map[string]bool{}, problems: loader.Problems(target[0], target[1])}
+	guarded := guardedMethodSignatures(loader)
 	for _, pkg := range loader.Roots {
 		for _, name := range pkg.GoFiles {
 			scan.loaded[filepath.Clean(name)] = true
@@ -151,7 +154,7 @@ func scanPlatformModelPathTarget(root string, patterns []string, target [2]strin
 					site = rel + ":" + fn.Name.Name
 				}
 				ast.Inspect(decl, func(node ast.Node) bool {
-					for _, kind := range platformModelPathKinds(unit.Info, node, inResolverPackage, inContextFabric) {
+					for _, kind := range platformModelPathKinds(unit.Info, guarded, node, inResolverPackage, inContextFabric) {
 						scan.counts[platformModelPathSite{kind, site}]++
 					}
 					return true
@@ -168,7 +171,7 @@ func scanPlatformModelPathTarget(root string, patterns []string, target [2]strin
 // one comes into being outside its package: its fields are exported, so a
 // literal (elided or not), a variable, parameter, result or field whose type
 // holds a Resolver by value, new and make each make a working resolver.
-func platformModelPathKinds(info *types.Info, node ast.Node, inResolverPackage, inContextFabric bool) []int {
+func platformModelPathKinds(info *types.Info, guarded map[string][]*types.Signature, node ast.Node, inResolverPackage, inContextFabric bool) []int {
 	var kinds []int
 	switch n := node.(type) {
 	case *ast.Ident:
@@ -178,10 +181,21 @@ func platformModelPathKinds(info *types.Info, node ast.Node, inResolverPackage, 
 				kinds = append(kinds, resolverSite)
 			case isPackageFunc(fn, contextFabricPackage, "NewEngine"):
 				kinds = append(kinds, engineSite)
-			case fn.Name() == "Investigate" && isGuardedFunc(fn):
+			case fn.Name() == "Investigate" && isGuardedMethod(fn, guarded):
 				kinds = append(kinds, investigateSite)
-			case !inContextFabric && slices.Contains(platformModelCallNames, fn.Name()) && isGuardedFunc(fn):
+			case !inContextFabric && slices.Contains(platformModelCallNames, fn.Name()) && isGuardedMethod(fn, guarded):
 				kinds = append(kinds, modelCallSite)
+			}
+		}
+		// A generic function or type instantiated with a Resolver value
+		// type can make one (new(T), make([]T, n), var zero T) where its
+		// own body only names T.
+		if instance, ok := info.Instances[n]; ok && !inResolverPackage {
+			for i := range instance.TypeArgs.Len() {
+				if holdsResolverValue(instance.TypeArgs.At(i)) {
+					kinds = append(kinds, resolverSite)
+					break
+				}
 			}
 		}
 		if variable, ok := info.Defs[n].(*types.Var); ok && !inResolverPackage && holdsResolverValue(variable.Type()) {
@@ -260,15 +274,53 @@ func isPackageFunc(fn *types.Func, pkgPath, name string) bool {
 	return fn.Pkg() != nil && fn.Pkg().Path() == pkgPath && fn.Name() == name && fn.Signature().Recv() == nil
 }
 
-// isGuardedFunc reports whether fn can be the module's own: a function or
-// method the module declares, or an interface method, which a module type may
-// implement. The planted packages under testdata stand for code outside the
-// module.
-func isGuardedFunc(fn *types.Func) bool {
-	if recv := fn.Signature().Recv(); recv != nil && types.IsInterface(recv.Type()) {
-		return true
+// guardedMethodSignatures is the signature of every guarded method a type the
+// module declares has (Investigate and the model runtime methods), by name.
+func guardedMethodSignatures(loader *sourceload.Loader) map[string][]*types.Signature {
+	guarded := map[string][]*types.Signature{}
+	for _, unit := range loader.Units {
+		if unit.Types == nil || !isModuleDeclared(unit.Types.Path()) {
+			continue
+		}
+		scope := unit.Types.Scope()
+		for _, name := range scope.Names() {
+			typeName, ok := scope.Lookup(name).(*types.TypeName)
+			if !ok || typeName.IsAlias() {
+				continue
+			}
+			named, ok := typeName.Type().(*types.Named)
+			if !ok || types.IsInterface(named) {
+				continue
+			}
+			for i := range named.NumMethods() {
+				if method := named.Method(i); method.Name() == "Investigate" || slices.Contains(platformModelCallNames, method.Name()) {
+					guarded[method.Name()] = append(guarded[method.Name()], method.Signature())
+				}
+			}
+		}
 	}
-	return fn.Pkg() != nil && inPackageTree(fn.Pkg().Path(), acrModulePath) && !inPackageTree(fn.Pkg().Path(), plantedPackages)
+	return guarded
+}
+
+// isGuardedMethod reports whether fn is a guarded method: a method of a type
+// the module declares (a type that embeds one selects that same method), or an
+// interface method whose signature is a guarded method's, which a module type
+// can therefore implement. A function without a receiver is not one.
+func isGuardedMethod(fn *types.Func, guarded map[string][]*types.Signature) bool {
+	recv := fn.Signature().Recv()
+	if recv == nil {
+		return false
+	}
+	if types.IsInterface(recv.Type()) {
+		return slices.ContainsFunc(guarded[fn.Name()], func(signature *types.Signature) bool {
+			return types.Identical(fn.Signature(), signature)
+		})
+	}
+	return fn.Pkg() != nil && isModuleDeclared(fn.Pkg().Path())
+}
+
+func isModuleDeclared(path string) bool {
+	return inPackageTree(path, acrModulePath) && !inPackageTree(path, foreignPlants)
 }
 
 // holdsResolverValue reports whether a value of type t holds a Resolver by
@@ -551,7 +603,7 @@ func callName(expr ast.Expr) string {
 func TestPlatformModelPathScanFindsEveryPlantedSite(t *testing.T) {
 	root := repopath.Root(t)
 	var patterns []string
-	for _, name := range []string{"aliases", "dotimport", "values", "elided", "signature", "foreign"} {
+	for _, name := range []string{"aliases", "dotimport", "values", "elided", "signature", "foreign", "realmethods", "generic"} {
 		patterns = append(patterns, plantedPackages+"/"+name)
 	}
 	sites, _ := scanPlatformModelPath(t, root, patterns)
@@ -575,6 +627,10 @@ func TestPlatformModelPathScanFindsEveryPlantedSite(t *testing.T) {
 			dir + "elided/elided.go:Nested",
 			dir + "elided/elided.go:Slice",
 			dir + "elided/elided.go:ThroughAlias",
+			dir + "generic/generic.go:Boxed",
+			dir + "generic/generic.go:Configured",
+			dir + "generic/generic.go:Explicit",
+			dir + "generic/generic.go:Made",
 			dir + "signature/signature.go:ArrayBound",
 			dir + "signature/signature.go:Constrained",
 			dir + "signature/signature.go:NamedResult",
@@ -602,12 +658,14 @@ func TestPlatformModelPathScanFindsEveryPlantedSite(t *testing.T) {
 			dir + "values/values.go:EngineValue",
 		}},
 		{name: "in-process Investigate calls", got: sites.investigateCalls, want: []string{
-			dir + "foreign/foreign.go:ThroughInterface",
+			dir + "realmethods/realmethods.go:ThroughEmbeddedReceiver",
+			dir + "realmethods/realmethods.go:ThroughInterface",
 			dir + "signature/signature.go:InvestigateArrayBound",
 			dir + "values/values.go:InvestigateMethodExpression",
 			dir + "values/values.go:InvestigateValue",
 		}},
 		{name: "model runtime calls outside the engine", got: sites.modelCallsOutside, want: []string{
+			dir + "realmethods/realmethods.go:ThroughEmbeddedInterface",
 			dir + "values/values.go:ModelValue",
 		}},
 		{name: "non-test importers of " + paritytestDir, got: sites.paritytestImporters, want: nil},
