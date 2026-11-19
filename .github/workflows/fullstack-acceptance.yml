@@ -480,7 +480,27 @@ jobs:
             sleep 2
           done
           docker exec "${net}-ch" clickhouse-client --user default --password ch --query 'SELECT 1'
-          docker build -q -f dev-health/ops/docker/go-worker.Dockerfile --target dho -t "${net}-dho" dev-health/ops
+          # Bounded retry (3 tries, 10 s then 30 s apart) of ONLY a mirror blob
+          # 404 on a digest-pinned base image: the same line the ops
+          # ci/lib/registry_retry.sh class T1 matches (registry_transient,
+          # lines 23-29), unanchored because -q drops the "#N " prefix. Any
+          # permanent line, or any other error, fails at once.
+          build_log="$RUNNER_TEMP/dho-build.log"
+          for try in 1 2 3; do
+            rc=0
+            docker build -q -f dev-health/ops/docker/go-worker.Dockerfile --target dho -t "${net}-dho" dev-health/ops >"$build_log" 2>&1 || rc=$?
+            cat "$build_log"
+            [ "$rc" -eq 0 ] && break
+            if [ "$try" -lt 3 ] \
+              && ! LC_ALL=C grep -aEq '(manifest unknown|denied|unauthorized|pull access denied|repository does not exist|no match for platform in manifest|invalid reference format)|ERROR: process "|didn.t complete successfully' "$build_log" \
+              && LC_ALL=C grep -aEq 'failed to copy: httpReadSeeker: failed open: could not fetch content descriptor sha256:[0-9a-f]{64} \(application/vnd\.(oci|docker)\.[A-Za-z0-9.+-]+\) from remote: not found' "$build_log"; then
+              delay=10; [ "$try" -eq 2 ] && delay=30
+              echo "::warning::mirror blob not found (try $try/3), retrying in ${delay}s"
+              sleep "$delay"
+              continue
+            fi
+            exit "$rc"
+          done
           docker run --rm --network "$net" -e "CLICKHOUSE_URI=clickhouse://default:ch@${net}-ch:9000/default" "${net}-dho" migrate clickhouse upgrade
           ch_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${net}-ch")"
           test -n "$ch_ip"

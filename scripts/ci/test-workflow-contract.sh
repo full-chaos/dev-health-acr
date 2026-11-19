@@ -2188,6 +2188,56 @@ for other_workflow in "$repo_root"/.github/workflows/*.yml; do
 done
 printf 'PASS: every workflow that runs go tests carries ACR_CONTAINER_TESTS=1\n'
 
+# The live-schema-parity job builds the ops go-worker image from the ops
+# checkout with a plain `docker build`; a mirror.gcr.io blob 404 on its
+# digest-pinned base image must not fail the job. The build runs in a bounded
+# retry (3 tries, 10 s then 30 s) that fires only on that one transient line.
+check_live_parity_build_retry() {
+  local file="$1" script fake out rc tries
+  script="$(awk '
+    /^          build_log=/ { on = 1 }
+    on { sub(/^          /, ""); print }
+    on && /^done$/ { exit }
+  ' "$file")"
+  [ -n "$script" ] || { printf '%s: no build retry block in the live parity job\n' "${file##*/}" >&2; return 1; }
+  grep -q 'docker build -q -f dev-health/ops/docker/go-worker.Dockerfile' <<<"$script" || {
+    printf '%s: the retry block does not run the ops go-worker docker build\n' "${file##*/}" >&2; return 1; }
+  [ "$(grep -c 'docker build -q -f dev-health/ops/docker/go-worker.Dockerfile' "$file")" -eq 1 ] || {
+    printf '%s: the ops go-worker docker build must appear once, inside the retry\n' "${file##*/}" >&2; return 1; }
+  fake="$(mktemp -d)"
+  # shellcheck disable=SC2016
+  printf '#!/usr/bin/env bash\necho "$1" >> "$FAKE_DIR/sleeps"\n' >"$fake/sleep"
+  # shellcheck disable=SC2016
+  printf '#!/usr/bin/env bash\nn=$(( $(cat "$FAKE_DIR/n" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_DIR/n"\ncat "$FAKE_DIR/out.$n" 2>/dev/null || cat "$FAKE_DIR/out.last"\nexit "$(cat "$FAKE_DIR/rc.$n" 2>/dev/null || cat "$FAKE_DIR/rc.last")"\n' >"$fake/docker"
+  chmod +x "$fake/sleep" "$fake/docker"
+  local t1='#9 ERROR: failed to copy: httpReadSeeker: failed open: could not fetch content descriptor sha256:0000000000000000000000000000000000000000000000000000000000000000 (application/vnd.oci.image.layer.v1.tar+gzip) from remote: not found'
+  run_case() { # name, expected rc, expected tries, expected sleeps, out.1, out.2, out.3
+    rm -f "$fake"/n "$fake"/sleeps "$fake"/out.* "$fake"/rc.*
+    [ -n "${5-}" ] && printf '%s\n' "$5" >"$fake/out.1"
+    [ -n "${6-}" ] && printf '%s\n' "$6" >"$fake/out.2"
+    [ -n "${7-}" ] && printf '%s\n' "$7" >"$fake/out.3"
+    printf 1 >"$fake/rc.1"; printf 1 >"$fake/rc.2"; printf 1 >"$fake/rc.3"; printf 1 >"$fake/rc.last"; printf 'x' >"$fake/out.last"
+    [ -n "${6-}" ] && [ "$6" = ok ] && { printf 0 >"$fake/rc.2"; : >"$fake/out.2"; }
+    rc=0
+    FAKE_DIR="$fake" PATH="$fake:$PATH" RUNNER_TEMP="$fake" net=n bash -c "set -euo pipefail; $script" >/dev/null 2>&1 || rc=$?
+    tries="$(cat "$fake/n" 2>/dev/null || echo 0)"
+    out="$(tr '\n' ' ' <"$fake/sleeps" 2>/dev/null || true)"
+    if [ "$rc" -eq "$2" ] && [ "$tries" -eq "$3" ] && [ "$out" = "$4" ]; then return 0; fi
+    printf '%s: %s: rc=%s tries=%s sleeps="%s" (want rc=%s tries=%s sleeps="%s")\n' "${file##*/}" "$1" "$rc" "$tries" "$out" "$2" "$3" "$4" >&2
+    return 1
+  }
+  local status=0
+  run_case 'blob 404 then success' 0 2 '10 ' "$t1" ok || status=1
+  run_case 'blob 404 three times' 1 3 '10 30 ' "$t1" "$t1" "$t1" || status=1
+  run_case 'other error fails at once' 1 1 '' 'ERROR: failed to solve: something else' || status=1
+  run_case 'permanent line vetoes the 404' 1 1 '' "$t1"$'\n''ERROR: failed to solve: pull access denied' || status=1
+  rm -rf "$fake"
+  return "$status"
+}
+live_parity_build_retry_workflow="$fullstack_workflow"
+check_live_parity_build_retry "$live_parity_build_retry_workflow"
+printf 'PASS: the live parity job retries a mirror blob 404 on the ops image build (3 tries, 10 s / 30 s) and fails at once on anything else\n'
+
 # CHAOS-11151: fullstack-acceptance and mutation-battery restore the one Go
 # module cache through the go-modcache action; neither keeps a cache of its own
 # (setup-go `cache: true`, or actions/cache). release.yml keeps its exact-key
@@ -2225,6 +2275,16 @@ assert_check_fails() {
     exit 1
   fi
 }
+
+# (live-parity-retry) the ops image build goes back to a bare docker build.
+live_parity_bare_build="$tmpdir/live-parity-bare-build.yml"
+awk '
+  /^          build_log=/ { skip = 1 }
+  skip && /^          done$/ { skip = 0
+    print "          docker build -q -f dev-health/ops/docker/go-worker.Dockerfile --target dho -t \"${net}-dho\" dev-health/ops"; next }
+  !skip { print }
+' "$fullstack_workflow" > "$live_parity_bare_build"
+assert_check_fails 'bare docker build in the live parity job' check_live_parity_build_retry "$live_parity_bare_build"
 
 # (a) drop one job name from verify's needs.
 needs_missing_job="$tmpdir/needs-missing-job.yml"
