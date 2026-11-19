@@ -458,7 +458,8 @@ func TestWorkUnitVersionKeyIsBuiltFromTheOpsLatestRowOrderKeyComponents(t *testi
 }
 
 // acr's ordinal and ops' latestrow.OrderKey pick the same row of every unit, on
-// a table of same-millisecond ties in two parts each (both insert orders), a
+// a table of same-millisecond ties in two parts each (both insert orders, the
+// earlier version at the larger _part_offset), a
 // same-millisecond pair in one part, and a unit whose newer computed_at was
 // inserted first, before and after OPTIMIZE FINAL; after the merge both pick
 // the row the merge kept.
@@ -472,19 +473,36 @@ func TestWorkUnitVersionKeyOrdersLikeTheOpsLatestRowOrderKeyAgainstRealClickHous
 	}
 	const orgID = "org-7323-order-parity"
 	at := ts(2026, 9, 18, 0, 0, 0)
-	for _, w := range []struct {
-		id, theme string
-		at        time.Time
-	}{
-		{"tie-risk-last", "quality", at}, {"tie-risk-last", "risk", at},
-		{"tie-quality-last", "risk", at}, {"tie-quality-last", "quality", at},
-		{"newer-first", "risk", at.Add(time.Millisecond)}, {"newer-first", "quality", at},
+	span := at.Add(-time.Hour).Truncate(time.Second)
+	// The earlier version of each two-part tie shares its part with a filler
+	// unit that sorts first, so its _part_offset (1) is larger than the later
+	// version's (0): only the part block number puts the later insert first.
+	for _, w := range []struct{ id, filler, first, last string }{
+		{"tie-risk-last", "a-filler-risk-last", "quality", "risk"},
+		{"tie-quality-last", "a-filler-quality-last", "risk", "quality"},
 	} {
-		insertRunVersionAtMilli(t, ctx, direct, orgID, w.id, "", `{"issues":[],"prs":[]}`, w.theme, w.theme, w.at, at.Add(-time.Hour))
+		if err := direct.Exec(ctx, `INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)
+SELECT id, ?, ?, NULL, 0, map(if(id = ?, ?, 'filler'), 1.0), map(), ?, fromUnixTimestamp64Milli(?, 'UTC'), ?
+FROM (SELECT arrayJoin([?, ?]) AS id)`, span, span, w.id, w.first, `{"issues":[],"prs":[]}`, at.UnixMilli(), orgID, w.filler, w.id); err != nil {
+			t.Fatalf("insert %s with its filler: %v", w.id, err)
+		}
+		insertRunVersionAtMilli(t, ctx, direct, orgID, w.id, "", `{"issues":[],"prs":[]}`, w.last, w.last, at, at.Add(-time.Hour))
+		var parts, earlierOffset, laterOffset uint64
+		var earlierTheme string
+		if err := direct.QueryRow(ctx, `SELECT uniqExact(_part),
+	argMin(arrayElement(mapKeys(theme_distribution_json), 1), toUInt64OrZero(splitByChar('_', _part)[3])),
+	argMin(_part_offset, toUInt64OrZero(splitByChar('_', _part)[3])),
+	argMax(_part_offset, toUInt64OrZero(splitByChar('_', _part)[3]))
+FROM work_unit_investments WHERE org_id = ? AND work_unit_id = ?`, orgID, w.id).Scan(&parts, &earlierTheme, &earlierOffset, &laterOffset); err != nil ||
+			parts != 2 || earlierTheme != w.first || earlierOffset != 1 || laterOffset != 0 {
+			t.Fatalf("%s: parts %d, earlier %q at offset %d, later at offset %d (%v); want 2 parts, earlier %q at offset 1, later at offset 0",
+				w.id, parts, earlierTheme, earlierOffset, laterOffset, err, w.first)
+		}
 	}
+	insertRunVersionAtMilli(t, ctx, direct, orgID, "newer-first", "", `{"issues":[],"prs":[]}`, "risk", "risk", at.Add(time.Millisecond), at.Add(-time.Hour))
+	insertRunVersionAtMilli(t, ctx, direct, orgID, "newer-first", "", `{"issues":[],"prs":[]}`, "quality", "quality", at, at.Add(-time.Hour))
 	// Two versions of one unit in ONE insert, so one part: only _part_offset
 	// tells them apart. optimize_on_insert = 0 keeps both rows in the part.
-	span := at.Add(-time.Hour).Truncate(time.Second)
 	if err := direct.Exec(ctx, `INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)
 SETTINGS optimize_on_insert = 0
 SELECT 'same-part', ?, ?, NULL, 0, map(theme, 1.0), map(), ?, fromUnixTimestamp64Milli(?, 'UTC'), ?
@@ -495,7 +513,8 @@ FROM (SELECT arrayJoin(['quality', 'risk']) AS theme)`, span, span, `{"issues":[
 	if err := direct.QueryRow(ctx, `SELECT uniqExact(_part) * 10 + count() FROM work_unit_investments WHERE org_id = ? AND work_unit_id = 'same-part'`, orgID).Scan(&samePart); err != nil || samePart != 12 {
 		t.Fatalf("the same-part pair is not two rows in one part (parts*10+rows = %d, %v)", samePart, err)
 	}
-	want := map[string]string{"tie-risk-last": "risk", "tie-quality-last": "quality", "newer-first": "risk", "same-part": "risk"}
+	want := map[string]string{"tie-risk-last": "risk", "tie-quality-last": "quality", "newer-first": "risk", "same-part": "risk",
+		"a-filler-risk-last": "filler", "a-filler-quality-last": "filler"}
 	pick := func(final string) map[string][2]string {
 		t.Helper()
 		rows, err := direct.Query(ctx, `SELECT work_unit_id,
