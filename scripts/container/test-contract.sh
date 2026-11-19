@@ -283,6 +283,16 @@ grep -q '"$mcp_image" workspace' "${repo_root}/scripts/container/verify.sh"
 # 13. Compilation must run network-isolated after module download; only
 # the module-download step may reach the network.
 test "$(grep -c -- '--network=none' "${repo_root}/Dockerfile")" -eq 1
+# The module-download step is `go mod download`; nothing else may fetch a
+# remote URL: no remote ADD, no curl/wget.
+if grep -Ev '^[[:space:]]*#' "${repo_root}/Dockerfile" | grep -Eiq '^[[:space:]]*ADD[[:space:]].*(https?|ftp|git|ssh)://|^[[:space:]]*ADD[[:space:]].*git@'; then
+  printf 'Dockerfile must not ADD a remote URL\n' >&2
+  exit 1
+fi
+if grep -Ev '^[[:space:]]*#' "${repo_root}/Dockerfile" | grep -Eq '(^|[^[:alnum:]_-])(curl|wget)([^[:alnum:]_-]|$)'; then
+  printf 'Dockerfile must not run curl or wget; only the go mod download step may reach the network\n' >&2
+  exit 1
+fi
 
 # 14. Runtime probes must drop all Linux capabilities and block privilege
 # escalation, in addition to the existing read-only-root/non-root user.
