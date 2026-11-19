@@ -579,10 +579,17 @@ func declaredPolicyFor(scoped bool) policyDeclaration {
 				RefusedPaths: map[string]dr.Refusal{
 					"input.workScopeId": refuse(dr.RefusalVariableNotAllowed, "work scope id form between acr and ops is UNCONFIRMED (POLICY-ARTIFACT-v0)"),
 				},
-				Unrestricted: served("[ops] throughputforecast clickhouse.go:44-63 apply teamIds (RM §14)"),
-				Restricted:   refusedFor("no repository scope; reviewBottleneck and incidentLoad are org-wide ([ops] throughputforecast/resolve.go:145-152; clickhouse.go:395-411,492-510; RM §14); REFUSED until the K2 team path is read"),
-				Disclosure:   []dr.DisclosureField{{Path: "throughputForecast.insufficientHistory", Rule: dr.DisclosurePartialWhenTrue}},
-				Notes:        []string{"reviewBottleneck and incidentLoad stay org-wide even with teamIds (RM §14)"},
+				Unrestricted: served("[ops] throughputforecast clickhouse.go:60-89 apply teamIds (RM §14)"),
+				Restricted:   refusedFor("no repository scope; reviewBottleneck and incidentLoad are org-wide ([ops] throughputforecast/resolve.go:148-155; clickhouse.go:448-460,577-589; RM §14); REFUSED until the K2 team path is read"),
+				Disclosure: []dr.DisclosureField{
+					{Path: "throughputForecast.insufficientHistory", Rule: dr.DisclosurePartialWhenTrue},
+					{Path: "throughputForecast.degradedReason", Rule: dr.DisclosurePartialWhenNonNull},
+				},
+				Notes: []string{
+					"reviewBottleneck and incidentLoad stay org-wide even with teamIds (RM §14)",
+					"backlogState STALE: backlogSize is read from backlogAsOfDay, a day before the window; NO_ROWS: no work-item row to read it from ([ops] throughputforecast/clickhouse.go:507); degradedReason carries STALE or NO_ROWS and is null for MEASURED or SUPPLIED ([ops] throughputforecast/resolve.go:270-273), so either state answers declared_partial with reason degraded",
+					"estimateCoverage.grainCount 0 = the scope has no estimate-coverage row: the zero counts and ratio 0 in estimateCoverage are not a measurement; the forecast itself is unaffected",
+				},
 			},
 			"capacityForecasts": {
 				DocumentName: "CapacityForecasts",

@@ -3,6 +3,7 @@ package factoracle
 import (
 	"encoding/json"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -595,11 +596,20 @@ func everyValuePairFindsAChangedValue(t *testing.T) {
 	planted.Tables[tableRepos][0]["repo"] = name + "x"
 
 	manifest, skipped := withoutNotRecordedRoots(t, manifest)
+	manifest, advanced := withoutAdvancedRoots(t, manifest)
+	skipped = append(skipped, advanced...)
 	planes := localPlanes(t, seedStore(t, planted), &recording)
 	oracle := oracleFor(t, manifest, planes, extract)
 	oracle.OnlyRoots = rootsExcept(t, skipped)
 	report := runOracle(t, oracle)
 	for _, root := range []string{"analytics", "capacityForecasts", "catalog", "compoundingRisk", "throughputForecast"} {
+		if slices.Contains(advanced, root) {
+			t.Log(notMeasuredLine(root))
+			if rr := report.Root(root); rr != nil {
+				t.Errorf("root %s is advanced past the capture but the run reports it: %+v", root, rr)
+			}
+			continue
+		}
 		rr := report.Root(root)
 		want := manifest.Expect[root]
 		// A finding the pinned outcome does not hold: one more, or one whose

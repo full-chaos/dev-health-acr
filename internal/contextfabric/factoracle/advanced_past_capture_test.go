@@ -1,6 +1,8 @@
 package factoracle
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -80,5 +82,62 @@ func TestAdvancedPastCaptureEntriesAreRecordedAndAdvanced(t *testing.T) {
 		if got := recordedNotRecorded()[name]; got != why {
 			t.Fatalf("%s is not named as not recorded: %q", name, got)
 		}
+	}
+}
+
+// A root every operation of which is advanced past the capture is skipped by
+// name and stated as not measured; a root that keeps one operation that is
+// not advanced is not skipped, and a missing case of that operation still
+// stops the run.
+func TestARootIsSkippedOnlyWhenEveryOperationIsAdvanced(t *testing.T) {
+	policy := mustPolicy(t)
+	roots := advancedRoots(policy, advancedPastCapture)
+	var lines []string
+	for _, root := range roots {
+		lines = append(lines, notMeasuredLine(root))
+	}
+	if want := []string{"throughputForecast: NOT MEASURED (advanced past capture; re-capture 14023)"}; !slices.Equal(lines, want) {
+		t.Fatalf("not measured roots = %q, want %q", lines, want)
+	}
+
+	planted := map[string]string{"investmentBreakdownTeam": "planted: advanced past the capture"}
+	if got := advancedRoots(policy, planted); len(got) != 0 {
+		t.Fatalf("a root that keeps operations that are not advanced is skipped: %v", got)
+	}
+	manifest, _, extract, err := LoadCapture(captureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(extract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shapes, err := Shapes(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropped := ""
+	for _, shape := range shapes {
+		if _, advanced := planted[shape.Operation]; shape.Root == "analytics" && !advanced {
+			dropped = shape.ID()
+			break
+		}
+	}
+	if dropped == "" {
+		t.Fatal("root analytics has no shape of an operation that is not advanced")
+	}
+	var cases []ShapeCase
+	for _, c := range manifest.ShapeCases {
+		parts := strings.SplitN(c.ShapeID, "/", 3)
+		if _, advanced := planted[parts[1]]; c.ShapeID != dropped && !advanced {
+			cases = append(cases, c)
+		}
+	}
+	oracle := &Oracle{Policy: policy, Store: store, Window: manifest.Window, ShapeCases: cases, OnlyRoots: []string{"analytics"}, NotRecorded: planted,
+		Planes: fakePlanes{graphQL: func(Shape, map[string]any) (json.RawMessage, error) {
+			return json.RawMessage(`{"call":"operation_unavailable"}`), nil
+		}}}
+	if _, err := oracle.Run(context.Background()); err == nil || !strings.Contains(err.Error(), dropped+" has no case") {
+		t.Fatalf("a root with one advanced operation and a missing case of another ran to %v", err)
 	}
 }
