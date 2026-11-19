@@ -135,6 +135,7 @@ type windowPass struct {
 	walking   bool        // a pass is in progress
 	pages     int         // pages the current pass has read
 	rows      int         // source rows the current pass has read
+	bounded   int         // pages of the current pass the page bound ended
 	nextStart time.Time   // no new pass starts before this (sourcePlan.windowInterval); zero = no pacing
 }
 
@@ -404,7 +405,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 	start := func() {
 		pass.walking, pass.passStart, pass.walk = true, now, cursorState{Since: pass.low}
 		pass.high = cursorState{Since: state.Since, After: state.After}
-		pass.pages, pass.rows = 0, 0
+		pass.pages, pass.rows, pass.bounded = 0, 0, 0
 		carry.reset()
 	}
 	// A pass resumed from an earlier call may have been passed by rows that
@@ -466,8 +467,13 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		if len(pageRows) > 0 {
 			sortCandidates(pageRows)
 			complete, bounded := truncateToCompleteRows(pageRows, incrementalBatchCap, bound)
+			// A long walk can meet the bound on every page: the pass writes
+			// the line for its first such page and counts the rest.
 			if bounded {
-				p.logBoundedPage(ctx, orgID, bound)
+				if pass.bounded == 0 {
+					p.logBoundedPage(ctx, orgID, bound)
+				}
+				pass.bounded++
 			}
 			more = more || len(complete) < len(pageRows)
 			// The pass ends at its upper edge. A row past it lies beyond the
@@ -624,6 +630,7 @@ func (p sourcePlan) logOpenPass(ctx context.Context, orgID string, pass windowPa
 		"frontier", contextfabric.SanitizeLogAttr(frontier.Since.UTC().Format(time.RFC3339Nano)),
 		"pass_age_seconds", int64(now.Sub(pass.passStart).Seconds()),
 		"pass_bound_seconds", int64(p.overlap.Seconds()), "pass_pages", pass.pages, "pass_rows", pass.rows,
+		"pass_bounded_pages", pass.bounded,
 		"remaining_span_seconds", int64(remainingSpan.Seconds()), "remaining_rows_estimate", remainingRows)
 }
 
@@ -635,6 +642,7 @@ func (p sourcePlan) logEndedPass(ctx context.Context, orgID string, pass windowP
 	attrs := []any{
 		"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
 		"pass_seconds", int64(now.Sub(pass.passStart).Seconds()), "pass_pages", pass.pages, "pass_rows", pass.rows,
+		"pass_bounded_pages", pass.bounded,
 		"window_low", contextfabric.SanitizeLogAttr(pass.low.UTC().Format(time.RFC3339Nano)),
 		"window_high", contextfabric.SanitizeLogAttr(pass.high.Since.UTC().Format(time.RFC3339Nano)),
 	}
