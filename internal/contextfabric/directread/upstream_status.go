@@ -46,29 +46,22 @@ func (c UpstreamGraphQLCode) callerFault() bool {
 // the name. The message text is never read out. A body that is not an
 // envelope yields empty values.
 func parseUpstreamGraphQLError(body []byte) (UpstreamGraphQLCode, string) {
-	var answer struct {
-		Errors []struct {
-			Path       []json.RawMessage `json:"path"`
-			Extensions struct {
-				Code string `json:"code"`
-			} `json:"extensions"`
-		} `json:"errors"`
-	}
-	if json.Unmarshal(body, &answer) != nil || len(answer.Errors) == 0 {
+	entries := errorEntriesOf(body)
+	if len(entries) == 0 {
 		return "", ""
 	}
-	first := answer.Errors[0]
+	first := entries[0]
 	code := UpstreamGraphQLCode("")
-	if first.Extensions.Code != "" {
+	if first.code != "" {
 		code = GraphQLCodeOther
-		if known, ok := upstreamGraphQLCodes[first.Extensions.Code]; ok {
+		if known, ok := upstreamGraphQLCodes[first.code]; ok {
 			code = known
 		}
 	}
 	variable := ""
-	if len(first.Path) >= 2 {
+	if len(first.path) >= 2 {
 		var head, name string
-		if json.Unmarshal(first.Path[0], &head) == nil && head == "variable" && json.Unmarshal(first.Path[1], &name) == nil &&
+		if json.Unmarshal(first.path[0], &head) == nil && head == "variable" && json.Unmarshal(first.path[1], &name) == nil &&
 			len(name) <= upstreamVariableMaxLen && graphQLNamePattern.MatchString(name) {
 			variable = name
 		}
