@@ -440,6 +440,9 @@ type EstimateCoverage struct {
 	Day string
 	// Scopes counts the (provider, work scope) rows of that day.
 	Scopes int
+	// Grains counts the team's (provider, work scope) keys in the extract,
+	// each at its own newest day: the grains ops reads for grainCount.
+	Grains int
 	// Counts sums estimated_count, unestimated_count and backlog_size over
 	// those rows.
 	Counts map[string]int64
@@ -457,6 +460,7 @@ func (s *Store) LatestEstimateCoverage() (map[string]EstimateCoverage, error) {
 	}
 	latestDay := map[string]string{}
 	rows := map[string]map[string]scopeRow{}
+	grains := map[string]map[string]bool{}
 	for _, row := range s.extract.Tables[tableEstimateCoverageMetricsDaily] {
 		team, ok := rowString(row, "team_id")
 		if !ok || team == "" {
@@ -466,6 +470,13 @@ func (s *Store) LatestEstimateCoverage() (map[string]EstimateCoverage, error) {
 		if !ok {
 			return nil, fmt.Errorf("estimate_coverage_metrics_daily: a row has no day")
 		}
+		provider, _ := rowString(row, "provider")
+		scope, _ := rowString(row, "work_scope_id")
+		key := provider + "\x00" + scope
+		if grains[team] == nil {
+			grains[team] = map[string]bool{}
+		}
+		grains[team][key] = true
 		if day < latestDay[team] {
 			continue
 		}
@@ -476,9 +487,6 @@ func (s *Store) LatestEstimateCoverage() (map[string]EstimateCoverage, error) {
 		if err != nil {
 			return nil, err
 		}
-		provider, _ := rowString(row, "provider")
-		scope, _ := rowString(row, "work_scope_id")
-		key := provider + "\x00" + scope
 		if prior, seen := rows[team][key]; seen && !at.After(prior.at) {
 			continue
 		}
@@ -494,7 +502,7 @@ func (s *Store) LatestEstimateCoverage() (map[string]EstimateCoverage, error) {
 	}
 	out := map[string]EstimateCoverage{}
 	for team, day := range latestDay {
-		coverage := EstimateCoverage{Day: day, Scopes: len(rows[team]), Counts: map[string]int64{}}
+		coverage := EstimateCoverage{Day: day, Scopes: len(rows[team]), Grains: len(grains[team]), Counts: map[string]int64{}}
 		for _, row := range rows[team] {
 			for column, value := range row.counts {
 				coverage.Counts[column] += value

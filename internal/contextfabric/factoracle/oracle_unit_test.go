@@ -1510,7 +1510,7 @@ func TestAReadinessFactTheReadLostShowsAgainstTheStore(t *testing.T) {
 				return
 			}
 			estimated, backlog := stored.Counts["estimated_count"]-lose, stored.Counts["backlog_size"]
-			block := map[string]any{"__typename": "EstimateCoverageSignal", "estimatedCount": estimated, "unestimatedCount": stored.Counts["unestimated_count"], "backlogSize": backlog, "ratio": nil}
+			block := map[string]any{"__typename": "EstimateCoverageSignal", "estimatedCount": estimated, "unestimatedCount": stored.Counts["unestimated_count"], "backlogSize": backlog, "ratio": nil, "grainCount": stored.Grains}
 			if backlog != 0 {
 				block["ratio"] = float64(estimated) / float64(backlog)
 			}
@@ -1559,6 +1559,124 @@ func TestAReadinessFactTheReadLostShowsAgainstTheStore(t *testing.T) {
 	}
 	if got := count(whole, "readiness_store", "acr:readiness.scopes"); several == 0 || got != several {
 		t.Fatalf("%d teams have more than one work scope in the store, %d scope findings", several, got)
+	}
+}
+
+// The grain count of the ops coverage block is held against the store's
+// (provider, work scope) keys of the team, each at its own newest day; a
+// count of 0 is ops stating no coverage row, never a measured zero.
+func TestTheCoverageGrainCountIsComparedWithTheStore(t *testing.T) {
+	_, _, extract, err := LoadCapture(captureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewStore(extract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverage, err := store.LatestEstimateCoverage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(coverage) == 0 {
+		t.Fatal("the extract has no team with estimate coverage rows")
+	}
+	const grainPath = coveragePath + "grainCount"
+	// grains answers the grain count ops states for a team; zero states no
+	// coverage row, with the zero object ops serves then.
+	run := func(grains func(EstimateCoverage) any, zero bool) *RootReport {
+		t.Helper()
+		planes := recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
+			input, _ := variables["input"].(map[string]any)
+			teams, _ := input["teamIds"].([]any)
+			team, _ := teams[0].(string)
+			stored, ok := coverage[strings.TrimPrefix(team, "team:")]
+			if !ok {
+				return
+			}
+			if zero {
+				forecast["estimateCoverage"] = map[string]any{"__typename": "ThroughputEstimateCoverage", "estimatedCount": 0, "unestimatedCount": 0, "backlogSize": 0, "ratio": 0.0, "grainCount": 0}
+				return
+			}
+			block := map[string]any{"__typename": "ThroughputEstimateCoverage", "estimatedCount": stored.Counts["estimated_count"],
+				"unestimatedCount": stored.Counts["unestimated_count"], "backlogSize": stored.Counts["backlog_size"], "ratio": nil, "grainCount": grains(stored)}
+			if backlog := stored.Counts["backlog_size"]; backlog != 0 {
+				block["ratio"] = float64(stored.Counts["estimated_count"]) / float64(backlog)
+			}
+			forecast["estimateCoverage"] = block
+		})
+		planes.facts = func(request FactsRequest) (json.RawMessage, error) {
+			if request.Kinds[0] != "readiness" {
+				return noFacts(request)
+			}
+			var facts, rows []any
+			for _, subject := range request.Subjects {
+				stored := coverage[strings.TrimPrefix(subject.CanonicalID, "team:")]
+				facts = append(facts, map[string]any{"kind": "readiness", "subject": subject, "fields": map[string]any{
+					"day": stored.Day, "estimated_count": fmt.Sprint(stored.Counts["estimated_count"]),
+					"unestimated_count": fmt.Sprint(stored.Counts["unestimated_count"]), "backlog_size": fmt.Sprint(stored.Counts["backlog_size"])}})
+				rows = append(rows, map[string]any{"kind": "readiness", "subject": subject, "outcome": "available"})
+			}
+			return json.Marshal(map[string]any{"status": "complete", "versions": map[string]any{"kinds": map[string]any{}}, "facts": facts, "coverage": rows})
+		}
+		return fakeRun(t, "throughputForecast", planes, nil).Root("throughputForecast")
+	}
+	on := func(rr *RootReport, path, detail string) int {
+		n := 0
+		for _, f := range rr.Findings {
+			if f.Pair == "readiness" && f.Path == path && strings.Contains(f.Detail, detail) {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Control: ops states the store's grain count for every team.
+	agree := run(func(stored EstimateCoverage) any { return stored.Grains }, false)
+	if got := on(agree, grainPath, ""); got != 0 || agree.touched[grainPath] != len(coverage) {
+		t.Fatalf("grain counts that agree with the store: %d findings, compared %d times for %d teams: %+v", got, agree.touched[grainPath], len(coverage), agree.Findings)
+	}
+	for _, reason := range agree.Invalid {
+		if strings.Contains(reason, grainPath) {
+			t.Fatalf("grain counts that agree with the store: %s", reason)
+		}
+	}
+
+	// Red: ops states one grain more than the store holds.
+	differ := run(func(stored EstimateCoverage) any { return stored.Grains + 1 }, false)
+	if got := on(differ, grainPath, "store"); got != len(coverage) {
+		t.Fatalf("%d teams state one grain more than the store, %d grain findings: %+v", len(coverage), got, differ.Findings)
+	}
+
+	// A count of the latest day's rows only is not the grain count for a
+	// team with a work scope whose newest day is older.
+	older := 0
+	for _, stored := range coverage {
+		if stored.Scopes != stored.Grains {
+			older++
+		}
+	}
+	latestOnly := run(func(stored EstimateCoverage) any { return stored.Scopes }, false)
+	if got := on(latestOnly, grainPath, "store"); older == 0 || got != older {
+		t.Fatalf("%d teams have a work scope with an older newest day, %d grain findings for a latest-day count", older, got)
+	}
+
+	// A grain count that is not a number is a finding, never a match.
+	null := run(func(EstimateCoverage) any { return nil }, false)
+	if got := on(null, grainPath, ""); got != len(coverage) {
+		t.Fatalf("%d teams state no grain count, %d grain findings", len(coverage), got)
+	}
+
+	// Zero grains: ops states no coverage row. Its zero counts and ratio 0
+	// are not compared as a measurement.
+	none := run(nil, true)
+	if got := on(none, grainPath, "no coverage row"); got != len(coverage) {
+		t.Fatalf("%d teams have store rows and ops states no coverage row, %d findings: %+v", len(coverage), got, none.Findings)
+	}
+	for _, field := range []string{"estimatedCount", "unestimatedCount", "backlogSize", "ratio"} {
+		if got := none.touched[coveragePath+field]; got != 0 {
+			t.Fatalf("the zero object of a scope with no coverage row was compared %d times on %s", got, field)
+		}
 	}
 }
 
