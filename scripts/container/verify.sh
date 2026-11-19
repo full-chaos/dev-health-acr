@@ -253,13 +253,13 @@ migration_password="acr-${RANDOM}-${RANDOM}-$$"
 #
 # Mount the parent and name the subdirectory, matching compose.yml and the Ops
 # Helm chart's bundled PostgreSQL.
-postgres_container="$(docker run -d \
+postgres_container="$(POSTGRES_PASSWORD="${migration_password}" docker run -d \
   --network "$migration_network" \
   --network-alias postgres \
   --tmpfs /var/lib/postgresql:rw,noexec,nosuid,size=512m \
   -e PGDATA=/var/lib/postgresql/pgdata \
   -e POSTGRES_USER=acr \
-  -e "POSTGRES_PASSWORD=${migration_password}" \
+  -e POSTGRES_PASSWORD \
   -e POSTGRES_DB=acr \
   "$postgres_image")"
 track_container "$postgres_container"
@@ -281,19 +281,19 @@ fi
 migration_dsn="postgres://acr:${migration_password}@postgres:5432/acr?sslmode=disable"
 migration_files=("${repo_root}"/migrations/postgres/[0-9][0-9][0-9][0-9]_*.sql)
 expected_migration_count="${#migration_files[@]}"
-docker run --rm --network "$migration_network" "${readonly_probe_flags[@]}" \
+ACR_POSTGRES_MIGRATION_DSN="${migration_dsn}" docker run --rm --network "$migration_network" "${readonly_probe_flags[@]}" \
   -e ACR_ENVIRONMENT=test \
-  -e "ACR_POSTGRES_MIGRATION_DSN=${migration_dsn}" \
+  -e ACR_POSTGRES_MIGRATION_DSN \
   --entrypoint /usr/local/bin/acr-migrate "$api_image" up >"${tmp_dir}/migration-first"
 grep -qxF "applied ${expected_migration_count} migrations" "${tmp_dir}/migration-first"
-docker run --rm --network "$migration_network" "${readonly_probe_flags[@]}" \
+ACR_POSTGRES_MIGRATION_DSN="${migration_dsn}" docker run --rm --network "$migration_network" "${readonly_probe_flags[@]}" \
   -e ACR_ENVIRONMENT=test \
-  -e "ACR_POSTGRES_MIGRATION_DSN=${migration_dsn}" \
+  -e ACR_POSTGRES_MIGRATION_DSN \
   --entrypoint /usr/local/bin/acr-migrate "$api_image" up >"${tmp_dir}/migration-second"
 grep -qxF 'no migrations applied' "${tmp_dir}/migration-second"
-docker run --rm --network "$migration_network" "${readonly_probe_flags[@]}" \
+ACR_POSTGRES_MIGRATION_DSN="${migration_dsn}" docker run --rm --network "$migration_network" "${readonly_probe_flags[@]}" \
   -e ACR_ENVIRONMENT=test \
-  -e "ACR_POSTGRES_MIGRATION_DSN=${migration_dsn}" \
+  -e ACR_POSTGRES_MIGRATION_DSN \
   --entrypoint /usr/local/bin/acr-migrate "$api_image" status >"${tmp_dir}/migration-status"
 for migration_file in "${migration_files[@]}"; do
   migration_name="$(basename "$migration_file")"

@@ -14,8 +14,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker run -d --rm --name "$container" --label devhealth.acr.e2e=acl-bootstrap \
-  -e POSTGRES_USER=bootstrap -e POSTGRES_PASSWORD="$admin_password" -e POSTGRES_DB=postgres \
+POSTGRES_PASSWORD="$admin_password" docker run -d --rm --name "$container" --label devhealth.acr.e2e=acl-bootstrap \
+  -e POSTGRES_USER=bootstrap -e POSTGRES_PASSWORD -e POSTGRES_DB=postgres \
   postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5 >/dev/null
 
 for _ in {1..60}; do
@@ -28,12 +28,13 @@ docker exec "$container" pg_isready -U bootstrap -d postgres >/dev/null
 
 run_init() {
   local mode="$1"
-  docker run --rm --network "container:${container}" \
+  POSTGRES_PASSWORD="$admin_password" ACR_RUNTIME_DB_PASSWORD=runtime-password ACR_MIGRATION_DB_PASSWORD=migration-password \
+    docker run --rm --network "container:${container}" \
     -v "$init_script:/usr/local/bin/acr-db-init:ro" \
     -e POSTGRES_HOST=127.0.0.1 -e POSTGRES_PORT=5432 \
-    -e POSTGRES_USER=bootstrap -e POSTGRES_PASSWORD="$admin_password" -e ACR_DB_NAME="$database" \
-    -e ACR_RUNTIME_DB_USER=acr_runtime -e ACR_RUNTIME_DB_PASSWORD=runtime-password \
-    -e ACR_MIGRATION_DB_USER=acr_migration -e ACR_MIGRATION_DB_PASSWORD=migration-password \
+    -e POSTGRES_USER=bootstrap -e POSTGRES_PASSWORD -e ACR_DB_NAME="$database" \
+    -e ACR_RUNTIME_DB_USER=acr_runtime -e ACR_RUNTIME_DB_PASSWORD \
+    -e ACR_MIGRATION_DB_USER=acr_migration -e ACR_MIGRATION_DB_PASSWORD \
     -e ACR_ENABLE_EPISODE_WRITEBACK="${ACR_ENABLE_EPISODE_WRITEBACK:-false}" \
     postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5 /usr/local/bin/acr-db-init "$mode" >/dev/null
 }

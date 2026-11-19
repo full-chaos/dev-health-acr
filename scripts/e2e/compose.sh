@@ -455,11 +455,13 @@ ACR_E2E_SEED_HOOK="${ACR_E2E_SEED_HOOK:-seed_synthetic_evidence}"
 dho() {
   local pg
   pg="$(<"$STATE/secrets/postgres-password")"
+  (export MIGRATION_DATABASE_URI="postgres://devhealth:${pg}@postgres:5432/devhealth?sslmode=disable"
+  export POSTGRES_URI="$MIGRATION_DATABASE_URI"
   compose run --rm --no-deps -T \
-    -e "MIGRATION_DATABASE_URI=postgres://devhealth:${pg}@postgres:5432/devhealth?sslmode=disable" \
-    -e "POSTGRES_URI=postgres://devhealth:${pg}@postgres:5432/devhealth?sslmode=disable" \
+    -e MIGRATION_DATABASE_URI \
+    -e POSTGRES_URI \
     -e "CLICKHOUSE_URI=${DHO_CLICKHOUSE_URI:-clickhouse://default:ch@clickhouse:9000/${CLICKHOUSE_DB:-default}}" \
-    query-api "$@"
+    query-api "$@")
 }
 
 # workload_probe_script is the probe container's own script (acr-workload-probe, run by sh -c): it exchanges the

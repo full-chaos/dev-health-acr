@@ -351,13 +351,17 @@ for seed_block in "$(awk '/^seed_web_owner_membership\(\)/,/^}/' "$script")" "$(
     fail 'the web user membership seed must not put a PGPASSWORD value in an exec argv'
   fi
 done
-# The same rule for every script: an exec gets PGPASSWORD by name (`-e PGPASSWORD`) with the value exported in
-# the calling subshell; `-e PGPASSWORD=<value>`, `--env PGPASSWORD=<value>` or `env PGPASSWORD=<value> <cmd>`
-# put the value in an argv.
-pgpassword_argv_re='(^|[[:space:]])(-e|--env)([[:space:]]+|=)["'"'"']?PGPASSWORD=|(^|[[:space:];|&(])env[[:space:]]+([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|-[^[:space:]]+[[:space:]]+)*PGPASSWORD='
-if pgpassword_argv_hits="$(grep -rEn -- "$pgpassword_argv_re" "$root/scripts")"; then
-  printf '%s\n' "$pgpassword_argv_hits" >&2
-  fail 'a script puts a PGPASSWORD value in an exec argv; pass -e PGPASSWORD with the value exported in a subshell'
+# The same rule for every script and every secret: an exec gets a *PASSWORD or *_DSN variable by name
+# (`-e NAME`) with the value in its environment only (exported in a subshell, or a `NAME=<value> docker ...`
+# assignment prefix). A `-e NAME=<value>` / `--env NAME=<value>` (quoted, attached or built into an array), a
+# `-e NAME=<scheme>://user:$secret@host` URI, or `env [args] NAME=<value> <cmd>` (`env -S` included) puts the value
+# in an argv.
+secret_argv_re='(^|[[:space:](=])(-e|--env)([[:space:]]*|=)["'"'"']?[A-Za-z0-9_]*(PASSWORD|_DSN)='
+secret_argv_re+='|(^|[[:space:](=])(-e|--env)([[:space:]]*|=)["'"'"']?[A-Za-z_][A-Za-z0-9_]*=["'"'"']?[A-Za-z][A-Za-z0-9+.-]*://[^:@/[:space:]]*:[$][^@[:space:]]*@'
+secret_argv_re+='|(^|[[:space:];|&(])env[[:space:]]+([^[:space:];|&]+[[:space:]]+)*["'"'"']?[A-Za-z0-9_]*(PASSWORD|_DSN)='
+if secret_argv_hits="$(grep -rEn -- "$secret_argv_re" "$root/scripts")"; then
+  printf '%s\n' "$secret_argv_hits" >&2
+  fail 'a script puts a password or DSN value in an exec argv; pass -e NAME with the value in the environment only'
 fi
 
 # go-api mints no token pair at the pinned ops build: the web user signs in only while go-api sends sessions to
