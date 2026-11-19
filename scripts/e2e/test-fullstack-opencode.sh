@@ -351,15 +351,43 @@ for seed_block in "$(awk '/^seed_web_owner_membership\(\)/,/^}/' "$script")" "$(
     fail 'the web user membership seed must not put a PGPASSWORD value in an exec argv'
   fi
 done
-# The same rule for every script and every secret: an exec gets a *PASSWORD or *_DSN variable by name
-# (`-e NAME`) with the value in its environment only (exported in a subshell, or a `NAME=<value> docker ...`
-# assignment prefix). A `-e NAME=<value>` / `--env NAME=<value>` (quoted, attached or built into an array), a
-# `-e NAME=<scheme>://user:$secret@host` URI, or `env [args] NAME=<value> <cmd>` (`env -S` included) puts the value
-# in an argv.
-secret_argv_re='(^|[[:space:](=])(-e|--env)([[:space:]]*|=)["'"'"']?[A-Za-z0-9_]*(PASSWORD|_DSN)='
-secret_argv_re+='|(^|[[:space:](=])(-e|--env)([[:space:]]*|=)["'"'"']?[A-Za-z_][A-Za-z0-9_]*=["'"'"']?[A-Za-z][A-Za-z0-9+.-]*://[^:@/[:space:]]*:[$][^@[:space:]]*@'
-secret_argv_re+='|(^|[[:space:];|&(])env[[:space:]]+([^[:space:];|&]+[[:space:]]+)*["'"'"']?[A-Za-z0-9_]*(PASSWORD|_DSN)='
-if secret_argv_hits="$(grep -rEn -- "$secret_argv_re" "$root/scripts")"; then
+# The same rule for every script and every secret: an exec gets a *PASSWORD or *_DSN variable, or a URI that carries
+# a password, by name (`-e NAME`) with the value in its environment only (exported in a subshell, or a
+# `NAME=<value> docker ...` assignment prefix). These put the value in an argv and fail: `-e NAME=<value>` /
+# `--env NAME=<value>` (quoted, attached, or an array element), `env [args] NAME=<value> <cmd>` (`env -S` included),
+# and either form with `NAME=<scheme>://user:<password>@host` where the password holds a shell expansion ($v, ${v},
+# $(..), `..`). Lines joined by a trailing backslash and multi-line array literals are read as one line. The fixed
+# public ClickHouse compose default `CLICKHOUSE_PASSWORD=ch` is not a secret.
+q='["'"'"']?'
+argv_env_flag='(^|[[:space:](=])(-e|--env)([[:space:]]*|=)'"$q"
+argv_env_cmd='(^|[[:space:];|&(])env[[:space:]]+([^[:space:];|&]+[[:space:]]+)*'"$q"
+argv_secret_name='[A-Za-z0-9_]*(PASSWORD|_DSN)='
+argv_secret_uri='[A-Za-z_][A-Za-z0-9_]*='"$q"'[A-Za-z][A-Za-z0-9+.-]*://[^:@/[:space:]"'"'"']*:([^@/[:space:]"'"'"'$`]*([$][(][^)]*[)]|`[^`]*`|[$][{][^}]*[}]|[$][A-Za-z0-9_@*#?$!-]))+[^@/[:space:]"'"'"']*@'
+secret_argv_re="${argv_env_flag}${argv_secret_name}|${argv_env_flag}${argv_secret_uri}|${argv_env_cmd}${argv_secret_name}|${argv_env_cmd}${argv_secret_uri}"
+secret_argv_logical_lines() {
+  awk '
+    function flush() { if (buf != "") print FILENAME ":" start ": " buf; buf = "" }
+    FNR == 1 { flush(); inarr = 0 }
+    {
+      line = $0
+      if (buf == "") start = FNR
+      if (inarr) { buf = buf " " line; if (line ~ /\)/) { inarr = 0; flush() }; next }
+      cont = (line ~ /\\$/)
+      if (cont) sub(/\\$/, "", line)
+      buf = (buf == "" ? line : buf " " line)
+      if (cont) next
+      if (line ~ /[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=\([^)]*$/) { inarr = 1; next }
+      flush()
+    }
+    END { flush() }
+  ' "$@"
+}
+secret_argv_files=()
+while IFS= read -r -d '' secret_argv_file; do secret_argv_files+=("$secret_argv_file"); done \
+  < <(find "$root/scripts" -type f -print0 | sort -z)
+if secret_argv_hits="$(secret_argv_logical_lines "${secret_argv_files[@]}" \
+  | sed -E 's/(^|[^A-Za-z0-9_]|-e)CLICKHOUSE_PASSWORD=(["'"'"']?)ch(["'"'"']?)([[:space:]);|&]|$)/\1CLICKHOUSE_PUBLIC_DEFAULT\4/g' \
+  | grep -E -- "$secret_argv_re")"; then
   printf '%s\n' "$secret_argv_hits" >&2
   fail 'a script puts a password or DSN value in an exec argv; pass -e NAME with the value in the environment only'
 fi
