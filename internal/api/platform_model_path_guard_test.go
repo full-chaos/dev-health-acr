@@ -87,15 +87,20 @@ func scanPlatformModelPath(t *testing.T, root string) platformModelPathSites {
 			}
 			// A name is a site wherever it is referenced, called or not: a
 			// function or method value reaches the path as well as a call does.
+			// The Resolver type is a site wherever it is not behind a pointer:
+			// its fields are exported, so a literal or a zero value (var, new, a
+			// value field) can each serve as a constructed resolver.
 			var visit func(ast.Node) bool
 			visit = func(node ast.Node) bool {
 				switch n := node.(type) {
-				case *ast.CompositeLit:
-					if isPackageName(n.Type, imports, dotImports, resolverPackagePath, "Resolver") && !inResolverPackage {
-						sites.resolverConstructions = append(sites.resolverConstructions, site)
+				case *ast.StarExpr:
+					if isPackageName(n.X, imports, dotImports, resolverPackagePath, "Resolver") {
+						return false
 					}
 				case *ast.SelectorExpr:
 					switch {
+					case isPackageSelector(n, imports, resolverPackagePath, "Resolver") && !inResolverPackage:
+						sites.resolverConstructions = append(sites.resolverConstructions, site)
 					case isPackageSelector(n, imports, resolverPackagePath, "New") && !inResolverPackage:
 						sites.resolverConstructions = append(sites.resolverConstructions, site)
 					case isPackageSelector(n, imports, contextFabricPackagePath, "NewEngine"):
@@ -111,7 +116,7 @@ func scanPlatformModelPath(t *testing.T, root string) platformModelPathSites {
 					return false
 				case *ast.Ident:
 					switch {
-					case isDotImported(n, dotImports, resolverPackagePath, "New") && !inResolverPackage:
+					case (isDotImported(n, dotImports, resolverPackagePath, "New") || isDotImported(n, dotImports, resolverPackagePath, "Resolver")) && !inResolverPackage:
 						sites.resolverConstructions = append(sites.resolverConstructions, site)
 					case isDotImported(n, dotImports, contextFabricPackagePath, "NewEngine"):
 						sites.engineConstructions = append(sites.engineConstructions, site)
@@ -436,6 +441,10 @@ func Dot() { _ = New(nil, nil, nil) }
 func DotLiteral() { _ = &Resolver{} }
 
 func DotValue() { construct := New; _ = construct }
+
+func DotZero() { var zero Resolver; _ = zero }
+
+func DotPointer(resolver *Resolver) { _ = (*Resolver)(nil); _ = resolver }
 `)
 	write("internal/plant/dotengine.go", `package plant
 
@@ -461,6 +470,22 @@ func InvestigateValue(engine *cf.Engine) { run := engine.Investigate; _ = run }
 func InvestigateMethodExpression() { _ = (*cf.Engine).Investigate }
 
 func ModelValue(runtime cf.ModelRuntime) { phrase := runtime.SynthesizeAnswer; _ = phrase }
+
+func Zero() { var zero mr.Resolver; zero.Default = nil; _ = &zero }
+
+func Allocated() { _ = new(mr.Resolver) }
+
+func Copied(resolver *mr.Resolver) { copied := *resolver; _ = copied }
+
+func Pointers(resolver *mr.Resolver) (*mr.Resolver, func(*mr.Resolver)) {
+	var none *mr.Resolver
+	_, _ = any(resolver).(*mr.Resolver)
+	return none, func(*mr.Resolver) {}
+}
+
+type holder struct{ resolver mr.Resolver }
+
+type pointerHolder struct{ resolver *mr.Resolver }
 `)
 	write("internal/plant/both.go", `package plant
 
@@ -498,7 +523,11 @@ func Local() { _ = New() }
 			"internal/plant/dot.go:Dot",
 			"internal/plant/dot.go:DotLiteral",
 			"internal/plant/dot.go:DotValue",
+			"internal/plant/dot.go:DotZero",
+			"internal/plant/value.go:Allocated",
 			"internal/plant/value.go:Value",
+			"internal/plant/value.go:Zero",
+			"internal/plant/value.go:package-level",
 			"internal/plant/value.go:package-level",
 		}},
 		{name: "engine constructions", got: sites.engineConstructions, want: []string{
