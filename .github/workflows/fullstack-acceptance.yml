@@ -481,19 +481,21 @@ jobs:
           done
           docker exec "${net}-ch" clickhouse-client --user default --password ch --query 'SELECT 1'
           # Bounded retry (3 tries, 10 s then 30 s apart) of ONLY a mirror blob
-          # 404 on a digest-pinned base image: the same line the ops
-          # ci/lib/registry_retry.sh class T1 matches (registry_transient,
-          # lines 23-29), unanchored because -q drops the "#N " prefix. Any
-          # permanent line, or any other error, fails at once.
+          # 404 on a digest-pinned base image: the line the ops
+          # ci/lib/registry_retry.sh class T1 matches (registry_transient, line
+          # 26), unanchored because -q drops the "#N " prefix. Only the ERROR
+          # lines of the build output are judged: retry when there is at least
+          # one and every one of them is that line; any other ERROR line, or
+          # none, fails at once.
           build_log="$RUNNER_TEMP/dho-build.log"
           for try in 1 2 3; do
             rc=0
             docker build -q -f dev-health/ops/docker/go-worker.Dockerfile --target dho -t "${net}-dho" dev-health/ops >"$build_log" 2>&1 || rc=$?
             cat "$build_log"
             [ "$rc" -eq 0 ] && break
-            if [ "$try" -lt 3 ] \
-              && ! LC_ALL=C grep -aEq '(manifest unknown|denied|unauthorized|pull access denied|repository does not exist|no match for platform in manifest|invalid reference format)|ERROR: process "|didn.t complete successfully' "$build_log" \
-              && LC_ALL=C grep -aEq 'failed to copy: httpReadSeeker: failed open: could not fetch content descriptor sha256:[0-9a-f]{64} \(application/vnd\.(oci|docker)\.[A-Za-z0-9.+-]+\) from remote: not found' "$build_log"; then
+            errs="$(LC_ALL=C grep -aE '^(#[0-9]+ )?ERROR: ' "$build_log" || true)"
+            if [ "$try" -lt 3 ] && [ -n "$errs" ] \
+              && ! LC_ALL=C grep -aqEv 'failed to copy: httpReadSeeker: failed open: could not fetch content descriptor sha256:[0-9a-f]{64} \(application/vnd\.(oci|docker)\.[A-Za-z0-9.+-]+\) from remote: not found' <<<"$errs"; then
               delay=10; [ "$try" -eq 2 ] && delay=30
               echo "::warning::mirror blob not found (try $try/3), retrying in ${delay}s"
               sleep "$delay"

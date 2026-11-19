@@ -2230,6 +2230,9 @@ check_live_parity_build_retry() {
   run_case 'blob 404 then success' 0 2 '10 ' "$t1" ok || status=1
   run_case 'blob 404 three times' 1 3 '10 30 ' "$t1" "$t1" "$t1" || status=1
   run_case 'other error fails at once' 1 1 '' 'ERROR: failed to solve: something else' || status=1
+  run_case 'blob 404 plus an unrelated ERROR line fails at once' 1 1 '' "$t1"$'\n''ERROR: failed to solve: dial tcp: lookup registry: no such host' || status=1
+  run_case 'blob 404 with a benign denied word outside the ERROR lines is retried' 0 2 '10 ' "$t1"$'\n''#4 note: access denied for a cache hint, ignored' ok || status=1
+  run_case 'the two ERROR lines of one blob 404 are retried' 0 2 '10 ' "$t1"$'\n''ERROR: failed to build: failed to solve: failed to copy: httpReadSeeker: failed open: could not fetch content descriptor sha256:0000000000000000000000000000000000000000000000000000000000000000 (application/vnd.oci.image.layer.v1.tar+gzip) from remote: not found' ok || status=1
   run_case 'permanent line vetoes the 404' 1 1 '' "$t1"$'\n''ERROR: failed to solve: pull access denied' || status=1
   rm -rf "$fake"
   return "$status"
