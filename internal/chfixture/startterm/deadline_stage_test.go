@@ -138,14 +138,15 @@ func TestPostgresStartEndedByTheDeadlineNamesTheStageItWasIn(t *testing.T) {
 }
 
 func TestStartEndedByACancelNamesTheCancel(t *testing.T) {
+	const image = "clickhouse/clickhouse-server:26.7"
 	lines := captureLogf(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	_, err := generic(ctx, testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{Image: "falkordb/falkordb"}},
+	_, err := generic(ctx, testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{Image: image}},
 		func(ctx context.Context, req testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
 			cancel()
 			return nil, runHooksThenWait(ctx, t, req, nil, afterPreCreate)
 		})
-	requireStageNamed(t, err, *lines, "falkordb/falkordb", "during container create", "context canceled", context.Canceled)
+	requireStageNamed(t, err, *lines, image, "during container create", "context canceled", context.Canceled)
 }
 
 func TestStartThatFailsWhileTheContextIsLiveIsNotReportedAsEndedByTheCaller(t *testing.T) {
