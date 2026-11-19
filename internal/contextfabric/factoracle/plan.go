@@ -117,7 +117,7 @@ var valuePaths = map[string][]pathRule{
 		{Path: "throughputForecast.estimateCoverage.estimatedCount"},
 		{Path: "throughputForecast.estimateCoverage.unestimatedCount"},
 		{Path: "throughputForecast.estimateCoverage.backlogSize"},
-		{Path: "throughputForecast.estimateCoverage.grainCount", Reason: "not compared yet: the store reading counts no estimate-coverage grains (ticket CHAOS-14141)"},
+		{Path: "throughputForecast.estimateCoverage.grainCount"},
 		{Path: "throughputForecast.backlogState", Reason: "how ops read the backlog (MEASURED, STALE, NO_ROWS, SUPPLIED); no acr fact"},
 		{Path: "throughputForecast.backlogAsOfDay", Reason: "the day ops read the backlog from; no acr fact"},
 		{Path: "throughputForecast.degradedReason", Reason: "the backlogState value when it is STALE or NO_ROWS; acr discloses it as declared_partial, no acr fact"},
