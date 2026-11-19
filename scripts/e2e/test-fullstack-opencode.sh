@@ -367,16 +367,34 @@ secret_argv_re="${argv_env_flag}${argv_secret_name}|${argv_env_flag}${argv_secre
 secret_argv_logical_lines() {
   awk '
     function flush() { if (buf != "") print FILENAME ":" start ": " buf; buf = "" }
+    # The array literal ends at a ")" outside quotes and outside $(..) / $((..)).
+    function closes_array(s,    i, c, n) {
+      n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (sq) { if (c == "\047") sq = 0; continue }
+        if (c == "\\") { i++; continue }
+        if (c == "\047" && !dq) { sq = 1; continue }
+        if (c == "\"") { dq = !dq; continue }
+        if (c == "$" && substr(s, i + 1, 1) == "(") { depth++; i++; continue }
+        if (c == "(" && depth > 0) { depth++; continue }
+        if (c == ")") { if (depth > 0) { depth--; continue }; if (!dq) return 1 }
+      }
+      return 0
+    }
     FNR == 1 { flush(); inarr = 0 }
     {
       line = $0
       if (buf == "") start = FNR
-      if (inarr) { buf = buf " " line; if (line ~ /\)/) { inarr = 0; flush() }; next }
+      if (inarr) { buf = buf " " line; if (closes_array(line)) { inarr = 0; flush() }; next }
       cont = (line ~ /\\$/)
       if (cont) sub(/\\$/, "", line)
       buf = (buf == "" ? line : buf " " line)
       if (cont) next
-      if (line ~ /[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=\([^)]*$/) { inarr = 1; next }
+      if (match(line, /[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=\(/)) {
+        sq = 0; dq = 0; depth = 0
+        if (!closes_array(substr(line, RSTART + RLENGTH))) { inarr = 1; next }
+      }
       flush()
     }
     END { flush() }
