@@ -930,12 +930,9 @@ func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
 			rr.Compared++
 			rr.find(Finding{Pair: "readiness", Key: key, Detail: fmt.Sprintf("estimate coverage present in ops %t, in acr %t", hasOps, latestDay != "")})
 		default:
-			// ops: grainCount counts the (provider, work scope, team) rows its
-			// sums read; 0 states no coverage row, and the zero object it
-			// serves then is not a measurement.
-			// The store side is its rows of the team's latest day.
+			// grainCount 0 is ops stating no coverage row, so its zero counts are no measurement.
 			grains, grainsErr := typedLeaf(LeafInt, coverage["grainCount"])
-			storeGrains := Leaf{T: LeafInt, V: fmt.Sprint(stored.Scopes)}
+			storeGrains := Leaf{T: LeafInt, V: fmt.Sprint(stored.Grains)}
 			grainPath := coveragePath + "grainCount"
 			rr.Compared++
 			rr.touch(grainPath)
