@@ -367,13 +367,16 @@ secret_argv_re="${argv_env_flag}${argv_secret_name}|${argv_env_flag}${argv_secre
 secret_argv_logical_lines() {
   awk '
     function flush() { if (buf != "") print FILENAME ":" start ": " buf; buf = "" }
-    # The array literal ends at a ")" outside quotes and outside $(..) / $((..)).
+    # The array literal ends at a ")" outside quotes, `..`, $(..) / $((..)) and a # comment.
     function closes_array(s,    i, c, n) {
       n = length(s)
       for (i = 1; i <= n; i++) {
         c = substr(s, i, 1)
         if (sq) { if (c == "\047") sq = 0; continue }
         if (c == "\\") { i++; continue }
+        if (bt) { if (c == "`") bt = 0; continue }
+        if (c == "`") { bt = 1; continue }
+        if (c == "#" && !dq && depth == 0 && (i == 1 || substr(s, i - 1, 1) ~ /[ \t(]/)) return 0
         if (c == "\047" && !dq) { sq = 1; continue }
         if (c == "\"") { dq = !dq; continue }
         if (c == "$" && substr(s, i + 1, 1) == "(") { depth++; i++; continue }
@@ -392,7 +395,7 @@ secret_argv_logical_lines() {
       buf = (buf == "" ? line : buf " " line)
       if (cont) next
       if (match(line, /[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=\(/)) {
-        sq = 0; dq = 0; depth = 0
+        sq = 0; dq = 0; bt = 0; depth = 0
         if (!closes_array(substr(line, RSTART + RLENGTH))) { inarr = 1; next }
       }
       flush()
