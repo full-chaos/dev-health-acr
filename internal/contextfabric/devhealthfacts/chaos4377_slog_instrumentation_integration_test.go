@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
@@ -76,8 +77,9 @@ func TestCHAOS4377_InstrumentedProvidersEmitSlogRecordOnRealClickHouseRead(t *te
 
 	const orgID = "org-chaos4377-instrumentation"
 	repoID := "66666666-6666-6666-6666-666666666666"
+	day := chaos4377SeedDay()
 	if err := direct.Exec(ctx, `INSERT INTO repo_metrics_daily (repo_id, org_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		repoID, orgID, date(2026, 8, 20), uint32(5), uint32(2), 3.5, 0.1, 4.0, uint32(2), 0.3, ts(2026, 8, 20, 2, 0, 0)); err != nil {
+		repoID, orgID, day, uint32(5), uint32(2), 3.5, 0.1, 4.0, uint32(2), 0.3, day.Add(2*time.Hour)); err != nil {
 		t.Fatalf("seed repo_metrics_daily: %v", err)
 	}
 
@@ -122,6 +124,13 @@ func TestCHAOS4377_InstrumentedProvidersEmitSlogRecordOnRealClickHouseRead(t *te
 	}
 }
 
+// chaos4377SeedDay is yesterday (UTC): a current-axis metrics read keeps the
+// trailing 90 days before today, so a fixed seed day ages out of it.
+func chaos4377SeedDay() time.Time {
+	now := time.Now().UTC()
+	return time.Date(now.Year(), now.Month(), now.Day()-1, 0, 0, 0, 0, time.UTC)
+}
+
 // TestCHAOS4377_NewInstrumentedProvidersNilInstrumentationMatchesNewProviders
 // pins NewInstrumentedProviders' documented nil-instrumentation behavior:
 // with instr == nil it must return providers that behave exactly like
@@ -136,8 +145,9 @@ func TestCHAOS4377_NewInstrumentedProvidersNilInstrumentationMatchesNewProviders
 
 	const orgID = "org-chaos4377-nil-instrumentation"
 	repoID := "88888888-8888-8888-8888-888888888888"
+	day := chaos4377SeedDay()
 	if err := direct.Exec(ctx, `INSERT INTO repo_metrics_daily (repo_id, org_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini, computed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-		repoID, orgID, date(2026, 8, 20), uint32(7), uint32(3), 2.5, 0.2, 5.0, uint32(3), 0.4, ts(2026, 8, 20, 2, 0, 0)); err != nil {
+		repoID, orgID, day, uint32(7), uint32(3), 2.5, 0.2, 5.0, uint32(3), 0.4, day.Add(2*time.Hour)); err != nil {
 		t.Fatalf("seed repo_metrics_daily: %v", err)
 	}
 

@@ -188,14 +188,89 @@ assert_go_version_pins() {
 
   ci_go_version="$(workflow_go_version "$1")" || return 1
   release_go_version="$(workflow_go_version "$2")" || return 1
-  test "$ci_go_version" = 1.27.4 || return 1
-  test "$release_go_version" = 1.27.4 || return 1
   test "$ci_go_version" = "$release_go_version"
+}
+
+# go_mod_version prints the `go` directive of the go.mod under $1.
+go_mod_version() {
+  sed -n 's/^go[[:space:]][[:space:]]*\([0-9][0-9.]*\)[[:space:]]*$/\1/p' "$1/go.mod" | head -n1
+}
+
+# assert_go_pins_match_go_mod DIR: every place under DIR that pins a Go version
+# must equal the go.mod `go` directive. It is a pattern scan, not a file list,
+# so a new pin site in any file is caught: (1) every `go-version:` input is a
+# literal equal to it or ${{ env.GO_VERSION }} (then that file's GO_VERSION must
+# be set), and each file has as many go-version inputs as setup-go steps; (2)
+# every `GO_VERSION:` value; (3) every `golang:<version>` image ref; (4) every
+# go.mod `toolchain` line. A failure names file:line on stderr.
+assert_go_pins_match_go_mod() {
+  local dir="$1" want hit file ln rest val rc=0 f n_steps n_inputs
+  want="$(go_mod_version "$dir")"
+  [[ "$want" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "go.mod: no go version" >&2; return 1; }
+
+  while IFS= read -r hit; do
+    IFS=: read -r file ln rest <<<"$hit"
+    val="${rest#*go-version:}"
+    val="${val%%#*}"; val="$(tr -d " \"'" <<<"$val")"
+    if [[ "$val" == '${{env.GO_VERSION}}' ]]; then
+      if ! grep -qE '^[[:space:]]*GO_VERSION:' "$dir/$file"; then echo "$file:$ln: go-version uses env.GO_VERSION but the file sets none" >&2; rc=1; fi
+    elif [[ "$val" != "$want" ]]; then
+      echo "$file:$ln: Go pin '$val' != go.mod '$want'" >&2; rc=1
+    fi
+  done < <(cd "$dir" && git grep --no-index -nE '^[[:space:]]*go-version:' -- .github || true)
+  while IFS= read -r hit; do
+    IFS=: read -r file ln rest <<<"$hit"
+    val="${rest#*GO_VERSION:}"; val="${val%%#*}"; val="$(tr -d " \"'" <<<"$val")"
+    if [[ "$val" != "$want" ]]; then echo "$file:$ln: Go pin '$val' != go.mod '$want'" >&2; rc=1; fi
+  done < <(cd "$dir" && git grep --no-index -nE '^[[:space:]]*GO_VERSION:' -- .github || true)
+  while IFS= read -r hit; do
+    IFS=: read -r file ln rest <<<"$hit"
+    while [[ "$rest" =~ golang:([0-9]+\.[0-9]+(\.[0-9]+)?)[^0-9.] ]]; do
+      if [[ "${BASH_REMATCH[1]}" != "$want" ]]; then echo "$file:$ln: Go pin '${BASH_REMATCH[1]}' != go.mod '$want'" >&2; rc=1; fi
+      rest="${rest#*"${BASH_REMATCH[0]}"}"
+    done
+  done < <(cd "$dir" && git grep --no-index -nE 'golang:[0-9]+\.[0-9]+' -- . ':!scripts/release/test_release_scripts.sh' || true)
+  while IFS= read -r hit; do
+    IFS=: read -r file ln rest <<<"$hit"
+    val="${rest#toolchain}"; val="${val//[[:space:]]/}"; val="${val#go}"
+    if [[ "$val" != "$want" ]]; then echo "$file:$ln: toolchain '$val' != go.mod '$want'" >&2; rc=1; fi
+  done < <(cd "$dir" && git grep --no-index -nE '^toolchain[[:space:]]' -- go.mod || true)
+  while IFS= read -r f; do
+    n_steps="$(grep -c 'uses: actions/setup-go@' "$dir/$f" || true)"
+    n_inputs="$(grep -cE '^[[:space:]]*go-version:' "$dir/$f" || true)"
+    if [[ "$n_steps" != "$n_inputs" ]]; then echo "$f: $n_steps setup-go steps but $n_inputs go-version inputs" >&2; rc=1; fi
+  done < <(cd "$dir" && git grep --no-index -lE 'actions/setup-go@' -- .github || true)
+  return "$rc"
 }
 
 ci_workflow="$root/.github/workflows/ci.yml"
 release_workflow="$root/.github/workflows/release.yml"
 assert_go_version_pins "$ci_workflow" "$release_workflow"
+assert_go_pins_match_go_mod "$root"
+
+# Planted mismatches in each kind of pin site, on a copy, must each fail and
+# name the file.
+mut="$tmp/go-pin-mut"
+plant_go_pin() { # file sed-expression
+  rm -rf "$mut"; mkdir -p "$mut/scripts" "$mut/docs"
+  cp -a "$root/.github" "$root/go.mod" "$root/Dockerfile" "$mut/"
+  cp -a "$root/scripts/container" "$mut/scripts/"
+  cp -a "$root/docs/container-images.md" "$mut/docs/"
+  sed -i "$2" "$mut/$1"
+}
+for planted in \
+  'Dockerfile|s/golang:1\.27\.4/golang:1.27.3/' \
+  'scripts/container/verify-pins.sh|s/golang:1\.27\.4/golang:1.27.3/' \
+  'docs/container-images.md|s/golang:1\.27\.4/golang:1.27.3/' \
+  '.github/workflows/mutation-battery.yml|s/^\([[:space:]]*GO_VERSION:\).*/\1 "1.27.3"/' \
+  '.github/workflows/o4-oracle-repin.yml|0,/go-version:.*/s//go-version: '"'"'1.27.3'"'"'/' \
+  '.github/workflows/fullstack-acceptance.yml|0,/go-version:.*/s//go-version: '"'"'1.27.3'"'"'/' \
+  '.github/workflows/o4-oracle-repin.yml|0,/^[[:space:]]*go-version:.*/{//d}' \
+  'go.mod|s/^go 1\.27\.4$/go 1.27.4\ntoolchain go1.27.3/'; do
+  plant_go_pin "${planted%%|*}" "${planted#*|}"
+  if assert_go_pins_match_go_mod "$mut" 2>"$tmp/go-pin-mut.err"; then echo "planted go pin not caught: $planted" >&2; exit 1; fi
+  grep -qF "${planted%%|*}" "$tmp/go-pin-mut.err" || { echo "failure did not name ${planted%%|*}" >&2; exit 1; }
+done
 
 grep -v '^[[:space:]]*go-version:' "$ci_workflow" > "$tmp/ci-missing-go-version.yml"
 if assert_go_version_pins "$tmp/ci-missing-go-version.yml" "$release_workflow"; then exit 1; fi
