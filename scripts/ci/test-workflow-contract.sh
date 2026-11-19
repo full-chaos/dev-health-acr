@@ -2166,9 +2166,11 @@ for other_workflow in "$repo_root"/.github/workflows/*.yml; do
 done
 printf 'PASS: every workflow that runs go tests carries ACR_CONTAINER_TESTS=1\n'
 
-# CHAOS-11151: fullstack-acceptance, mutation-battery and release restore the
-# one Go module cache through the go-modcache action; none keeps a cache of its
-# own (setup-go `cache: true`, or actions/cache).
+# CHAOS-11151: fullstack-acceptance and mutation-battery restore the one Go
+# module cache through the go-modcache action; neither keeps a cache of its own
+# (setup-go `cache: true`, or actions/cache). release.yml keeps its exact-key
+# cache: CodeQL flags a go-modcache restore in a job that publishes a release
+# (actions/cache-poisoning/poisonable-step).
 check_no_own_go_cache() {
   local file="$1" code
   code="$(grep -vE '^[[:space:]]*#' "$file")"
@@ -2181,10 +2183,10 @@ check_no_own_go_cache() {
     return 1
   }
 }
-for own_cache_file in fullstack-acceptance mutation-battery release; do
+for own_cache_file in fullstack-acceptance mutation-battery; do
   check_no_own_go_cache "$repo_root/.github/workflows/$own_cache_file.yml"
 done
-printf 'PASS: fullstack-acceptance, mutation-battery and release use the go-modcache action and keep no cache of their own\n'
+printf 'PASS: fullstack-acceptance and mutation-battery use the go-modcache action and keep no cache of their own\n'
 
 # ---- negative controls ---------------------------------------------------
 # Each mutation below must make its corresponding check FAIL. mktemp -d
@@ -3814,8 +3816,8 @@ own_cache_setup_go="$tmpdir/own-cache-setup-go.yml"
 sed '0,/cache: false/s//cache: true/' "$repo_root/.github/workflows/mutation-battery.yml" > "$own_cache_setup_go"
 assert_check_fails 'setup-go cache: true is back' check_no_own_go_cache "$own_cache_setup_go"
 own_cache_actions="$tmpdir/own-cache-actions.yml"
-{ cat "$repo_root/.github/workflows/release.yml"; printf '      - uses: actions/cache@0000000000000000000000000000000000000000\n'; } > "$own_cache_actions"
-assert_check_fails 'a release job carries actions/cache again' check_no_own_go_cache "$own_cache_actions"
+{ cat "$repo_root/.github/workflows/mutation-battery.yml"; printf '      - uses: actions/cache@0000000000000000000000000000000000000000\n'; } > "$own_cache_actions"
+assert_check_fails 'mutation-battery carries actions/cache again' check_no_own_go_cache "$own_cache_actions"
 own_cache_no_action="$tmpdir/own-cache-no-action.yml"
 sed 's#uses: \./.*go-modcache#uses: ./.github/actions/other#' "$repo_root/.github/workflows/fullstack-acceptance.yml" > "$own_cache_no_action"
 assert_check_fails 'fullstack-acceptance stopped using go-modcache' check_no_own_go_cache "$own_cache_no_action"
