@@ -282,7 +282,11 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
+          cache: false
+      - uses: ./harness/.github/actions/go-modcache
+        with:
+          mode: restore
+          working-directory: target
 
       - name: Warm the module cache, with retries
         # BEFORE the floor and before any arm. A proxy reset here fails a
@@ -385,8 +389,11 @@ jobs:
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache: true
-          cache-dependency-path: target/go.sum
+          cache: false
+      - uses: ./harness/.github/actions/go-modcache
+        with:
+          mode: restore
+          working-directory: target
 
       # actions/download-artifact v6.0.0
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c

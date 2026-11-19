@@ -1707,7 +1707,8 @@ check_gomodcache_action() {
     printf 'go-modcache save is not limited to warm mode on a miss\n' >&2; status=1; }
   grep -qF 'RUNNER_TEMP/gomodcache" >> "' "$file" || {
     printf 'go-modcache does not move GOMODCACHE to its own directory (extracting over setup-go'"'"'s read-only module dir fails)\n' >&2; status=1; }
-  grep -qF 'cat go.mod go.sum scripts/ci/go-tool-pins.txt | sha256sum' "$file" || {
+  # shellcheck disable=SC2016
+  grep -qF 'cat go.mod go.sum "$root/scripts/ci/go-tool-pins.txt" | sha256sum' "$file" || {
     printf 'go-modcache key does not hash go.mod, go.sum and the tool pins together\n' >&2; status=1; }
   grep -qE '^ +run: go mod verify$' "$file" || {
     printf 'go-modcache does not run go mod verify\n' >&2; status=1; }
@@ -2165,6 +2166,28 @@ for other_workflow in "$repo_root"/.github/workflows/*.yml; do
 done
 printf 'PASS: every workflow that runs go tests carries ACR_CONTAINER_TESTS=1\n'
 
+# CHAOS-11151: fullstack-acceptance and mutation-battery restore the one Go
+# module cache through the go-modcache action; neither keeps a cache of its own
+# (setup-go `cache: true`, or actions/cache). release.yml keeps its exact-key
+# cache: CodeQL flags a go-modcache restore in a job that publishes a release
+# (actions/cache-poisoning/poisonable-step).
+check_no_own_go_cache() {
+  local file="$1" code
+  code="$(grep -vE '^[[:space:]]*#' "$file")"
+  if grep -qE 'cache:[[:space:]]*true|cache-dependency-path:|uses:[[:space:]]*actions/cache@' <<<"$code"; then
+    printf '%s: carries its own Go cache step (setup-go cache or actions/cache)\n' "${file##*/}" >&2
+    return 1
+  fi
+  grep -q 'uses: .*\.github/actions/go-modcache' <<<"$code" || {
+    printf '%s: does not use the go-modcache action\n' "${file##*/}" >&2
+    return 1
+  }
+}
+for own_cache_file in fullstack-acceptance mutation-battery; do
+  check_no_own_go_cache "$repo_root/.github/workflows/$own_cache_file.yml"
+done
+printf 'PASS: fullstack-acceptance and mutation-battery use the go-modcache action and keep no cache of their own\n'
+
 # ---- negative controls ---------------------------------------------------
 # Each mutation below must make its corresponding check FAIL. mktemp -d
 # output is cleaned up on exit regardless of how the script ends.
@@ -2241,7 +2264,7 @@ sed "s/^      if: \${{ inputs.mode == 'warm' \&\& steps.restore.outputs.cache-hi
 cmp -s "$modcache_action" "$modcache_save_always" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_save_always did not change the action\n' >&2; exit 1; }
 assert_check_fails 'every mode saves the module cache' check_gomodcache_action "$modcache_save_always"
 modcache_key_no_gomod="$tmpdir/modcache-key-no-gomod.yml"
-sed 's/cat go.mod go.sum scripts/cat go.sum scripts/' "$modcache_action" > "$modcache_key_no_gomod"
+sed 's/cat go.mod go.sum /cat go.sum /' "$modcache_action" > "$modcache_key_no_gomod"
 cmp -s "$modcache_action" "$modcache_key_no_gomod" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_key_no_gomod did not change the action\n' >&2; exit 1; }
 assert_check_fails 'the cache key stopped hashing go.mod' check_gomodcache_action "$modcache_key_no_gomod"
 modcache_shared_dir="$tmpdir/modcache-shared-dir.yml"
@@ -2249,7 +2272,8 @@ sed '/GITHUB_ENV/d' "$modcache_action" > "$modcache_shared_dir"
 cmp -s "$modcache_action" "$modcache_shared_dir" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_shared_dir did not change the action\n' >&2; exit 1; }
 assert_check_fails 'the restore targets setup-go'"'"'s module directory again' check_gomodcache_action "$modcache_shared_dir"
 modcache_key_no_pins="$tmpdir/modcache-key-no-pins.yml"
-sed 's/ go.sum scripts\/ci\/go-tool-pins.txt | sha256sum/ go.sum | sha256sum/' "$modcache_action" > "$modcache_key_no_pins"
+# shellcheck disable=SC2016
+sed 's/ go.sum "$root\/scripts\/ci\/go-tool-pins.txt" | sha256sum/ go.sum | sha256sum/' "$modcache_action" > "$modcache_key_no_pins"
 cmp -s "$modcache_action" "$modcache_key_no_pins" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_key_no_pins did not change the action\n' >&2; exit 1; }
 assert_check_fails 'the cache key stopped hashing the tool pins' check_gomodcache_action "$modcache_key_no_pins"
 modcache_no_summary="$tmpdir/modcache-no-summary.yml"
@@ -3786,6 +3810,17 @@ assert_check_fails 'a factoracle race job stopped uploading its events' check_ra
   "$(mutate_dedup factoracle-no-upload 'name: race-json-race-factoracle-heavy' 'name: race-json-other')"
 assert_check_fails 'a NEW race job without -json capture and upload' check_race_json_all_jobs \
   "$(mutate_dedup new-race-job $'\n  build:\n    runs-on: ubuntu-latest' $'\n  race-newpkg:\n    runs-on: ubuntu-latest\n    steps:\n      - run: make test-race GOTEST_PKGS=./x\n\n  build:\n    runs-on: ubuntu-latest')"
+
+# (z) one workflow keeps its own Go cache again.
+own_cache_setup_go="$tmpdir/own-cache-setup-go.yml"
+sed '0,/cache: false/s//cache: true/' "$repo_root/.github/workflows/mutation-battery.yml" > "$own_cache_setup_go"
+assert_check_fails 'setup-go cache: true is back' check_no_own_go_cache "$own_cache_setup_go"
+own_cache_actions="$tmpdir/own-cache-actions.yml"
+{ cat "$repo_root/.github/workflows/mutation-battery.yml"; printf '      - uses: actions/cache@0000000000000000000000000000000000000000\n'; } > "$own_cache_actions"
+assert_check_fails 'mutation-battery carries actions/cache again' check_no_own_go_cache "$own_cache_actions"
+own_cache_no_action="$tmpdir/own-cache-no-action.yml"
+sed 's#uses: \./.*go-modcache#uses: ./.github/actions/other#' "$repo_root/.github/workflows/fullstack-acceptance.yml" > "$own_cache_no_action"
+assert_check_fails 'fullstack-acceptance stopped using go-modcache' check_no_own_go_cache "$own_cache_no_action"
 
 printf 'PASS: all negative controls correctly failed their check\n'
 
