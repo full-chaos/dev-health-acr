@@ -83,3 +83,26 @@ func TestListenerRefusalOfExactKeys(t *testing.T) {
 		})
 	}
 }
+
+// A duplicated canonical key keeps its first value (the struct decode this replaced kept a first object against
+// a later null), so a typed refusal is not hidden by a trailing null.
+func TestErrorEntriesDuplicateCanonicalKeyFirstWins(t *testing.T) {
+	typed := `{"code":"MCP_REFUSED","reason":"no_carrier"}`
+	for _, tc := range []struct{ name, body string }{
+		{"extensions then null", `{"errors":[{"extensions":` + typed + `,"extensions":null}]}`},
+		{"code then null", `{"errors":[{"extensions":{"code":"MCP_REFUSED","code":null,"reason":"no_carrier"}}]}`},
+		{"errors then null", `{"errors":[{"extensions":` + typed + `}],"errors":null}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, r := listenerRefusalOf([]byte(tc.body))
+			if c != ListenerRefusalCarrier || r != "no_carrier" {
+				t.Fatalf("got %q %q", c, r)
+			}
+		})
+	}
+	for _, body := range []string{`{"errors":[]} x`, `{"errors":[{"extensions":{"code":"MCP_REFUSED"}}]`, `[]`, ``} {
+		if got := errorEntriesOf([]byte(body)); len(got) != 0 {
+			t.Fatalf("%q: got %d entries", body, len(got))
+		}
+	}
+}

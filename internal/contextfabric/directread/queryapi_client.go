@@ -267,30 +267,57 @@ type errorEntry struct {
 // case-insensitively, so a differently cased key must not stand in for a canonical one (CHAOS-14024). A body
 // that is not a JSON object with an errors array yields nothing.
 func errorEntriesOf(body []byte) []errorEntry {
-	var answer map[string]json.RawMessage
-	if json.Unmarshal(body, &answer) != nil {
-		return nil
-	}
+	answer := objectFieldsOf(body)
 	var raws []json.RawMessage
 	if json.Unmarshal(answer["errors"], &raws) != nil {
 		return nil
 	}
 	entries := make([]errorEntry, 0, len(raws))
 	for _, raw := range raws {
-		var fields map[string]json.RawMessage
-		if json.Unmarshal(raw, &fields) != nil {
+		fields := objectFieldsOf(raw)
+		if fields == nil {
 			continue
 		}
 		var parsed errorEntry
-		var extensions map[string]json.RawMessage
-		if json.Unmarshal(fields["extensions"], &extensions) == nil {
-			_ = json.Unmarshal(extensions["code"], &parsed.code)
-			_ = json.Unmarshal(extensions["reason"], &parsed.reason)
-		}
+		extensions := objectFieldsOf(fields["extensions"])
+		_ = json.Unmarshal(extensions["code"], &parsed.code)
+		_ = json.Unmarshal(extensions["reason"], &parsed.reason)
 		_ = json.Unmarshal(fields["path"], &parsed.path)
 		entries = append(entries, parsed)
 	}
 	return entries
+}
+
+// objectFieldsOf returns the members of a JSON object keyed by their exact name, the first occurrence of a
+// duplicated key winning (as the struct decode it replaces kept a first value against a later null). It
+// returns nil for anything that is not a well-formed JSON object.
+func objectFieldsOf(raw []byte) map[string]json.RawMessage {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil
+	}
+	fields := map[string]json.RawMessage{}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		key, ok := keyTok.(string)
+		if err != nil || !ok {
+			return nil
+		}
+		var value json.RawMessage
+		if dec.Decode(&value) != nil {
+			return nil
+		}
+		if _, seen := fields[key]; !seen {
+			fields[key] = value
+		}
+	}
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return nil
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil
+	}
+	return fields
 }
 
 // Closed reasons of a listener 404 (ops mcp_route.go): a root the routing
