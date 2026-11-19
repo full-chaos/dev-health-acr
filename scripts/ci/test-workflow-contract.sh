@@ -1707,6 +1707,7 @@ check_gomodcache_action() {
     printf 'go-modcache save is not limited to warm mode on a miss\n' >&2; status=1; }
   grep -qF 'RUNNER_TEMP/gomodcache" >> "' "$file" || {
     printf 'go-modcache does not move GOMODCACHE to its own directory (extracting over setup-go'"'"'s read-only module dir fails)\n' >&2; status=1; }
+  # shellcheck disable=SC2016
   grep -qF 'cat go.mod go.sum "$root/scripts/ci/go-tool-pins.txt" | sha256sum' "$file" || {
     printf 'go-modcache key does not hash go.mod, go.sum and the tool pins together\n' >&2; status=1; }
   grep -qE '^ +run: go mod verify$' "$file" || {
@@ -2269,6 +2270,7 @@ sed '/GITHUB_ENV/d' "$modcache_action" > "$modcache_shared_dir"
 cmp -s "$modcache_action" "$modcache_shared_dir" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_shared_dir did not change the action\n' >&2; exit 1; }
 assert_check_fails 'the restore targets setup-go'"'"'s module directory again' check_gomodcache_action "$modcache_shared_dir"
 modcache_key_no_pins="$tmpdir/modcache-key-no-pins.yml"
+# shellcheck disable=SC2016
 sed 's/ go.sum "$root\/scripts\/ci\/go-tool-pins.txt" | sha256sum/ go.sum | sha256sum/' "$modcache_action" > "$modcache_key_no_pins"
 cmp -s "$modcache_action" "$modcache_key_no_pins" && { printf 'NEGATIVE CONTROL SETUP FAILED: modcache_key_no_pins did not change the action\n' >&2; exit 1; }
 assert_check_fails 'the cache key stopped hashing the tool pins' check_gomodcache_action "$modcache_key_no_pins"
