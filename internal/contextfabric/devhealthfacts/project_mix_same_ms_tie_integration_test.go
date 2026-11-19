@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -437,13 +438,85 @@ SELECT ?, ?, ?, toUUID(?), 1, map(?, 1.0), map(), ?, ?, fromUnixTimestamp64Milli
 	}
 }
 
-// acr's order key is ops' latestrow.OrderKey, byte for byte. This catches a
-// change on the acr side only: a later change of the ops key does not fail here.
-func TestWorkUnitVersionKeyIsTheOpsLatestRowOrderKey(t *testing.T) {
+// acr's ordinal is built from the three components of ops' latestrow.OrderKey,
+// each in its own 64 bits. This text pin catches a change of a component on the
+// acr side only: a later change of the ops key does not fail here.
+func TestWorkUnitVersionKeyIsBuiltFromTheOpsLatestRowOrderKeyComponents(t *testing.T) {
 	t.Parallel()
-	if devhealthfacts.WorkUnitVersionKey != opsLatestRowOrderKey {
-		t.Fatalf("workUnitVersionKey = %q, ops latestrow.OrderKey = %q", devhealthfacts.WorkUnitVersionKey, opsLatestRowOrderKey)
+	for _, component := range []struct{ ops, acr string }{
+		{"work_unit_investments.computed_at", "toUInt256(toUnixTimestamp64Milli(work_unit_investments.computed_at)), 128)"},
+		{"toUInt64OrZero(splitByChar('_', work_unit_investments._part)[3])", "toUInt256(toUInt64OrZero(splitByChar('_', work_unit_investments._part)[3])), 64)"},
+		{"work_unit_investments._part_offset", "toUInt256(work_unit_investments._part_offset))"},
+	} {
+		if !strings.Contains(opsLatestRowOrderKey, component.ops) {
+			t.Errorf("ops latestrow.OrderKey %q lacks %q", opsLatestRowOrderKey, component.ops)
+		}
+		if !strings.Contains(devhealthfacts.WorkUnitVersionKey, component.acr) {
+			t.Errorf("workUnitVersionKey %q lacks %q", devhealthfacts.WorkUnitVersionKey, component.acr)
+		}
 	}
+}
+
+// acr's ordinal and ops' latestrow.OrderKey pick the same row of every unit, on
+// a table of same-millisecond ties in two parts each (both insert orders) and a
+// unit whose newer computed_at was inserted first, before and after OPTIMIZE
+// FINAL; after the merge both pick the row the merge kept.
+func TestWorkUnitVersionKeyOrdersLikeTheOpsLatestRowOrderKeyAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	_, direct := newScopedCHAOS7257Client(t, nil)
+	createCHAOS7257Tables(t, ctx, direct)
+	if err := direct.Exec(ctx, `SYSTEM STOP MERGES work_unit_investments`); err != nil {
+		t.Fatalf("stop merges: %v", err)
+	}
+	const orgID = "org-7323-order-parity"
+	at := ts(2026, 9, 18, 0, 0, 0)
+	for _, w := range []struct {
+		id, theme string
+		at        time.Time
+	}{
+		{"tie-risk-last", "quality", at}, {"tie-risk-last", "risk", at},
+		{"tie-quality-last", "risk", at}, {"tie-quality-last", "quality", at},
+		{"newer-first", "risk", at.Add(time.Millisecond)}, {"newer-first", "quality", at},
+	} {
+		insertRunVersionAtMilli(t, ctx, direct, orgID, w.id, "", `{"issues":[],"prs":[]}`, w.theme, w.theme, w.at, at.Add(-time.Hour))
+	}
+	want := map[string]string{"tie-risk-last": "risk", "tie-quality-last": "quality", "newer-first": "risk"}
+	pick := func(final string) map[string][2]string {
+		t.Helper()
+		rows, err := direct.Query(ctx, `SELECT work_unit_id,
+	arrayElement(mapKeys(argMax(theme_distribution_json, `+devhealthfacts.WorkUnitVersionKey+`)), 1),
+	arrayElement(mapKeys(argMax(theme_distribution_json, `+opsLatestRowOrderKey+`)), 1)
+FROM work_unit_investments`+final+` WHERE org_id = ? GROUP BY work_unit_id`, orgID)
+		if err != nil {
+			t.Fatalf("pick: %v", err)
+		}
+		defer rows.Close()
+		out := map[string][2]string{}
+		for rows.Next() {
+			var id, acr, ops string
+			if err := rows.Scan(&id, &acr, &ops); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			out[id] = [2]string{acr, ops}
+		}
+		return out
+	}
+	check := func(stage string, got map[string][2]string) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("%s: %d units, want %d", stage, len(got), len(want))
+		}
+		for id, theme := range want {
+			if got[id][0] != theme || got[id][1] != theme {
+				t.Errorf("%s, %s: acr ordinal picks %q, ops OrderKey picks %q, want %q", stage, id, got[id][0], got[id][1], theme)
+			}
+		}
+	}
+	check("before the merge", pick(""))
+	mergeWorkUnitInvestments(t, ctx, direct)
+	check("after OPTIMIZE FINAL", pick(""))
+	check("FINAL read after OPTIMIZE FINAL", pick(" FINAL"))
 }
 
 // insertRunVersionAtMilli writes one version of a unit (label names it in a

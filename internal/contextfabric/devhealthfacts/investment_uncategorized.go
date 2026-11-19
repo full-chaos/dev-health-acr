@@ -11,14 +11,19 @@ import (
 const evidenceGatedStatuses = "('insufficient_evidence', 'no_text_sources')"
 
 // workUnitVersionKey is the order of the versions of one work unit in
-// work_unit_investments, byte-equal to ops' latestrow.OrderKey
-// (internal/storage/clickhouse/latestrow/latestrow.go): computed_at, then insert
+// work_unit_investments: the order of ops' latestrow.OrderKey
+// (internal/storage/clickhouse/latestrow/latestrow.go), computed_at, then insert
 // order (the part's highest block number, then the row's offset in the part).
 // On an equal computed_at the later insert wins, the row a ReplacingMergeTree
-// merge keeps, so acr, ops and a merge pick the same row. The columns are
-// table-qualified, so a fold's output alias never shadows them; it is valid only
-// in a statement that reads FROM work_unit_investments directly.
-const workUnitVersionKey = "(work_unit_investments.computed_at, toUInt64OrZero(splitByChar('_', work_unit_investments._part)[3]), work_unit_investments._part_offset)"
+// merge keeps, so acr, ops and a merge pick the same row. It is one UInt256,
+// each component in its own 64 bits (computed_at as epoch milliseconds), not
+// ops' tuple: argMax keeps a tuple key in a generic state that costs memory per
+// unit. The columns are table-qualified, so a fold's output alias never shadows
+// them; it is valid only in a statement that reads FROM work_unit_investments
+// directly.
+const workUnitVersionKey = "bitOr(bitOr(bitShiftLeft(toUInt256(toUnixTimestamp64Milli(work_unit_investments.computed_at)), 128), " +
+	"bitShiftLeft(toUInt256(toUInt64OrZero(splitByChar('_', work_unit_investments._part)[3])), 64)), " +
+	"toUInt256(work_unit_investments._part_offset))"
 
 // latestUnitGatedSQL is judged on the unit's latest row, inside a GROUP BY work_unit_id fold.
 const latestUnitGatedSQL = "argMax(categorization_status, " + workUnitVersionKey + ") IN " + evidenceGatedStatuses

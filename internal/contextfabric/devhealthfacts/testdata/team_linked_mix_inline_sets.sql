@@ -41,7 +41,7 @@ FROM (
 						argMaxIf(tuple(repo_id, from_ts, to_ts, theme_distribution_json, unit_bugfix_share, pr_refs), unit_version, reaches) AS latest,
 						argMax(categorization_status, unit_version) IN ('insufficient_evidence', 'no_text_sources') AS gated
 					FROM (
-						SELECT work_unit_id, (work_unit_investments.computed_at, toUInt64OrZero(splitByChar('_', work_unit_investments._part)[3]), work_unit_investments._part_offset) AS unit_version, repo_id, from_ts, to_ts, theme_distribution_json, categorization_status,
+						SELECT work_unit_id, bitOr(bitOr(bitShiftLeft(toUInt256(toUnixTimestamp64Milli(work_unit_investments.computed_at)), 128), bitShiftLeft(toUInt256(toUInt64OrZero(splitByChar('_', work_unit_investments._part)[3])), 64)), toUInt256(work_unit_investments._part_offset)) AS unit_version, repo_id, from_ts, to_ts, theme_distribution_json, categorization_status,
 							ifNull(subcategory_distribution_json['quality.bugfix'], 0.0) AS unit_bugfix_share,
 							arrayMap(r -> (substring(r, 1, 36), substring(r, 40)),
 								arrayFilter(r -> match(r, '^[0-9a-fA-F-]{36}#pr[0-9]+$'), JSONExtract(structural_evidence_json, 'prs', 'Array(String)'))) AS direct_refs,
