@@ -56,7 +56,7 @@ GitHub action commit SHA):
 | Dockerfile frontend | `docker/dockerfile:1.20@sha256:26147acbda4f14c5add9946e2fd2ed543fc402884fd75146bd342a7f6271dc1d` |
 | Go builder | `golang:1.27.4-alpine3.23@sha256:146e3b9c7c1e2ec3d3f5348c8a686151a75e1976e50efac9fc022ebe446a9a82` |
 | API runtime | `gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab` |
-| MCP runtime | `cgr.dev/chainguard/git:latest@sha256:f3b9ade5b3e78c5ea04cd77baa431ec3a5c060da5144a8357cc0ba47326dcd93` |
+| MCP runtime | `cgr.dev/chainguard/git:latest@sha256:caa7647e036b43c39a0d47a8fe6730bc0f75627841eff3df2ba60a1fc6357341` |
 | QEMU binfmt | `docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0` |
 | Buildx CLI | `v0.35.0` linux-amd64 asset, SHA-256 `d41ece72044243b4f58b343441ae37446d9c29a7d6b5e11c61847bbcf8f7dfda` |
 | BuildKit driver | `moby/buildkit:v0.31.0@sha256:a095b3d11ce1a9a05b6064ef515dfca0291ec5bcf2ea8178da8f6461924294e1` |
@@ -71,7 +71,7 @@ GitHub action commit SHA):
 | Compose E2E TLS proxy | `nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10` |
 | Context Fabric graph backend (ADR 0009, profile-gated) | `falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3` (FalkorDB 4.20.2, module ver 42002, Redis 8.6.3) |
 
-The pinned MCP runtime base ships `git-lfs` 3.8.1-r0. `git-lfs` stays in the
+The pinned MCP runtime base ships `git-lfs` 3.8.1-r3. `git-lfs` stays in the
 image instead of being removed because a mounted workspace whose own Git config
 enables an LFS filter needs it for `git status`. The smoke gate
 (`assert_git_lfs_fixed` in `scripts/container/verify.sh`) reads the installed
