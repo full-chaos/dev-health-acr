@@ -828,7 +828,11 @@ two row keys, `resume_after_key_digest` and `window_high_key_digest`: on
 rows that share one stamp only the key moves; the estimate is linear and is
 `-1` when there is none, before the pass has moved or while the walk stands
 on the edge's own stamp), and a pass that spanned several ticks
-logs `devhealthsource overlap window pass ended`. A pass older than one
+logs `devhealthsource overlap window pass ended`. Both lines carry
+`pass_bounded_pages`: the pages of the pass that ended at the last row a
+truncated table returned (rows of that table share one cursor position). A
+pass logs the WARN line `devhealthsource page ended at the last row a
+truncated table returned` for the first such page only. A pass older than one
 overlap logs the same fields at WARN, `devhealthsource overlap window pass is
 older than the lateness the window absorbs`: late rows then wait longer than
 they were late. The tick freshness summary carries both readings:

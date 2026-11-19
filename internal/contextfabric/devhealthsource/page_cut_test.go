@@ -478,6 +478,56 @@ func TestOverlapWalkNeverStepsPastTheLastRowATruncatedTableReturned(t *testing.T
 	}
 }
 
+// Every row of table full is two statement rows on one stamp and key, so each
+// statement of 200 rows holds 100 positions and the row of table later, past
+// all of them, ends every page but the last at the bound. One pass walks five
+// bounded pages over six calls; it writes one bounded-page line, for its first
+// bounded page, and the open and ended pass lines carry the count.
+func TestOverlapWalkWritesOneBoundedPageLinePerPass(t *testing.T) {
+	var rows keysetRows
+	for n := 0; n < 600; n++ {
+		key := fmt.Sprintf("a%03d", n)
+		rows = append(rows, keysetRow{at: pageCutStamp, key: key}, keysetRow{at: pageCutStamp, key: key})
+	}
+	var logs bytes.Buffer
+	now := pageCutStamp.Add(10 * time.Minute)
+	plan := sourcePlan{
+		client: keysetRows{}, source: "page_cut_test", version: "v1",
+		tables: []entityTable{
+			keysetTable("full", rows),
+			keysetTable("later", keysetRows{{at: pageCutStamp.Add(30 * time.Second), key: "0"}}),
+		},
+		now: func() time.Time { return now }, overlap: 15 * time.Minute, window: newWindowMemo(), windowScope: windowScopeFor("org", 0),
+		windowInterval: time.Hour,
+		logger:         slog.New(slog.NewJSONHandler(&logs, nil)),
+	}
+	frontier := cursorState{Since: pageCutStamp.Add(time.Minute), After: "zz"}
+	for call := 0; call < 9; call++ {
+		if _, available, err := plan.overlapBatch(context.Background(), "org", "cursor", frontier); err != nil || available {
+			t.Fatalf("call %d: available=%v err=%v", call, available, err)
+		}
+	}
+	if seen := len(plan.window.scopes[plan.windowScope].seen); seen != 601 {
+		t.Fatalf("the pass reached %d of 601 rows", seen)
+	}
+	bounded := boundedPageLines(t, &logs)
+	if len(bounded) != 1 || bounded[0]["level"] != "WARN" || bounded[0]["table"] != "full" || bounded[0]["last_key_digest"] != keyDigest("a099") {
+		t.Fatalf("bounded-page lines = %v, want one, for the first page of the pass, which ends at a099", bounded)
+	}
+	open := logLines(t, &logs, openPassMessage)
+	var counts []float64
+	for _, line := range open {
+		counts = append(counts, line["pass_bounded_pages"].(float64))
+	}
+	if want := []float64{1, 2, 3, 4, 5, 5}; !reflect.DeepEqual(counts, want) {
+		t.Fatalf("open pass lines carry pass_bounded_pages %v, want %v", counts, want)
+	}
+	ended := logLines(t, &logs, endedPassMessage)
+	if len(ended) != 1 || ended[0]["pass_bounded_pages"].(float64) != 5 || ended[0]["pass_pages"].(float64) != 7 {
+		t.Fatalf("ended pass lines = %v, want one with pass_bounded_pages 5 of pass_pages 7", ended)
+	}
+}
+
 // scanMembershipArmRow is scanKeysetRow for the membership table: its rows
 // belong to the transition arm, so the membership read ledger counts them.
 func scanMembershipArmRow(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
