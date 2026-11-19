@@ -248,9 +248,9 @@ clear_packet_snapshot() {
   local packet_file="$1" packet_id
   packet_id="$(jq -r '.context_packet_id // .result.structuredContent.structured.context_packet_id // empty' "$packet_file")"
   [[ "$packet_id" =~ ^pkt_[0-9a-f]{24}$ ]] || svs_die 'packet ID was not safe for isolated snapshot reset'
-  compose exec -T -e "PGPASSWORD=$(<"$STATE/secrets/runtime-password")" postgres \
+  (PGPASSWORD="$(<"$STATE/secrets/runtime-password")"; export PGPASSWORD; compose exec -T -e PGPASSWORD postgres \
     psql -h postgres -U "$ACR_RUNTIME_DB_USER" -d "$ACR_DB_NAME" -v ON_ERROR_STOP=1 \
-    -c "DELETE FROM acr.context_packet_snapshots WHERE context_packet_id = '${packet_id}'" >/dev/null
+    -c "DELETE FROM acr.context_packet_snapshots WHERE context_packet_id = '${packet_id}'") >/dev/null
 }
 
 mcp_stop() {
@@ -336,9 +336,9 @@ acr_table_count() {
     episodes) table='acr.agent_episodes' ;;
     *) svs_die 'unknown ACR persistence probe' ;;
   esac
-  compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres \
+  (export PGPASSWORD="${POSTGRES_PASSWORD}"; compose exec -T -e PGPASSWORD postgres \
     psql -h postgres -U "$POSTGRES_USER" -d "$ACR_DB_NAME" -At -v ON_ERROR_STOP=1 \
-    -c "SELECT count(*) FROM ${table}"
+    -c "SELECT count(*) FROM ${table}")
 }
 
 assert_no_forbidden_persistence() {
@@ -351,10 +351,10 @@ assert_no_forbidden_persistence() {
 
 remove_runtime_entitlement() {
   local remaining
-  compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres \
+  (export PGPASSWORD="${POSTGRES_PASSWORD}"; compose exec -T -e PGPASSWORD postgres \
     psql -h postgres -U "$POSTGRES_USER" -d devhealth -v ON_ERROR_STOP=1 \
-    -c "DELETE FROM org_feature_overrides USING feature_flags WHERE org_feature_overrides.feature_id = feature_flags.id AND org_feature_overrides.org_id = '$(<"$STATE/org-id")' AND feature_flags.key = 'agent_context_runtime'" >/dev/null
-  remaining="$(compose exec -T -e "PGPASSWORD=${POSTGRES_PASSWORD}" postgres \
+    -c "DELETE FROM org_feature_overrides USING feature_flags WHERE org_feature_overrides.feature_id = feature_flags.id AND org_feature_overrides.org_id = '$(<"$STATE/org-id")' AND feature_flags.key = 'agent_context_runtime'") >/dev/null
+  remaining="$(export PGPASSWORD="${POSTGRES_PASSWORD}"; compose exec -T -e PGPASSWORD postgres \
     psql -h postgres -U "$POSTGRES_USER" -d devhealth -At -v ON_ERROR_STOP=1 \
     -c "SELECT count(*) FROM org_feature_overrides JOIN feature_flags ON feature_flags.id = org_feature_overrides.feature_id WHERE org_feature_overrides.org_id = '$(<"$STATE/org-id")' AND feature_flags.key = 'agent_context_runtime'")"
   [[ "$remaining" == '0' ]] || svs_die 'failed to remove the isolated runtime entitlement override'

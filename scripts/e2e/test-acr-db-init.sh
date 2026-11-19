@@ -39,8 +39,8 @@ run_init() {
 }
 
 admin_query() {
-  docker exec -e PGPASSWORD="$admin_password" "$container" \
-    psql -h 127.0.0.1 -U bootstrap -d "$database" -At -v ON_ERROR_STOP=1 -c "$1"
+  (export PGPASSWORD="$admin_password"; docker exec -e PGPASSWORD "$container" \
+    psql -h 127.0.0.1 -U bootstrap -d "$database" -At -v ON_ERROR_STOP=1 -c "$1")
 }
 
 expect() {
@@ -55,7 +55,7 @@ expect() {
 
 run_init roles
 
-docker exec -i -e PGPASSWORD=migration-password "$container" \
+PGPASSWORD=migration-password docker exec -i -e PGPASSWORD "$container" \
   psql -h 127.0.0.1 -U acr_migration -d "$database" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 CREATE SCHEMA acr AUTHORIZATION acr_migration;
 CREATE TABLE acr.schema_migrations (version BIGINT PRIMARY KEY);
@@ -81,18 +81,18 @@ expect 't|t|t|t' "SELECT has_table_privilege('acr_runtime', 'acr.device_authoriz
 expect 't|t|t|t' "SELECT has_table_privilege('acr_runtime', 'acr.oauth_clients', 'SELECT'), has_table_privilege('acr_runtime', 'acr.oauth_clients', 'INSERT'), has_table_privilege('acr_runtime', 'acr.oauth_clients', 'UPDATE'), has_table_privilege('acr_runtime', 'acr.oauth_clients', 'DELETE')"
 expect 't|t|t|t' "SELECT has_table_privilege('acr_runtime', 'acr.oauth_authorization_requests', 'SELECT'), has_table_privilege('acr_runtime', 'acr.oauth_authorization_requests', 'INSERT'), has_table_privilege('acr_runtime', 'acr.oauth_authorization_requests', 'UPDATE'), has_table_privilege('acr_runtime', 'acr.oauth_authorization_requests', 'DELETE')"
 
-docker exec -e PGPASSWORD=migration-password "$container" \
+PGPASSWORD=migration-password docker exec -e PGPASSWORD "$container" \
   psql -h 127.0.0.1 -U acr_migration -d "$database" -v ON_ERROR_STOP=1 \
   -c "CREATE TABLE acr.future_runtime_table (id TEXT PRIMARY KEY)" >/dev/null
 expect 'f|f|f|f' "SELECT has_table_privilege('acr_runtime', 'acr.future_runtime_table', 'SELECT'), has_table_privilege('acr_runtime', 'acr.future_runtime_table', 'INSERT'), has_table_privilege('acr_runtime', 'acr.future_runtime_table', 'UPDATE'), has_table_privilege('acr_runtime', 'acr.future_runtime_table', 'DELETE')"
 
-docker exec -i -e PGPASSWORD="$admin_password" "$container" \
+PGPASSWORD="$admin_password" docker exec -i -e PGPASSWORD "$container" \
   psql -h 127.0.0.1 -U bootstrap -d postgres -v ON_ERROR_STOP=1 <<SQL >/dev/null
 ALTER ROLE acr_runtime SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS PASSWORD 'stale-runtime-password';
 ALTER ROLE acr_migration SUPERUSER CREATEDB CREATEROLE REPLICATION BYPASSRLS PASSWORD 'stale-migration-password';
 ALTER DATABASE ${database} OWNER TO bootstrap;
 SQL
-docker exec -i -e PGPASSWORD="$admin_password" "$container" \
+PGPASSWORD="$admin_password" docker exec -i -e PGPASSWORD "$container" \
   psql -h 127.0.0.1 -U bootstrap -d "$database" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
 ALTER SCHEMA acr OWNER TO bootstrap;
 ALTER TABLE acr.client_credentials OWNER TO bootstrap;
@@ -109,7 +109,7 @@ expect 'acr_migration' "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE da
 expect 'acr_migration' "SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'acr'"
 expect 'acr_migration' "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'acr.client_credentials'::regclass"
 expect 't|f|f|f' "SELECT has_table_privilege('acr_runtime', 'acr.schema_migrations', 'SELECT'), has_table_privilege('acr_runtime', 'acr.schema_migrations', 'INSERT'), has_table_privilege('acr_runtime', 'acr.schema_migrations', 'UPDATE'), has_table_privilege('acr_runtime', 'acr.schema_migrations', 'DELETE')"
-docker exec -e PGPASSWORD=runtime-password "$container" \
+PGPASSWORD=runtime-password docker exec -e PGPASSWORD "$container" \
   psql -h 127.0.0.1 -U acr_runtime -d "$database" -At -v ON_ERROR_STOP=1 -c 'SELECT current_user' | grep -qx 'acr_runtime'
 
 ACR_ENABLE_EPISODE_WRITEBACK=true run_init runtime-acl
