@@ -74,7 +74,7 @@ func scanPlatformModelPath(t *testing.T, root string) platformModelPathSites {
 				sites.paritytestImporters = append(sites.paritytestImporters, rel)
 			}
 		}
-		imports := importedNames(file)
+		imports, dotImports := importedNames(file)
 		inResolverPackage := strings.HasPrefix(rel, "internal/contextfabric/modelruntimeresolver/")
 		inContextFabric := strings.HasPrefix(rel, "internal/contextfabric/")
 		for _, decl := range file.Decls {
@@ -85,30 +85,41 @@ func scanPlatformModelPath(t *testing.T, root string) platformModelPathSites {
 				}
 				site, scope = rel+":"+fn.Name.Name, fn.Body
 			}
-			ast.Inspect(scope, func(node ast.Node) bool {
+			// A name is a site wherever it is referenced, called or not: a
+			// function or method value reaches the path as well as a call does.
+			var visit func(ast.Node) bool
+			visit = func(node ast.Node) bool {
 				switch n := node.(type) {
 				case *ast.CompositeLit:
-					if isPackageSelector(n.Type, imports, resolverPackagePath, "Resolver") && !inResolverPackage {
+					if isPackageName(n.Type, imports, dotImports, resolverPackagePath, "Resolver") && !inResolverPackage {
 						sites.resolverConstructions = append(sites.resolverConstructions, site)
 					}
-				case *ast.CallExpr:
-					selector, ok := n.Fun.(*ast.SelectorExpr)
-					if !ok {
-						return true
-					}
+				case *ast.SelectorExpr:
 					switch {
-					case isPackageSelector(selector, imports, resolverPackagePath, "New") && !inResolverPackage:
+					case isPackageSelector(n, imports, resolverPackagePath, "New") && !inResolverPackage:
 						sites.resolverConstructions = append(sites.resolverConstructions, site)
-					case isPackageSelector(selector, imports, contextFabricPackagePath, "NewEngine"):
+					case isPackageSelector(n, imports, contextFabricPackagePath, "NewEngine"):
 						sites.engineConstructions = append(sites.engineConstructions, site)
-					case selector.Sel.Name == "Investigate":
+					case n.Sel.Name == "Investigate":
 						sites.investigateCalls = append(sites.investigateCalls, site)
-					case !inContextFabric && slices.Contains([]string{"InterpretQuestion", "SynthesizeAnswer", "PhraseStructureOffers"}, selector.Sel.Name):
+					case !inContextFabric && slices.Contains([]string{"InterpretQuestion", "SynthesizeAnswer", "PhraseStructureOffers"}, n.Sel.Name):
 						sites.modelCallsOutside = append(sites.modelCallsOutside, site)
+					}
+					// The selected name is not a bare identifier of a dot
+					// import, so only the operand is scanned further.
+					ast.Inspect(n.X, visit)
+					return false
+				case *ast.Ident:
+					switch {
+					case isDotImported(n, dotImports, resolverPackagePath, "New") && !inResolverPackage:
+						sites.resolverConstructions = append(sites.resolverConstructions, site)
+					case isDotImported(n, dotImports, contextFabricPackagePath, "NewEngine"):
+						sites.engineConstructions = append(sites.engineConstructions, site)
 					}
 				}
 				return true
-			})
+			}
+			ast.Inspect(scope, visit)
 		}
 		return nil
 	})
@@ -135,9 +146,11 @@ func mentionsPlatformModelPathName(source []byte) bool {
 }
 
 // importedNames maps each name a file binds to an import (its alias, else the
-// last element of the path) to the import path.
-func importedNames(file *ast.File) map[string]string {
+// last element of the path) to the import path, and lists the paths the file
+// dot-imports, whose exported names it uses bare.
+func importedNames(file *ast.File) (map[string]string, []string) {
 	names := map[string]string{}
+	var dotImports []string
 	for _, spec := range file.Imports {
 		importPath, err := strconv.Unquote(spec.Path.Value)
 		if err != nil {
@@ -147,9 +160,17 @@ func importedNames(file *ast.File) map[string]string {
 		if spec.Name != nil {
 			name = spec.Name.Name
 		}
+		if name == "." {
+			dotImports = append(dotImports, importPath)
+			continue
+		}
 		names[name] = importPath
 	}
-	return names
+	return names, dotImports
+}
+
+func isAcrPackage(importPath, pathSuffix string) bool {
+	return strings.HasSuffix(importPath, "github.com/full-chaos/dev-health-acr"+pathSuffix)
 }
 
 // isPackageSelector reports whether expr is name selected from the package at
@@ -160,7 +181,22 @@ func isPackageSelector(expr ast.Expr, imports map[string]string, pathSuffix, nam
 		return false
 	}
 	ident, ok := selector.X.(*ast.Ident)
-	return ok && strings.HasSuffix(imports[ident.Name], "github.com/full-chaos/dev-health-acr"+pathSuffix)
+	return ok && isAcrPackage(imports[ident.Name], pathSuffix)
+}
+
+// isDotImported reports whether expr is the bare name of a file that
+// dot-imports the package at the import path that ends in pathSuffix.
+func isDotImported(expr ast.Expr, dotImports []string, pathSuffix, name string) bool {
+	ident, ok := expr.(*ast.Ident)
+	return ok && ident.Name == name && slices.ContainsFunc(dotImports, func(importPath string) bool {
+		return isAcrPackage(importPath, pathSuffix)
+	})
+}
+
+// isPackageName reports whether expr names name from the package at the
+// import path that ends in pathSuffix, selected or through a dot import.
+func isPackageName(expr ast.Expr, imports map[string]string, dotImports []string, pathSuffix, name string) bool {
+	return isPackageSelector(expr, imports, pathSuffix, name) || isDotImported(expr, dotImports, pathSuffix, name)
 }
 
 func isSelector(expr ast.Expr, pkg, name string) bool {
@@ -373,5 +409,114 @@ func Unrelated() { _ = mr.New(nil, nil, nil) }
 	}
 	if !slices.Equal(sites.engineConstructions, []string{"internal/plant/engine.go:Engine"}) {
 		t.Fatalf("engine constructions = %q, want the aliased NewEngine", sites.engineConstructions)
+	}
+}
+
+// A dot import binds the package's names bare, and a function or method value
+// reaches the path without a call at the site: each is a site too, counted
+// once, while the same bare names from another package are not.
+func TestPlatformModelPathScanFindsDotImportsAndUncalledValues(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, source string) {
+		t.Helper()
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("internal/plant/dot.go", `package plant
+
+import . "github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
+
+func Dot() { _ = New(nil, nil, nil) }
+
+func DotLiteral() { _ = &Resolver{} }
+
+func DotValue() { construct := New; _ = construct }
+`)
+	write("internal/plant/dotengine.go", `package plant
+
+import . "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+
+func DotEngine() { _, _ = NewEngine(EngineDependencies{}, EngineOptions{}) }
+`)
+	write("internal/plant/value.go", `package plant
+
+import (
+	cf "github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	mr "github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
+)
+
+var packageValue = mr.New
+
+func Value() { construct := mr.New; _ = construct }
+
+func EngineValue() { build := cf.NewEngine; _ = build }
+
+func InvestigateValue(engine *cf.Engine) { run := engine.Investigate; _ = run }
+
+func InvestigateMethodExpression() { _ = (*cf.Engine).Investigate }
+
+func ModelValue(runtime cf.ModelRuntime) { phrase := runtime.SynthesizeAnswer; _ = phrase }
+`)
+	write("internal/plant/both.go", `package plant
+
+import (
+	. "github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
+	mr "github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
+)
+
+func Both() { _ = mr.New(nil, nil, nil) }
+`)
+	write("internal/plant/unrelated.go", `package plant
+
+import . "example.test/other/modelruntimeresolver"
+
+func Unrelated() { _ = New(nil, nil, nil); _ = &Resolver{} }
+`)
+	write("internal/plant/local.go", `package plant
+
+import "github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
+
+var _ modelruntimeresolver.Build
+
+func New() int { return 0 }
+
+func Local() { _ = New() }
+`)
+	sites := scanPlatformModelPath(t, root)
+	for _, check := range []struct {
+		name string
+		got  []string
+		want []string
+	}{
+		{name: "resolver constructions", got: sites.resolverConstructions, want: []string{
+			"internal/plant/both.go:Both",
+			"internal/plant/dot.go:Dot",
+			"internal/plant/dot.go:DotLiteral",
+			"internal/plant/dot.go:DotValue",
+			"internal/plant/value.go:Value",
+			"internal/plant/value.go:package-level",
+		}},
+		{name: "engine constructions", got: sites.engineConstructions, want: []string{
+			"internal/plant/dotengine.go:DotEngine",
+			"internal/plant/value.go:EngineValue",
+		}},
+		{name: "in-process Investigate calls", got: sites.investigateCalls, want: []string{
+			"internal/plant/value.go:InvestigateMethodExpression",
+			"internal/plant/value.go:InvestigateValue",
+		}},
+		{name: "model runtime calls outside the engine", got: sites.modelCallsOutside, want: []string{
+			"internal/plant/value.go:ModelValue",
+		}},
+	} {
+		got := slices.Clone(check.got)
+		slices.Sort(got)
+		if !slices.Equal(got, check.want) {
+			t.Errorf("%s = %q, want %q", check.name, got, check.want)
+		}
 	}
 }
