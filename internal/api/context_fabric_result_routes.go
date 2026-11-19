@@ -528,7 +528,8 @@ func (a *App) writeInvestigationResultError(w http.ResponseWriter, r *http.Reque
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Context Fabric is temporarily unavailable", true, nil)
 		return
 	}
-	a.logger.ErrorContext(r.Context(), "context fabric investigation result read failed", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_investigation_result")
+	attrs := append([]any{"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "context_fabric_investigation_result"}, dependencyErrorClassAttrs(err)...)
+	a.logger.ErrorContext(r.Context(), "context fabric investigation result read failed", attrs...)
 	writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation result read failed", false, nil)
 }
 

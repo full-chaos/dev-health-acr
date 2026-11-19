@@ -19,7 +19,8 @@ func (a *App) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	providerRequest.Body = nil
 	capabilities, err := a.capabilities.Capabilities(r.Context(), providerRequest)
 	if err != nil {
-		a.logger.ErrorContext(r.Context(), "capabilities resolution failed", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "capabilities_provider")
+		attrs := append([]any{"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "capabilities_provider"}, dependencyErrorClassAttrs(err)...)
+		a.logger.ErrorContext(r.Context(), "capabilities resolution failed", attrs...)
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Capabilities are temporarily unavailable", true, nil)
 		return
 	}

@@ -108,7 +108,8 @@ func (a *App) writeEpisodeError(w http.ResponseWriter, r *http.Request, principa
 	case errors.Is(err, context.DeadlineExceeded) || errors.Is(r.Context().Err(), context.DeadlineExceeded):
 		writeError(w, r, http.StatusGatewayTimeout, "upstream_unavailable", "Episode recording timed out", true, nil)
 	default:
-		a.logger.ErrorContext(r.Context(), "episode recording dependency failed", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "episode_creator")
+		attrs := append([]any{"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", "episode_creator"}, dependencyErrorClassAttrs(err)...)
+		a.logger.ErrorContext(r.Context(), "episode recording dependency failed", attrs...)
 		writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Episode recording is temporarily unavailable", true, nil)
 	}
 }
