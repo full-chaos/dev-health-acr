@@ -440,17 +440,12 @@ jobs:
           go-version: "1.27.4"
           check-latest: false
           cache: false
-      # CHAOS-6403: cache ONLY the Go module cache. It is verifiable: `go mod
-      # verify` below re-checks every restored module against go.sum and the
-      # job fails loud on a mismatch. The compiled-object cache (GOCACHE) is
-      # NOT verifiable, so it is never cached (CodeQL #11 "no cache sink"
-      # rationale stands for it). Key = os + arch + go.sum, EXACT match only
-      # (no prefix fallback), so a branch-scoped cache can never be picked up.
-      # actions/cache v6.1.0
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ${{ runner.temp }}/gomod
-          key: release-gomod-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+      # CHAOS-6403: cache ONLY the Go module cache, never GOCACHE (not
+      # verifiable; CodeQL #11 "no cache sink" rationale). CHAOS-11151: through
+      # the shared go-modcache action; `go mod verify` re-checks every module
+      # against go.sum and the job fails loud on a mismatch.
+      - uses: ./.github/actions/go-modcache
+        with: {mode: restore}
       - name: Build platform fragment
         env:
           VERSION: ${{ needs.preflight.outputs.version }}
@@ -460,7 +455,6 @@ jobs:
           LEG: ${{ matrix.leg }}
         run: |
           set -euo pipefail
-          export GOMODCACHE="$RUNNER_TEMP/gomod"
           go mod download
           go mod verify
           build() { GOCACHE="$RUNNER_TEMP/gobuild-$1" go run ./cmd/releasebuild build -version "$VERSION" -commit "$COMMIT" -date "$DATE" -platform "$PLATFORM" -out "$RUNNER_TEMP/out-$1"; }
@@ -502,10 +496,8 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with: {pattern: "release-leg-*", path: legs}
       # actions/cache v6.1.0 (module cache only, see build-leg; verified below)
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ${{ runner.temp }}/gomod
-          key: release-gomod-merge-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+      - uses: ./.github/actions/go-modcache
+        with: {mode: restore}
       - name: Install checksum-verified Syft
         env:
           SYFT_VERSION: v1.46.0
@@ -528,7 +520,7 @@ jobs:
       - name: Merge legs and write final checksum manifest
         run: |
           set -euo pipefail
-          export GOMODCACHE="$RUNNER_TEMP/gomod" GOCACHE="$RUNNER_TEMP/gobuild"
+          export GOCACHE="$RUNNER_TEMP/gobuild"
           go mod download
           go mod verify
           go build -o "$RUNNER_TEMP/releasebuild" ./cmd/releasebuild

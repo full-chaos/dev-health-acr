@@ -9,6 +9,10 @@ inputs:
   mode:
     description: warm or restore
     required: true
+  working-directory:
+    description: Directory of the Go module (go.mod, go.sum); the pinned tools and retry.sh come from the repository of this action
+    required: false
+    default: .
 runs:
   using: composite
   steps:
@@ -24,10 +28,12 @@ runs:
     - name: Compute the Go module cache key
       id: key
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
+        root="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
         printf 'key=gomod-v3-%s-%s-%s\n' "$RUNNER_OS" "$(go env GOVERSION)" \
-          "$(cat go.mod go.sum scripts/ci/go-tool-pins.txt | sha256sum | cut -c1-24)" >> "$GITHUB_OUTPUT"
+          "$(cat go.mod go.sum "$root/scripts/ci/go-tool-pins.txt" | sha256sum | cut -c1-24)" >> "$GITHUB_OUTPUT"
         printf 'path=%s\n' "$(go env GOMODCACHE)/cache/download" >> "$GITHUB_OUTPUT"
     # actions/cache v6.1.0 (restore)
     - name: Restore the Go module cache
@@ -41,6 +47,7 @@ runs:
     - name: Download every module and pinned tool once
       if: ${{ steps.restore.outputs.cache-hit != 'true' }}
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       env:
         MODE: ${{ inputs.mode }}
         KEY: ${{ steps.key.outputs.key }}
@@ -51,15 +58,17 @@ runs:
           printf '::warning title=go-modcache::module cache %s was not restored; downloading the modules and pinned tools from GOPROXY\n' "$KEY"
           printf 'go-modcache: module cache `%s` was not restored; this job downloaded the modules and pinned tools from GOPROXY.\n' "$KEY" >> "$GITHUB_STEP_SUMMARY"
         fi
-        scripts/ci/retry.sh go mod download
+        root="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
+        "$root/scripts/ci/retry.sh" go mod download
         bin="$(mktemp -d)"
         while IFS= read -r pin; do
           [ -n "$pin" ] || continue
-          GOBIN="$bin" scripts/ci/retry.sh go install "$pin"
-        done < scripts/ci/go-tool-pins.txt
+          GOBIN="$bin" "$root/scripts/ci/retry.sh" go install "$pin"
+        done < "$root/scripts/ci/go-tool-pins.txt"
     - name: Verify the module cache against go.sum
       if: ${{ inputs.mode == 'restore' || steps.restore.outputs.cache-hit != 'true' }}
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       run: go mod verify
     # actions/cache v6.1.0 (save)
     - name: Save the Go module cache
