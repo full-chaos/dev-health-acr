@@ -69,3 +69,32 @@ func TestLivePostgresFailedReadinessLeavesNoContainerBehind(t *testing.T) {
 	}
 	requireGone(t, container, err)
 }
+
+// cancelAtReadiness ends the caller's context from inside the readiness wait, as a deadline that wins there would.
+type cancelAtReadiness struct{ cancel context.CancelFunc }
+
+func (s *cancelAtReadiness) WaitUntilReady(ctx context.Context, _ wait.StrategyTarget) error {
+	s.cancel()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestLivePostgresStartEndedInTheReadinessWaitNamesThatStage(t *testing.T) {
+	chfixture.RequireContainers(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	pc, err := startterm.PostgresRun(ctx, livePostgresImage,
+		tcpostgres.WithDatabase("acr"), tcpostgres.WithUsername("acr"), tcpostgres.WithPassword("acr"),
+		testcontainers.WithWaitStrategy(&cancelAtReadiness{cancel: cancel}),
+	)
+	if err == nil || !strings.Contains(err.Error(), "ended by the caller's context (context canceled)") ||
+		!strings.Contains(err.Error(), "during readiness wait") {
+		t.Fatalf("a start whose context ended in the readiness wait must name that stage: %v", err)
+	}
+	if pc == nil {
+		t.Fatal("testcontainers must hand back the container whose readiness wait ended")
+	}
+	if _, stateErr := pc.State(context.Background()); !errdefs.IsNotFound(stateErr) {
+		t.Fatalf("the container of a start ended in the readiness wait must be gone: %v", stateErr)
+	}
+}
