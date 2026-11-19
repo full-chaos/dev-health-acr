@@ -322,13 +322,11 @@ func splitDiffRows(t *testing.T, ctx context.Context, query readers.QueryClient,
 }
 
 // Two versions of one unit with the same computed_at, one reaching a
-// requested repository (or linked pull request) and one not: on one thread,
-// over two parts written in a known order with merges stopped, the old and the
-// new statements pick the same version (each keeps the first version it reads
-// at the top computed_at). Across threads the pick depends on the order the
-// thread states merge, in each query; old and new are then NOT guaranteed to
-// agree on such a tie. The tie only exists between unmerged parts: a merge
-// keeps the last inserted version.
+// requested repository (or linked pull request) and one not, over two parts
+// written in a known order with merges stopped: the old statements (with their
+// version picks ordered by workUnitVersionKey, latestRowKeyRead) and the new
+// ones pick the same version, the later insert, which is the version a merge
+// keeps.
 func TestInvestmentSplitStatementsPickTheSameVersionOnAComputedAtTieOnRealClickHouse(t *testing.T) {
 	ctx := context.Background()
 	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
