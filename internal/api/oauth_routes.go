@@ -472,19 +472,7 @@ func (a *App) logOAuthDependencyFailure(r *http.Request, step string, err error)
 		"step", step,
 		"failure_class", "oauth_dependency",
 	}
-	var class *storage.DependencyErrorClass
-	if errors.As(err, &class) {
-		attrs = append(attrs,
-			"db_error_class", class.Class,
-			"db_sqlstate", class.SQLState,
-		)
-		if class.Constraint != "" {
-			attrs = append(attrs, "db_constraint", class.Constraint)
-		}
-		if class.Table != "" {
-			attrs = append(attrs, "db_table", class.Table)
-		}
-	}
+	attrs = append(attrs, dependencyErrorClassAttrs(err)...)
 	a.logger.WarnContext(r.Context(), "oauth dependency failed", attrs...)
 }
 

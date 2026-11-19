@@ -242,6 +242,7 @@ func (a *App) writeReadDependencyError(w http.ResponseWriter, r *http.Request, e
 		writeError(w, r, http.StatusGatewayTimeout, "upstream_unavailable", "The read operation timed out", true, nil)
 		return
 	}
-	a.logger.ErrorContext(r.Context(), "hosted read dependency failed", "request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", failureClass)
+	attrs := append([]any{"request_id", contextfabric.SanitizeLogAttr(RequestID(r.Context())), "failure_class", failureClass}, dependencyErrorClassAttrs(err)...)
+	a.logger.ErrorContext(r.Context(), "hosted read dependency failed", attrs...)
 	writeError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "The read operation is temporarily unavailable", true, nil)
 }
