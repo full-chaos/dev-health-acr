@@ -458,9 +458,10 @@ func TestWorkUnitVersionKeyIsBuiltFromTheOpsLatestRowOrderKeyComponents(t *testi
 }
 
 // acr's ordinal and ops' latestrow.OrderKey pick the same row of every unit, on
-// a table of same-millisecond ties in two parts each (both insert orders) and a
-// unit whose newer computed_at was inserted first, before and after OPTIMIZE
-// FINAL; after the merge both pick the row the merge kept.
+// a table of same-millisecond ties in two parts each (both insert orders), a
+// same-millisecond pair in one part, and a unit whose newer computed_at was
+// inserted first, before and after OPTIMIZE FINAL; after the merge both pick
+// the row the merge kept.
 func TestWorkUnitVersionKeyOrdersLikeTheOpsLatestRowOrderKeyAgainstRealClickHouse(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -481,7 +482,20 @@ func TestWorkUnitVersionKeyOrdersLikeTheOpsLatestRowOrderKeyAgainstRealClickHous
 	} {
 		insertRunVersionAtMilli(t, ctx, direct, orgID, w.id, "", `{"issues":[],"prs":[]}`, w.theme, w.theme, w.at, at.Add(-time.Hour))
 	}
-	want := map[string]string{"tie-risk-last": "risk", "tie-quality-last": "quality", "newer-first": "risk"}
+	// Two versions of one unit in ONE insert, so one part: only _part_offset
+	// tells them apart. optimize_on_insert = 0 keeps both rows in the part.
+	span := at.Add(-time.Hour).Truncate(time.Second)
+	if err := direct.Exec(ctx, `INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)
+SETTINGS optimize_on_insert = 0
+SELECT 'same-part', ?, ?, NULL, 0, map(theme, 1.0), map(), ?, fromUnixTimestamp64Milli(?, 'UTC'), ?
+FROM (SELECT arrayJoin(['quality', 'risk']) AS theme)`, span, span, `{"issues":[],"prs":[]}`, at.UnixMilli(), orgID); err != nil {
+		t.Fatalf("insert the same-part pair: %v", err)
+	}
+	var samePart uint64
+	if err := direct.QueryRow(ctx, `SELECT uniqExact(_part) * 10 + count() FROM work_unit_investments WHERE org_id = ? AND work_unit_id = 'same-part'`, orgID).Scan(&samePart); err != nil || samePart != 12 {
+		t.Fatalf("the same-part pair is not two rows in one part (parts*10+rows = %d, %v)", samePart, err)
+	}
+	want := map[string]string{"tie-risk-last": "risk", "tie-quality-last": "quality", "newer-first": "risk", "same-part": "risk"}
 	pick := func(final string) map[string][2]string {
 		t.Helper()
 		rows, err := direct.Query(ctx, `SELECT work_unit_id,
