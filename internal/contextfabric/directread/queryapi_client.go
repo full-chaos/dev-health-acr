@@ -253,37 +253,71 @@ func listenerRefusalOf(body []byte) (ListenerRefusalClass, string) {
 	return "", ""
 }
 
-// errorEntry is the extensions.code and extensions.reason of one GraphQL error, each kept only when it is a
-// JSON string (a numeric code or an object reason leaves it empty).
-type errorEntry struct{ code, reason string }
+// errorEntry is the extensions.code, extensions.reason and path of one GraphQL error. code and reason are kept
+// only when they are JSON strings (a numeric code or an object reason leaves them empty); path only when it
+// is a JSON array.
+type errorEntry struct {
+	code, reason string
+	path         []json.RawMessage
+}
 
 // errorEntriesOf decodes each entry of the answer's errors list on its own, so an entry with metadata of an
-// unexpected type never hides a typed refusal in the same list (CHAOS-13999). A body that is not a JSON object
-// with an errors array yields nothing.
+// unexpected type never hides a typed refusal in the same list (CHAOS-13999). The protocol keys (errors,
+// extensions, code, reason, path) are looked up by exact name: encoding/json struct tags match
+// case-insensitively, so a differently cased key must not stand in for a canonical one (CHAOS-14024). A body
+// that is not a JSON object with an errors array yields nothing.
 func errorEntriesOf(body []byte) []errorEntry {
-	var answer struct {
-		Errors []json.RawMessage `json:"errors"`
-	}
-	if json.Unmarshal(body, &answer) != nil {
+	answer := objectFieldsOf(body)
+	var raws []json.RawMessage
+	if json.Unmarshal(answer["errors"], &raws) != nil {
 		return nil
 	}
-	entries := make([]errorEntry, 0, len(answer.Errors))
-	for _, raw := range answer.Errors {
-		var entry struct {
-			Extensions struct {
-				Code   json.RawMessage `json:"code"`
-				Reason json.RawMessage `json:"reason"`
-			} `json:"extensions"`
-		}
-		if json.Unmarshal(raw, &entry) != nil {
+	entries := make([]errorEntry, 0, len(raws))
+	for _, raw := range raws {
+		fields := objectFieldsOf(raw)
+		if fields == nil {
 			continue
 		}
 		var parsed errorEntry
-		_ = json.Unmarshal(entry.Extensions.Code, &parsed.code)
-		_ = json.Unmarshal(entry.Extensions.Reason, &parsed.reason)
+		extensions := objectFieldsOf(fields["extensions"])
+		_ = json.Unmarshal(extensions["code"], &parsed.code)
+		_ = json.Unmarshal(extensions["reason"], &parsed.reason)
+		_ = json.Unmarshal(fields["path"], &parsed.path)
 		entries = append(entries, parsed)
 	}
 	return entries
+}
+
+// objectFieldsOf returns the members of a JSON object keyed by their exact name, the first occurrence of a
+// duplicated key winning (as the struct decode it replaces kept a first value against a later null). It
+// returns nil for anything that is not a well-formed JSON object.
+func objectFieldsOf(raw []byte) map[string]json.RawMessage {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil
+	}
+	fields := map[string]json.RawMessage{}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		key, ok := keyTok.(string)
+		if err != nil || !ok {
+			return nil
+		}
+		var value json.RawMessage
+		if dec.Decode(&value) != nil {
+			return nil
+		}
+		if _, seen := fields[key]; !seen {
+			fields[key] = value
+		}
+	}
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return nil
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil
+	}
+	return fields
 }
 
 // Closed reasons of a listener 404 (ops mcp_route.go): a root the routing
@@ -345,24 +379,13 @@ func ReadBudgetReasonVocabulary() [4]ReadBudgetReason {
 // time_ceiling; anything else is unknown), or "" when the code is absent.
 // Nothing else of the body is kept.
 func ReadBudgetOf(body []byte) ReadBudgetReason {
-	var answer struct {
-		Errors []struct {
-			Extensions struct {
-				Code   string `json:"code"`
-				Reason string `json:"reason"`
-			} `json:"extensions"`
-		} `json:"errors"`
-	}
-	if json.Unmarshal(body, &answer) != nil {
-		return ""
-	}
-	for _, e := range answer.Errors {
-		if e.Extensions.Code != MCPReadBudgetExceededCode {
+	for _, entry := range errorEntriesOf(body) {
+		if entry.code != MCPReadBudgetExceededCode {
 			continue
 		}
-		switch ReadBudgetReason(e.Extensions.Reason) {
+		switch ReadBudgetReason(entry.reason) {
 		case ReadBudgetBytes, ReadBudgetRows, ReadBudgetTime:
-			return ReadBudgetReason(e.Extensions.Reason)
+			return ReadBudgetReason(entry.reason)
 		default:
 			return ReadBudgetUnknown
 		}
