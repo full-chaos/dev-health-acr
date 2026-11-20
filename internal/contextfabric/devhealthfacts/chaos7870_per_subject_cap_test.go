@@ -342,3 +342,47 @@ func TestChaos7870ProjectDisplayCutKeepsItsReading(t *testing.T) {
 		}
 	}
 }
+
+// In a mixed read with a cut team, a project whose own daily table is cut
+// reads truncated on its fact; a team without a cut reads available.
+func TestChaos7870MixedReadProjectWithItsOwnCutReadsTruncated(t *testing.T) {
+	t.Parallel()
+	var series [][]any
+	for i := 0; i < 100; i++ {
+		series = append(series, workloadDailySeriesRow("A", chaos7870DayString(i), 5, 1.5, 0.5))
+	}
+	for i := 0; i < 28; i++ {
+		series = append(series, workloadDailySeriesRow("B", chaos7870DayString(i), 5, 1.5, 0.5))
+	}
+	for i := 0; i < 70; i++ {
+		series = append(series, workloadDailySeriesRow("linear:proj-1", chaos7870DayString(i), 5, 1.5, 0.5))
+	}
+	client := &fakeClient{tables: []fakeTable{
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 1, 0, 0, 7, "team-p", "scope-p", false, false)}},
+		{match: workloadProjectRollupMatch, rows: [][]any{chaos5931WorkloadRow("linear", "proj-1", "team-p", "Team P", "scope-p", 1.5, 0.2, true, 7, false, false, 10)}},
+		{match: workloadForecastRunMatch, rows: [][]any{{"2026-09-27", uint64(254)}}},
+		{match: workloadBaseQueryMatch, rows: [][]any{workloadRow("A", "s"), workloadRow("B", "s")}},
+		{match: workloadDailySeriesMatch, rows: series, honorLimit: true},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactWorkload, Subjects: []contextfabric.SubjectRef{teamSubject("A"), teamSubject("B"), projectSubject("linear", "proj-1")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	want := map[string]contextfabric.SourceState{"team:A": contextfabric.SourceTruncated, "team:B": contextfabric.SourceAvailable}
+	for _, fact := range result.Facts {
+		state, isTeam := want[fact.Subject.CanonicalID]
+		if !isTeam {
+			state = contextfabric.SourceTruncated
+		}
+		if fact.SourceState != state {
+			t.Errorf("%s source state = %q, want %q", fact.Subject.CanonicalID, fact.SourceState, state)
+		}
+	}
+	if len(result.Facts) != 3 {
+		t.Fatalf("facts = %d, want 3", len(result.Facts))
+	}
+}

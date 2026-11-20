@@ -1545,12 +1545,18 @@ func withRowLimitPerKey(statement, key string, keys int) string {
 }
 
 // factOmittedRowCount sums the integer daily_*_omitted_count fields a fact carries: the rows a daily table lost.
-// Only a team's table counts: a project's daily series keep their earlier reading.
+// Only a team's table counts here: a project's daily series keep their earlier
+// reading, so a project's own cut never makes a read subject-local.
 func factOmittedRowCount(fact contextfabric.CanonicalFact) int64 {
-	var total int64
 	if fact.Subject.Kind != contextfabric.SubjectTeam {
 		return 0
 	}
+	return factDailyOmittedCount(fact)
+}
+
+// factDailyOmittedCount sums the daily_*_omitted_count fields of any fact.
+func factDailyOmittedCount(fact contextfabric.CanonicalFact) int64 {
+	var total int64
 	for name, value := range fact.Fields {
 		if strings.HasPrefix(name, "daily_") && strings.HasSuffix(name, "_omitted_count") && value.Integer != nil {
 			total += *value.Integer
@@ -1580,7 +1586,7 @@ func markSubjectLocalCuts(facts []contextfabric.CanonicalFact, omitted int) bool
 		if facts[index].SourceState != "" {
 			continue
 		}
-		if factOmittedRowCount(facts[index]) > 0 {
+		if factDailyOmittedCount(facts[index]) > 0 {
 			facts[index].SourceState = contextfabric.SourceTruncated
 		} else {
 			facts[index].SourceState = contextfabric.SourceAvailable
