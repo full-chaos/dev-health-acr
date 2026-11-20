@@ -57,6 +57,17 @@ Limit: root `catalog` compares only `owner/name` repository names, as the ops re
 inventory lists only those. The capture reports every other name (for example a GitLab
 nested-group slug) as "not joined: N", never as a silent drop.
 
+### What O4 does not measure
+
+- The issue-size weighting of repository effort (see above).
+- Repository names that are not `owner/name` slugs in root `catalog` (reported as not joined).
+- Two acceptance gate cells, NOT MEASURED by name: `AcceptanceGate/NullRepoID` and
+  `TeamRollupLossWithNoNullRowIsAFinding`. Reason: no team-owned repository with in-scope effort
+  in the window, because membership has no manual ops trigger (only a daily scheduler fanout), so
+  the only membership run comes from the `_mg` world, whose repository no team owns. They are
+  listed in `internal/contextfabric/factoracle/testdata/venue/not_measured_gates.json`; the gate
+  fails when a listed cell could be measured on the capture, or when any other cell is not.
+
 ### Venue steps before the capture
 
 - Project the graph of the organization (acr-projector) and stop it: acr-api reads subjects

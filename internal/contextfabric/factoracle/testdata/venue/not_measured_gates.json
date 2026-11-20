@@ -1,0 +1,4 @@
+{
+  "AcceptanceGate/NullRepoID": "no team-owned repository with in-scope effort in the window: membership has no manual ops trigger",
+  "TeamRollupLossWithNoNullRowIsAFinding": "no team-owned repository with in-scope effort in the window: membership has no manual ops trigger"
+}

@@ -2,7 +2,9 @@ package factoracle
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
+	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -182,6 +184,50 @@ func wantPlanted(t *testing.T, rr *RootReport, pair string, want Class, values m
 // window without the capture day (Oracle.analyticsWindow).
 func gateWindow(m Manifest) Window {
 	return (&Oracle{Window: m.Window, Today: captureDay(m)}).analyticsWindow()
+}
+
+// notMeasuredGatesFile lists the gate cells the capture cannot build, each with
+// the reason. Only the cells in measurableOnlyIfOwned may be listed; a listed
+// cell the capture can build fails, and so does an unlisted cell with no unit.
+const notMeasuredGatesFile = captureDir + "/not_measured_gates.json"
+
+// measurableOnlyIfOwned are the cells that need a team-owned repository with
+// in-scope work-unit effort in the window.
+var measurableOnlyIfOwned = []string{"AcceptanceGate/NullRepoID", "TeamRollupLossWithNoNullRowIsAFinding"}
+
+func notMeasuredGates(t *testing.T) map[string]string {
+	t.Helper()
+	raw, err := os.ReadFile(notMeasuredGatesFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return map[string]string{}
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out map[string]string
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("%s: %v", notMeasuredGatesFile, err)
+	}
+	return out
+}
+
+// noOwnedEffort ends a cell whose capture holds no team-owned repository with
+// in-scope effort: NOT MEASURED when the cell is listed, a failure when not.
+func noOwnedEffort(t *testing.T, gate string) {
+	t.Helper()
+	reason, listed := notMeasuredGates(t)[gate]
+	if !listed {
+		t.Fatalf("%s: no team owns a repository with effort in the window and the cell is not listed in %s: the gate is not measured", gate, notMeasuredGatesFile)
+	}
+	t.Skipf("%s: NOT MEASURED (%s)", gate, reason)
+}
+
+// ownedEffortFound fails a listed cell whose capture holds its unit.
+func ownedEffortFound(t *testing.T, gate string) {
+	t.Helper()
+	if _, listed := notMeasuredGates(t)[gate]; listed {
+		t.Fatalf("%s is listed in %s but the capture holds a team-owned repository with effort: remove it from the list", gate, notMeasuredGatesFile)
+	}
 }
 
 func directUnit(t *testing.T, extract *Extract, window Window) (id string, row Row) {
@@ -456,8 +502,9 @@ func acceptanceGateNullRepoID(t *testing.T) {
 		}
 	}
 	if team == "" {
-		t.Fatal("no team owns a repository with effort in the window: the gate case cannot be built")
+		noOwnedEffort(t, "AcceptanceGate/NullRepoID")
 	}
+	ownedEffortFound(t, "AcceptanceGate/NullRepoID")
 
 	// Reference: every valid ownership row of the team for that repository
 	// loses its repo_id and keeps its name. ops resolves such a row by name
@@ -535,8 +582,9 @@ func teamRollupLossWithNoNullRowIsAFinding(t *testing.T) {
 		}
 	}
 	if team == "" {
-		t.Fatal("no team owns a repository with effort in the window")
+		noOwnedEffort(t, "TeamRollupLossWithNoNullRowIsAFinding")
 	}
+	ownedEffortFound(t, "TeamRollupLossWithNoNullRowIsAFinding")
 	planted := extract.Clone()
 	var kept []Row
 	for _, row := range planted.Tables[tableTeamRepoOwnership] {
@@ -730,4 +778,17 @@ func teamDeniedForInvestment(manifest Manifest, team string) bool {
 		}
 	}
 	return false
+}
+
+// TestTheNotMeasuredGateListNamesOnlyTheOwnedRepositoryCells: the list may
+// name only the cells that need a team-owned repository, each with a reason.
+func TestTheNotMeasuredGateListNamesOnlyTheOwnedRepositoryCells(t *testing.T) {
+	for gate, reason := range notMeasuredGates(t) {
+		if !slices.Contains(measurableOnlyIfOwned, gate) {
+			t.Errorf("%s names %q, which may not be NOT MEASURED", notMeasuredGatesFile, gate)
+		}
+		if strings.TrimSpace(reason) == "" {
+			t.Errorf("%s: %s names no reason", notMeasuredGatesFile, gate)
+		}
+	}
 }
