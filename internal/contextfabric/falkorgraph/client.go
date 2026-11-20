@@ -618,6 +618,15 @@ func safeDependencyError(operation string, err error) error {
 			return fmt.Errorf("%s: %w", operation, sentinel)
 		}
 	}
+	// The residual keeps the driver cause as a closed class: a second call
+	// on an already flattened error keeps the first call's cause.
+	cause := DependencyCauseOther
+	var flattened *dependencyError
+	if errors.As(err, &flattened) {
+		cause = flattened.cause
+	} else if class, _ := readFailureCause(err); class != "" {
+		cause = class
+	}
 	// CHAOS-4874: the unclassified residual is the arm that eats a genuine
 	// connection-refused, a dropped-mid-handshake EOF and a TLS alert (see
 	// classifyConnError's own doc comment above). Before this wrap it
@@ -627,5 +636,23 @@ func safeDependencyError(operation string, err error) error {
 	// is the honest neutral class: a bounded dependency failure a caller may
 	// retry. Only the sentinel's own text joins the message -- the driver's
 	// text is still never included, which is this function's whole purpose.
-	return fmt.Errorf("context fabric graph dependency error during %s: %w", operation, contextfabric.ErrUnavailable)
+	return &dependencyError{operation: operation, cause: cause}
 }
+
+// dependencyError is safeDependencyError's residual result. Its text is the
+// generic served text and it unwraps to contextfabric.ErrUnavailable only:
+// the raw driver error is not in the chain, so no caller can reach its text
+// or address. DependencyCause names the driver cause from the closed read
+// failure vocabulary (read_retry.go) or DependencyCauseOther.
+type dependencyError struct {
+	operation string
+	cause     string
+}
+
+func (e *dependencyError) Error() string {
+	return "context fabric graph dependency error during " + e.operation + ": " + contextfabric.ErrUnavailable.Error()
+}
+
+func (e *dependencyError) Unwrap() error { return contextfabric.ErrUnavailable }
+
+func (e *dependencyError) DependencyCause() string { return e.cause }

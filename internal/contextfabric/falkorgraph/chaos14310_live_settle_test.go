@@ -49,7 +49,8 @@ func settleWith(ctx context.Context, addr string, tries int, pause time.Duration
 			}
 		}
 	}
-	return fmt.Errorf("FalkorDB live dependency at %s unavailable after %d tries over %s: %w", addr, tries, time.Since(began).Round(time.Millisecond), last)
+	cause, _ := contextfabric.DependencyCause(last)
+	return fmt.Errorf("FalkorDB live dependency at %s unavailable after %d tries over %s (driver cause %q): %w", addr, tries, time.Since(began).Round(time.Millisecond), cause, last)
 }
 
 func retryableSettleError(err error) bool {
