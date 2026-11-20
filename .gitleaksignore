@@ -57,3 +57,13 @@ c1dd2c9024876d862b2dd5265ce00c3340587f0a:internal/contextfabric/factoracle/testd
 6ec9385bd4426371bb7f2c37aa58c1be30041aad:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18651
 6ec9385bd4426371bb7f2c37aa58c1be30041aad:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18656
 6ec9385bd4426371bb7f2c37aa58c1be30041aad:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18661
+# O4 venue capture (membership trigger re-capture): scrubber pseudonyms (h- + 16 hex) in replies.json, not credentials
+6acea2abd3796d37a0f085264540ced25f8c263b:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:3115
+6acea2abd3796d37a0f085264540ced25f8c263b:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:3130
+6acea2abd3796d37a0f085264540ced25f8c263b:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:3145
+6acea2abd3796d37a0f085264540ced25f8c263b:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:3186
+6acea2abd3796d37a0f085264540ced25f8c263b:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:3201
+6acea2abd3796d37a0f085264540ced25f8c263b:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:3216
+6acea2abd3796d37a0f085264540ced25f8c263b:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:19734
+6acea2abd3796d37a0f085264540ced25f8c263b:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:19749
+6acea2abd3796d37a0f085264540ced25f8c263b:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:19764
