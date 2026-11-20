@@ -330,8 +330,6 @@ services:
     extends: { file: "${O4_VENUE_OPS_DIR}/compose.yml", service: go-worker-ops }
     profiles: [o4-derive]
     labels: !reset {}
-    # Investment categories come from the ops mock provider, never a model (docs/o4-venue.md).
-    environment: { LLM_PROVIDER: mock }
     command:
       - worker
       - --queues=${O4_VENUE_WORKER_QUEUES}
@@ -556,9 +554,14 @@ step_counts() {
   for table in $COUNT_TABLES; do
     n="$(table_count "$table" "$org")"
     printf '%s\t%s\n' "$table" "$n"
-    if [ "$n" = 0 ] && [ "$table" != work_unit_supersessions ]; then zero=$((zero + 1)); fi
+    case "$table" in
+      work_unit_supersessions) ;;
+      # Seeded empty by design (factoracle extract.go seededEmptyTables): a row breaks the weight-1 pairs.
+      work_unit_issue_size) [ "$n" = 0 ] || { note "P0: work_unit_issue_size holds ${n} rows; it must be empty"; zero=$((zero + 1)); } ;;
+      *) [ "$n" != 0 ] || zero=$((zero + 1)) ;;
+    esac
   done
-  [ "$zero" = 0 ] || die "P0: ${zero} table(s) hold no row of the organization"
+  [ "$zero" = 0 ] || die "P0: ${zero} table(s) fail the rule (rows > 0; work_unit_issue_size exactly 0)"
   note 'P0: every table holds rows of the organization'
 }
 
@@ -678,7 +681,7 @@ ACR_O4_CLICKHOUSE_DSN_FILE=${SECRETS}/o4-clickhouse.dsn
 ACR_O4_ORG_ID=${org}
 ACR_O4_OPS_BUILD="dev-health-ops ${O4_VENUE_OPS_COMMIT} ${O4_VENUE_OPS_TAG}"
 ACR_O4_ACR_BUILD="dev-health-acr ${O4_VENUE_ACR_TAG}"
-ACR_O4_VENUE_NOTE="synthetic organization (ops fixtures generate); investment categories come from the ops mock provider (LLM_PROVIDER=mock), not from a model"
+ACR_O4_VENUE_NOTE="synthetic organization (ops fixtures generate); work_unit_issue_size is empty, so every work unit has weight 1: the issue-size weighting of repository effort (ops internal/queryapi/analytics/sankeycoverage.go:320-322) is NOT MEASURED by O4"
 EOF
 )
   note "env file written (0600): ${ENV_FILE}"

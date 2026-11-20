@@ -26,9 +26,7 @@ Seed one synthetic organization; never use real or production data. ops provides
 the seed and the derive chain, run from the same ops image:
 
 1. `dho fixtures generate --sink <clickhouse dsn> --db-type clickhouse --org <org> --provider mixed --repo-name chaos-fixtures/shared-api --repo-count 18 --days 180 --commits-per-day 0 --pr-count 189 --team-count 8 --seed 9440`
-2. With a reconciler and a worker on the queues `investment,metrics,reports,workgraph`, the
-   worker with `LLM_PROVIDER=mock`: the investment categories then come from the ops mock
-   provider, not from a model, and the capture says so (`venue_note` in the manifest):
+2. With a reconciler and a worker on the queues `investment,metrics,reports,workgraph`:
    `dho workers metrics daily-start --org <org> --day <first> --to <last>` (at most 31 days),
    `dho workers investment trigger --org <org> --review-evidence testing`,
    `dho workers workgraph trigger --org <org> --review-evidence testing`; when those jobs are
@@ -36,8 +34,14 @@ the seed and the derive chain, run from the same ops image:
    (the forecast reads the daily metrics). Each verb takes `--reason` and `--correlation-id`.
    Stop the worker and the reconciler before the capture: a store that moves during the run
    is refused.
-3. If `work_unit_investments` or `work_unit_membership_runs` stays empty (membership has no manual ops trigger), also load the `_mg` world for the same
+3. If `work_unit_investments` or `work_unit_membership_runs` stays empty (the venue has no LLM
+   provider, and membership has no manual ops trigger), also load the `_mg` world for the same
    organization (`--provider synthetic --repo-name acme/live-e2e --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph --allow-mixed-org`).
+
+`work_unit_issue_size` must stay empty (acr seeds it empty: every work unit has weight 1, the
+weight the pairs are recorded under). Limit: the issue-size weighting of repository effort
+(ops `internal/queryapi/analytics/sankeycoverage.go:320-322`) is NOT MEASURED by O4. The
+capture manifest says so in `venue_note`.
 
 ### Venue steps before the capture
 
@@ -88,7 +92,7 @@ export O4_VENUE_OPS_DIR=<ops checkout at the pin>
 scripts/e2e/o4-venue.sh check    # tools, host load and disk gates, free ports and subnets
 scripts/e2e/o4-venue.sh up       # pinned images, empty volumes, synthetic organization
 scripts/e2e/o4-venue.sh seed     # world + derive chain + graph; worker, reconciler, projector stop
-scripts/e2e/o4-venue.sh counts   # rows per table for the organization (all > 0)
+scripts/e2e/o4-venue.sh counts   # rows per table (all > 0; work_unit_issue_size exactly 0)
 scripts/e2e/o4-venue.sh token    # MCP credential from this project's acr-api (0600)
 scripts/e2e/o4-venue.sh routes   # MCP class roots on; the admin token is removed after use
 scripts/e2e/o4-venue.sh env      # writes <state>/o4.env (0600)
