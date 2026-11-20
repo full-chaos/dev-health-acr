@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,14 +17,16 @@ import (
 // 600 positions of two statement rows each (a page reads 100 of them), so every page but the last ends at the
 // last row of full once a row of table later lies past it. The repository rows give each page a batch to apply.
 type boundedRetryRig struct {
-	t         *testing.T
-	plan      sourcePlan
-	logs      *bytes.Buffer
-	repos     *liveKeysetRows
-	later     keysetRows
-	failAfter string
-	now       time.Time
-	frontier  cursorState
+	t                               *testing.T
+	plan                            sourcePlan
+	logs                            *bytes.Buffer
+	repos                           *liveKeysetRows
+	later                           keysetRows
+	failAfter                       string
+	failAtLines                     int
+	reads, failAtRead, failedAtRead int
+	now                             time.Time
+	frontier                        cursorState
 }
 
 var errBoundedRetryRead = errors.New("read of table full failed")
@@ -45,6 +48,14 @@ func newBoundedRetryRig(t *testing.T) *boundedRetryRig {
 	query := fullTable.query
 	fullTable.query = func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 		if r.failAfter != "" && cursor.After == r.failAfter {
+			return nil, false, errBoundedRetryRead
+		}
+		r.reads++
+		if r.failAtLines > 0 && strings.Count(r.logs.String(), boundedPageMessage) >= r.failAtLines {
+			r.failedAtRead = r.reads
+			return nil, false, errBoundedRetryRead
+		}
+		if r.failAtRead > 0 && r.reads == r.failAtRead {
 			return nil, false, errBoundedRetryRead
 		}
 		return query(ctx, client, orgID, cursor, limit)
@@ -70,6 +81,7 @@ func newBoundedRetryRig(t *testing.T) *boundedRetryRig {
 // call runs one overlap call and returns the batch's ack, empty when no batch was emitted.
 func (r *boundedRetryRig) call() (string, error) {
 	r.t.Helper()
+	r.reads = 0
 	cursor, err := encodeCursor(r.frontier)
 	if err != nil {
 		r.t.Fatal(err)
@@ -303,25 +315,78 @@ func TestBoundedPageLineIsNotWrittenAgainWhenOneCallRunsTwoPasses(t *testing.T) 
 	}
 }
 
-// boundedWarnedPasses is sized by this: with no pause between passes one call starts at most one pass, so it
-// touches at most that one and the resumed pass it ended.
-func TestOneCallStartsAtMostOnePassSoItTouchesBoundedWarnedPasses(t *testing.T) {
+const boundedPageMessage = "devhealthsource page ended at the last row a truncated table returned"
+
+// retriesAcrossAPassBoundary runs four attempts of the call that ends the resumed pass B and starts a successor,
+// each failing the way failed says (an unacknowledged batch, or a table read that fails right after the
+// successor's line), with the frontier fixed or moving on each attempt. B writes its line once. Every window the
+// successor starts on writes one more, once, so the lines are 1 + the windows.
+func retriesAcrossAPassBoundary(t *testing.T, failed, advance bool) *boundedRetryRig {
+	t.Helper()
 	r := twoPassCallRig(t)
-	most := 0
-	for call := 0; call < 40; call++ {
-		before := r.seq()
-		ack, err := r.call()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if ack != "" {
-			r.plan.window.settle(r.plan.windowScope, ack)
-		}
-		if started := r.seq() - before; started > most {
-			most = started
-		}
+	if failed {
+		r.repos.rows = r.repos.rows[:len(r.repos.rows)-1]
 	}
-	if most != 1 || boundedWarnedPasses != most+1 {
-		t.Fatalf("a call started at most %d passes (want 1), boundedWarnedPasses = %d (want that plus the resumed pass)", most, boundedWarnedPasses)
+	base := r.frontier
+	lines := func() int { return len(boundedPageLines(t, r.logs)) }
+	windows := map[time.Time]bool{}
+	for attempt := 1; attempt <= 4; attempt++ {
+		if advance {
+			r.frontier = cursorState{Since: base.Since.Add(time.Duration(attempt) * time.Minute), After: base.After}
+		}
+		windows[r.frontier.Since] = true
+		if failed {
+			// The first attempt fails right after the successor's line; the later ones fail at the same read.
+			if attempt == 1 {
+				r.failAtLines = lines() + 1
+			} else {
+				r.failAtLines, r.failAtRead = 0, r.failedAtRead
+			}
+			if _, err := r.call(); !errors.Is(err, errBoundedRetryRead) {
+				t.Fatalf("attempt %d: err = %v, want the read failure after the successor's line", attempt, err)
+			}
+		} else {
+			if ack, err := r.call(); err != nil || ack == "" {
+				t.Fatalf("attempt %d: ack=%q err=%v, want the batch of the row that landed late", attempt, ack, err)
+			}
+			r.plan.window.settle(r.plan.windowScope, "")
+		}
+		if want := 1 + len(windows); lines() != want {
+			t.Fatalf("after attempt %d the passes wrote %d bounded-page lines, want %d: the resumed pass once and one per window of its successor", attempt, lines(), want)
+		}
+		r.plan.window.settle(r.plan.windowScope, "")
+	}
+	return r
+}
+
+func TestBoundedPageLineOfAResumedPassIsNotRepeatedAcrossAPassBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		failed, advance bool
+	}{
+		{"unacked batch, fixed frontier", false, false},
+		{"unacked batch, frontier advances", false, true},
+		{"failed read, fixed frontier", true, false},
+		{"failed read, frontier advances", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) { retriesAcrossAPassBoundary(t, tc.failed, tc.advance) })
+	}
+}
+
+// The markers kept are bounded by the failed attempts since the last acknowledged batch, and an acknowledged
+// batch leaves the live pass only.
+func TestBoundedPageMarkersAreBoundedByFailedAttemptsAndPrunedByAnAck(t *testing.T) {
+	r := retriesAcrossAPassBoundary(t, false, true)
+	scope := r.plan.window.scopes[r.plan.windowScope]
+	if got := len(scope.boundedWarned); got != 5 {
+		t.Fatalf("after 4 failed attempts the memo keeps %d markers, want at most 4 + 1: the resumed pass and one window per attempt", got)
+	}
+	ack, err := r.call()
+	if err != nil || ack == "" {
+		t.Fatalf("ack attempt: ack=%q err=%v, want a batch", ack, err)
+	}
+	r.plan.window.settle(r.plan.windowScope, ack)
+	if got := len(scope.boundedWarned); got != 1 {
+		t.Fatalf("after an acknowledged batch the memo keeps %d markers, want the live pass only", got)
 	}
 }

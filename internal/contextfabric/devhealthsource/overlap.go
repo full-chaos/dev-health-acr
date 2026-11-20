@@ -115,22 +115,15 @@ type windowScope struct {
 	recon map[string]reconcilePass
 	// ahead says the scope's last paged read stopped with rows beyond it.
 	ahead bool
-	// boundedWarned holds the identities of the last passes that wrote their
-	// bounded-page line (boundedWarnedPasses of them, newest at the end). It sits
-	// outside windowPass: a rollback of the pass (an unacknowledged batch, a
-	// failed read) must not make the retry of that page write it again. A
-	// rollback also puts seq back, so the retry that starts the pass again has
-	// the same identity; a later pass differs by seq, or, when the frontier moved
-	// before it started, by its window.
-	boundedWarned [boundedWarnedPasses]passIdentity
+	// boundedWarned holds the identities of the passes that wrote their
+	// bounded-page line and that a rollback can still revisit. It sits outside
+	// windowPass: a rollback of the pass (an unacknowledged batch, a failed read)
+	// must not make the retry of that page write it again. A rollback also puts
+	// seq back, so the retry that starts the pass again has the same identity; a
+	// later pass differs by seq, or, when the frontier moved before it started,
+	// by its window. settle prunes it (pruneBoundedWarned).
+	boundedWarned []passIdentity
 }
-
-// boundedWarnedPasses is how many passes one overlapBatch call can touch: the
-// resumed pass it ends and the one pass it starts after it (the completed flag
-// below allows one restart); a pass the call itself started never restarts in
-// that call. A rollback goes back at most that far, so these are the markers a
-// retry can need.
-const boundedWarnedPasses = 2
 
 // pendingWindow is an emitted window batch whose rows are not yet "seen":
 // the pass as it stood before the batch was built, and the batch's rows.
@@ -313,15 +306,18 @@ func (m *windowMemo) settle(scope, ack string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sc := m.scopes[scope]
-	if sc == nil || sc.pending == nil {
+	if sc == nil {
 		return
 	}
-	if ack != "" && ack == sc.pending.ack {
-		sc.recordLocked(sc.pending.rows, sc.pending.overlap)
-	} else {
-		sc.windowPass = sc.pending.before
+	if sc.pending != nil {
+		if ack != "" && ack == sc.pending.ack {
+			sc.recordLocked(sc.pending.rows, sc.pending.overlap)
+		} else {
+			sc.windowPass = sc.pending.before
+		}
+		sc.pending = nil
 	}
-	sc.pending = nil
+	sc.pruneBoundedWarned()
 }
 
 func (m *windowMemo) unseen(scope string, all []candidate) []candidate {
@@ -362,15 +358,7 @@ func (m *windowMemo) boundedWarned(scope string, id passIdentity) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sc := m.scopes[scope]
-	if sc == nil {
-		return false
-	}
-	for _, warned := range sc.boundedWarned {
-		if warned.same(id) {
-			return true
-		}
-	}
-	return false
+	return sc != nil && slices.ContainsFunc(sc.boundedWarned, id.same)
 }
 
 func (m *windowMemo) markBoundedWarned(scope string, id passIdentity) {
@@ -380,8 +368,24 @@ func (m *windowMemo) markBoundedWarned(scope string, id passIdentity) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sc := m.scopeLocked(scope)
-	copy(sc.boundedWarned[:], sc.boundedWarned[1:])
-	sc.boundedWarned[boundedWarnedPasses-1] = id
+	if !slices.ContainsFunc(sc.boundedWarned, id.same) {
+		sc.boundedWarned = append(sc.boundedWarned, id)
+	}
+}
+
+// pruneBoundedWarned drops the markers no rollback can reach. A rollback puts
+// the pass back to pending.before, a copy of the stored pass taken at the start
+// of the latest call, and a later call starts from the stored pass: its seq
+// never falls below the stored one, so a pass of an older seq is never run
+// again, and neither is another window of the stored seq (the stored pass is
+// the one running; a retry that starts another window starts a later seq or is
+// the stored pass itself). What stays: the stored pass and every later seq, one
+// window per failed attempt since the last acknowledged batch.
+func (sc *windowScope) pruneBoundedWarned() {
+	live := sc.windowPass.identity()
+	sc.boundedWarned = slices.DeleteFunc(sc.boundedWarned, func(id passIdentity) bool {
+		return id.seq < live.seq || (id.seq == live.seq && !id.same(live))
+	})
 }
 
 func (m *windowMemo) setPass(scope string, pass windowPass) {
@@ -407,7 +411,7 @@ func (m *windowMemo) snapshot() *windowMemo {
 	defer m.mu.Unlock()
 	out := newWindowMemo()
 	for scope, sc := range m.scopes {
-		copied := &windowScope{seen: make(map[string]time.Time, len(sc.seen)), windowPass: sc.windowPass, boundedWarned: sc.boundedWarned}
+		copied := &windowScope{seen: make(map[string]time.Time, len(sc.seen)), windowPass: sc.windowPass, boundedWarned: slices.Clone(sc.boundedWarned)}
 		if sc.recon != nil {
 			copied.recon = make(map[string]reconcilePass, len(sc.recon))
 			for name, rs := range sc.recon {
