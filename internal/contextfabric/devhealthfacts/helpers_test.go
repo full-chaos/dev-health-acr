@@ -181,12 +181,26 @@ func (t fakeTable) rowsFor(statement string) [][]any {
 	return t.rows
 }
 
+var limitByKey = regexp.MustCompile(`\nLIMIT (\d+) BY [^\n]+\nLIMIT \d+\s*$`)
+
 var trailingLimit = regexp.MustCompile(`\nLIMIT (\d+)\s*$`)
 
 // limitedRows applies the statement's own trailing LIMIT to canned rows, as the
 // server would, so a case that returns more rows than the statement admits
 // reads only what the statement admits.
 func limitedRows(statement string, rows [][]any) [][]any {
+	if m := limitByKey.FindStringSubmatch(statement); m != nil {
+		per, _ := strconv.Atoi(m[1])
+		seen := map[any]int{}
+		var kept [][]any
+		for _, row := range rows {
+			if seen[row[0]] < per {
+				seen[row[0]]++
+				kept = append(kept, row)
+			}
+		}
+		rows = kept
+	}
 	if m := trailingLimit.FindStringSubmatch(statement); m != nil {
 		if limit, err := strconv.Atoi(m[1]); err == nil && len(rows) > limit {
 			return rows[:limit]

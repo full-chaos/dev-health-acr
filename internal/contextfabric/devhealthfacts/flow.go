@@ -102,7 +102,7 @@ func (p *FlowProvider) ReadFacts(ctx context.Context, principal storage.Principa
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team flow", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery || rowsOmitted > 0
+		truncated = truncated || rowCount >= maxFactRowsPerQuery
 		omittedRows += rowsOmitted
 		rejectedCount += rejected
 	}
@@ -126,8 +126,16 @@ func (p *FlowProvider) ReadFacts(ctx context.Context, principal storage.Principa
 		rejectedCount += rejected
 	}
 
+	// Rows the provider dropped and named on the facts that lost them are a
+	// subject-local cut when nothing else truncated the read.
+	subjectLocal := !truncated && markSubjectLocalCuts(facts, omittedRows)
+	if subjectLocal {
+		omittedRows = 0
+	}
+	truncated = truncated || omittedRows > 0 || subjectLocal
+
 	state, retentionReason := timeBound.retentionState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated, OmittedCount: omittedRows}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated, OmittedCount: omittedRows, TruncationSubjectLocal: subjectLocal}
 	return result, nil
 }
 
@@ -321,7 +329,7 @@ func (r flowDailyRow) toFactValueRow() contextfabric.FactValueRow {
 // GROUP BY sums each day's scopes into one row per (team_id, day), so a
 // multi-scope team still yields exactly one time_series point per day.
 func (p *FlowProvider) queryTeamFlowDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]flowDailyRow, err error) {
-	statement := withRowLimit(`SELECT toString(team_id), toString(day), toInt64(sum(items_started)), toInt64(sum(items_completed)), toInt64(sum(wip_count_end_of_day)),
+	seriesSQL := `SELECT toString(team_id), toString(day), toInt64(sum(items_started)), toInt64(sum(items_completed)), toInt64(sum(wip_count_end_of_day)),
 	` + flowMeasureAggregateSQL("", flowMeasureBugCompletedRatio, "avgIf") + `,
 	` + flowMeasureAggregateSQL("", flowMeasureStoryPointsCompleted, "sumIf") + `
 FROM (
@@ -332,7 +340,8 @@ FROM (
 )
 WHERE rn = 1
 GROUP BY team_id, day
-ORDER BY team_id, day DESC`)
+ORDER BY team_id, day DESC`
+	statement := withRowLimitPerKey(seriesSQL, "team_id", len(ids))
 	byTeam = make(map[string][]flowDailyRow)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r flowDailyRow
@@ -464,20 +473,9 @@ func (p *FlowProvider) readTeamFlow(ctx context.Context, orgID string, subjects 
 	if seriesErr != nil {
 		return rowCount, 0, rejected, seriesErr
 	}
-	// codex CHAOS-4645 round-1 P2 (EXECUTED): the daily-series query carries
-	// its OWN withRowLimit(200) cap, shared across every requested team in
-	// ONE query -- distinct from queryTeamScopeRows' own rowCount above. Five
-	// teams x 50 days each can silently drop an entire team's daily_flow rows
-	// under the shared LIMIT while the legacy scope_breakdown read (~1
-	// row/team) never comes close to it, so Truncated must also reflect this
-	// query hitting its own cap, not only the legacy one.
-	dailySeriesRowCount := 0
-	for _, rows := range dailyByTeam {
-		dailySeriesRowCount += len(rows)
-	}
-	if dailySeriesRowCount > rowCount {
-		rowCount = dailySeriesRowCount
-	}
+	// The daily-series query caps each team's own rows (withRowLimitPerKey),
+	// so a team that fills the cap cannot starve another; a team cut by the
+	// display cap names it on its own fact (daily_flow_omitted_count).
 	windowByTeam, windowErr := p.queryTeamFlowWindowTotals(ctx, orgID, ids, timeBound)
 	if windowErr != nil {
 		return rowCount, 0, rejected, windowErr

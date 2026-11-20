@@ -225,7 +225,7 @@ func workloadDailyTable(rows []workloadDailyRow, grain contextfabric.TemporalGra
 // never distinct scopes or distinct days, which the row_number() partition
 // above is what actually resolves.
 func (p *WorkloadProvider) queryTeamWorkloadDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]workloadDailyRow, err error) {
-	statement := withRowLimit(`SELECT toString(team_id), toString(toDate(computed_at)), toInt64(sum(backlog_size)), sum(throughput_mean), sqrt(sum(pow(throughput_stddev, 2)))
+	seriesSQL := `SELECT toString(team_id), toString(toDate(computed_at)), toInt64(sum(backlog_size)), sum(throughput_mean), sqrt(sum(pow(throughput_stddev, 2)))
 FROM (
 	SELECT ifNull(team_id, '') AS team_id, work_scope_id, computed_at, backlog_size, throughput_mean, throughput_stddev,
 		row_number() OVER (PARTITION BY team_id, work_scope_id, toDate(computed_at) ORDER BY computed_at DESC, forecast_id DESC) AS rn
@@ -234,7 +234,8 @@ FROM (
 )
 WHERE rn = 1
 GROUP BY team_id, toDate(computed_at)
-ORDER BY team_id, toDate(computed_at) DESC`)
+ORDER BY team_id, toDate(computed_at) DESC`
+	statement := withRowLimitPerKey(seriesSQL, "team_id", len(ids))
 	byTeam = make(map[string][]workloadDailyRow)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r workloadDailyRow
@@ -337,13 +338,11 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 	if seriesErr != nil {
 		return 0, rejected, seriesErr
 	}
-	// codex CHAOS-4645 round-1 P2 (EXECUTED): see flow.go's readTeamFlow
-	// identical note -- the daily-series query's own withRowLimit(200) cap,
-	// shared across every requested team in one query, must also surface as
-	// Truncated.
+	// The daily-series query caps each team's own rows; the largest one is
+	// folded into rowCount so a team hitting its own cap reads as truncated.
 	dailySeriesRowCount := 0
 	for _, dailyRows := range dailyByTeam {
-		dailySeriesRowCount += len(dailyRows)
+		dailySeriesRowCount = max(dailySeriesRowCount, len(dailyRows))
 	}
 	rowCount := len(rows)
 	if dailySeriesRowCount > rowCount {

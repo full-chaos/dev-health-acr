@@ -1537,6 +1537,42 @@ func withRowLimitOf(statement string, limit int) string {
 	return statement + "\nLIMIT " + strconv.Itoa(limit)
 }
 
+// withRowLimitPerKey bounds each key's own rows to maxFactRowsPerQuery, so one
+// subject that fills the cap cannot starve the next; the outer LIMIT only
+// bounds the whole read at that cap times the number of keys.
+func withRowLimitPerKey(statement, key string, keys int) string {
+	return statement + "\nLIMIT " + strconv.Itoa(maxFactRowsPerQuery) + " BY " + key + "\nLIMIT " + strconv.Itoa(maxFactRowsPerQuery*max(keys, 1))
+}
+
+// factOmittedRowCount sums the integer *_omitted_count fields a fact carries.
+func factOmittedRowCount(fact contextfabric.CanonicalFact) int64 {
+	var total int64
+	for name, value := range fact.Fields {
+		if strings.HasSuffix(name, "_omitted_count") && value.Integer != nil {
+			total += *value.Integer
+		}
+	}
+	return total
+}
+
+// markSubjectLocalCuts handles a read whose only truncation is rows the
+// provider dropped and named on the facts that lost them: those facts say
+// truncated, every other fact says available, and the result reports the
+// truncation as subject-local.
+func markSubjectLocalCuts(facts []contextfabric.CanonicalFact, omitted int) bool {
+	if omitted <= 0 {
+		return false
+	}
+	for index := range facts {
+		if factOmittedRowCount(facts[index]) > 0 {
+			facts[index].SourceState = contextfabric.SourceTruncated
+		} else {
+			facts[index].SourceState = contextfabric.SourceAvailable
+		}
+	}
+	return true
+}
+
 func withRowLimit(statement string) string {
 	return statement + "\nLIMIT " + strconv.Itoa(maxFactRowsPerQuery)
 }
