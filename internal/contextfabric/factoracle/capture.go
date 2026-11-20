@@ -357,6 +357,9 @@ type Manifest struct {
 	// the teams before it that gave no backlog size.
 	SubjectTeam         string `json:"subject_team,omitempty"`
 	SubjectTeamsSkipped int    `json:"subject_teams_skipped,omitempty"`
+	// RepoScopeIDCheck is the raw check of the compoundingRisk REPO rows
+	// against the extract, before scrubbing: counts only.
+	RepoScopeIDCheck *ScopeIDCheck `json:"repo_scope_id_check,omitempty"`
 }
 
 // Capture file names under the capture directory.
@@ -380,6 +383,17 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 	// A run that is not a measurement is not recorded.
 	if invalid := run.Report.Invalid(); len(invalid) > 0 {
 		return run, fmt.Errorf("the venue run is not a measurement; nothing was written: %s", strings.Join(invalid, "; "))
+	}
+	rawAnswers, err := servedData(run.Oracle)
+	if err != nil {
+		return nil, err
+	}
+	scopeCheck := checkRepoScopeIDs(run.Extract, rawAnswers)
+	if cfg.Logf != nil {
+		cfg.Logf("%s", scopeCheck.Summary())
+	}
+	if len(scopeCheck.Misses) > 0 {
+		return run, fmt.Errorf("a replay could not join these REPO rows; nothing was written: %s", scopeCheck.Summary())
 	}
 	scrubber, err := NewScrubber(cfg.OrgID)
 	if err != nil {
@@ -477,7 +491,7 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 		OpsBuild: cfg.OpsBuild, AcrBuild: cfg.AcrBuild, VenueNote: strings.TrimSpace(cfg.VenueNote),
 		SchemaDigest: run.Oracle.Policy.Catalogue().SchemaDigest(), ContractDigests: contractDigestsOf(run.Oracle.Policy), FactQueryVersion: devhealthfacts.QueryVersion,
 		VenueFactQueryVersions: sortedKeys(run.Oracle.FactVersions),
-		Rows:                   map[string]int{}, Residual: run.Oracle.Residual, Expect: map[string]RootExpectation{},
+		Rows:                   map[string]int{}, Residual: run.Oracle.Residual, Expect: map[string]RootExpectation{}, RepoScopeIDCheck: &scopeCheck,
 		ListenerDark: append([]string{}, cfg.ListenerDark...), OperationDark: append([]string{}, cfg.OperationDark...),
 	}
 	for _, d := range run.Oracle.deniedList {
