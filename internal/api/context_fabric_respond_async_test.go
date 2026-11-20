@@ -378,16 +378,18 @@ func TestWantsRespondAsync(t *testing.T) {
 	}
 }
 
-// terminalHoldingRunStore holds every terminal append until released: the
-// window in which the holder wrote the record but not yet the log's end.
+// terminalHoldingRunStore holds the first terminal append until released:
+// the window in which the holder wrote the record but not yet the log's end.
+// Later terminal appends pass through.
 type terminalHoldingRunStore struct {
 	contextfabric.RunStore
 	held    chan struct{}
 	release chan struct{}
+	first   atomic.Bool
 }
 
 func (s *terminalHoldingRunStore) AppendRunEvent(ctx context.Context, run contextfabric.RunKey, event contextfabric.RunEvent, maxEvents int, now time.Time) (bool, error) {
-	if event.Terminal != nil {
+	if event.Terminal != nil && s.first.CompareAndSwap(false, true) {
 		s.held <- struct{}{}
 		<-s.release
 	}
