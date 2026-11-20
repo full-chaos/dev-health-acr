@@ -277,3 +277,31 @@ func TestAppConfigThreadsTheInvestmentSankeySwitch(t *testing.T) {
 		}
 	}
 }
+
+// TestPrepareServer_hands_the_app_drain_to_the_server: the server drains the
+// app's accept-first runs at shutdown only when prepareServer passes the
+// app's drain in the server config.
+func TestPrepareServer_hands_the_app_drain_to_the_server(t *testing.T) {
+	cfg := developmentServeConfig(t)
+	cfg.RequireBackingStores = false
+	var got api.ServerConfig
+	_, closeRuntime, err := prepareServer(context.Background(), serverBuildRequest{
+		config: cfg, logger: slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil)), serviceVersion: "test",
+		newServer: func(serverCfg api.ServerConfig, _ http.Handler, _ *slog.Logger) (serverRunner, error) {
+			got = serverCfg
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closeRuntime != nil {
+		defer func() { _ = closeRuntime() }()
+	}
+	if got.Drain == nil {
+		t.Fatal("the server config carries no drain")
+	}
+	if err := got.Drain(context.Background()); err != nil {
+		t.Fatalf("drain of an idle app = %v", err)
+	}
+}

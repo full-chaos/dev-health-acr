@@ -81,7 +81,7 @@ func expectCORSActual(t *testing.T, name string, recorder *httptest.ResponseReco
 	if got := header.Get("Access-Control-Allow-Origin"); got != origin {
 		t.Fatalf("%s: Access-Control-Allow-Origin = %q, want %q", name, got, origin)
 	}
-	if got := header.Get("Access-Control-Expose-Headers"); got != "Retry-After, X-Request-ID" {
+	if got := header.Get("Access-Control-Expose-Headers"); got != "Retry-After, X-Request-ID, Preference-Applied" {
 		t.Fatalf("%s: Access-Control-Expose-Headers = %q", name, got)
 	}
 	if !containsValue(header.Values("Vary"), "Origin") {
@@ -153,7 +153,7 @@ func TestABrowserPreflightIsAnsweredBeforeAuthOnEveryBrowserRoute(t *testing.T) 
 			want := map[string]string{
 				"Access-Control-Allow-Origin":  origin,
 				"Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-				"Access-Control-Allow-Headers": "Authorization, Content-Type, X-ACR-Client-Version, X-ACR-Submission-ID, X-ACR-Thread-ID, X-ACR-Wait-Budget-Seconds, X-ACR-Resource, X-Request-ID, Last-Event-ID",
+				"Access-Control-Allow-Headers": "Authorization, Content-Type, X-ACR-Client-Version, X-ACR-Submission-ID, X-ACR-Thread-ID, X-ACR-Wait-Budget-Seconds, X-ACR-Resource, X-Request-ID, Last-Event-ID, Prefer",
 				"Access-Control-Max-Age":       "600",
 			}
 			for key, value := range want {

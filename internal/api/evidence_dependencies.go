@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
@@ -141,6 +142,9 @@ type App struct {
 	// runs are the leased runs this replica holds, for a cancel that lands
 	// on the holder's own replica.
 	runs *runRegistry
+	// detachedRuns counts the accept-first runs this replica still runs after
+	// their 202, for DrainDetachedRuns at shutdown.
+	detachedRuns sync.WaitGroup
 }
 
 func NewApp(cfg AppConfig, deps Dependencies, logger *slog.Logger) (*App, error) {
