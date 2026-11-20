@@ -33,8 +33,13 @@ import (
 //
 // A write is at-least-once. The WRITE client sets MaxRetries to -1: a write
 // whose reply misses the RequestTimeout returns its error and is not sent
-// again; the projector replay is the only retry. The READ client keeps the
-// driver default (3). A write may still land after its error (the server
+// again; the projector replay is the only retry. The READ client also sets
+// MaxRetries to -1: retryRead (read_retry.go) owns the read retry, up to
+// Config.MaxAttempts sends on a dropped connection, and never resends a read
+// that timed out. Both clients keep the driver's dial retry (DialerRetries,
+// default 5 dials 100ms apart): a failed dial sends no command, and after
+// PoolSize failed dials the pool returns the last dial error at once. A write
+// may still land after its error (the server
 // commits after the caller gave up, and a ctx deadline on the read client's
 // options ends the call while the server still commits), so every write
 // statement must be replay-idempotent, and a ctx deadline may reach the write
@@ -77,7 +82,7 @@ func newSDKAPI(config Config) (conn, error) {
 	if err != nil {
 		return nil, safeDependencyError("connect to falkordb", err)
 	}
-	read, err := newClient(true, 0)
+	read, err := newClient(true, -1)
 	if err != nil {
 		return nil, safeDependencyError("connect to falkordb", err)
 	}
@@ -106,7 +111,13 @@ func (s *sdkAPI) query(ctx context.Context, graphKey, cypher string, params map[
 	if readOnly {
 		client = s.read
 	}
-	raw, err := client.Conn.Do(ctx, command, graphKey, text, "--compact").Result()
+	send := func() (interface{}, error) { return client.Conn.Do(ctx, command, graphKey, text, "--compact").Result() }
+	var raw interface{}
+	if readOnly {
+		raw, err = retryRead(ctx, s, "query context graph", send)
+	} else {
+		raw, err = send()
+	}
 	if err != nil {
 		return nil, s.classifyConnError("query context graph", err)
 	}
@@ -142,7 +153,7 @@ func (s *sdkAPI) deleteGraph(ctx context.Context, graphKey string) error {
 }
 
 func (s *sdkAPI) listGraphs(ctx context.Context) ([]string, error) {
-	names, err := s.read.Conn.Do(ctx, "GRAPH.LIST").StringSlice()
+	names, err := retryRead(ctx, s, "list graphs", func() ([]string, error) { return s.read.Conn.Do(ctx, "GRAPH.LIST").StringSlice() })
 	if err != nil {
 		return nil, s.classifyConnError("list graphs", err)
 	}

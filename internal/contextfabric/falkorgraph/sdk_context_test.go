@@ -217,28 +217,34 @@ func TestTheWriteClientDoesNotResendAWriteWhoseReplyMissedTheRequestTimeout(t *t
 	}
 }
 
-// TestTheReadClientKeepsTheDriverRetries pins that the read client still
-// resends a read whose reply missed the RequestTimeout (driver default 3).
-func TestTheReadClientKeepsTheDriverRetries(t *testing.T) {
+// TestATimedOutReadIsSentOnce pins that the read client's driver resend is
+// off (MaxRetries -1) and that retryRead does not resend a read whose reply
+// missed the RequestTimeout, whatever MaxAttempts is. The read path reports
+// it once as a "timeout" attempt that was not retried.
+func TestATimedOutReadIsSentOnce(t *testing.T) {
 	addr, graphQueries := countingRESPServer(t, 1500*time.Millisecond)
+	sink := &readAttemptRecorder{}
 	api, err := newSDKAPI(Config{
 		Addr: addr, GraphPrefix: "acr-cf-ctx", RequestTimeout: time.Second,
-		MaxAttempts: 1, MaxResults: 25, PoolSize: 3, AllowInsecure: true,
+		MaxAttempts: 5, MaxResults: 25, PoolSize: 3, AllowInsecure: true, Telemetry: sink,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := api.(*sdkAPI)
-	options := s.read.Conn.(*redis.Client).Options()
-	if options.MaxRetries != 3 {
-		t.Fatalf("read client MaxRetries = %d, want the driver default 3", options.MaxRetries)
+	if got := s.read.Conn.(*redis.Client).Options().MaxRetries; got != 0 {
+		t.Fatalf("read client MaxRetries = %d, want 0 (configured -1: no driver resend)", got)
 	}
 	_, err = s.query(context.Background(), "g", "MATCH (n) RETURN n", nil, true)
 	if err == nil {
 		t.Fatal("a read slower than the request timeout returned no error")
 	}
-	if got, want := graphQueries.Load(), int64(options.MaxRetries+1); got != want {
-		t.Fatalf("one read call sent GRAPH.RO_QUERY %d times, want %d", got, want)
+	if got := graphQueries.Load(); got != 1 {
+		t.Fatalf("one read call sent GRAPH.RO_QUERY %d times, want 1", got)
+	}
+	want := []readAttempt{{operation: "query context graph", attempt: 1, maxAttempts: 5, cause: ReadFailureTimeout, retried: false}}
+	if got := sink.all(); len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("read attempt records = %+v, want %+v", got, want)
 	}
 }
 
