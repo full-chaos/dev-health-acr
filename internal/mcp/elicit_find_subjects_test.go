@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -72,11 +73,12 @@ func TestFindSubjectsAmbiguousElicitation(t *testing.T) {
 		content map[string]any
 		err     error
 		outcome string
+		asked   bool
 	}{
-		"decline":            {action: "decline", outcome: "declined"},
-		"cancel":             {action: "cancel", outcome: "declined"},
-		"client error":       {err: errors.New("boom"), outcome: "unavailable"},
-		"accept not offered": {action: "accept", content: map[string]any{"subject": "repository:" + dtRepoA}, outcome: "unavailable"},
+		"decline":            {action: "decline", outcome: "declined", asked: true},
+		"cancel":             {action: "cancel", outcome: "declined", asked: true},
+		"client error":       {err: errors.New("boom"), outcome: "unavailable", asked: false},
+		"accept not offered": {action: "accept", content: map[string]any{"subject": "repository:" + dtRepoA}, outcome: "unavailable", asked: false},
 	} {
 		t.Run(name+" is byte-equal to base", func(t *testing.T) {
 			withSameLabelRepos(t)
@@ -87,7 +89,7 @@ func TestFindSubjectsAmbiguousElicitation(t *testing.T) {
 				t.Fatal(err)
 			}
 			if _, err := certify.Certify(log, certify.Assertion{Event: eventspec.MCPElicitationOutcome, Want: map[string]any{
-				"tool": "find_subjects", "outcome": tc.outcome, "asked": true, "offered": float64(2),
+				"tool": "find_subjects", "outcome": tc.outcome, "asked": tc.asked, "offered": float64(2),
 			}}); err != nil {
 				t.Fatal(err)
 			}
@@ -237,6 +239,48 @@ func TestFindSubjectsPerCallCapabilityWithoutSessionCapabilityAsksNothing(t *tes
 	if _, err := cs.CallTool(context.Background(), params); err != nil {
 		t.Fatal(err)
 	}
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{Event: eventspec.MCPElicitationOutcome, Want: map[string]any{
+		"tool": "find_subjects", "outcome": "unavailable", "asked": false, "offered": float64(2),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type failElicitWriteTransport struct{ mcpsdk.Transport }
+
+type failElicitWriteConn struct{ mcpsdk.Connection }
+
+func (t failElicitWriteTransport) Connect(ctx context.Context) (mcpsdk.Connection, error) {
+	c, err := t.Transport.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return failElicitWriteConn{c}, nil
+}
+
+func (c failElicitWriteConn) Write(ctx context.Context, m jsonrpc.Message) error {
+	if r, ok := m.(*jsonrpc.Request); ok && r.Method == "elicitation/create" {
+		return errors.New("write failed")
+	}
+	return c.Connection.Write(ctx, m)
+}
+
+// An elicitation/create write that fails before any byte is sent is no client
+// reply: asked false, outcome unavailable.
+func TestFindSubjectsFailedElicitationWriteLogsAskedFalse(t *testing.T) {
+	withSameLabelRepos(t)
+	st := newDTStack(t)
+	var buf syncBuffer
+	opts := &mcpsdk.ClientOptions{ElicitationHandler: func(context.Context, *mcpsdk.ElicitRequest) (*mcpsdk.ElicitResult, error) {
+		t.Error("the client must not see a prompt")
+		return &mcpsdk.ElicitResult{Action: "decline"}, nil
+	}}
+	cs, _ := st.sessionWithDiagnosticsWrapped([]string{auth.ScopeContextRead, auth.ScopeDataRead}, []string{"*"}, opts, &buf, func(tr mcpsdk.Transport) mcpsdk.Transport { return failElicitWriteTransport{tr} })
+	_, _ = cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "find_subjects", Arguments: map[string]any{"query": dtSlugSame, "kind": "repository"}})
 	log, err := certify.Parse(buf.Bytes())
 	if err != nil {
 		t.Fatal(err)

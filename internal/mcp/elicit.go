@@ -33,9 +33,10 @@ type elicitChoice struct {
 type elicitResult struct {
 	Outcome elicitOutcome
 	Value   string
-	// Sent is true only when an elicitation/create request left the session.
-	// A declined or accepted result was answered by the client, so it is sent.
-	Sent bool
+	// Answered is true only when the client replied to the elicitation/create
+	// request (accept, decline or cancel). A session or transport error is not
+	// a reply.
+	Answered bool
 }
 
 // elicitTransport carries one elicitChoice to the user. It returns
@@ -56,15 +57,15 @@ func elicit(ctx context.Context, t elicitTransport, c elicitChoice) elicitResult
 	defer cancel()
 	res := t.ask(ctx, c)
 	if res.Outcome != elicitAccepted {
-		return elicitResult{Outcome: res.Outcome, Sent: res.Sent || res.Outcome == elicitDeclined}
+		return elicitResult{Outcome: res.Outcome, Answered: res.Answered || res.Outcome == elicitDeclined}
 	}
 	for _, o := range c.Options {
 		if o.Value == res.Value {
-			res.Sent = true
+			res.Answered = true
 			return res
 		}
 	}
-	return elicitResult{Outcome: elicitUnavailable, Sent: true}
+	return elicitResult{Outcome: elicitUnavailable, Answered: true}
 }
 
 type clientElicitationCaps struct {
@@ -149,14 +150,14 @@ func (s sessionElicitTransport) ask(ctx context.Context, c elicitChoice) elicitR
 		},
 	})
 	if err != nil || res == nil {
-		return elicitResult{Outcome: elicitUnavailable, Sent: true}
+		return elicitResult{Outcome: elicitUnavailable}
 	}
 	if res.Action != "accept" {
-		return elicitResult{Outcome: elicitDeclined, Sent: true}
+		return elicitResult{Outcome: elicitDeclined, Answered: true}
 	}
 	v, ok := res.Content[c.Field].(string)
 	if !ok {
-		return elicitResult{Outcome: elicitUnavailable, Sent: true}
+		return elicitResult{Outcome: elicitUnavailable, Answered: true}
 	}
-	return elicitResult{Outcome: elicitAccepted, Value: v, Sent: true}
+	return elicitResult{Outcome: elicitAccepted, Value: v, Answered: true}
 }

@@ -7,8 +7,11 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/stretchr/testify/require"
 
@@ -23,6 +26,7 @@ type windowRun struct {
 	calls   int
 	text    string
 	struct_ string
+	meta    string
 	asks    []elicitCall
 	diag    string
 }
@@ -37,6 +41,7 @@ func investigateWindowRun(t *testing.T, args map[string]any, handler func(*mcpsd
 type windowRunMeta struct {
 	malformed bool
 	perCall   map[string]any
+	failWrite bool
 }
 
 func investigateWindowRunWith(t *testing.T, tool string, args map[string]any, handler func(*mcpsdk.ElicitRequest) (*mcpsdk.ElicitResult, error), meta windowRunMeta, prepare func(*Bootstrap) *Bootstrap) windowRun {
@@ -46,10 +51,14 @@ func investigateWindowRunWith(t *testing.T, tool string, args map[string]any, ha
 	if prepare != nil {
 		boot = prepare(boot)
 	}
-	var buf bytes.Buffer
+	var buf syncBufferLocal
 	server := NewServerWithDiagnostics(boot, "test", &buf)
 	t1, t2 := mcpsdk.NewInMemoryTransports()
-	ss, err := server.Connect(context.Background(), t1, nil)
+	var serverTransport mcpsdk.Transport = t1
+	if meta.failWrite {
+		serverTransport = failElicitTransport{t1}
+	}
+	ss, err := server.Connect(context.Background(), serverTransport, nil)
 	require.NoError(t, err)
 	var opts *mcpsdk.ClientOptions
 	if handler != nil {
@@ -70,6 +79,14 @@ func investigateWindowRunWith(t *testing.T, tool string, args map[string]any, ha
 		params.SetMeta(map[string]any{mcpsdk.MetaKeyClientCapabilities: meta.perCall})
 	}
 	result, err := cs.CallTool(context.Background(), params)
+	if meta.failWrite {
+		// A failed write closes the session: the call may end in an error; the diagnostics are what is asserted.
+		for i := 0; i < 300 && !strings.Contains(buf.String(), "mcp elicitation outcome"); i++ {
+			time.Sleep(10 * time.Millisecond)
+		}
+		run.diag = buf.String()
+		return run
+	}
 	require.NoError(t, err)
 	require.False(t, result.IsError, "%+v", result.Content)
 	for _, c := range result.Content {
@@ -79,8 +96,46 @@ func investigateWindowRunWith(t *testing.T, tool string, args map[string]any, ha
 	}
 	structured, _ := json.Marshal(result.StructuredContent)
 	run.struct_ = string(structured)
+	metaJSON, _ := json.Marshal(result.Meta)
+	run.meta = string(metaJSON)
 	run.diag = buf.String()
 	return run
+}
+
+type syncBufferLocal struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBufferLocal) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBufferLocal) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+type failElicitTransport struct{ mcpsdk.Transport }
+
+type failElicitConn struct{ mcpsdk.Connection }
+
+func (t failElicitTransport) Connect(ctx context.Context) (mcpsdk.Connection, error) {
+	c, err := t.Transport.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return failElicitConn{c}, nil
+}
+
+func (c failElicitConn) Write(ctx context.Context, m jsonrpc.Message) error {
+	if r, ok := m.(*jsonrpc.Request); ok && r.Method == "elicitation/create" {
+		return errors.New("write failed")
+	}
+	return c.Connection.Write(ctx, m)
 }
 
 func answerOf(action string, content map[string]any, err error) func(*mcpsdk.ElicitRequest) (*mcpsdk.ElicitResult, error) {
@@ -153,12 +208,13 @@ func TestInvestigateQuestionWindowElicitation(t *testing.T) {
 	for name, tc := range map[string]struct {
 		handler func(*mcpsdk.ElicitRequest) (*mcpsdk.ElicitResult, error)
 		outcome string
+		asked   bool
 	}{
-		"decline":            {answerOf("decline", nil, nil), "declined"},
-		"cancel":             {answerOf("cancel", nil, nil), "declined"},
-		"client error":       {answerOf("", nil, errors.New("boom")), "unavailable"},
-		"accept not offered": {answerOf("accept", map[string]any{"window": "trailing_90d"}, nil), "unavailable"},
-		"accept calendar":    {answerOf("accept", map[string]any{"window": "previous_calendar_month"}, nil), "accepted"},
+		"decline":            {answerOf("decline", nil, nil), "declined", true},
+		"cancel":             {answerOf("cancel", nil, nil), "declined", true},
+		"client error":       {answerOf("", nil, errors.New("boom")), "unavailable", false},
+		"accept not offered": {answerOf("accept", map[string]any{"window": "trailing_90d"}, nil), "unavailable", false},
+		"accept calendar":    {answerOf("accept", map[string]any{"window": "previous_calendar_month"}, nil), "accepted", true},
 	} {
 		t.Run(name+" sends today's request and answer", func(t *testing.T) {
 			run := investigateWindowRun(t, args, tc.handler, false)
@@ -167,7 +223,8 @@ func TestInvestigateQuestionWindowElicitation(t *testing.T) {
 			require.Equal(t, rawHosted(base.hosted), rawHosted(run.hosted), "hosted request must be byte-equal to base")
 			require.Equal(t, base.text, run.text)
 			require.Equal(t, base.struct_, run.struct_)
-			windowOutcomeCertified(t, run.diag, tc.outcome, true, 2)
+			require.Equal(t, base.meta, run.meta)
+			windowOutcomeCertified(t, run.diag, tc.outcome, tc.asked, 2)
 		})
 	}
 
@@ -175,6 +232,19 @@ func TestInvestigateQuestionWindowElicitation(t *testing.T) {
 		run := investigateWindowRun(t, args, answerOf("accept", map[string]any{"window": "trailing_30d"}, nil), false)
 		require.Len(t, run.asks, 1)
 		t.Logf("ELICIT message=%q schema=%s", run.asks[0].message, run.asks[0].schema)
+		var schema struct {
+			Properties struct {
+				Window struct {
+					OneOf []struct {
+						Const string `json:"const"`
+					} `json:"oneOf"`
+				} `json:"window"`
+			} `json:"properties"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(run.asks[0].schema), &schema))
+		require.Len(t, schema.Properties.Window.OneOf, 2)
+		require.Equal(t, "previous_calendar_month", schema.Properties.Window.OneOf[0].Const, "today's reading is listed first")
+		require.Equal(t, "trailing_30d", schema.Properties.Window.OneOf[1].Const)
 		require.Equal(t, 1, run.calls)
 		require.JSONEq(t, `{"relative_id":"trailing_30d"}`, string(hostedEvidenceWindow(t, run.hosted)))
 		require.Equal(t, rawHosted(base.hosted), rawHostedWithoutWindow(run.hosted))
@@ -199,6 +269,12 @@ func TestInvestigateQuestionWindowElicitation(t *testing.T) {
 		windowOutcomeCertified(t, run.diag, "accepted", true, 2)
 	})
 
+	t.Run("a failed elicitation write is no client reply: asked false, outcome unavailable", func(t *testing.T) {
+		run := investigateWindowRunWith(t, toolInvestigateQuestion, args, answerOf("decline", nil, nil), windowRunMeta{failWrite: true}, nil)
+		require.Empty(t, run.asks, "the client must not see a prompt")
+		windowOutcomeCertified(t, run.diag, "unavailable", false, 2)
+	})
+
 	t.Run("per-call form capability with no session capability sends no prompt and logs asked false", func(t *testing.T) {
 		run := investigateWindowRunWith(t, toolInvestigateQuestion, args, nil, windowRunMeta{perCall: map[string]any{"elicitation": map[string]any{"form": map[string]any{}}}}, nil)
 		require.Empty(t, run.asks)
@@ -207,16 +283,20 @@ func TestInvestigateQuestionWindowElicitation(t *testing.T) {
 	})
 }
 
-func TestInvestigateQuestionWindowAsksOnlyWhenThePhraseEndsItsClause(t *testing.T) {
+func TestInvestigateQuestionWindowAsksOnlyWhenThePhraseEndsItsSentence(t *testing.T) {
 	accept := answerOf("accept", map[string]any{"window": "trailing_30d"}, nil)
 	for question, asks := range map[string]bool{
-		"What changed for last month's release?":                           false,
-		"How many incidents did we have during last month of the quarter?": false,
-		"Show deployments for last month through November 10.":             false,
-		"Which repository carried the most work for last month?":           true,
-		"Which repository carried the most work for last month, and why?":  true,
-		"Which repository carried the most work for last month and why?":   true,
-		"Which repository carried the most work for last month: top three": true,
+		"What changed for last month's release?":                              false,
+		"How many incidents did we have during last month of the quarter?":    false,
+		"Show deployments for last month through November 10.":                false,
+		"Compare deployment counts for last month and the month before.":      false,
+		"Show deployment counts for last month and a half.":                   false,
+		"Which repository carried the most work for last month and by repo?":  false,
+		"Which repository carried the most work for last month or last year?": false,
+		"Which repository carried the most work for last month, and why?":     false,
+		"Which repository carried the most work for last month?":              true,
+		"Show deployments for last month. Break them down by repository.":     true,
+		"What shipped during last month? Break it down by repository.":        true,
 	} {
 		t.Run(question, func(t *testing.T) {
 			run := investigateWindowRun(t, map[string]any{"question": question}, accept, false)

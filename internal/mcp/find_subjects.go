@@ -136,7 +136,7 @@ func pickAmbiguousSubject(ctx context.Context, cfg *ProcessConfig, t elicitTrans
 		return raw
 	case elicitAccepted:
 	default:
-		logElicitOutcome(ctx, cfg, elicitOutcomeUnavailable, res.Sent, len(options))
+		logElicitOutcome(ctx, cfg, elicitOutcomeUnavailable, res.Answered, len(options))
 		return raw
 	}
 	picked, err := json.Marshal([]map[string]json.RawMessage{byID[res.Value]})

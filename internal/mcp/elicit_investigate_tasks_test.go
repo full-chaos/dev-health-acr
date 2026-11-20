@@ -1,6 +1,7 @@
 package mcp_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -15,4 +16,6 @@ func TestTasksNeverAskTheWindowQuestion(t *testing.T) {
 	require.Contains(t, string(reply.Result), `"resultType":"task"`, string(reply.raw))
 	require.Equal(t, 1, s.fake.createCount())
 	require.Equal(t, 0, s.fake.syncCount())
+	require.NotContains(t, string(s.e.logs.Bytes()), "mcp elicitation outcome", "the window question is never reached from Tasks")
+	require.False(t, strings.Contains(string(s.e.logs.Bytes()), "investigate_question_window"))
 }
