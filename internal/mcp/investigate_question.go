@@ -79,6 +79,7 @@ func handleInvestigateQuestion(ctx context.Context, cfg *ProcessConfig, req *mcp
 	if err := input.Validate(); err != nil {
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_question arguments failed schema validation"}), nil
 	}
+	input.EvidenceWindow = chooseWindow(ctx, cfg, req, input)
 	return investigateAndRender(ctx, cfg, caller, toolInvestigateQuestion, input, nil, nil)
 }
 

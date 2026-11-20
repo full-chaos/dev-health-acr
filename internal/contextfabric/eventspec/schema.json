@@ -19229,14 +19229,15 @@
       "tool",
       "outcome"
     ],
-    "bounded_aggregation": "one line per find_subjects call whose answer status is ambiguous; any other status emits none",
+    "bounded_aggregation": "one line per find_subjects call whose answer status is ambiguous, and one line per investigate_question call whose question states a bare last month after for, over, during or within; any other call emits none",
     "fields": [
       {
         "key": "tool",
         "type": "string",
         "presence": "required",
         "closed_vocabulary": [
-          "find_subjects"
+          "find_subjects",
+          "investigate_question_window"
         ]
       },
       {
