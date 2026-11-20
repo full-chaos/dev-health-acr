@@ -105,7 +105,8 @@ func generic(ctx context.Context, req testcontainers.GenericContainerRequest, cr
 		stage := &startStage{}
 		began := time.Now()
 		tracked := req
-		tracked.LifecycleHooks = append(slices.Clone(req.LifecycleHooks), stage.hooks())
+		early, late := stage.hooks()
+		tracked.LifecycleHooks = append([]testcontainers.ContainerLifecycleHooks{early}, append(slices.Clone(req.LifecycleHooks), late)...)
 		c, err := create(ctx, tracked)
 		if err != nil {
 			err = endedByCaller(ctx, req.Image, began, stage, err)
@@ -119,7 +120,9 @@ func postgresRun(ctx context.Context, image string, opts []testcontainers.Contai
 	return startUntilImageServes(ctx, func() (*tcpostgres.PostgresContainer, error) {
 		stage := &startStage{}
 		began := time.Now()
-		tracked := append(slices.Clone(opts), testcontainers.WithAdditionalLifecycleHooks(stage.hooks()))
+		early, late := stage.hooks()
+		tracked := append([]testcontainers.ContainerCustomizer{testcontainers.WithAdditionalLifecycleHooks(early)}, opts...)
+		tracked = append(tracked, testcontainers.WithAdditionalLifecycleHooks(late))
 		pc, err := run(ctx, image, tracked...)
 		if err != nil {
 			err = endedByCaller(ctx, image, began, stage, err)
@@ -155,7 +158,10 @@ type startStage struct{ reached atomic.Int32 }
 
 func (s *startStage) name() string { return stageNames[s.reached.Load()] }
 
-func (s *startStage) hooks() testcontainers.ContainerLifecycleHooks {
+// hooks returns the stage hooks of the two phases that enter their stage before the caller's hooks run
+// (PreCreates, PostReadies) and of the two that enter it after (PostCreates, PostStarts). A caller's PreCreates or
+// PostReadies hook that fails on an ended context must read as the stage it ran in, not the one before it.
+func (s *startStage) hooks() (early, late testcontainers.ContainerLifecycleHooks) {
 	enter := func(stage int32) func() { return func() { s.reached.Store(stage) } }
 	onRequest := func(enter func()) []testcontainers.ContainerRequestHook {
 		return []testcontainers.ContainerRequestHook{func(context.Context, testcontainers.ContainerRequest) error {
@@ -169,12 +175,15 @@ func (s *startStage) hooks() testcontainers.ContainerLifecycleHooks {
 			return nil
 		}}
 	}
-	return testcontainers.ContainerLifecycleHooks{
+	early = testcontainers.ContainerLifecycleHooks{
 		PreCreates:  onRequest(enter(stageCreate)),
-		PostCreates: onContainer(enter(stageStart)),
-		PostStarts:  onContainer(enter(stageReadiness)),
 		PostReadies: onContainer(enter(stageReady)),
 	}
+	late = testcontainers.ContainerLifecycleHooks{
+		PostCreates: onContainer(enter(stageStart)),
+		PostStarts:  onContainer(enter(stageReadiness)),
+	}
+	return early, late
 }
 
 // endedByCaller logs a failed start whose context had ended and names in the error the stage the start was in. A
