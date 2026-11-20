@@ -43,6 +43,10 @@ weight the pairs are recorded under). Limit: the issue-size weighting of reposit
 (ops `internal/queryapi/analytics/sankeycoverage.go:320-322`) is NOT MEASURED by O4. The
 capture manifest says so in `venue_note`.
 
+Limit: root `catalog` compares only `owner/name` repository names, as the ops repository
+inventory lists only those. The capture reports every other name (for example a GitLab
+nested-group slug) as "not joined: N", never as a silent drop.
+
 ### Venue steps before the capture
 
 - Project the graph of the organization (acr-projector) and stop it: acr-api reads subjects
