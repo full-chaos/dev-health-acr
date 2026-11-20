@@ -20,7 +20,7 @@ import (
 const captureDir = "testdata/venue"
 
 // captureSchemaDigest is the SDL digest the recorded capture was taken at
-// (a synthetic organization on the isolated compose venue, ops 2c115402,
+// (a synthetic organization on the isolated compose venue, ops 2c1fdfb1,
 // captured 2026-11-20, docs/o4-venue.md).
 const captureSchemaDigest = "sha256:7f8167568a634f87d77d4c28e9fb34efa17078cbff1b5d950b5e0e334d4f26b3"
 

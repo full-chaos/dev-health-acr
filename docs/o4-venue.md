@@ -61,20 +61,27 @@ nested-group slug) as "not joined: N", never as a silent drop.
 
 - The issue-size weighting of repository effort (see above).
 - Repository names that are not `owner/name` slugs in root `catalog` (reported as not joined).
-- Seven tests, NOT MEASURED by name, because the synthetic capture holds no unit of their shape.
-  They are listed with their reason in
+- Four tests, NOT MEASURED by name. They are listed with their reason in
   `internal/contextfabric/factoracle/testdata/venue/not_measured_gates.json`; a test fails when it
   is listed and the capture could measure it, or when it is not measured and not listed.
 
   | Test | Shape the capture lacks |
   | --- | --- |
-  | `AcceptanceGate/NullRepoID` | a team-owned repository with in-scope effort in the window (membership has no manual ops trigger) |
+  | `AcceptanceGate/NullRepoID` | a team-owned repository with in-scope effort in the window |
   | `TeamRollupLossWithNoNullRowIsAFinding` | the same |
   | `TestTheStoreReadingLeavesEvidenceGatedUnitsOutAsOpsDoes` | an evidence-gated (uncategorized) work unit in scope in the analytics window |
   | `TestTheRunComparesTheUncategorizedCountWithTheStoreGate` | the same |
-  | `TestReadinessSumsEveryKeyAtItsOwnNewestDay` | a team with a coverage key whose newest day is older than the team's latest day |
-  | `TestTheCoverageGrainCountIsComparedWithTheStore` | the same |
-  | `TestOwnerShareTheRecordedCaptureReadsTheStoredShare` | a capture where every owner of a repository stores a share |
+
+  The cause is the same for all four, and it is not the fixture world. A work unit is in scope only
+  when the newest work unit membership run holds it, and only the daily scheduler writes such a run:
+  ops has no manual trigger for the membership job. The venue's runs come from the fallback world, so
+  the fixture world's units (its team-owned repositories with effort, and its evidence-gated unit) are
+  in no run. The ops fixture tests that run the daily membership job find both shapes.
+
+- Owner shares: ops stores a share only on an ownership row of the inferred derivation. A row from
+  provider access, a native team or a manual entry never stores one, and the owners of such a
+  repository split it equally. The capture is held to that rule
+  (`TestOwnerShareTheRecordedCaptureReadsTheStoredShare`).
 
 ### Venue steps before the capture
 
