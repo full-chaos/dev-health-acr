@@ -1034,6 +1034,12 @@ func (a *App) logContextFabricFailure(r *http.Request, err error, classification
 	if classification == contextFabricClassUnclassified {
 		fields = append(fields, "failure_error_type", contextFabricInnermostErrorType(err))
 	}
+	// failure_dependency_cause: the closed driver cause class a graph adapter
+	// attached to a flattened dependency error (eof, connection_reset, ...),
+	// never error text.
+	if cause, ok := contextfabric.DependencyCause(err); ok {
+		fields = append(fields, "failure_dependency_cause", contextfabric.SanitizeLogAttr(cause))
+	}
 	if refusedOnBudget {
 		fields = append(fields, contextFabricBudgetRefusalFields(budgetRefusal)...)
 	}

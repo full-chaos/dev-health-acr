@@ -218,7 +218,7 @@ func fakeRun(t *testing.T, root string, planes Planes, configure func(*Oracle)) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{root}, Planes: planes}
+	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, Today: captureDay(manifest), ShapeCases: manifest.ShapeCases, OnlyRoots: []string{root}, Planes: planes}
 	if configure != nil {
 		configure(oracle)
 	}
@@ -249,7 +249,7 @@ func TestRunStopsWhenAGeneratedShapeHasNoCase(t *testing.T) {
 	if len(cases) == len(manifest.ShapeCases) {
 		t.Fatalf("the capture has no case for %s", dropped)
 	}
-	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: cases, OnlyRoots: []string{"hotspots"},
+	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, Today: captureDay(manifest), ShapeCases: cases, OnlyRoots: []string{"hotspots"},
 		Planes: fakePlanes{graphQL: func(Shape, map[string]any) (json.RawMessage, error) {
 			return json.RawMessage(`{"call":"operation_unavailable"}`), nil
 		}}}
@@ -734,7 +734,7 @@ func TestShapePassFindsTypeEchoAndLimitProblems(t *testing.T) {
 	good := `{"workGraphFlow":{"__typename":"WorkGraphFlowResult","degradedReason":null,"rows":[{"__typename":"WorkGraphFlowRow","nodeType":"ISSUE","inflow":3,"outflow":4}]}}`
 	run := func(answer json.RawMessage) *RootReport {
 		t.Helper()
-		oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"workGraphFlow"},
+		oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, Today: captureDay(manifest), ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"workGraphFlow"},
 			Planes: fakePlanes{graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
 				switch shape.Name {
 				case "branch:(root)":
@@ -806,7 +806,7 @@ func TestTheTwoPathsMustAnswerTheSame(t *testing.T) {
 	flow := `{"workGraphFlow":{"__typename":"WorkGraphFlowResult","degradedReason":null,"rows":[{"__typename":"WorkGraphFlowRow","nodeType":"ISSUE","inflow":3,"outflow":4},{"__typename":"WorkGraphFlowRow","nodeType":"PR","inflow":1,"outflow":2}]}}`
 	run := func(root, graphQL, operation string) *RootReport {
 		t.Helper()
-		oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{root}, NotRecorded: notRecordedOperations,
+		oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, Today: captureDay(manifest), ShapeCases: manifest.ShapeCases, OnlyRoots: []string{root}, NotRecorded: notRecordedOperations,
 			Planes: fakePlanes{
 				graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
 					if shape.Name != "all" {
@@ -856,7 +856,7 @@ func TestTheTwoPathsMustAnswerTheSame(t *testing.T) {
 		t.Fatalf("a row missing on the other path is not a finding")
 	}
 	// run_operation must name the operation that was asked.
-	echo := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"workGraphFlow"},
+	echo := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, Today: captureDay(manifest), ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"workGraphFlow"},
 		Planes: fakePlanes{
 			graphQL: func(Shape, map[string]any) (json.RawMessage, error) {
 				return json.RawMessage(`{"call":"operation_unavailable"}`), nil
@@ -1237,11 +1237,12 @@ func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
 	}
 	count := func(rr *RootReport) int { return rr.ByClass[ClassLatestDayVsWindow] }
 
-	// The covered values are the same for both histories: three counted
-	// differences, one per covered path, nothing expired.
+	// The covered values are the same for both histories: two counted
+	// differences, one per covered path (staleWip, estimateCoverage), nothing
+	// expired. wipCongestion left the allowance: it follows the window.
 	same := fakeRun(t, "throughputForecast", recordedThroughput(t, echo), nil)
 	rr := same.Root("throughputForecast")
-	if count(rr) != 3 || len(same.Expired()) != 0 || len(rr.CodeRead) != 0 {
+	if count(rr) != 2 || len(same.Expired()) != 0 || len(rr.CodeRead) != 0 {
 		t.Fatalf("a latest-day value under two histories: %d differences, expired %v, code read %v", count(rr), same.Expired(), rr.CodeRead)
 	}
 	for _, d := range rr.Differences {
@@ -1256,19 +1257,19 @@ func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
 		echo(variables, forecast)
 		forecast["backlogSize"] = 100 + historyOf(variables, "historyWeeks")
 	}), nil)
-	if expired := backlog.Expired(); len(expired) != 0 || count(backlog.Root("throughputForecast")) != 3 {
+	if expired := backlog.Expired(); len(expired) != 0 || count(backlog.Root("throughputForecast")) != 2 {
 		t.Fatalf("a backlog that follows the history: expired %v, %d differences", expired, count(backlog.Root("throughputForecast")))
 	}
 
-	// The WIP overlay now follows the requested history: that path expires,
-	// the other two are still measured.
+	// The stale WIP ages now follow the requested history: that path expires,
+	// the other one is still measured.
 	follows := fakeRun(t, "throughputForecast", recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
 		echo(variables, forecast)
-		forecast["wipCongestion"] = map[string]any{"__typename": "ThroughputRiskOverlay", "active": false, "kind": "wip", "label": "h-e3696e6a81516f0b", "score": 0.8, "threshold": 1.25, "value": float64(historyOf(variables, "historyWeeks"))}
+		forecast["staleWip"] = map[string]any{"__typename": "ThroughputStaleWip", "p50AgeHours": float64(historyOf(variables, "historyWeeks")), "p90AgeHours": float64(2 * historyOf(variables, "historyWeeks"))}
 	}), nil)
 	expired := follows.Expired()
-	if len(expired) != 1 || !strings.Contains(expired[0], "throughputForecast.wipCongestion is another value") || count(follows.Root("throughputForecast")) != 2 {
-		t.Fatalf("a WIP overlay that follows the history: expired %v, %d differences", expired, count(follows.Root("throughputForecast")))
+	if len(expired) != 1 || !strings.Contains(expired[0], "throughputForecast.staleWip is another value") || count(follows.Root("throughputForecast")) != 1 {
+		t.Fatalf("stale WIP ages that follow the history: expired %v, %d differences", expired, count(follows.Root("throughputForecast")))
 	}
 	if follows.Err() == nil {
 		t.Fatal("a run with an allowance that expired by measurement is not an error")
@@ -1329,7 +1330,7 @@ func TestTemporaryAllowanceIsMeasuredNotAssumed(t *testing.T) {
 		forecast["estimateCoverage"] = nil
 	}), nil)
 	rr = null.Root("throughputForecast")
-	if count(rr) != 2 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 1 || !strings.Contains(probeInvalid(rr)[0], "throughputForecast.estimateCoverage") || null.Err() == nil {
+	if count(rr) != 1 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 1 || !strings.Contains(probeInvalid(rr)[0], "throughputForecast.estimateCoverage") || null.Err() == nil {
 		t.Fatalf("a covered block that is null: %d differences, code read %v, invalid %v", count(rr), rr.CodeRead, rr.Invalid)
 	}
 
@@ -1671,8 +1672,12 @@ func TestTheCoverageGrainCountIsComparedWithTheStore(t *testing.T) {
 			older++
 		}
 	}
+	if older == 0 {
+		notMeasured(t, "TestTheCoverageGrainCountIsComparedWithTheStore", "team with a work scope whose newest coverage day is older than the team's latest day")
+	}
+	measured(t, "TestTheCoverageGrainCountIsComparedWithTheStore")
 	latestOnly := run(func(team string, _ EstimateCoverage) any { return onLatestDay[team] }, false)
-	if got := on(latestOnly, grainPath, "store"); older == 0 || got != older {
+	if got := on(latestOnly, grainPath, "store"); got != older {
 		t.Fatalf("%d teams have a work scope with an older newest day, %d grain findings for a latest-day count", older, got)
 	}
 
@@ -1991,7 +1996,7 @@ func readinessRun(t *testing.T, planes Planes) (*Report, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"throughputForecast"}, Planes: planes}
+	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, Today: captureDay(manifest), ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"throughputForecast"}, Planes: planes}
 	return oracle.Run(context.Background())
 }
 
@@ -2089,7 +2094,7 @@ func TestAShortHistoryIsProbedWithWindowsTheDataCanTellApart(t *testing.T) {
 	}
 	same := fakeRun(t, "throughputForecast", recordedThroughput(t, clamp), nil)
 	rr := same.Root("throughputForecast")
-	if count(rr) != 3 || len(same.Expired()) != 0 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 0 {
+	if count(rr) != 2 || len(same.Expired()) != 0 || len(rr.CodeRead) != 0 || len(probeInvalid(rr)) != 0 {
 		t.Fatalf("a short history, windows told apart: %d differences, expired %v, code read %v, invalid %v", count(rr), same.Expired(), rr.CodeRead, rr.Invalid)
 	}
 	for _, d := range rr.Differences {

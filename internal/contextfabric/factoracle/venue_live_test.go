@@ -34,10 +34,10 @@ func venueEnv(t *testing.T, name string) string {
 }
 
 // venueWindow is the oracle window: MaxWindowDays ending at the next UTC
-// midnight, or at ACR_O4_WINDOW_END.
+// midnight (venueWindowEnd), or at ACR_O4_WINDOW_END.
 func venueWindow(t *testing.T) Window {
 	t.Helper()
-	end := time.Now().UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
+	end := venueWindowEnd(time.Now())
 	if raw := os.Getenv("ACR_O4_WINDOW_END"); raw != "" {
 		parsed, err := time.Parse("2006-01-02", raw)
 		if err != nil {
@@ -59,6 +59,7 @@ func venueConfig(t *testing.T) VenueConfig {
 		OrgID:    need("ACR_O4_ORG_ID"),
 		Window:   venueWindow(t),
 		OpsBuild: os.Getenv("ACR_O4_OPS_BUILD"), AcrBuild: os.Getenv("ACR_O4_ACR_BUILD"),
+		VenueNote: os.Getenv("ACR_O4_VENUE_NOTE"),
 		// The roots the venue is known not to serve on a path. A root that is
 		// unavailable and not named here fails the run.
 		ListenerDark: rootList("ACR_O4_LISTENER_DARK"), OperationDark: rootList("ACR_O4_OPERATION_DARK"),

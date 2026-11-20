@@ -38,6 +38,10 @@ type VenueConfig struct {
 	OpsBuild string
 	// AcrBuild names the acr build the venue runs.
 	AcrBuild string
+	// VenueNote says where the venue data comes from (for example that the
+	// investment categories are a mock provider's), so a reader of the
+	// capture never takes them for model output.
+	VenueNote string
 	// ListenerDark and OperationDark name the root fields the venue does not
 	// serve through graphql_query and through run_operation (Oracle).
 	ListenerDark  []string
@@ -136,6 +140,13 @@ type LiveRun struct {
 // is read before and after, and a run over a store that moved is refused
 // (the error names the tables). Rows a job writes and rows a background merge
 // removes both read as a store that moved.
+// venueWindowEnd is the default end of a venue window: the next UTC midnight,
+// so the window holds the capture day. Which readers count that day is each
+// reader's own rule (Oracle.Today, analyticsWindow).
+func venueWindowEnd(now time.Time) time.Time {
+	return now.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
+}
+
 // venuePaceInterval keeps a run under the venue's default request budget of
 // 60 per minute per request class and credential.
 const venuePaceInterval = 1100 * time.Millisecond
@@ -166,7 +177,7 @@ func RunLive(ctx context.Context, cfg VenueConfig) (*LiveRun, error) {
 			return nil, err
 		}
 		planes := &VenuePlanes{URL: cfg.MCPURL, TokenFile: cfg.TokenFile, MinInterval: venuePaceInterval, Logf: cfg.Logf}
-		oracle := &Oracle{Policy: policy, Planes: planes, Store: store, Window: cfg.Window,
+		oracle := &Oracle{Policy: policy, Planes: planes, Store: store, Window: cfg.Window, Today: time.Now().UTC().Truncate(24 * time.Hour),
 			ListenerDark: cfg.ListenerDark, OperationDark: cfg.OperationDark}
 		report, err := oracle.Run(ctx)
 		if count, waited := planes.LimitedCalls(); cfg.Logf != nil {
@@ -309,6 +320,8 @@ type Manifest struct {
 	// OpsBuild is the ops build the recorded replies came from.
 	OpsBuild string `json:"ops_build"`
 	AcrBuild string `json:"acr_build"`
+	// VenueNote is VenueConfig.VenueNote: where the venue data comes from.
+	VenueNote string `json:"venue_note,omitempty"`
 	// SchemaDigest is the SDL the shapes and the replies belong to. A build
 	// that pins another SDL must be captured again.
 	SchemaDigest string `json:"schema_digest"`
@@ -344,6 +357,9 @@ type Manifest struct {
 	// the teams before it that gave no backlog size.
 	SubjectTeam         string `json:"subject_team,omitempty"`
 	SubjectTeamsSkipped int    `json:"subject_teams_skipped,omitempty"`
+	// RepoScopeIDCheck is the raw check of the compoundingRisk REPO rows
+	// against the extract, before scrubbing: counts only.
+	RepoScopeIDCheck *ScopeIDCheck `json:"repo_scope_id_check,omitempty"`
 }
 
 // Capture file names under the capture directory.
@@ -356,8 +372,9 @@ const (
 // Capture runs the oracle on the venue and writes the scrubbed extract, the
 // scrubbed recorded replies and the manifest to dir.
 func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error) {
-	if strings.TrimSpace(cfg.OpsBuild) == "" {
-		return nil, fmt.Errorf("a capture must name the ops build its replies come from")
+	cfg.OpsBuild, cfg.AcrBuild = ScrubBuild(cfg.OpsBuild), ScrubBuild(cfg.AcrBuild)
+	if cfg.OpsBuild == "" {
+		return nil, fmt.Errorf("a capture must name the ops build (a commit) its replies come from")
 	}
 	run, err := RunLive(ctx, cfg)
 	if err != nil {
@@ -366,6 +383,17 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 	// A run that is not a measurement is not recorded.
 	if invalid := run.Report.Invalid(); len(invalid) > 0 {
 		return run, fmt.Errorf("the venue run is not a measurement; nothing was written: %s", strings.Join(invalid, "; "))
+	}
+	rawAnswers, err := servedData(run.Oracle)
+	if err != nil {
+		return nil, err
+	}
+	scopeCheck := checkRepoScopeIDs(run.Extract, rawAnswers)
+	if cfg.Logf != nil {
+		cfg.Logf("%s", scopeCheck.Summary())
+	}
+	if len(scopeCheck.Misses) > 0 {
+		return run, fmt.Errorf("a replay could not join these REPO rows; nothing was written: %s", scopeCheck.Summary())
 	}
 	scrubber, err := NewScrubber(cfg.OrgID)
 	if err != nil {
@@ -460,10 +488,10 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 	}
 	manifest := Manifest{
 		CapturedAt: time.Now().UTC().Format(time.RFC3339), Window: cfg.Window, FixtureOrg: FixtureOrgID,
-		OpsBuild: cfg.OpsBuild, AcrBuild: cfg.AcrBuild,
+		OpsBuild: cfg.OpsBuild, AcrBuild: cfg.AcrBuild, VenueNote: strings.TrimSpace(cfg.VenueNote),
 		SchemaDigest: run.Oracle.Policy.Catalogue().SchemaDigest(), ContractDigests: contractDigestsOf(run.Oracle.Policy), FactQueryVersion: devhealthfacts.QueryVersion,
 		VenueFactQueryVersions: sortedKeys(run.Oracle.FactVersions),
-		Rows:                   map[string]int{}, Residual: run.Oracle.Residual, Expect: map[string]RootExpectation{},
+		Rows:                   map[string]int{}, Residual: run.Oracle.Residual, Expect: map[string]RootExpectation{}, RepoScopeIDCheck: &scopeCheck,
 		ListenerDark: append([]string{}, cfg.ListenerDark...), OperationDark: append([]string{}, cfg.OperationDark...),
 	}
 	for _, d := range run.Oracle.deniedList {
@@ -521,6 +549,31 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 		return nil, err
 	}
 	return run, nil
+}
+
+var buildToken = regexp.MustCompile(`^(dev-health-(ops|acr)|(sha-)?[0-9a-f]{7,40}|v?[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9a-z.]+)?)$`)
+
+// ScrubBuild keeps the repository names, commits and versions of a build
+// description and drops every other word: a machine, host or registry name
+// of the venue never reaches the manifest.
+func ScrubBuild(build string) string {
+	var kept []string
+	for _, word := range strings.Fields(build) {
+		if word = strings.Trim(word, "(),;"); buildToken.MatchString(word) {
+			kept = append(kept, word)
+		}
+	}
+	return strings.Join(kept, " ")
+}
+
+// captureDay is the start of the UTC day a capture was taken (its Oracle.Today
+// in recorded mode). A manifest with no readable captured_at gives zero.
+func captureDay(m Manifest) time.Time {
+	at, err := time.Parse(time.RFC3339, m.CapturedAt)
+	if err != nil {
+		return time.Time{}
+	}
+	return at.UTC().Truncate(24 * time.Hour)
 }
 
 // contractDigestsOf is contractDigest of every operation the policy serves.
@@ -735,10 +788,8 @@ func scrubReply(s *Scrubber, schema *ast.Schema, shape Shape, variables map[stri
 			case replyWorkScope:
 				return s.Token("scope", t), nil
 			case replyScopeID:
-				if scope, _ := parent["scope"].(string); strings.EqualFold(scope, "repo") {
-					return s.UUID(t), nil
-				}
-				return s.Token("team", t), nil
+				scope, _ := parent["scope"].(string)
+				return scrubRiskScopeID(s, scope, t), nil
 			case replyCatalogValue:
 				switch dimension {
 				case "REPO":

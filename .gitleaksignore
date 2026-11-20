@@ -11,3 +11,41 @@ internal/auth/testdata/web-approver.v1.json:jwt:76
 internal/auth/testdata/web-approver.v1.json:jwt:77
 # history only: a fake token literal that commit 6cd9df23 added and a later commit replaced with a run-time join; the row is pinned to that commit and can match nothing else
 6cd9df239969dd316f1d1d7e32375843b884f437:internal/auth/approval_decision_test.go:jwt:24
+
+# chris (2026-11-20, via the CHAOS-14023 lead): "you can always append to .gitleaksignore". Class: O4 venue capture scrubber pseudonyms ("h-" + 16 hex, HMAC under a per-capture random key), not credentials.
+internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2181
+internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2186
+internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2196
+internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2201
+internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2252
+internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2257
+internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2267
+internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2272
+internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18758
+internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18763
+internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18773
+internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18778
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2171
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2181
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2191
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2201
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2206
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2242
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2252
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2262
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2272
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2277
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18777
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18787
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18797
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18807
+24cd605ccd16a7990b501728f533a7e175e780a0:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18812
+# CHAOS-14023 r13 capture: scrubber pseudonyms ("h-"+16 hex) in factoracle testdata replies.json, not credentials; append allowed by chris 2026-11-20
+c1dd2c9024876d862b2dd5265ce00c3340587f0a:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2191
+c1dd2c9024876d862b2dd5265ce00c3340587f0a:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2206
+c1dd2c9024876d862b2dd5265ce00c3340587f0a:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2262
+c1dd2c9024876d862b2dd5265ce00c3340587f0a:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2277
+c1dd2c9024876d862b2dd5265ce00c3340587f0a:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18781
+c1dd2c9024876d862b2dd5265ce00c3340587f0a:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18786
+c1dd2c9024876d862b2dd5265ce00c3340587f0a:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18791
+c1dd2c9024876d862b2dd5265ce00c3340587f0a:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18806

@@ -152,8 +152,11 @@ func (o SlogObserver) ObserveProjectionOutcome(outcome Outcome) {
 		// Same discipline as the embedder's model-identity error: name the
 		// classified thing, never the received text.
 		failureClass := classifyOutcomeError(outcome.Err)
-		logger.Error("context_fabric: projection tick failed; checkpoint held for replay",
-			append(attrs, "failure_class", contextfabric.SanitizeLogAttr(failureClass))...)
+		attrs = append(attrs, "failure_class", contextfabric.SanitizeLogAttr(failureClass))
+		if cause, ok := contextfabric.DependencyCause(outcome.Err); ok {
+			attrs = append(attrs, "dependency_cause", contextfabric.SanitizeLogAttr(cause))
+		}
+		logger.Error("context_fabric: projection tick failed; checkpoint held for replay", attrs...)
 		if o.PairFailure != nil {
 			o.PairFailure(failureClass)
 		}

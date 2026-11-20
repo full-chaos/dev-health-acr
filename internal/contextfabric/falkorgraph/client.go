@@ -540,7 +540,7 @@ func classifyFalkorError(operation string, err error) error {
 	case strings.Contains(message, "WRONGPASS") || strings.Contains(message, "NOAUTH"):
 		return fmt.Errorf("%s: %w", operation, ErrUnauthorized)
 	default:
-		return safeDependencyError(operation, err)
+		return flattenDependencyError(operation, err, true)
 	}
 }
 
@@ -607,6 +607,15 @@ var neutralClass = map[error]error{
 }
 
 func safeDependencyError(operation string, err error) error {
+	return flattenDependencyError(operation, err, false)
+}
+
+// flattenDependencyError is safeDependencyError. driverErr is true only at the
+// FalkorDB SDK boundary (classifyFalkorError on a raw go-redis error): only
+// there does the residual error get a driver cause. Every other caller also
+// flattens Postgres and ClickHouse errors (epoch resolution, the identity
+// universe), and a cause there would point at FalkorDB.
+func flattenDependencyError(operation string, err error, driverErr bool) error {
 	if err == nil {
 		return nil
 	}
@@ -618,6 +627,12 @@ func safeDependencyError(operation string, err error) error {
 			return fmt.Errorf("%s: %w", operation, sentinel)
 		}
 	}
+	// A second call on an already flattened error keeps the first call's
+	// driver cause.
+	var flattened *dependencyError
+	if errors.As(err, &flattened) {
+		return &dependencyError{operation: operation, cause: flattened.cause}
+	}
 	// CHAOS-4874: the unclassified residual is the arm that eats a genuine
 	// connection-refused, a dropped-mid-handshake EOF and a TLS alert (see
 	// classifyConnError's own doc comment above). Before this wrap it
@@ -627,5 +642,30 @@ func safeDependencyError(operation string, err error) error {
 	// is the honest neutral class: a bounded dependency failure a caller may
 	// retry. Only the sentinel's own text joins the message -- the driver's
 	// text is still never included, which is this function's whole purpose.
-	return fmt.Errorf("context fabric graph dependency error during %s: %w", operation, contextfabric.ErrUnavailable)
+	if !driverErr {
+		return fmt.Errorf("context fabric graph dependency error during %s: %w", operation, contextfabric.ErrUnavailable)
+	}
+	cause := DependencyCauseOther
+	if class, _ := readFailureCause(err); class != "" {
+		cause = class
+	}
+	return &dependencyError{operation: operation, cause: cause}
 }
+
+// dependencyError is safeDependencyError's residual result. Its text is the
+// generic served text and it unwraps to contextfabric.ErrUnavailable only:
+// the raw driver error is not in the chain, so no caller can reach its text
+// or address. DependencyCause names the driver cause from the closed read
+// failure vocabulary (read_retry.go) or DependencyCauseOther.
+type dependencyError struct {
+	operation string
+	cause     string
+}
+
+func (e *dependencyError) Error() string {
+	return "context fabric graph dependency error during " + e.operation + ": " + contextfabric.ErrUnavailable.Error()
+}
+
+func (e *dependencyError) Unwrap() error { return contextfabric.ErrUnavailable }
+
+func (e *dependencyError) DependencyCause() string { return e.cause }

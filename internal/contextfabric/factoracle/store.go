@@ -199,8 +199,12 @@ func NewStore(extract *Extract) (*Store, error) {
 	return s, nil
 }
 
+// holds dates a work unit by its end: to_ts in [Start, End), the rule of the
+// ops investment reads (ops internal/queryapi/analytics/investmentwindow.go,
+// dated by end) and of the acr investment mix (devhealthfacts
+// investment_repo_mix.go).
 func (w Window) holds(gen unitGeneration) bool {
-	return gen.fromTS.Before(w.End) && !gen.toTS.Before(w.Start)
+	return !gen.toTS.Before(w.Start) && gen.toTS.Before(w.End)
 }
 
 func (s *Store) inScope(id string) bool {

@@ -27,6 +27,9 @@ const (
 	ReadFailureLoading           = "loading"
 	ReadFailureTimeout           = "timeout"
 	ReadFailurePoolTimeout       = "pool_timeout"
+	// DependencyCauseOther is the dependency cause of a driver error with no
+	// class above (a TLS alert, an unknown reply).
+	DependencyCauseOther = "other"
 )
 
 // GraphReadAttemptTelemetry is the optional extension of GraphTelemetry for a

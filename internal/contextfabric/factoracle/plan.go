@@ -610,7 +610,7 @@ type temporaryAllowance struct {
 var temporaryAllowances = map[string]temporaryAllowance{
 	"throughputForecast": {
 		Operation: "throughputForecast", Window: "input.historyWeeks", Narrow: 4, Echo: "throughputForecast.historyWeeks",
-		Paths:    []string{"throughputForecast.wipCongestion", "throughputForecast.staleWip", "throughputForecast.estimateCoverage"},
+		Paths:    []string{"throughputForecast.staleWip", "throughputForecast.estimateCoverage"},
 		Contract: "sha256:080099573a1f73dd8f739ed711627f037cddc166b3e2bdc5ba97ada243d0c24f",
 	},
 	"capacityForecast": {
