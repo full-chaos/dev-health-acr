@@ -368,18 +368,24 @@ compose() {
 dho() {
   local pg ch
   pg="$(cat "$SECRETS/postgres-password")"; ch="$(cat "$SECRETS/clickhouse-password")"
-  compose run --rm --no-deps -T \
-    -e "MIGRATION_DATABASE_URI=postgres://postgres:${pg}@postgres:5432/postgres?sslmode=disable" \
-    -e "POSTGRES_URI=postgres://postgres:${pg}@postgres:5432/postgres?sslmode=disable" \
-    -e "CLICKHOUSE_URI=clickhouse://ch:${ch}@clickhouse:9000/default" \
-    query-api "$@"
+  # Values reach the container through the environment (-e NAME), never through argv.
+  (
+    export MIGRATION_DATABASE_URI="postgres://postgres:${pg}@postgres:5432/postgres?sslmode=disable"
+    # shellcheck disable=SC2030 # exported to this subshell only.
+    export POSTGRES_URI="$MIGRATION_DATABASE_URI" CLICKHOUSE_URI="clickhouse://ch:${ch}@clickhouse:9000/default"
+    compose run --rm --no-deps -T -e MIGRATION_DATABASE_URI -e POSTGRES_URI -e CLICKHOUSE_URI query-api "$@"
+  )
 }
 
 # dho_analytics is dho with the ClickHouse DSN alone: `fixtures generate` refuses a POSTGRES_URI.
 dho_analytics() {
   local ch
   ch="$(cat "$SECRETS/clickhouse-password")"
-  compose run --rm --no-deps -T -e "CLICKHOUSE_URI=clickhouse://ch:${ch}@clickhouse:9000/default" query-api "$@"
+  (
+    # shellcheck disable=SC2031 # exported to this subshell only.
+    export CLICKHOUSE_URI="clickhouse://ch:${ch}@clickhouse:9000/default"
+    compose run --rm --no-deps -T -e CLICKHOUSE_URI query-api "$@"
+  )
 }
 
 ch_query() {
@@ -631,10 +637,10 @@ provision_user() {
   local email="o4-venue@example.invalid" org pg user
   org="$(cat "$SECRETS/org-id")"
   [ -f "$SECRETS/user-password" ] || write_private "$SECRETS/user-password" "$(random_secret)"
-  dho admin users create --email "$email" --password "$(cat "$SECRETS/user-password")" --full-name 'O4 Venue' >/dev/null 2>&1 || true
+  dho admin users create --email "$email" --password-stdin --full-name 'O4 Venue' < "$SECRETS/user-password" >/dev/null 2>&1 || true
   dho admin users update --email "$email" --verified >/dev/null || die 'the venue user could not be marked verified'
   pg="$(cat "$SECRETS/postgres-password")"
-  user="$(compose exec -T -e "PGPASSWORD=${pg}" postgres psql -h postgres -U postgres -d postgres -At -q -v ON_ERROR_STOP=1 -c "
+  user="$(export PGPASSWORD="$pg"; compose exec -T -e PGPASSWORD postgres psql -h postgres -U postgres -d postgres -At -q -v ON_ERROR_STOP=1 -c "
     INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
       SELECT gen_random_uuid(), '${org}', u.id, 'owner', now(), now(), now() FROM users u
       WHERE u.email = '${email}' AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.org_id = '${org}' AND m.user_id = u.id);
@@ -681,7 +687,7 @@ step_routes() {
   assert_own_run go-api
   local email="o4-venue-admin@example.com" pg token
   [ -f "$SECRETS/admin-password" ] || write_private "$SECRETS/admin-password" "$(random_secret)"
-  dho admin users create --email "$email" --password "$(cat "$SECRETS/admin-password")" --full-name 'O4 Venue Admin' >/dev/null 2>&1 || true
+  dho admin users create --email "$email" --password-stdin --full-name 'O4 Venue Admin' < "$SECRETS/admin-password" >/dev/null 2>&1 || true
   dho admin users update --email "$email" --verified --superuser >/dev/null || die 'the venue admin could not be marked a verified superuser'
   # shellcheck disable=SC2016 # expanded by the container's sh.
   # The login runs in a throwaway curl container on this project's own network only.
@@ -691,12 +697,15 @@ step_routes() {
   [ -n "$token" ] || die 'the venue admin login returned no access token'
   write_private "$SECRETS/admin-token" "$token"
   pg="$(cat "$SECRETS/postgres-password")"
+  # shellcheck disable=SC2031 # unset after the one command.
+  export POSTGRES_URI="postgres://postgres:${pg}@postgres:5432/postgres?sslmode=disable"
   compose run --rm --no-deps -T --user "$(id -u):$(id -g)" \
     -v "$SECRETS/admin-token:/run/o4-venue/admin-token:ro" \
     -e GO_API_ROUTING_ACCESS_TOKEN_FILE=/run/o4-venue/admin-token \
-    -e "POSTGRES_URI=postgres://postgres:${pg}@postgres:5432/postgres?sslmode=disable" \
+    -e POSTGRES_URI \
     query-api goapi routing enable -registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo \
     -operations all-mcp -mode canary -recorded-by o4-venue -review-evidence 'O4 venue capture on a synthetic organization' 2>&1 | mask_ids >&2
+  unset POSTGRES_URI
   rm -f "$SECRETS/admin-token"
   note 'MCP class roots enabled (canary); the admin token is removed'
 }
