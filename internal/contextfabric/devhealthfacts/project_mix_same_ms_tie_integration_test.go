@@ -189,6 +189,72 @@ func TestProjectMixRetriesWhenAPinnedUnitGainsASameMillisecondRowBetweenThePhase
 	}
 }
 
+// Two same-millisecond versions of each tie unit differ only in to_ts, one
+// inside the window and one outside: phase 0 decides from the later version's
+// to_ts whether the unit is in the window. The want is the same read on a
+// database that holds only the later rows; a database that holds only the
+// earlier rows shows that the window choice moves the answer.
+func TestProjectMixSameMillisecondTieTakesTheLaterVersionsWindowAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
+	inside, outside := -73*time.Hour, -60*24*time.Hour
+	for name, spans := range map[string][]time.Duration{
+		"in-window version written last":     {outside, inside},
+		"out-of-window version written last": {inside, outside},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			const orgID = "org-7323-tie-window"
+			ids := []string{"linear:proj-1", "linear:proj-2", "linear:proj-3"}
+			seed := func(direct clickhousedriver.Conn, versions []time.Duration) time.Time {
+				t.Helper()
+				at := seedCHAOS7257Parity(t, ctx, direct, orgID)
+				for _, id := range tieUnitIDs("wu-span") {
+					insertMembership(t, ctx, direct, orgID, id, at)
+					for _, span := range versions {
+						insertRunVersionAtMilli(t, ctx, direct, orgID, id, repoUUID("r1a"), `{"issues":[],"prs":[]}`, "risk", span.String(), at.Add(-time.Hour), at.Add(span))
+					}
+				}
+				return at
+			}
+			query, direct := newScopedCHAOS7257Client(t, nil)
+			createCHAOS7257Tables(t, ctx, direct)
+			// Merges stay stopped until OPTIMIZE FINAL, so the reads before it
+			// see both versions of every tie.
+			if err := direct.Exec(ctx, `SYSTEM STOP MERGES work_unit_investments`); err != nil {
+				t.Fatalf("stop merges: %v", err)
+			}
+			at := seed(direct, spans)
+			var tied uint64
+			if err := direct.QueryRow(ctx, `SELECT countIf(rows = 2) FROM (SELECT count() AS rows FROM work_unit_investments WHERE org_id = ? AND startsWith(work_unit_id, 'wu-span-') GROUP BY work_unit_id)`, orgID).Scan(&tied); err != nil || tied != tieUnits {
+				t.Fatalf("%d of %d tie units hold both versions (%v)", tied, tieUnits, err)
+			}
+			window := devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: at.Add(-10 * 24 * time.Hour), End: at.Add(24 * time.Hour)}
+			wantQuery, wantDirect := newScopedCHAOS7257Client(t, nil)
+			createCHAOS7257Tables(t, ctx, wantDirect)
+			seed(wantDirect, spans[len(spans)-1:])
+			want := runRollupPhased(t, ctx, wantQuery, orgID, ids, window)
+			earlierQuery, earlierDirect := newScopedCHAOS7257Client(t, nil)
+			createCHAOS7257Tables(t, ctx, earlierDirect)
+			seed(earlierDirect, spans[:1])
+			if err := rollupRowsDiffer(want, runRollupPhased(t, ctx, earlierQuery, orgID, ids, window)); err == nil {
+				t.Fatal("control: the earlier versions give the answer of the later ones, so the case proves nothing")
+			}
+			arms := map[string][]rollupRow{
+				"phased":                  runRollupPhased(t, ctx, query, orgID, ids, window),
+				"phased, chunks of 1 row": runRollupPhased(t, devhealthfacts.WithProjectMixChunking(ctx, 0, 1), query, orgID, ids, window),
+			}
+			mergeWorkUnitInvestments(t, ctx, direct)
+			arms["phased, after OPTIMIZE FINAL"] = runRollupPhased(t, ctx, query, orgID, ids, window)
+			for arm, got := range arms {
+				if err := rollupRowsDiffer(want, got); err != nil {
+					t.Errorf("%s: the tie did not take the later version's window: %v", arm, err)
+				}
+			}
+		})
+	}
+}
+
 // The growth guard compares each pinned unit on its own: a merge that collapses
 // one unit's same-millisecond rows (2 -> 1) in the same attempt in which another
 // unit gains one (1 -> 2) leaves the pinned set's total unchanged, and the
