@@ -62,7 +62,7 @@ func readFailureCause(err error) (cause string, retry bool) {
 		return ReadFailureBrokenPipe, true
 	case errors.Is(err, syscall.ECONNABORTED):
 		return ReadFailureConnectionAborted, true
-	case strings.HasPrefix(err.Error(), "LOADING "):
+	case isLoadingReply(err.Error()):
 		return ReadFailureLoading, true
 	case errors.Is(err, redis.ErrPoolTimeout):
 		return ReadFailurePoolTimeout, false
@@ -72,6 +72,11 @@ func readFailureCause(err error) (cause string, retry bool) {
 		return ReadFailureTimeout, false
 	}
 	return "", false
+}
+
+// isLoadingReply matches the LOADING error code, alone or followed by detail.
+func isLoadingReply(message string) bool {
+	return message == "LOADING" || strings.HasPrefix(message, "LOADING ")
 }
 
 // readRetryBackoff is the wait before attempt+1: 50ms, 100ms, 200ms, 400ms.
@@ -87,6 +92,18 @@ func readRetryBackoff(attempt int) time.Duration {
 // no attempt is sent past the deadline. When the caller's context has ended,
 // a failure with a cause returns the context's error, which is what the
 // driver's own retry returned before (TestReadsHonourTheCallersDeadlineOnTheNetworkIO).
+//
+// A cancel is honoured between attempts and during the wait, not inside a
+// driver call, the same as main (client.go:24-27,
+// TestACancelDoesNotStopAReadInFlight): a cancel that lands while the driver
+// sets up a connection or waits on the socket lets that send go out, and a
+// reply that arrives returns as is.
+//
+// Each failed attempt with a transient cause is recorded once: retried=true
+// only when the next send starts, retried=false when the attempts, the
+// deadline or the caller's end stop it. A timeout or pool timeout is recorded
+// only while the caller's context is live, so a read that ran into the
+// caller's own deadline is not counted as a dependency timeout.
 func retryRead[T any](ctx context.Context, s *sdkAPI, operation string, call func() (T, error)) (T, error) {
 	maxAttempts := int(s.config.MaxAttempts)
 	for attempt := 1; ; attempt++ {
@@ -99,6 +116,9 @@ func retryRead[T any](ctx context.Context, s *sdkAPI, operation string, call fun
 			return value, err
 		}
 		if ctxErr := contextEnded(ctx); ctxErr != nil {
+			if retry {
+				s.recordReadAttemptFailed(ctx, operation, attempt, maxAttempts, cause, false)
+			}
 			return value, ctxErr
 		}
 		wait := readRetryBackoff(attempt)
@@ -106,14 +126,19 @@ func retryRead[T any](ctx context.Context, s *sdkAPI, operation string, call fun
 			s.recordReadAttemptFailed(ctx, operation, attempt, maxAttempts, cause, false)
 			return value, err
 		}
-		s.recordReadAttemptFailed(ctx, operation, attempt, maxAttempts, cause, true)
 		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
+			s.recordReadAttemptFailed(ctx, operation, attempt, maxAttempts, cause, false)
 			return value, ctx.Err()
 		case <-timer.C:
 		}
+		if ctxErr := contextEnded(ctx); ctxErr != nil {
+			s.recordReadAttemptFailed(ctx, operation, attempt, maxAttempts, cause, false)
+			return value, ctxErr
+		}
+		s.recordReadAttemptFailed(ctx, operation, attempt, maxAttempts, cause, true)
 	}
 }
 

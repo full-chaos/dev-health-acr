@@ -297,25 +297,170 @@ func TestTheReadBackoffIsCutByTheCallersDeadline(t *testing.T) {
 	}
 }
 
-// TestACancelDuringTheReadBackoffEndsTheRead cancels the context while the
-// first backoff runs: the read ends with the cancel and calls nothing more.
-func TestACancelDuringTheReadBackoffEndsTheRead(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sink := &readAttemptRecorder{onRecord: func(r readAttempt) {
-		if r.retried {
-			cancel()
+// cancelledContext reports Err nil for its first errNilCalls calls and
+// context.Canceled after. done, when set, is already closed. It places a cancel
+// at an exact step of retryRead without timers.
+type cancelledContext struct {
+	context.Context
+	errNilCalls int
+	errCalls    int
+	done        chan struct{}
+}
+
+func (c *cancelledContext) Done() <-chan struct{} { return c.done }
+
+func (c *cancelledContext) Err() error {
+	c.errCalls++
+	if c.errCalls <= c.errNilCalls {
+		return nil
+	}
+	return context.Canceled
+}
+
+func closedChannel() chan struct{} {
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+
+func requireReadAttempts(t *testing.T, got, want []readAttempt) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("records = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("record %d = %+v, want %+v", i, got[i], want[i])
 		}
-	}}
+	}
+}
+
+// TestACancelDuringTheReadBackoffEndsTheRead: a cancel that lands during the
+// wait ends the read at once with the cancel, sends nothing more, and records
+// the failed attempt once as not retried.
+func TestACancelDuringTheReadBackoffEndsTheRead(t *testing.T) {
+	ctx := &cancelledContext{Context: context.Background(), errNilCalls: 1, done: closedChannel()}
+	sink := &readAttemptRecorder{}
+	s := &sdkAPI{config: Config{MaxAttempts: 5, Telemetry: sink}}
+	calls := 0
+	began := time.Now()
+	_, err := retryRead(ctx, s, "list graphs", func() (int, error) { calls++; return 0, io.EOF })
+	spent := time.Since(began)
+	if !errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatalf("calls=%d err=%v, want 1 call and context.Canceled", calls, err)
+	}
+	if spent >= 40*time.Millisecond {
+		t.Fatalf("returned after %s, want at once, not after the 50ms wait", spent)
+	}
+	requireReadAttempts(t, sink.all(), []readAttempt{{operation: "list graphs", attempt: 1, maxAttempts: 5, cause: ReadFailureEOF, retried: false}})
+}
+
+// TestACancelAtTheEndOfTheReadBackoffSendsNothingMore: a cancel that is seen
+// only after the wait ends still stops the next send and is not recorded as a
+// retry.
+func TestACancelAtTheEndOfTheReadBackoffSendsNothingMore(t *testing.T) {
+	ctx := &cancelledContext{Context: context.Background(), errNilCalls: 1}
+	sink := &readAttemptRecorder{}
 	s := &sdkAPI{config: Config{MaxAttempts: 5, Telemetry: sink}}
 	calls := 0
 	_, err := retryRead(ctx, s, "list graphs", func() (int, error) { calls++; return 0, io.EOF })
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("error = %v, want context.Canceled", err)
+	if !errors.Is(err, context.Canceled) || calls != 1 {
+		t.Fatalf("calls=%d err=%v, want 1 call and context.Canceled", calls, err)
 	}
-	if calls != 1 {
-		t.Fatalf("read called %d times, want 1: no attempt after the cancel", calls)
+	requireReadAttempts(t, sink.all(), []readAttempt{{operation: "list graphs", attempt: 1, maxAttempts: 5, cause: ReadFailureEOF, retried: false}})
+}
+
+// TestATransientReadFailureAfterTheCallersEndIsRecordedOnce: a dropped
+// connection that comes back after the caller's context ended returns the
+// context error and is recorded once, not retried. A timeout in the same spot
+// is the caller's own deadline and is not recorded
+// (TestAReadTimeoutAtThePassedDeadlineReturnsTheDeadline).
+func TestATransientReadFailureAfterTheCallersEndIsRecordedOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		err   error
+		cause string
+	}{
+		{"eof", io.EOF, ReadFailureEOF},
+		{"loading", errors.New("LOADING"), ReadFailureLoading},
+	} {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		sink := &readAttemptRecorder{}
+		s := &sdkAPI{config: Config{MaxAttempts: 5, Telemetry: sink}}
+		calls := 0
+		_, err := retryRead(ctx, s, "query context graph", func() (int, error) { calls++; return 0, tc.err })
+		if !errors.Is(err, context.Canceled) || calls != 1 {
+			t.Fatalf("%s: calls=%d err=%v, want 1 call and context.Canceled", tc.name, calls, err)
+		}
+		requireReadAttempts(t, sink.all(), []readAttempt{{operation: "query context graph", attempt: 1, maxAttempts: 5, cause: tc.cause, retried: false}})
 	}
+}
+
+// TestABareLoadingReplyIsRetried drives the real read client: a LOADING
+// reply with or without detail is retried and the read then succeeds.
+func TestABareLoadingReplyIsRetried(t *testing.T) {
+	for _, reply := range []string{"-LOADING\r\n", "-LOADING Redis is loading the dataset in memory\r\n"} {
+		addr, sent := loadingOnceRESPServer(t, reply)
+		sink := &readAttemptRecorder{}
+		s := retrySDKAPI(t, addr, 3, sink)
+		if _, err := s.listGraphs(context.Background()); err != nil {
+			t.Fatalf("%q: error = %v, want success on the second send", reply, err)
+		}
+		if got := sent(); got != 2 {
+			t.Fatalf("%q: GRAPH.LIST sent %d times, want 2", reply, got)
+		}
+		requireReadAttempts(t, sink.all(), []readAttempt{{operation: "list graphs", attempt: 1, maxAttempts: 3, cause: ReadFailureLoading, retried: true}})
+	}
+}
+
+// loadingOnceRESPServer answers the first GRAPH.LIST with reply and every
+// later one with an empty list.
+func loadingOnceRESPServer(t *testing.T, reply string) (string, func() int) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	var mu sync.Mutex
+	lists := 0
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				r := bufio.NewReader(c)
+				for {
+					_, name, err := readRawRESPCommand(r)
+					if err != nil {
+						return
+					}
+					answer := "+OK\r\n"
+					switch name {
+					case "HELLO":
+						answer = "-ERR unknown command 'HELLO'\r\n"
+					case "GRAPH.LIST":
+						mu.Lock()
+						lists++
+						first := lists == 1
+						mu.Unlock()
+						answer = "*0\r\n"
+						if first {
+							answer = reply
+						}
+					}
+					if _, err := io.WriteString(c, answer); err != nil {
+						return
+					}
+				}
+			}(c)
+		}
+	}()
+	return ln.Addr().String(), func() int { mu.Lock(); defer mu.Unlock(); return lists }
 }
 
 // TestTheReadBackoffDoublesFrom50ms pins the waits and that retryRead sleeps
@@ -462,6 +607,9 @@ func TestReadFailureCauseTable(t *testing.T) {
 		{"broken pipe", syscallOpError(syscall.EPIPE), ReadFailureBrokenPipe, true},
 		{"connection aborted", syscallOpError(syscall.ECONNABORTED), ReadFailureConnectionAborted, true},
 		{"loading reply", errors.New("LOADING Redis is loading the dataset in memory"), ReadFailureLoading, true},
+		{"bare loading reply", errors.New("LOADING"), ReadFailureLoading, true},
+		{"loading-like code", errors.New("LOADING_FAILED something"), "", false},
+		{"loading without space", errors.New("LOADINGX"), "", false},
 		{"real read timeout", realReadTimeout(t), ReadFailureTimeout, false},
 		{"os deadline", os.ErrDeadlineExceeded, ReadFailureTimeout, false},
 		{"pool timeout", redis.ErrPoolTimeout, ReadFailurePoolTimeout, false},
