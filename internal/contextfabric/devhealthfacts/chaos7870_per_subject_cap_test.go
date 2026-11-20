@@ -269,3 +269,76 @@ func TestChaos7870FlowScopeBreakdownCutStaysKindWide(t *testing.T) {
 		t.Errorf("Truncated=%v TruncationSubjectLocal=%v, want true false: a scope breakdown cut is kind-wide", result.Truncated, result.TruncationSubjectLocal)
 	}
 }
+
+func chaos7870WorkloadProjectRead(t *testing.T, teamDays, projectDays, projectFirstDay int, withTeam bool) contextfabric.FactProviderResult {
+	t.Helper()
+	var series [][]any
+	for i := 0; i < teamDays; i++ {
+		series = append(series, workloadDailySeriesRow("CHAOS", chaos7870DayString(i), 5, 1.5, 0.5))
+	}
+	for i := 0; i < projectDays; i++ {
+		series = append(series, workloadDailySeriesRow("linear:proj-1", chaos7870DayString(projectFirstDay+i), 5, 1.5, 0.5))
+	}
+	client := &fakeClient{tables: []fakeTable{
+		{match: workloadP50MaxMatch, rows: [][]any{workloadP50MaxRow("linear", "proj-1", 1, 0, 0, 7, "team-p", "scope-p", false, false)}},
+		{match: workloadProjectRollupMatch, rows: [][]any{chaos5931WorkloadRow("linear", "proj-1", "team-p", "Team P", "scope-p", 1.5, 0.2, true, 7, false, false, 10)}},
+		{match: workloadForecastRunMatch, rows: [][]any{{"2026-09-27", uint64(254)}}},
+		{match: workloadBaseQueryMatch, rows: [][]any{workloadRow("CHAOS", "scope-team")}},
+		{match: workloadDailySeriesMatch, rows: series, honorLimit: true},
+	}}
+	subjects := []contextfabric.SubjectRef{projectSubject("linear", "proj-1")}
+	if withTeam {
+		subjects = append([]contextfabric.SubjectRef{teamSubject("CHAOS")}, subjects...)
+	}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactWorkload, Subjects: subjects,
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	return result
+}
+
+func chaos7870FactOf(result contextfabric.FactProviderResult, prefix string) *contextfabric.CanonicalFact {
+	for index := range result.Facts {
+		if strings.HasPrefix(result.Facts[index].Subject.CanonicalID, prefix) {
+			return &result.Facts[index]
+		}
+	}
+	return nil
+}
+
+// A cut on the team's daily table must not overwrite the stale state of an
+// uncut project served in the same read.
+func TestChaos7870TeamCutKeepsTheProjectStale(t *testing.T) {
+	t.Parallel()
+	result := chaos7870WorkloadProjectRead(t, 65, 28, 1, true)
+	project, team := chaos7870FactOf(result, "project"), chaos7870FactOf(result, "team:")
+	if project == nil || team == nil {
+		t.Fatalf("facts = %d, want a team and a project fact", len(result.Facts))
+	}
+	if project.SourceState != contextfabric.SourceStale {
+		t.Errorf("project source state = %q, want stale", project.SourceState)
+	}
+	if team.SourceState != contextfabric.SourceTruncated {
+		t.Errorf("team source state = %q, want truncated", team.SourceState)
+	}
+}
+
+// A project's own daily display cut keeps its earlier reading: the project
+// daily series are not part of the per-team cap change.
+func TestChaos7870ProjectDisplayCutKeepsItsReading(t *testing.T) {
+	t.Parallel()
+	for _, days := range []int{65, 199} {
+		fresh := chaos7870WorkloadProjectRead(t, 0, days, 0, false)
+		if fresh.Truncated || fresh.TruncationSubjectLocal || fresh.Facts[0].SourceState == contextfabric.SourceTruncated {
+			t.Errorf("%d fresh project days: Truncated=%v local=%v state=%q, want the reading before this change", days, fresh.Truncated, fresh.TruncationSubjectLocal, fresh.Facts[0].SourceState)
+		}
+		stale := chaos7870WorkloadProjectRead(t, 0, days, 1, false)
+		if stale.Facts[0].SourceState != contextfabric.SourceStale {
+			t.Errorf("%d stale project days: state = %q, want stale", days, stale.Facts[0].SourceState)
+		}
+	}
+}

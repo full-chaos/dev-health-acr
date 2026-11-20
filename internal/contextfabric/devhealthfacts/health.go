@@ -1145,6 +1145,9 @@ func factsWithDailyHealthCut(facts []contextfabric.CanonicalFact) int {
 
 func markSubjectLocalTruncation(facts []contextfabric.CanonicalFact) {
 	for index := range facts {
+		if facts[index].SourceState != "" {
+			continue
+		}
 		if factHasDailyHealthCut(facts[index]) {
 			facts[index].SourceState = contextfabric.SourceTruncated
 		} else {

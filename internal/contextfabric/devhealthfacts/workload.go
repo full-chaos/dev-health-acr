@@ -123,9 +123,7 @@ func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Prin
 	// when it is the only truncation, the cut is subject-local.
 	var dailyOmitted int64
 	for _, fact := range facts {
-		if value, ok := fact.Fields["daily_workload_omitted_count"]; ok && value.Integer != nil {
-			dailyOmitted += *value.Integer
-		}
+		dailyOmitted += factOmittedRowCount(fact)
 	}
 	subjectLocal := !truncated && markSubjectLocalCuts(facts, int(dailyOmitted))
 	truncated = truncated || dailyOmitted > 0
