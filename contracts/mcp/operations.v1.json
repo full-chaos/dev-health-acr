@@ -3,10 +3,10 @@
   "generator": "cmd/operationpolicy",
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "b0f621e5268d9a5f3b6d99968d51d144054daef4",
+    "commit": "2c115402dbbb3b11f28a0029cdbe3b9da5c3e891",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
-    "schema_digest": "sha256:c3340e3a18800084eb8eccee7c7bb916153cc5ef6a6c4ae07ce35e85d0c8a4d7",
-    "registry_sha256": "d1d431efeba9cc66127d8613a388be677aaecac9fad286db473f170c4a015788",
+    "schema_digest": "sha256:7f8167568a634f87d77d4c28e9fb34efa17078cbff1b5d950b5e0e334d4f26b3",
+    "registry_sha256": "a5b10041070294faf37a75253ff2a024af2656442b341562b8202c65f6ca26c0",
     "registry_rows": 67
   },
   "person_name_tokens": [
@@ -9917,7 +9917,7 @@
     {
       "name": "testopsTestWindow",
       "kind": "query",
-      "digest": "614e1da8cdd06f40b68d5c57011462c5b3a8c2dbffa465ed95bc98d782389354",
+      "digest": "2f4f9cac166ce3fac54b9eb4eca7aa6f1b279a2ff5b240d9a0310c360dad9f2d",
       "code": "unknown_operation",
       "reason": "no scope rule or no honest status yet (design D.3)"
     },

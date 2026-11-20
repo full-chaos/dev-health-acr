@@ -324,12 +324,12 @@ func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *tes
 	}
 }
 
-// Fixture: the GET /registry body of ops b0f621e5 (the query-api prod serves), taken from the
+// Fixture: the GET /registry body of ops 2c115402 (the query-api prod serves), taken from the
 // production handler constructor (newQueryHandler, as buildQueryRoute builds it, with the schema
 // digest digest.Schema(schemav1.SDL)): HTTP 200. The catalogue pinned from that commit must match
 // it with zero drift.
 func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T) {
-	body, err := os.ReadFile("testdata/query_registry_b0f621e5.json")
+	body, err := os.ReadFile("testdata/query_registry_2c115402.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T)
 	w, cat, buf := newWatch(t, f, nil)
 	w.Start()
 	w.Wait()
-	const want = "sha256:c3340e3a18800084eb8eccee7c7bb916153cc5ef6a6c4ae07ce35e85d0c8a4d7"
+	const want = "sha256:7f8167568a634f87d77d4c28e9fb34efa17078cbff1b5d950b5e0e334d4f26b3"
 	if got := cat.StampedSchemaDigest(); got != want || cat.SchemaDigest() != want {
 		t.Fatalf("stamp %s pinned %s, want %s", got, cat.SchemaDigest(), want)
 	}
@@ -461,6 +461,13 @@ func TestRegistryWatch_0b763a85_served_registry_against_the_new_pin_shows_digest
 	}
 }
 
+// The one operation whose registry row moved between ops b0f621e5 and ops 2c115402: the
+// testopsTestWindow document, which now selects reportCompleteness (the old text stays
+// registered as a legacy text, so it is not a row of the served set).
+func registryDriftB0f621e5To2c115402() map[string]string {
+	return map[string]string{"testopsTestWindow": "changed"}
+}
+
 // The three operations whose registry row moved between ops f67b568a and ops b0f621e5: the
 // throughputForecast document selecting backlogState, backlogAsOfDay and grainCount, and the two
 // not-served documents operatingReview and testopsRisk.
@@ -468,14 +475,14 @@ func registryDriftF67b568aToB0f621e5() map[string]string {
 	return map[string]string{"operatingReview": "changed", "testopsRisk": "changed", "throughputForecast": "changed"}
 }
 
-// The catalogue pinned at ops f67b568a (the previous pin) against the registry ops b0f621e5
-// serves: one schema digest drift warning and the three changed documents.
-func TestRegistryWatch_previous_f67b568a_pin_against_the_b0f621e5_registry_shows_digest_drift_and_three_operations(t *testing.T) {
-	oldPin, err := os.ReadFile("testdata/operations_f67b568a.v1.json")
+// The catalogue pinned at ops b0f621e5 (the previous pin) against the registry ops 2c115402
+// serves: one schema digest drift warning and the one changed document.
+func TestRegistryWatch_previous_b0f621e5_pin_against_the_2c115402_registry_shows_digest_drift_and_one_operation(t *testing.T) {
+	oldPin, err := os.ReadFile("testdata/operations_b0f621e5.v1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := os.ReadFile("testdata/query_registry_b0f621e5.json")
+	body, err := os.ReadFile("testdata/query_registry_2c115402.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -483,7 +490,7 @@ func TestRegistryWatch_previous_f67b568a_pin_against_the_b0f621e5_registry_shows
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := cat.SchemaDigest(); got != "sha256:76218f99d03ba1ca80c91c8d45c1ecf38570f2c139d27593415734c096fb6ec7" {
+	if got := cat.SchemaDigest(); got != "sha256:c3340e3a18800084eb8eccee7c7bb916153cc5ef6a6c4ae07ce35e85d0c8a4d7" {
 		t.Fatalf("old pin digest %s", got)
 	}
 	f := newRegistryFixture(t)
@@ -499,18 +506,18 @@ func TestRegistryWatch_previous_f67b568a_pin_against_the_b0f621e5_registry_shows
 	w.Wait()
 	out := buf.String()
 	ws := warns(out)
-	if len(ws) != 4 || !strings.Contains(ws[0], "registry digest drift") || !strings.Contains(ws[0], "served_digest=sha256:c3340e3a18800084eb8eccee7c7bb916153cc5ef6a6c4ae07ce35e85d0c8a4d7") || !strings.Contains(ws[0], "drifted_ops=3") {
-		t.Fatalf("want the digest drift line (served b0f621e5, drifted_ops=3) + 3 operation drift lines: %q", ws)
+	if len(ws) != 2 || !strings.Contains(ws[0], "registry digest drift") || !strings.Contains(ws[0], "served_digest=sha256:7f8167568a634f87d77d4c28e9fb34efa17078cbff1b5d950b5e0e334d4f26b3") || !strings.Contains(ws[0], "drifted_ops=1") {
+		t.Fatalf("want the digest drift line (served 2c115402, drifted_ops=1) + 1 operation drift line: %q", ws)
 	}
-	if got, want := driftReasons(t, out), registryDriftF67b568aToB0f621e5(); !maps.Equal(got, want) {
+	if got, want := driftReasons(t, out), registryDriftB0f621e5To2c115402(); !maps.Equal(got, want) {
 		t.Fatalf("drift %v, want %v", got, want)
 	}
 }
 
-// The same three operations from the other side: the registry ops f67b568a served (the prod
-// fact before b0f621e5) against the catalogue pinned now.
-func TestRegistryWatch_f67b568a_served_registry_against_the_new_pin_shows_digest_drift_and_three_operations(t *testing.T) {
-	body, err := os.ReadFile("testdata/query_registry_f67b568a.json")
+// The same operation from the other side: the registry ops b0f621e5 served (the prod fact
+// before 2c115402) against the catalogue pinned now.
+func TestRegistryWatch_b0f621e5_served_registry_against_the_new_pin_shows_digest_drift_and_one_operation(t *testing.T) {
+	body, err := os.ReadFile("testdata/query_registry_b0f621e5.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,10 +527,10 @@ func TestRegistryWatch_f67b568a_served_registry_against_the_new_pin_shows_digest
 	w.Start()
 	w.Wait()
 	out := buf.String()
-	if ws := warns(out); len(ws) != 4 || !strings.Contains(ws[0], "registry digest drift") {
-		t.Fatalf("want digest drift + 3 operation drift warnings: %q", ws)
+	if ws := warns(out); len(ws) != 2 || !strings.Contains(ws[0], "registry digest drift") {
+		t.Fatalf("want digest drift + 1 operation drift warning: %q", ws)
 	}
-	if got, want := driftReasons(t, out), registryDriftF67b568aToB0f621e5(); !maps.Equal(got, want) {
+	if got, want := driftReasons(t, out), registryDriftB0f621e5To2c115402(); !maps.Equal(got, want) {
 		t.Fatalf("drift %v, want %v", got, want)
 	}
 }
