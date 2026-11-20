@@ -36,12 +36,14 @@ ACR_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # The `_mg` world adds work units and investments when the derive chain leaves them empty.
 : "${O4_VENUE_FALLBACK_WORLD_ARGS:=--provider synthetic --repo-name acme/live-e2e --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph}"
 : "${O4_VENUE_WORKER_QUEUES:=investment,metrics,reports,workgraph}"
+: "${O4_VENUE_WORKER_CONCURRENCY:=investment=1,metrics=2,reports=2,workgraph=1}"
 : "${O4_VENUE_JQ_IMAGE:=ghcr.io/jqlang/jq:1.7.1}"
 
 STATE="$O4_VENUE_STATE_DIR"
 SECRETS="$STATE/secrets"
 ENV_FILE="$STATE/o4.env"
 
+mask_ids() { sed -E 's/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/<id>/g'; }
 die() { printf '[o4-venue] FAIL: %s\n' "$*" >&2; exit 1; }
 note() { printf '[o4-venue] %s\n' "$*" >&2; }
 usage() {
@@ -221,6 +223,7 @@ services:
   clickhouse:
     container_name: !reset null
     ports: !override [ "127.0.0.1:${O4_VENUE_CH_HTTP_PORT}:8123", "127.0.0.1:${O4_VENUE_CH_NATIVE_PORT}:9000" ]
+    environment: { CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1" }
     networks: [default, dev-health]
   go-api: { ports: !reset [], networks: [default, planes, auth_plane, dev-health] }
   auth-issuer: { ports: !reset [] }
@@ -304,6 +307,20 @@ services:
       ACR_MCP_RESOURCE_URL: "${mcp_resource}"
     depends_on: { acr-api: { condition: service_started } }
     networks: [dev-health]
+  # o4-ops runs the dho workers verbs one-shot with the reconciler's environment (the
+  # coordinator, queue and domain databases).
+  o4-ops:
+    extends: { file: "${O4_VENUE_OPS_DIR}/compose.yml", service: go-reconciler }
+    profiles: [o4-derive]
+    labels: !reset {}
+    restart: "no"
+    depends_on: !reset {}
+  # o4-reconciler moves the triggered jobs from the outbox to the queue (seed phase only).
+  o4-reconciler:
+    extends: { file: "${O4_VENUE_OPS_DIR}/compose.yml", service: go-reconciler }
+    profiles: [o4-derive]
+    labels: !reset {}
+    depends_on: !reset {}
   o4-worker:
     extends: { file: "${O4_VENUE_OPS_DIR}/compose.yml", service: go-worker-ops }
     profiles: [o4-derive]
@@ -311,14 +328,16 @@ services:
     command:
       - worker
       - --queues=${O4_VENUE_WORKER_QUEUES}
+      - --queue-concurrency=${O4_VENUE_WORKER_CONCURRENCY}
       - --worker-group=heavy
-      - --shutdown-timeout=60s
+      - --shutdown-timeout=7260s
       - --http-addr=:8080
       - --river-schema=river
       - --domain-database-role=devhealth_domain
       - --queue-database-role=devhealth_queue
       - --queue-database-mode=session
       - --coordinator-database-mode=session
+      - --domain-transaction-pooler=true
       - --log-level=info
 EOF
 }
@@ -342,6 +361,13 @@ dho() {
     -e "POSTGRES_URI=postgres://postgres:${pg}@postgres:5432/postgres?sslmode=disable" \
     -e "CLICKHOUSE_URI=clickhouse://ch:${ch}@clickhouse:9000/default" \
     query-api "$@"
+}
+
+# dho_analytics is dho with the ClickHouse DSN alone: `fixtures generate` refuses a POSTGRES_URI.
+dho_analytics() {
+  local ch
+  ch="$(cat "$SECRETS/clickhouse-password")"
+  compose run --rm --no-deps -T -e "CLICKHOUSE_URI=clickhouse://ch:${ch}@clickhouse:9000/default" query-api "$@"
 }
 
 ch_query() {
@@ -415,7 +441,8 @@ provision_org() {
 }
 
 grant_reader() {
-  ch_query <<EOF >/dev/null
+  # The statement holds a password: its error text is not shown.
+  ch_query <<EOF >/dev/null 2>&1 || die 'the read-only ClickHouse user could not be created'
 CREATE USER IF NOT EXISTS o4_reader IDENTIFIED BY '$(cat "$SECRETS/reader-password")' SETTINGS readonly = 1;
 GRANT SELECT ON default.* TO o4_reader;
 EOF
@@ -426,14 +453,18 @@ step_seed() {
   render_override
   local org ch
   org="$(cat "$SECRETS/org-id")"; ch="$(cat "$SECRETS/clickhouse-password")"
+  if [ "$(table_count repos "$org")" != 0 ]; then
+    note 'the organization already holds the world: not loaded again'
+  else
   # shellcheck disable=SC2086 # the world arguments are a word list.
-  dho fixtures generate --sink "clickhouse://ch:${ch}@clickhouse:9000/default" --db-type clickhouse --org "$org" $O4_VENUE_WORLD_ARGS >/dev/null
+  dho_analytics fixtures generate --sink "clickhouse://ch:${ch}@clickhouse:9000/default" --db-type clickhouse --org "$org" $O4_VENUE_WORLD_ARGS 2>&1 | mask_ids >&2
   note 'synthetic world loaded'
+  fi
   derive "$org"
   if [ "$(table_count work_unit_investments "$org")" = 0 ]; then
     note 'no work unit investments after the derive chain: loading the _mg world for the same organization'
     # shellcheck disable=SC2086
-    dho fixtures generate --sink "clickhouse://ch:${ch}@clickhouse:9000/default" --db-type clickhouse --org "$org" --allow-mixed-org $O4_VENUE_FALLBACK_WORLD_ARGS >/dev/null
+    dho_analytics fixtures generate --sink "clickhouse://ch:${ch}@clickhouse:9000/default" --db-type clickhouse --org "$org" --allow-mixed-org $O4_VENUE_FALLBACK_WORLD_ARGS 2>&1 | mask_ids >&2
     derive "$org"
   fi
   project_graph
@@ -455,38 +486,53 @@ project_graph() {
   note "graph projected (${graphs} graph(s)); projector stopped"
 }
 
+# workers_verb runs one audited dho workers mutation; a trigger whose job is already queued is
+# not an error (a second seed run).
+workers_verb() {
+  local out
+  if out="$(compose --profile o4-derive run --rm --no-deps -T o4-ops workers "$@" --reason o4_venue_seed --correlation-id "$O4_VENUE_PROJECT" 2>&1)"; then
+    return 0
+  fi
+  case "$out" in *'duplicate request'*) note "workers $1 $2: already queued" ;; *) printf '%s\n' "$out" | mask_ids >&2; die "workers $1 $2 failed" ;; esac
+}
+
 # derive runs the ops job chain for the organization with a worker of this project only, then
 # stops the worker: nothing writes the store after the seed.
 derive() {
   local org="$1" from to
-  to="$(date -u +%Y-%m-%d)"
-  from="$(date -u -d "-$((O4_VENUE_WINDOW_DAYS + 4)) days" +%Y-%m-%d 2>/dev/null || date -u -v-"$((O4_VENUE_WINDOW_DAYS + 4))"d +%Y-%m-%d)"
-  compose --profile o4-derive up -d --no-build o4-worker
-  dho workers metrics daily-redrive --org "$org" --from "$from" --to "$to" --review-evidence testing >/dev/null
-  dho workers investment trigger --org "$org" --review-evidence testing >/dev/null
-  dho workers workgraph trigger --org "$org" --review-evidence testing >/dev/null
-  dho workers metrics remaining trigger-backstop --family capacity --org "$org" --review-evidence testing >/dev/null
+  # daily-start takes at most 31 days; the run covers the 30 whole days before today.
+  to="$(date -u -d '-1 day' +%Y-%m-%d 2>/dev/null || date -u -v-1d +%Y-%m-%d)"
+  from="$(date -u -d '-30 days' +%Y-%m-%d 2>/dev/null || date -u -v-30d +%Y-%m-%d)"
+  compose --profile o4-derive up -d --no-build o4-reconciler o4-worker
+  workers_verb metrics daily-start --org "$org" --day "$from" --to "$to"
+  workers_verb investment trigger --org "$org" --review-evidence testing >/dev/null
+  workers_verb workgraph trigger --org "$org" --review-evidence testing >/dev/null
+  workers_verb metrics remaining trigger-backstop --family capacity --all-teams --org "$org" --review-evidence testing >/dev/null
   wait_queue_drained
-  compose --profile o4-derive stop o4-worker >/dev/null
-  compose --profile o4-derive rm -f o4-worker >/dev/null
-  note 'derive chain done; worker stopped'
+  compose --profile o4-derive stop o4-worker o4-reconciler >/dev/null
+  compose --profile o4-derive rm -f o4-worker o4-reconciler >/dev/null
+  note 'derive chain done; worker and reconciler stopped'
 }
 
 wait_queue_drained() {
-  local waited=0 pending
+  local waited=60 pending zero=0
+  # A fanout enqueues its follow-up jobs over time: wait a minute, then require an empty queue
+  # on two checks 15 s apart.
+  sleep 60
   while [ "$waited" -lt "$O4_VENUE_DERIVE_TIMEOUT" ]; do
     # shellcheck disable=SC2016 # expanded by the container's sh.
-    pending="$(compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -c "SELECT count(*) FROM river.river_job WHERE state IN ('"'"'available'"'"', '"'"'running'"'"', '"'"'retryable'"'"', '"'"'scheduled'"'"')"' 2>/dev/null || echo unknown)"
-    [ "$pending" = 0 ] && return 0
+    pending="$(compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -c "SELECT count(*) FROM river.river_job WHERE state IN ('"'"'available'"'"', '"'"'running'"'"', '"'"'retryable'"'"', '"'"'scheduled'"'"', '"'"'pending'"'"')"' 2>/dev/null || echo unknown)"
+    if [ "$pending" = 0 ]; then zero=$((zero + 1)); else zero=0; fi
+    [ "$zero" -ge 2 ] && return 0
     sleep 15; waited=$((waited + 15))
   done
   die "the derive chain did not drain within O4_VENUE_DERIVE_TIMEOUT=${O4_VENUE_DERIVE_TIMEOUT}s (pending: ${pending})"
 }
 
-COUNT_TABLES="work_unit_investments work_unit_supersessions work_unit_membership_runs work_unit_membership repos teams team_repo_ownership capacity_forecasts compounding_risk_daily work_item_metrics_daily estimate_coverage_metrics_daily work_item_completion_daily repo_metrics_daily incident_metrics_daily investment_metrics_daily work_unit_issue_size work_unit_repo_effort work_item_team_attributions work_items work_item_cycle_times"
+COUNT_TABLES="work_unit_investments work_unit_supersessions work_unit_membership_runs work_unit_membership repos teams team_repo_ownership capacity_forecasts compounding_risk_daily work_item_metrics_daily estimate_coverage_metrics_daily work_item_completion_daily repo_metrics_daily incident_metrics_daily work_unit_issue_size work_unit_repo_effort work_item_team_attributions work_items work_item_cycle_times"
 
 table_count() {
-  printf "SELECT count() FROM default.%s WHERE org_id = '%s'" "$1" "$2" | ch_query
+  printf "SELECT count() FROM default.%s WHERE org_id = '%s'" "$1" "$2" | ch_query 2>&1 | mask_ids
 }
 
 step_counts() {
