@@ -32,7 +32,7 @@ func newLiveFalkorAdapter(t *testing.T, ctx context.Context) (*Adapter, string) 
 	addr := host + ":" + port.Port()
 	adapter, err := New(Config{
 		Addr: addr, GraphPrefix: "acr-cf-codex-live", RequestTimeout: 15 * time.Second,
-		MaxAttempts: 1, MaxResults: 25, PoolSize: 10, AllowInsecure: true, TLS: false,
+		MaxAttempts: 3, MaxResults: 25, PoolSize: 10, AllowInsecure: true, TLS: false,
 	})
 	require.NoError(t, err, "construct Adapter")
 	if err := settleLiveFalkor(ctx, adapter, addr, liveSettleTries, liveSettlePause); err != nil {

@@ -151,7 +151,10 @@ type Config struct {
 	TLS            bool
 	GraphPrefix    string
 	RequestTimeout time.Duration
-	MaxAttempts    uint
+	// MaxAttempts (ACR_CONTEXT_FABRIC_FALKOR_MAX_ATTEMPTS, 1-5, default 3)
+	// bounds the sends of one graph READ on a dropped connection (retryRead).
+	// A write is always sent once.
+	MaxAttempts uint
 	// MaxResults (ACR_CONTEXT_FABRIC_FALKOR_MAX_RESULTS, default 25) is a
 	// SEPARATE, deployment-level ceiling on top of a request's own
 	// Options.MaxSubjectCandidates (CHAOS-4117 calibrated it to 20; see

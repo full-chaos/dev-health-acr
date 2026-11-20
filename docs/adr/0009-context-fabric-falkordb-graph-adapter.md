@@ -244,7 +244,7 @@ does not prove the graph module itself is loaded and serving Cypher.
 | `ACR_CONTEXT_FABRIC_FALKOR_TLS` | Require TLS (default `true`) | boolean |
 | `ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX` | Server-owned graph key prefix (default `acr-cf`) | plain value |
 | `ACR_CONTEXT_FABRIC_FALKOR_REQUEST_TIMEOUT` | Per-request timeout (default `30s`) | Go duration |
-| `ACR_CONTEXT_FABRIC_FALKOR_MAX_ATTEMPTS` | Bounded attempts, 1-5 (default `3`) | integer |
+| `ACR_CONTEXT_FABRIC_FALKOR_MAX_ATTEMPTS` | Sends of one graph read on a dropped, reset or refused connection, 1-5 (default `3`); a timed-out read and every write are sent once | integer |
 | `ACR_CONTEXT_FABRIC_FALKOR_MAX_RESULTS` | Bounded search page size, 1-50 (default `25`) | integer |
 | `ACR_CONTEXT_FABRIC_FALKOR_POOL_SIZE` | `go-redis` connection pool size (default `10`) | integer |
 | `ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE` | Permit a non-TLS address (local loopback only) | boolean |

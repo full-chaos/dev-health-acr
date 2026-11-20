@@ -22,7 +22,8 @@ const (
 // settleLiveFalkor runs the schema bootstrap on a throwaway graph through the adapter's own client before a live
 // test body starts, so a connection the docker port drops in the container's first seconds is absorbed here. Only
 // the unclassified dependency error is retried; a classified error (unauthorized, timeout, constraint) is final.
-// The test body keeps MaxAttempts 1, so a drop after this step still fails it.
+// The test body keeps the production default MaxAttempts 3: a drop after this step still fails a write (writes are
+// sent once), and a read gets the same retry it gets in production.
 func settleLiveFalkor(ctx context.Context, adapter *Adapter, addr string, tries int, pause time.Duration) error {
 	org := "settle-14310-" + time.Now().UTC().Format("20060102T150405.000000000")
 	key := graphKey(adapter.config.GraphPrefix, org)
