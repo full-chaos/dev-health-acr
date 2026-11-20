@@ -1584,7 +1584,7 @@ func TestTheCoverageGrainCountIsComparedWithTheStore(t *testing.T) {
 	const grainPath = coveragePath + "grainCount"
 	// grains answers the grain count ops states for a team; zero states no
 	// coverage row, with the zero object ops serves then.
-	run := func(grains func(EstimateCoverage) any, zero bool) *RootReport {
+	run := func(grains func(string, EstimateCoverage) any, zero bool) *RootReport {
 		t.Helper()
 		planes := recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
 			input, _ := variables["input"].(map[string]any)
@@ -1599,7 +1599,7 @@ func TestTheCoverageGrainCountIsComparedWithTheStore(t *testing.T) {
 				return
 			}
 			block := map[string]any{"__typename": "ThroughputEstimateCoverage", "estimatedCount": stored.Counts["estimated_count"],
-				"unestimatedCount": stored.Counts["unestimated_count"], "backlogSize": stored.Counts["backlog_size"], "ratio": nil, "grainCount": grains(stored)}
+				"unestimatedCount": stored.Counts["unestimated_count"], "backlogSize": stored.Counts["backlog_size"], "ratio": nil, "grainCount": grains(strings.TrimPrefix(team, "team:"), stored)}
 			if backlog := stored.Counts["backlog_size"]; backlog != 0 {
 				block["ratio"] = float64(stored.Counts["estimated_count"]) / float64(backlog)
 			}
@@ -1632,7 +1632,7 @@ func TestTheCoverageGrainCountIsComparedWithTheStore(t *testing.T) {
 	}
 
 	// Control: ops states the store's grain count for every team.
-	agree := run(func(stored EstimateCoverage) any { return stored.Grains }, false)
+	agree := run(func(_ string, stored EstimateCoverage) any { return stored.Grains }, false)
 	if got := on(agree, grainPath, ""); got != 0 || agree.touched[grainPath] != len(coverage) {
 		t.Fatalf("grain counts that agree with the store: %d findings, compared %d times for %d teams: %+v", got, agree.touched[grainPath], len(coverage), agree.Findings)
 	}
@@ -1643,26 +1643,41 @@ func TestTheCoverageGrainCountIsComparedWithTheStore(t *testing.T) {
 	}
 
 	// Red: ops states one grain more than the store holds.
-	differ := run(func(stored EstimateCoverage) any { return stored.Grains + 1 }, false)
+	differ := run(func(_ string, stored EstimateCoverage) any { return stored.Grains + 1 }, false)
 	if got := on(differ, grainPath, "store"); got != len(coverage) {
 		t.Fatalf("%d teams state one grain more than the store, %d grain findings: %+v", len(coverage), got, differ.Findings)
 	}
 
 	// A count of the latest day's rows only is not the grain count for a
 	// team with a work scope whose newest day is older.
+	onLatestDay := map[string]int{}
+	for team, stored := range coverage {
+		keys := map[string]bool{}
+		for _, row := range extract.Tables[tableEstimateCoverageMetricsDaily] {
+			if id, _ := rowString(row, "team_id"); id != team {
+				continue
+			}
+			if day, _ := rowString(row, "day"); day == stored.Day {
+				provider, _ := rowString(row, "provider")
+				scope, _ := rowString(row, "work_scope_id")
+				keys[provider+"\x00"+scope] = true
+			}
+		}
+		onLatestDay[team] = len(keys)
+	}
 	older := 0
-	for _, stored := range coverage {
-		if stored.Scopes != stored.Grains {
+	for team, stored := range coverage {
+		if onLatestDay[team] != stored.Grains {
 			older++
 		}
 	}
-	latestOnly := run(func(stored EstimateCoverage) any { return stored.Scopes }, false)
+	latestOnly := run(func(team string, _ EstimateCoverage) any { return onLatestDay[team] }, false)
 	if got := on(latestOnly, grainPath, "store"); older == 0 || got != older {
 		t.Fatalf("%d teams have a work scope with an older newest day, %d grain findings for a latest-day count", older, got)
 	}
 
 	// A grain count that is not a number is a finding, never a match.
-	null := run(func(EstimateCoverage) any { return nil }, false)
+	null := run(func(string, EstimateCoverage) any { return nil }, false)
 	if got := on(null, grainPath, ""); got != len(coverage) {
 		t.Fatalf("%d teams state no grain count, %d grain findings", len(coverage), got)
 	}

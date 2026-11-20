@@ -5,15 +5,18 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/full-chaos/dev-health-acr/internal/cigates/sourceload"
+	"github.com/full-chaos/dev-health-acr/internal/releasebuild"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
@@ -22,9 +25,16 @@ import (
 const paritytestDir = "internal/contextfabric/pginvestigation/paritytest"
 
 const (
-	resolverPackagePath      = "/internal/contextfabric/modelruntimeresolver"
-	contextFabricPackagePath = "/internal/contextfabric"
+	acrModulePath        = "github.com/full-chaos/dev-health-acr"
+	resolverPackage      = acrModulePath + "/internal/contextfabric/modelruntimeresolver"
+	contextFabricPackage = acrModulePath + "/internal/contextfabric"
+	paritytestPackage    = acrModulePath + "/" + paritytestDir
+	plantedPackages      = acrModulePath + "/internal/api/testdata/platformmodelpath"
+	// foreignPlants stands for code outside the module.
+	foreignPlants = plantedPackages + "/foreign"
 )
+
+var platformModelCallNames = []string{"InterpretQuestion", "SynthesizeAnswer", "PhraseStructureOffers"}
 
 // platformModelPathSites is every production site, as "file:function", of the
 // path that can serve the platform model: the per-organization resolver whose
@@ -39,128 +49,391 @@ type platformModelPathSites struct {
 	paritytestImporters   []string
 }
 
-func scanPlatformModelPath(t *testing.T, root string) platformModelPathSites {
+const (
+	resolverSite = iota
+	engineSite
+	investigateSite
+	modelCallSite
+	paritytestSite
+)
+
+func (s *platformModelPathSites) list(kind int) *[]string {
+	return [...]*[]string{&s.resolverConstructions, &s.engineConstructions, &s.investigateCalls, &s.modelCallsOutside, &s.paritytestImporters}[kind]
+}
+
+type platformModelPathSite struct {
+	kind int
+	site string
+}
+
+type platformModelPathTargetScan struct {
+	counts   map[platformModelPathSite]int
+	problems []string
+	loaded   map[string]bool
+	err      error
+}
+
+// scanPlatformModelPath type-checks the non-test files of the packages
+// matching patterns once for each release GOOS and returns every site, each
+// counted as often as the build that holds it most often has it, and the files
+// some build loaded. Sites are found by the objects identifiers resolve to, so
+// an import alias, a dot import, a shadowing local or a same-named object from
+// another package cannot hide or fake one.
+func scanPlatformModelPath(t *testing.T, root string, patterns []string) (platformModelPathSites, map[string]bool) {
 	t.Helper()
+	targets := platformModelPathTargets()
+	results := make([]platformModelPathTargetScan, len(targets))
+	var wait sync.WaitGroup
+	for i, target := range targets {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			results[i] = scanPlatformModelPathTarget(root, patterns, target)
+		}()
+	}
+	wait.Wait()
+	counts := map[platformModelPathSite]int{}
+	loaded := map[string]bool{}
+	for _, result := range results {
+		if result.err != nil {
+			t.Fatalf("load %v: %v", patterns, result.err)
+		}
+		for _, problem := range result.problems {
+			t.Error(problem)
+		}
+		for name := range result.loaded {
+			loaded[name] = true
+		}
+		for key, count := range result.counts {
+			counts[key] = max(counts[key], count)
+		}
+	}
 	var sites platformModelPathSites
+	for key, count := range counts {
+		for range count {
+			*sites.list(key.kind) = append(*sites.list(key.kind), key.site)
+		}
+	}
+	for kind := resolverSite; kind <= paritytestSite; kind++ {
+		slices.Sort(*sites.list(kind))
+	}
+	return sites, loaded
+}
+
+func scanPlatformModelPathTarget(root string, patterns []string, target [2]string) platformModelPathTargetScan {
+	loader, err := sourceload.Load(root, patterns, target[0], target[1])
+	if err != nil {
+		return platformModelPathTargetScan{err: err}
+	}
+	scan := platformModelPathTargetScan{counts: map[platformModelPathSite]int{}, loaded: map[string]bool{}, problems: loader.Problems(target[0], target[1])}
+	guarded := guardedMethodSignatures(loader)
+	for _, pkg := range loader.Roots {
+		for _, name := range pkg.GoFiles {
+			scan.loaded[filepath.Clean(name)] = true
+		}
+		if inPackageTree(pkg.PkgPath, paritytestPackage) {
+			continue
+		}
+		unit := loader.Units[pkg.ID]
+		inResolverPackage := inPackageTree(pkg.PkgPath, resolverPackage)
+		inContextFabric := inPackageTree(pkg.PkgPath, contextFabricPackage)
+		for _, file := range unit.Files {
+			rel, err := filepath.Rel(root, loader.Fset.Position(file.Pos()).Filename)
+			if err != nil {
+				return platformModelPathTargetScan{err: err}
+			}
+			rel = filepath.ToSlash(rel)
+			for _, spec := range file.Imports {
+				if importPath, _ := strconv.Unquote(spec.Path.Value); inPackageTree(importPath, paritytestPackage) {
+					scan.counts[platformModelPathSite{paritytestSite, rel}]++
+				}
+			}
+			for _, decl := range file.Decls {
+				site := rel + ":package-level"
+				if fn, ok := decl.(*ast.FuncDecl); ok {
+					site = rel + ":" + fn.Name.Name
+				}
+				ast.Inspect(decl, func(node ast.Node) bool {
+					for _, kind := range platformModelPathKinds(unit.Info, guarded, node, inResolverPackage, inContextFabric) {
+						scan.counts[platformModelPathSite{kind, site}]++
+					}
+					return true
+				})
+			}
+		}
+	}
+	return scan
+}
+
+// platformModelPathKinds is the site kinds one node is. A reference to New,
+// NewEngine, an Investigate method or a model runtime method is a site whether
+// it is called or taken as a value. A Resolver value is a construction wherever
+// one comes into being outside its package: its fields are exported, so a
+// literal (elided or not), a variable, parameter, result or field whose type
+// holds a Resolver by value, new and make each make a working resolver.
+func platformModelPathKinds(info *types.Info, guarded map[string][]*types.Signature, node ast.Node, inResolverPackage, inContextFabric bool) []int {
+	var kinds []int
+	switch n := node.(type) {
+	case *ast.Ident:
+		if fn, ok := info.Uses[n].(*types.Func); ok {
+			switch {
+			case isPackageFunc(fn, resolverPackage, "New") && !inResolverPackage:
+				kinds = append(kinds, resolverSite)
+			case isPackageFunc(fn, contextFabricPackage, "NewEngine"):
+				kinds = append(kinds, engineSite)
+			case fn.Name() == "Investigate" && isGuardedMethod(fn, guarded):
+				kinds = append(kinds, investigateSite)
+			case !inContextFabric && slices.Contains(platformModelCallNames, fn.Name()) && isGuardedMethod(fn, guarded):
+				kinds = append(kinds, modelCallSite)
+			}
+		}
+		// A generic function or type instantiated with a Resolver value
+		// type can make one (new(T), make([]T, n), var zero T) where its
+		// own body only names T.
+		if instance, ok := info.Instances[n]; ok && !inResolverPackage {
+			for i := range instance.TypeArgs.Len() {
+				if holdsResolverValue(instance.TypeArgs.At(i)) {
+					kinds = append(kinds, resolverSite)
+					break
+				}
+			}
+		}
+		if variable, ok := info.Defs[n].(*types.Var); ok && !inResolverPackage && holdsResolverValue(variable.Type()) {
+			kinds = append(kinds, resolverSite)
+		}
+	case *ast.FuncType:
+		// A parameter or result without a name defines no object; its type
+		// is the only trace of the value the signature carries.
+		for _, fields := range []*ast.FieldList{n.Params, n.Results} {
+			if fields == nil || inResolverPackage {
+				continue
+			}
+			for _, field := range fields.List {
+				typ := field.Type
+				if variadic, ok := typ.(*ast.Ellipsis); ok {
+					typ = variadic.Elt
+				}
+				if tv, ok := info.Types[typ]; ok && len(field.Names) == 0 && holdsResolverValue(tv.Type) {
+					kinds = append(kinds, resolverSite)
+				}
+			}
+		}
+	case *ast.CompositeLit:
+		tv, ok := info.Types[n]
+		if !ok || inResolverPackage {
+			break
+		}
+		literalType := tv.Type
+		// An elided literal in a container of pointers is the literal of
+		// the pointed-to type, and its address is stored.
+		if pointer, ok := types.Unalias(literalType).Underlying().(*types.Pointer); ok && n.Type == nil {
+			literalType = pointer.Elem()
+		}
+		if holdsResolverValue(literalType) {
+			kinds = append(kinds, resolverSite)
+		}
+	case *ast.CallExpr:
+		if inResolverPackage {
+			break
+		}
+		builtin, ok := info.Uses[calledIdent(n.Fun)].(*types.Builtin)
+		if !ok || len(n.Args) == 0 {
+			break
+		}
+		switch builtin.Name() {
+		case "new":
+			if tv, ok := info.Types[n.Args[0]]; ok && holdsResolverValue(tv.Type) {
+				kinds = append(kinds, resolverSite)
+			}
+		case "make":
+			if tv, ok := info.Types[n]; ok && holdsResolverValue(tv.Type) {
+				kinds = append(kinds, resolverSite)
+			}
+		}
+	}
+	return kinds
+}
+
+func calledIdent(expr ast.Expr) *ast.Ident {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	ident, _ := expr.(*ast.Ident)
+	return ident
+}
+
+func inPackageTree(path, root string) bool {
+	return path == root || strings.HasPrefix(path, root+"/")
+}
+
+func isPackageFunc(fn *types.Func, pkgPath, name string) bool {
+	return fn.Pkg() != nil && fn.Pkg().Path() == pkgPath && fn.Name() == name && fn.Signature().Recv() == nil
+}
+
+// guardedMethodSignatures is the signature of every guarded method a type the
+// module declares has (Investigate and the model runtime methods), by name.
+func guardedMethodSignatures(loader *sourceload.Loader) map[string][]*types.Signature {
+	guarded := map[string][]*types.Signature{}
+	for _, unit := range loader.Units {
+		if unit.Types == nil || !isModuleDeclared(unit.Types.Path()) {
+			continue
+		}
+		scope := unit.Types.Scope()
+		for _, name := range scope.Names() {
+			typeName, ok := scope.Lookup(name).(*types.TypeName)
+			if !ok || typeName.IsAlias() {
+				continue
+			}
+			named, ok := typeName.Type().(*types.Named)
+			if !ok || types.IsInterface(named) {
+				continue
+			}
+			for i := range named.NumMethods() {
+				if method := named.Method(i); method.Name() == "Investigate" || slices.Contains(platformModelCallNames, method.Name()) {
+					guarded[method.Name()] = append(guarded[method.Name()], method.Signature())
+				}
+			}
+		}
+	}
+	return guarded
+}
+
+// isGuardedMethod reports whether fn is a guarded method: a method of a type
+// the module declares (a type that embeds one selects that same method), or an
+// interface method whose signature is a guarded method's, which a module type
+// can therefore implement. A function without a receiver is not one.
+func isGuardedMethod(fn *types.Func, guarded map[string][]*types.Signature) bool {
+	recv := fn.Signature().Recv()
+	if recv == nil {
+		return false
+	}
+	if types.IsInterface(recv.Type()) {
+		return slices.ContainsFunc(guarded[fn.Name()], func(signature *types.Signature) bool {
+			return types.Identical(fn.Signature(), signature)
+		})
+	}
+	return fn.Pkg() != nil && isModuleDeclared(fn.Pkg().Path())
+}
+
+func isModuleDeclared(path string) bool {
+	return inPackageTree(path, acrModulePath) && !inPackageTree(path, foreignPlants)
+}
+
+// holdsResolverValue reports whether a value of type t holds a Resolver by
+// value: t is Resolver, or an array, slice, map, channel, struct or type
+// parameter constraint over such a type. A pointer or a function does not.
+func holdsResolverValue(t types.Type) bool {
+	return holdsResolver(t, map[types.Type]bool{})
+}
+
+func holdsResolver(t types.Type, seen map[types.Type]bool) bool {
+	t = types.Unalias(t)
+	if seen[t] {
+		return false
+	}
+	seen[t] = true
+	switch u := t.(type) {
+	case *types.Named:
+		if obj := u.Obj(); obj.Pkg() != nil && obj.Pkg().Path() == resolverPackage && obj.Name() == "Resolver" {
+			return true
+		}
+		return holdsResolver(u.Underlying(), seen)
+	case *types.TypeParam:
+		return holdsResolver(u.Constraint(), seen)
+	case *types.Interface:
+		for i := range u.NumEmbeddeds() {
+			if holdsResolver(u.EmbeddedType(i), seen) {
+				return true
+			}
+		}
+	case *types.Union:
+		for i := range u.Len() {
+			if holdsResolver(u.Term(i).Type(), seen) {
+				return true
+			}
+		}
+	case *types.Array:
+		return holdsResolver(u.Elem(), seen)
+	case *types.Slice:
+		return holdsResolver(u.Elem(), seen)
+	case *types.Map:
+		return holdsResolver(u.Key(), seen) || holdsResolver(u.Elem(), seen)
+	case *types.Chan:
+		return holdsResolver(u.Elem(), seen)
+	case *types.Struct:
+		for i := range u.NumFields() {
+			if holdsResolver(u.Field(i).Type(), seen) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// platformModelPathTargets is one GOOS/GOARCH pair for each GOOS the release
+// matrix ships.
+func platformModelPathTargets() [][2]string {
+	seen := map[string]bool{}
+	var targets [][2]string
+	for _, target := range releasebuild.Matrix() {
+		if !seen[target.GOOS] {
+			seen[target.GOOS] = true
+			targets = append(targets, [2]string{target.GOOS, target.GOARCH})
+		}
+	}
+	return targets
+}
+
+// platformModelPathNames is every name a site needs in its text: a production
+// file outside every release build that holds none of them cannot hold a site.
+var platformModelPathNames = [][]byte{
+	[]byte("modelruntimeresolver"), []byte("NewEngine"), []byte("Investigate"),
+	[]byte("InterpretQuestion"), []byte("SynthesizeAnswer"), []byte("PhraseStructureOffers"), []byte(paritytestDir),
+}
+
+// filesOutsideEveryBuild is every production .go file under root that no
+// release build loaded and whose text names a site: the type-checked walk
+// cannot see it, so it is listed instead of passed.
+func filesOutsideEveryBuild(t *testing.T, root string, loaded map[string]bool) []string {
+	t.Helper()
+	var outside []string
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		rel, _ := filepath.Rel(root, path)
-		rel = filepath.ToSlash(rel)
 		if entry.IsDir() {
 			switch entry.Name() {
 			case ".git", "testdata", ".tmp", "node_modules", "vendor":
 				return filepath.SkipDir
 			}
+			if path != root {
+				if _, statErr := os.Stat(filepath.Join(path, "go.mod")); statErr == nil {
+					return filepath.SkipDir
+				}
+			}
 			return nil
 		}
-		if !strings.HasSuffix(rel, ".go") || strings.HasSuffix(rel, "_test.go") || strings.HasPrefix(rel, paritytestDir+"/") {
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || loaded[filepath.Clean(path)] {
 			return nil
 		}
 		source, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		if !mentionsPlatformModelPathName(source) {
-			return nil
-		}
-		file, err := parser.ParseFile(token.NewFileSet(), rel, source, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parse %s: %v", rel, err)
-		}
-		for _, spec := range file.Imports {
-			if importPath, _ := strconv.Unquote(spec.Path.Value); strings.HasSuffix(importPath, "/"+paritytestDir) {
-				sites.paritytestImporters = append(sites.paritytestImporters, rel)
-			}
-		}
-		imports := importedNames(file)
-		inResolverPackage := strings.HasPrefix(rel, "internal/contextfabric/modelruntimeresolver/")
-		inContextFabric := strings.HasPrefix(rel, "internal/contextfabric/")
-		for _, decl := range file.Decls {
-			site, scope := rel+":package-level", ast.Node(decl)
-			if fn, ok := decl.(*ast.FuncDecl); ok {
-				if fn.Body == nil {
-					continue
-				}
-				site, scope = rel+":"+fn.Name.Name, fn.Body
-			}
-			ast.Inspect(scope, func(node ast.Node) bool {
-				switch n := node.(type) {
-				case *ast.CompositeLit:
-					if isPackageSelector(n.Type, imports, resolverPackagePath, "Resolver") && !inResolverPackage {
-						sites.resolverConstructions = append(sites.resolverConstructions, site)
-					}
-				case *ast.CallExpr:
-					selector, ok := n.Fun.(*ast.SelectorExpr)
-					if !ok {
-						return true
-					}
-					switch {
-					case isPackageSelector(selector, imports, resolverPackagePath, "New") && !inResolverPackage:
-						sites.resolverConstructions = append(sites.resolverConstructions, site)
-					case isPackageSelector(selector, imports, contextFabricPackagePath, "NewEngine"):
-						sites.engineConstructions = append(sites.engineConstructions, site)
-					case selector.Sel.Name == "Investigate":
-						sites.investigateCalls = append(sites.investigateCalls, site)
-					case !inContextFabric && slices.Contains([]string{"InterpretQuestion", "SynthesizeAnswer", "PhraseStructureOffers"}, selector.Sel.Name):
-						sites.modelCallsOutside = append(sites.modelCallsOutside, site)
-					}
-				}
-				return true
-			})
+		if slices.ContainsFunc(platformModelPathNames, func(name []byte) bool { return bytes.Contains(source, name) }) {
+			rel, _ := filepath.Rel(root, path)
+			outside = append(outside, filepath.ToSlash(rel))
 		}
 		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sites
-}
-
-// platformModelPathNames is every name a site needs in its text to be found:
-// a file with none of them cannot hold a site, so it is not parsed.
-var platformModelPathNames = [][]byte{
-	[]byte("modelruntimeresolver"), []byte("NewEngine"), []byte("Investigate"),
-	[]byte("InterpretQuestion"), []byte("SynthesizeAnswer"), []byte("PhraseStructureOffers"), []byte(paritytestDir),
-}
-
-func mentionsPlatformModelPathName(source []byte) bool {
-	for _, name := range platformModelPathNames {
-		if bytes.Contains(source, name) {
-			return true
-		}
-	}
-	return false
-}
-
-// importedNames maps each name a file binds to an import (its alias, else the
-// last element of the path) to the import path.
-func importedNames(file *ast.File) map[string]string {
-	names := map[string]string{}
-	for _, spec := range file.Imports {
-		importPath, err := strconv.Unquote(spec.Path.Value)
-		if err != nil {
-			continue
-		}
-		name := path.Base(importPath)
-		if spec.Name != nil {
-			name = spec.Name.Name
-		}
-		names[name] = importPath
-	}
-	return names
-}
-
-// isPackageSelector reports whether expr is name selected from the package at
-// the import path that ends in pathSuffix, under whatever name the file gave it.
-func isPackageSelector(expr ast.Expr, imports map[string]string, pathSuffix, name string) bool {
-	selector, ok := expr.(*ast.SelectorExpr)
-	if !ok || selector.Sel.Name != name {
-		return false
-	}
-	ident, ok := selector.X.(*ast.Ident)
-	return ok && strings.HasSuffix(imports[ident.Name], "github.com/full-chaos/dev-health-acr"+pathSuffix)
+	return outside
 }
 
 func isSelector(expr ast.Expr, pkg, name string) bool {
@@ -181,7 +454,7 @@ func isSelector(expr ast.Expr, pkg, name string) bool {
 // model call anywhere else fails here.
 func TestPlatformModelPathIsReachedOnlyThroughTheServiceModelGate(t *testing.T) {
 	root := repopath.Root(t)
-	sites := scanPlatformModelPath(t, root)
+	sites, loaded := scanPlatformModelPath(t, root, []string{"./..."})
 	for _, check := range []struct {
 		name string
 		got  []string
@@ -205,6 +478,7 @@ func TestPlatformModelPathIsReachedOnlyThroughTheServiceModelGate(t *testing.T) 
 		}},
 		{name: "model runtime calls outside the engine", got: sites.modelCallsOutside, want: nil},
 		{name: "non-test importers of " + paritytestDir, got: sites.paritytestImporters, want: nil},
+		{name: "production files that name a site outside every release build", got: filesOutsideEveryBuild(t, root, loaded), want: nil},
 	} {
 		got := slices.Clone(check.got)
 		slices.Sort(got)
@@ -320,58 +594,84 @@ func callName(expr ast.Expr) string {
 	return "a call"
 }
 
-// The scan resolves an import by its path, not by the package's default name:
-// a construction or call made through an import alias is a site too.
-func TestPlatformModelPathScanFindsSitesBehindImportAliases(t *testing.T) {
-	root := t.TempDir()
-	write := func(name, source string) {
-		t.Helper()
-		path := filepath.Join(root, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
-			t.Fatal(err)
-		}
+// The scan is itself tested on planted packages: a site is found by the object
+// its identifiers resolve to, through an import alias or a dot import, called
+// or as a value, in a signature or a body, and a Resolver value is found
+// however it comes into being (literal, elided literal, variable, field,
+// parameter, result, new, make), while pointer uses, shadowing locals, struct
+// fields, labels and same-named methods of other types are not sites.
+func TestPlatformModelPathScanFindsEveryPlantedSite(t *testing.T) {
+	root := repopath.Root(t)
+	var patterns []string
+	for _, name := range []string{"aliases", "dotimport", "values", "elided", "signature", "foreign", "realmethods", "generic"} {
+		patterns = append(patterns, plantedPackages+"/"+name)
 	}
-	write("internal/plant/plain.go", `package plant
-
-import "github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
-
-func Plain() { _ = modelruntimeresolver.New(nil, nil, nil) }
-`)
-	write("internal/plant/aliased.go", `package plant
-
-import mr "github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
-
-func Aliased() { _ = mr.New(nil, nil, nil) }
-`)
-	write("internal/plant/literal.go", `package plant
-
-import res "github.com/full-chaos/dev-health-acr/internal/contextfabric/modelruntimeresolver"
-
-func Literal() { _ = &res.Resolver{} }
-`)
-	write("internal/plant/engine.go", `package plant
-
-import cf "github.com/full-chaos/dev-health-acr/internal/contextfabric"
-
-func Engine() { _, _ = cf.NewEngine(cf.EngineDependencies{}, cf.EngineOptions{}) }
-`)
-	write("internal/plant/unrelated.go", `package plant
-
-import mr "example.test/other/modelruntimeresolver"
-
-func Unrelated() { _ = mr.New(nil, nil, nil) }
-`)
-	sites := scanPlatformModelPath(t, root)
-	got := slices.Clone(sites.resolverConstructions)
-	slices.Sort(got)
-	want := []string{"internal/plant/aliased.go:Aliased", "internal/plant/literal.go:Literal", "internal/plant/plain.go:Plain"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("resolver constructions = %q, want %q", got, want)
-	}
-	if !slices.Equal(sites.engineConstructions, []string{"internal/plant/engine.go:Engine"}) {
-		t.Fatalf("engine constructions = %q, want the aliased NewEngine", sites.engineConstructions)
+	sites, _ := scanPlatformModelPath(t, root, patterns)
+	const dir = "internal/api/testdata/platformmodelpath/"
+	for _, check := range []struct {
+		name string
+		got  []string
+		want []string
+	}{
+		{name: "resolver constructions", got: sites.resolverConstructions, want: []string{
+			dir + "aliases/aliases.go:Aliased",
+			dir + "aliases/aliases.go:Literal",
+			dir + "aliases/aliases.go:Plain",
+			dir + "dotimport/resolver.go:Dot",
+			dir + "dotimport/resolver.go:DotLiteral",
+			dir + "dotimport/resolver.go:DotValue",
+			dir + "dotimport/resolver.go:DotZero",
+			dir + "elided/elided.go:Array",
+			dir + "elided/elided.go:MapKey",
+			dir + "elided/elided.go:MapValue",
+			dir + "elided/elided.go:Nested",
+			dir + "elided/elided.go:Slice",
+			dir + "elided/elided.go:ThroughAlias",
+			dir + "generic/generic.go:Boxed",
+			dir + "generic/generic.go:Configured",
+			dir + "generic/generic.go:Explicit",
+			dir + "generic/generic.go:Made",
+			dir + "signature/signature.go:ArrayBound",
+			dir + "signature/signature.go:Constrained",
+			dir + "signature/signature.go:NamedResult",
+			dir + "signature/signature.go:UnnamedParameter",
+			dir + "signature/signature.go:UnnamedResult",
+			dir + "signature/signature.go:UnnamedVariadic",
+			dir + "signature/signature.go:ValueParameter",
+			dir + "signature/signature.go:Variadic",
+			dir + "values/values.go:Allocated",
+			dir + "values/values.go:Both",
+			dir + "values/values.go:Copied",
+			dir + "values/values.go:Made",
+			dir + "values/values.go:Value",
+			dir + "values/values.go:Zero",
+			dir + "values/values.go:package-level",
+			dir + "values/values.go:package-level",
+			dir + "values/values.go:package-level",
+			dir + "values/values.go:package-level",
+		}},
+		{name: "engine constructions", got: sites.engineConstructions, want: []string{
+			dir + "aliases/aliases.go:Engine",
+			dir + "dotimport/engine.go:DotEngine",
+			dir + "dotimport/engine.go:DotEngineValue",
+			dir + "signature/signature.go:EngineArrayBound",
+			dir + "values/values.go:EngineValue",
+		}},
+		{name: "in-process Investigate calls", got: sites.investigateCalls, want: []string{
+			dir + "realmethods/realmethods.go:ThroughEmbeddedReceiver",
+			dir + "realmethods/realmethods.go:ThroughInterface",
+			dir + "signature/signature.go:InvestigateArrayBound",
+			dir + "values/values.go:InvestigateMethodExpression",
+			dir + "values/values.go:InvestigateValue",
+		}},
+		{name: "model runtime calls outside the engine", got: sites.modelCallsOutside, want: []string{
+			dir + "realmethods/realmethods.go:ThroughEmbeddedInterface",
+			dir + "values/values.go:ModelValue",
+		}},
+		{name: "non-test importers of " + paritytestDir, got: sites.paritytestImporters, want: nil},
+	} {
+		if !slices.Equal(check.got, check.want) {
+			t.Errorf("%s = %q, want %q", check.name, check.got, check.want)
+		}
 	}
 }
