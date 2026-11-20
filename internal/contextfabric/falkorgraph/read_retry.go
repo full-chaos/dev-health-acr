@@ -96,11 +96,14 @@ func readRetryBackoff(attempt int) time.Duration {
 // a failure with a cause returns the context's error, which is what the
 // driver's own retry returned before (TestReadsHonourTheCallersDeadlineOnTheNetworkIO).
 //
-// A cancel is honoured between attempts and during the wait, not inside a
-// driver call, the same as main (client.go:24-27,
-// TestACancelDoesNotStopAReadInFlight): a cancel that lands while the driver
-// sets up a connection or waits on the socket lets that send go out, and a
-// reply that arrives returns as is.
+// A cancel is honoured between attempts, during the wait, after a new
+// connection's setup before the command is written (refuseAnEndedRead), and
+// when the call returns: a reply, or a server error with no transient cause,
+// that comes back after the caller's context ended returns the context's
+// error. A cancel does not interrupt a socket wait already in progress
+// (TestACancelDoesNotStopAReadInFlight). Known limit, not pinned: a cancel
+// between the pool get and the write on a reused idle connection still sends
+// the read once.
 //
 // Each failed attempt with a transient cause is recorded once: retried=true
 // only when the next send starts, retried=false when the attempts, the
@@ -112,10 +115,18 @@ func retryRead[T any](ctx context.Context, s *sdkAPI, operation string, call fun
 	for attempt := 1; ; attempt++ {
 		value, err := call()
 		if err == nil {
+			if ctxErr := s.endedAfterReply(ctx, operation, nil); ctxErr != nil {
+				var zero T
+				return zero, ctxErr
+			}
 			return value, nil
 		}
 		cause, retry := readFailureCause(err)
 		if cause == "" {
+			if ctxErr := s.endedAfterReply(ctx, operation, err); ctxErr != nil {
+				var zero T
+				return zero, ctxErr
+			}
 			return value, err
 		}
 		if ctxErr := contextEnded(ctx); ctxErr != nil {
@@ -143,6 +154,28 @@ func retryRead[T any](ctx context.Context, s *sdkAPI, operation string, call fun
 		}
 		s.recordReadAttemptFailed(ctx, operation, attempt, maxAttempts, cause, true)
 	}
+}
+
+// refuseAnEndedRead is the read client's OnConnect step. go-redis runs it after
+// a new connection's setup (HELLO, CLIENT SETINFO) with the caller's context and
+// before the command is written; an error closes that connection and fails the
+// call, so a read cancelled during the setup is never sent.
+func refuseAnEndedRead(ctx context.Context, _ *redis.Conn) error {
+	return ctx.Err()
+}
+
+// endedAfterReply returns the caller's context error when the call came back
+// with a reply after the context ended. The reply still proves the connection
+// works, so it is recorded for classifyConnError as it would have been.
+func (s *sdkAPI) endedAfterReply(ctx context.Context, operation string, replyErr error) error {
+	ctxErr := ctx.Err()
+	if ctxErr == nil {
+		return nil
+	}
+	if replyErr == nil || isProofOfLife(replyErr, classifyFalkorError(operation, replyErr)) {
+		s.everConnected.Store(true)
+	}
+	return ctxErr
 }
 
 // contextEnded reports the caller's end. The read client's socket deadline is

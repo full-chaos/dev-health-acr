@@ -22,9 +22,14 @@ import (
 //
 // Two clients share one Config. The READ client (read) honours the caller's
 // ctx deadline on the network IO: the deadline bounds dial, write and read, on
-// top of the configured RequestTimeout (go-redis ContextTimeoutEnabled); a
-// cancel is honoured before the call and while waiting for a pooled
-// connection, not by interrupting a socket wait already in progress. The
+// top of the configured RequestTimeout (go-redis ContextTimeoutEnabled). A
+// cancel is honoured before the call, while waiting for a pooled connection,
+// and after a new connection's setup, before the command is written
+// (refuseAnEndedRead, the go-redis OnConnect step). It does not interrupt a
+// socket wait already in progress, but a read whose ctx has ended when the
+// call returns returns the ctx error, not the reply (retryRead). Known limit,
+// not pinned by a test: a cancel between the pool get and the write on a
+// REUSED idle connection still sends the read once. The
 // WRITE client (db) does not: its ctx only guards the call before it starts, and
 // a started write runs to the RequestTimeout, so a caller's deadline or cancel
 // can never cut a projection or purge write mid-command. Reads are query(readOnly=true)
@@ -75,6 +80,9 @@ func newSDKAPI(config Config) (conn, error) {
 		}
 		if config.TLS {
 			options.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		}
+		if contextTimeout {
+			options.OnConnect = refuseAnEndedRead
 		}
 		return falkordb.FalkorDBNew(options)
 	}

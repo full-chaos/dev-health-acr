@@ -218,8 +218,17 @@ already-endpoint-resolved edges and owns only the pure admission decision.
   separate `GRAPH.LIST` existence check or bootstrap marker node
   required. Writes still auto-create on a brand-new organization's first
   write, which is intentional (see Deletion/rebuild below).
-- Context cancellation propagates to the server: every call goes through
-  `db.Conn.Do(ctx, ...)`, a real `go-redis` call.
+- Context handling differs by client; every call goes through `Conn.Do(ctx, ...)`,
+  a real `go-redis` call, and no call tells the server to stop a command it
+  already holds. The read client's context deadline bounds dial, write and
+  read on the socket. A cancel of a read is honoured before the call, while
+  it waits for a pooled connection, and after a new connection's setup,
+  before the command is written; a read whose context ended when the call
+  returns gets the context's error, not the reply. A cancel does not cut a
+  socket wait already in progress. Known limit, not pinned by a test: a
+  cancel between the pool get and the write on a reused idle connection still
+  sends the read once. The write client's context only guards the call
+  before it starts; a started write runs to the request timeout.
 
 ## Deployment topology
 
