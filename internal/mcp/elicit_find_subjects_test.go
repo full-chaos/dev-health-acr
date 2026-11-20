@@ -95,9 +95,6 @@ func TestFindSubjectsAmbiguousElicitation(t *testing.T) {
 			Subjects []struct {
 				CanonicalID string `json:"canonical_id"`
 			} `json:"subjects"`
-			Population struct {
-				Returned, TotalKnown int `json:"total_known"`
-			} `json:"population"`
 		}
 		if err := json.Unmarshal([]byte(gotStruct), &got); err != nil {
 			t.Fatal(err)
