@@ -282,7 +282,7 @@ func osExpectedVariables(measure, level, id string) string {
 	}
 	return canonicalJSON(map[string]any{"orgId": FixtureOrgID, "batch": map[string]any{
 		"breakdowns": []any{map[string]any{"dimension": "THEME", "measure": measure,
-			"dateRange": map[string]any{"startDate": "2026-09-01", "endDate": "2026-10-01"}, "topN": 50}},
+			"dateRange": map[string]any{"startDate": "2026-09-01", "endDate": "2026-09-30"}, "topN": 50}},
 		"useInvestment": true,
 		"filters":       map[string]any{"scope": scope},
 	}})

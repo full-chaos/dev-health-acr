@@ -82,7 +82,8 @@ func TestTheStoreReadingLeavesEvidenceGatedUnitsOutAsOpsDoes(t *testing.T) {
 		t.Fatal(err)
 	}
 	ops, uncategorized := recordedOrgThemeReply(t)
-	fromStore := store.OrgThemeEffort(manifest.Window)
+	// The ops analytics readers leave the capture day out (D6101): gateWindow.
+	fromStore := store.OrgThemeEffort(gateWindow(manifest))
 	if len(ops) == 0 || len(fromStore) != len(ops) {
 		t.Fatalf("ops answered %d themes, the store gives %d", len(ops), len(fromStore))
 	}
@@ -94,7 +95,7 @@ func TestTheStoreReadingLeavesEvidenceGatedUnitsOutAsOpsDoes(t *testing.T) {
 	if uncategorized == 0 {
 		t.Fatal("ops counts no uncategorized unit in the capture: this test measures nothing")
 	}
-	if got := store.GatedUnits(manifest.Window); got != uncategorized {
+	if got := store.GatedUnits(gateWindow(manifest)); got != uncategorized {
 		t.Errorf("the store gates %d units in scope and window, ops counts %d uncategorized", got, uncategorized)
 	}
 }

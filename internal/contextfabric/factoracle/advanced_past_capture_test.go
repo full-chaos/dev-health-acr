@@ -91,9 +91,13 @@ func TestAdvancedPastCaptureEntriesAreRecordedAndAdvanced(t *testing.T) {
 // stops the run.
 func TestARootIsSkippedOnlyWhenEveryOperationIsAdvanced(t *testing.T) {
 	policy := mustPolicy(t)
-	roots := advancedRoots(policy, advancedPastCapture)
+	// The capture is current: no root is skipped.
+	if roots := advancedRoots(policy, advancedPastCapture); len(roots) != 0 {
+		t.Fatalf("the current capture skips roots %v", roots)
+	}
+	// A root whose only operation is advanced is skipped by name.
 	var lines []string
-	for _, root := range roots {
+	for _, root := range advancedRoots(policy, map[string]string{"throughputForecast": "planted: advanced past the capture"}) {
 		lines = append(lines, notMeasuredLine(root))
 	}
 	if want := []string{"throughputForecast: NOT MEASURED (advanced past capture; re-capture 14023)"}; !slices.Equal(lines, want) {
