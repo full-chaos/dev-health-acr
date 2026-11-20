@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
@@ -16,6 +17,37 @@ import (
 )
 
 type limitClaimContextKey struct{}
+
+// limitClaimHolder carries a request's limit claim. The middleware closes the
+// claim when the handler returns, unless the handler detached it to work that
+// outlives the request (an accept-first investigation run), which then closes
+// it itself at its end.
+type limitClaimHolder struct {
+	claim    *limits.Claim
+	detached atomic.Bool
+}
+
+// DetachLimitClaim hands ctx's limit claim to work that outlives its
+// request: the middleware no longer closes it, and the returned close (once,
+// at that work's end) does. The claim stays in the request context, so the
+// work charges its real usage to it before the close. Without a claim the
+// close does nothing.
+func DetachLimitClaim(ctx context.Context) (closeClaim func()) {
+	holder, _ := ctx.Value(limitClaimContextKey{}).(*limitClaimHolder)
+	if holder == nil || holder.claim == nil {
+		return func() {}
+	}
+	holder.detached.Store(true)
+	return holder.claim.DoneClaim
+}
+
+func claimOf(ctx context.Context) *limits.Claim {
+	holder, _ := ctx.Value(limitClaimContextKey{}).(*limitClaimHolder)
+	if holder == nil {
+		return nil
+	}
+	return holder.claim
+}
 
 // limitSubjectOf is what principal's requests count under. For a user's
 // credentials it is the owner of contextfabric.SameSubmissionOwner, the user on
@@ -54,14 +86,18 @@ func LimitMiddleware(manager *limits.Manager, class limits.RequestClass, next ht
 			writeRateLimitError(w, r, decision.RetryAfter, limitTokenForClass(class))
 			return
 		}
-		defer claim.DoneClaim()
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), limitClaimContextKey{}, claim)))
+		holder := &limitClaimHolder{claim: claim}
+		defer func() {
+			if !holder.detached.Load() {
+				claim.DoneClaim()
+			}
+		}()
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), limitClaimContextKey{}, holder)))
 	})
 }
 
 func CompleteUsage(ctx context.Context, usage limits.ResourceUsage) error {
-	claim, _ := ctx.Value(limitClaimContextKey{}).(*limits.Claim)
-	return claim.Complete(usage)
+	return claimOf(ctx).Complete(usage)
 }
 
 // CompleteUsageWithBudget is CompleteUsage, except it evaluates usage
@@ -70,8 +106,7 @@ func CompleteUsage(ctx context.Context, usage limits.ResourceUsage) error {
 // why a route needs this rather than a new RequestClass or a change to the
 // class's shared policy.
 func CompleteUsageWithBudget(ctx context.Context, usage limits.ResourceUsage, override limits.ResourceBudget) error {
-	claim, _ := ctx.Value(limitClaimContextKey{}).(*limits.Claim)
-	return claim.CompleteWithBudget(usage, override)
+	return claimOf(ctx).CompleteWithBudget(usage, override)
 }
 
 // limitTokenForClass names the budget a refusal came from: the capabilities

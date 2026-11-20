@@ -242,12 +242,17 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			// leased, so serveInvestigationEventStream detaches it from the
 			// request the way it detaches a leased stream: the request's
 			// deadline (the run limit) is kept, its cancel is not.
+			// The run also takes over the request's limit claim: it charges
+			// its real usage and closes the claim once at its own end, on
+			// every terminal, the way a leased stream's handler does.
 			detached = true
 			runRequest := r.Clone(r.Context())
 			logCtx := context.WithoutCancel(r.Context())
+			closeClaim := DetachLimitClaim(r.Context())
 			a.detachedRuns.Add(1)
 			go func() {
 				defer a.detachedRuns.Done()
+				defer closeClaim()
 				defer func() {
 					if recovered := recover(); recovered != nil {
 						a.logger.ErrorContext(logCtx, "request panic recovered",
