@@ -249,3 +249,79 @@ func TestBoundedPageLineIsWrittenAgainByTheNextPass(t *testing.T) {
 		t.Fatalf("the second pass wrote %d bounded-page lines in all, want 2: one per pass", len(lines))
 	}
 }
+
+// twoPassCallRig leaves the next call to end the resumed pass and start the next one in the same call: every row
+// the resumed pass has left is seen, and one row landed behind its walk, which the next pass emits.
+func twoPassCallRig(t *testing.T) *boundedRetryRig {
+	t.Helper()
+	r := newBoundedRetryRig(t)
+	r.plan.windowInterval = 0
+	r.plan.windowPagesPerCall = 50
+	r.landSecondPage()
+	ack, err := r.call()
+	if err != nil || ack == "" {
+		t.Fatalf("first call: ack=%q err=%v, want the batch of the bounded first page", ack, err)
+	}
+	r.plan.window.settle(r.plan.windowScope, ack)
+	var seen []candidate
+	for n := 100; n < 600; n++ {
+		seen = append(seen, candidate{table: "full", observedAt: pageCutStamp, sortKey: fmt.Sprintf("a%03d", n)})
+	}
+	seen = append(seen,
+		candidate{table: "repos", observedAt: pageCutStamp, sortKey: "a150z"},
+		candidate{table: "later", observedAt: pageCutStamp.Add(30 * time.Second), sortKey: "0"})
+	r.plan.window.record(r.plan.windowScope, seen, r.plan.overlap)
+	r.repos.rows = append(r.repos.rows, keysetRow{at: pageCutStamp.Add(-2 * time.Second), key: "00000000-0000-4000-8000-000000000002"})
+	return r
+}
+
+func (r *boundedRetryRig) seq() int { return r.plan.window.pass(r.plan.windowScope).seq }
+
+// One call ends the resumed pass and starts the next; both write their line once, and a rollback of that call's
+// batch makes neither write it again.
+func TestBoundedPageLineIsNotWrittenAgainWhenOneCallRunsTwoPasses(t *testing.T) {
+	r := twoPassCallRig(t)
+	before := r.seq()
+	ack, err := r.call()
+	if err != nil || ack == "" {
+		t.Fatalf("second call: ack=%q err=%v, want the batch of the row that landed late", ack, err)
+	}
+	if got := r.seq() - before; got != 1 {
+		t.Fatalf("the call started %d passes, want the resumed pass to end and one more to start", got)
+	}
+	if lines := boundedPageLines(t, r.logs); len(lines) != 2 {
+		t.Fatalf("the two passes wrote %d bounded-page lines, want one each", len(lines))
+	}
+	for retry := 1; retry <= 2; retry++ {
+		r.plan.window.settle(r.plan.windowScope, "")
+		if ack, err := r.call(); err != nil || ack == "" {
+			t.Fatalf("retry %d: ack=%q err=%v, want the same batch again", retry, ack, err)
+		}
+		if lines := boundedPageLines(t, r.logs); len(lines) != 2 {
+			t.Fatalf("after retry %d the passes wrote %d bounded-page lines in all, want 2", retry, len(lines))
+		}
+	}
+}
+
+// boundedWarnedPasses is sized by this: with no pause between passes one call starts at most one pass, so it
+// touches at most that one and the resumed pass it ended.
+func TestOneCallStartsAtMostOnePassSoItTouchesBoundedWarnedPasses(t *testing.T) {
+	r := twoPassCallRig(t)
+	most := 0
+	for call := 0; call < 40; call++ {
+		before := r.seq()
+		ack, err := r.call()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ack != "" {
+			r.plan.window.settle(r.plan.windowScope, ack)
+		}
+		if started := r.seq() - before; started > most {
+			most = started
+		}
+	}
+	if most != 1 || boundedWarnedPasses != most+1 {
+		t.Fatalf("a call started at most %d passes (want 1), boundedWarnedPasses = %d (want that plus the resumed pass)", most, boundedWarnedPasses)
+	}
+}

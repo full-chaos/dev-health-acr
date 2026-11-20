@@ -115,14 +115,22 @@ type windowScope struct {
 	recon map[string]reconcilePass
 	// ahead says the scope's last paged read stopped with rows beyond it.
 	ahead bool
-	// boundedWarned is the identity of the pass that wrote its bounded-page
-	// line last. It sits outside windowPass: a rollback of the pass (an
-	// unacknowledged batch, a failed read) must not make the retry of that page
-	// write it again. A rollback also puts seq back, so the retry that starts
-	// the pass again has the same identity; a later pass differs by seq, or, when
-	// the frontier moved before it started, by its window.
-	boundedWarned passIdentity
+	// boundedWarned holds the identities of the last passes that wrote their
+	// bounded-page line (boundedWarnedPasses of them, newest at the end). It sits
+	// outside windowPass: a rollback of the pass (an unacknowledged batch, a
+	// failed read) must not make the retry of that page write it again. A
+	// rollback also puts seq back, so the retry that starts the pass again has
+	// the same identity; a later pass differs by seq, or, when the frontier moved
+	// before it started, by its window.
+	boundedWarned [boundedWarnedPasses]passIdentity
 }
+
+// boundedWarnedPasses is how many passes one overlapBatch call can touch: the
+// resumed pass it ends and the one pass it starts after it (the completed flag
+// below allows one restart); a pass the call itself started never restarts in
+// that call. A rollback goes back at most that far, so these are the markers a
+// retry can need.
+const boundedWarnedPasses = 2
 
 // pendingWindow is an emitted window batch whose rows are not yet "seen":
 // the pass as it stood before the batch was built, and the batch's rows.
@@ -354,7 +362,15 @@ func (m *windowMemo) boundedWarned(scope string, id passIdentity) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sc := m.scopes[scope]
-	return sc != nil && sc.boundedWarned.same(id)
+	if sc == nil {
+		return false
+	}
+	for _, warned := range sc.boundedWarned {
+		if warned.same(id) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *windowMemo) markBoundedWarned(scope string, id passIdentity) {
@@ -363,7 +379,9 @@ func (m *windowMemo) markBoundedWarned(scope string, id passIdentity) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.scopeLocked(scope).boundedWarned = id
+	sc := m.scopeLocked(scope)
+	copy(sc.boundedWarned[:], sc.boundedWarned[1:])
+	sc.boundedWarned[boundedWarnedPasses-1] = id
 }
 
 func (m *windowMemo) setPass(scope string, pass windowPass) {
