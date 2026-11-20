@@ -52,6 +52,8 @@ usage: o4-venue.sh <step>
   up       pull the pinned images, start the stack from empty volumes, provision the organization
   seed     load the synthetic world and derive the tables (workers run here only)
   counts   P0: rows of the organization in the window, per table (read only)
+  token    mint the MCP credential on this project's own acr-api (device grant, approved by a
+           per-run web-assertion key that only this project trusts)
   env      write the ACR_O4_* env file (0600) for `make o4-oracle-preflight o4-oracle-capture`
   down     `down -v` of this project only, then the residue check
 EOF
@@ -66,6 +68,7 @@ require_tools() {
     command -v "$tool" >/dev/null 2>&1 || die "$tool is required"
   done
   docker compose version >/dev/null 2>&1 || die 'the docker compose plugin (v2) is required'
+  case "$(openssl version)" in OpenSSL\ [3-9]*) ;; *) die 'OpenSSL 3 is required (Ed25519 signing; macOS: brew install openssl@3 and put it first on PATH)' ;; esac
   [ -n "$O4_VENUE_OPS_DIR" ] || die 'O4_VENUE_OPS_DIR must name a dev-health-ops checkout at the vendored pin'
   [ -f "$O4_VENUE_OPS_DIR/compose.yml" ] || die 'O4_VENUE_OPS_DIR has no compose.yml'
   local head
@@ -129,6 +132,7 @@ assert_project_new() {
 # --- state, secrets and the compose model --------------------------------------------------
 
 random_secret() { openssl rand -hex 24; }
+b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 # Host-only credential files are 0600; files a container reads through a bind mount are 0644
 # (the distroless UID of the container is not the owner).
 write_private() { (umask 077; printf '%s' "$2" > "$1"); }
@@ -153,6 +157,11 @@ prepare_state() {
   [ -f "$SECRETS/evidence-keys" ] || write_shared "$SECRETS/evidence-keys" "o4-venue-kid=$(openssl rand -base64 32 | tr -d '\n')"
   [ -f "$SECRETS/settings-key" ] || write_private "$SECRETS/settings-key" "$(random_secret)"
   [ -f "$SECRETS/bugsink-key" ] || write_private "$SECRETS/bugsink-key" "$(random_secret)"
+  if [ ! -f "$STATE/web/web-assertion.key" ]; then
+    (umask 077; openssl genpkey -algorithm ED25519 -out "$STATE/web/web-assertion.key" 2>/dev/null)
+    write_shared "$STATE/web/web-assertions.jwks.json" "$(printf '{"keys":[{"kty":"OKP","crv":"Ed25519","kid":"o4-venue-web","use":"sig","alg":"EdDSA","x":"%s"}]}' \
+      "$(openssl pkey -in "$STATE/web/web-assertion.key" -pubout -outform DER | tail -c 32 | b64url)")"
+  fi
   local pg ch reader runtime migration
   pg="$(cat "$SECRETS/postgres-password")"; ch="$(cat "$SECRETS/clickhouse-password")"
   reader="$(cat "$SECRETS/reader-password")"; runtime="$(cat "$SECRETS/runtime-password")"
@@ -171,6 +180,9 @@ prepare_state() {
   export ACR_RUNTIME_DSN_FILE="$SECRETS/runtime-dsn" ACR_MIGRATION_DSN_FILE="$SECRETS/migration-dsn"
   export ACR_CLICKHOUSE_DSN_FILE="$SECRETS/acr-clickhouse-dsn"
   export ACR_EVIDENCE_ACTIVE_KID_FILE="$SECRETS/evidence-kid" ACR_EVIDENCE_KEYS_FILE="$SECRETS/evidence-keys"
+  ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS=""
+  [ ! -f "$SECRETS/org-id" ] || ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS="$(cat "$SECRETS/org-id")"
+  export ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS
   DEV_HEALTH_GO_DHO_IMAGE="$(image dev-health-go-dho "$O4_VENUE_OPS_TAG")"
   DEV_HEALTH_GO_OPERATOR_IMAGE="$(image dev-health-go-operator "$O4_VENUE_OPS_TAG")"
   DEV_HEALTH_GO_AUTH_MIGRATE_IMAGE="$(image dev-health-go-auth-migrate "$O4_VENUE_OPS_TAG")"
@@ -212,6 +224,10 @@ services:
     networks: [default, dev-health]
   go-api: { ports: !reset [], networks: [default, planes, auth_plane, dev-health] }
   auth-issuer: { ports: !reset [] }
+  # go-api reads the workload registry to accept acr-api's workload token (ops
+  # docs/operate/security/acr-service-credential-migration.md, step 3).
+  auth-migrate: { environment: { AUTH_WORKLOAD_READER_ROLES: devhealth_api } }
+  auth-grants: { environment: { AUTH_WORKLOAD_READER_ROLES: devhealth_api } }
   auth-service: { ports: !reset [] }
   query-api:
     networks: [default, planes, dev-health, o4_query_internal]
@@ -229,7 +245,14 @@ services:
   go-worker-ops: { profiles: [o4-never] }
   go-worker-sync: { profiles: [o4-never] }
   go-worker-sync-provider: { profiles: [o4-never] }
-  acr-projector: { profiles: [o4-never] }
+  falkordb: { profiles: !override [o4-graph] }
+  acr-projector:
+    profiles: [o4-graph]
+    healthcheck: { test: ["NONE"] }
+    environment:
+      ACR_CONTEXT_FABRIC_PROJECTION_ENABLED: "true"
+      ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED: "true"
+      ACR_CONTEXT_FABRIC_FALKOR_ADDR: falkordb:6379
   acr-db-init:
     volumes: !override [ "${ACR_ROOT}/deploy/compose/acr-db-init.sh:/usr/local/bin/acr-db-init:ro" ]
   acr-db-acl:
@@ -238,6 +261,7 @@ services:
     image: "${acr_api}"
     ports: [ "127.0.0.1:${O4_VENUE_API_PORT}:8080" ]
     labels: !reset {}
+    healthcheck: { test: ["NONE"] }
     networks: [dev-health, acr_auth_workload, o4_query_internal]
     environment:
       ACR_DEV_HEALTH_ENTITLEMENT_URL: http://go-api:8091
@@ -247,8 +271,18 @@ services:
       ACR_DATA_QUERY_TIMEOUT: 30s
       ACR_OAUTH_ISSUER: "${api_base}"
       ACR_OAUTH_RESOURCES: "${mcp_resource}"
+      ACR_OAUTH_CONSENT_URL: "${api_base}/consent"
       ACR_DEVICE_VERIFICATION_URL: "${api_base}/device"
       ACR_REQUIRE_BACKING_STORES: "false"
+      ACR_CONTEXT_FABRIC_GRAPH_READS_ENABLED: "true"
+      ACR_CONTEXT_FABRIC_FALKOR_ADDR: falkordb:6379
+      ACR_CONTEXT_FABRIC_FALKOR_TLS: "false"
+      ACR_CONTEXT_FABRIC_FALKOR_ALLOW_INSECURE: "true"
+      ACR_CONTEXT_FABRIC_FALKOR_GRAPH_PREFIX: acr-cf
+      ACR_WEB_ASSERTION_ISSUER: o4-venue-web
+      ACR_WEB_ASSERTION_AUDIENCE: acr-api
+      ACR_WEB_ASSERTION_JWKS_FILE: /run/o4-venue/web-assertions.jwks.json
+    volumes: [ "${STATE}/web/web-assertions.jwks.json:/run/o4-venue/web-assertions.jwks.json:ro" ]
   acr-mcp:
     image: "${acr_mcp}"
     entrypoint: ["/usr/local/bin/acr-mcp"]
@@ -295,7 +329,7 @@ compose() {
     -f "$ACR_ROOT/deploy/compose/acr.compose.yml" \
     -f "$ACR_ROOT/deploy/compose/acr-auth-workload.compose.yml" \
     -f "$STATE/override.yml" \
-    --profile auth "$@"
+    --profile auth --profile o4-graph "$@"
 }
 
 # dho runs the ops CLI one-shot in the query-api image on the project network, against
@@ -335,7 +369,8 @@ step_render() {
   note "compose model of ${O4_VENUE_PROJECT} renders"
 }
 
-ACR_SERVICES="acr-db-init acr-migrate acr-db-acl acr-workload-volume acr-workload-bootstrap acr-api acr-mcp"
+# The acr one-shots (db-init, migrate, db-acl) run as dependencies of acr-api.
+ACR_SERVICES="falkordb acr-api acr-mcp"
 OPS_SERVICES="postgres pgbouncer pgbouncer-river-queue pgbouncer-river-coordinator clickhouse valkey migrate go-river-provision go-river-migrate go-api query-api auth-service auth-issuer"
 
 step_up() {
@@ -351,11 +386,21 @@ step_up() {
   compose pull -q $OPS_SERVICES
   # shellcheck disable=SC2086
   compose up -d --no-build --wait $OPS_SERVICES
-  # shellcheck disable=SC2086
-  compose up -d --no-build --wait $ACR_SERVICES
-  provision_org
   grant_reader
+  compose run --rm acr-workload-bootstrap >/dev/null 2>&1 || die 'the acr-api workload bootstrap credential was not created'
+  # shellcheck disable=SC2086
+  compose up -d --no-build $ACR_SERVICES
+  wait_ready "http://127.0.0.1:${O4_VENUE_API_PORT}/readyz" acr-api
+  provision_org
   note "up: ${O4_VENUE_PROJECT}, ops ${O4_VENUE_OPS_TAG}, acr ${O4_VENUE_ACR_TAG}"
+}
+
+wait_ready() {
+  local waited=0
+  until curl -fsS --noproxy '*' -o /dev/null "$1"; do
+    [ "$waited" -lt 180 ] || die "$2 is not ready after 180 s"
+    sleep 5; waited=$((waited + 5))
+  done
 }
 
 provision_org() {
@@ -391,6 +436,23 @@ step_seed() {
     dho fixtures generate --sink "clickhouse://ch:${ch}@clickhouse:9000/default" --db-type clickhouse --org "$org" --allow-mixed-org $O4_VENUE_FALLBACK_WORLD_ARGS >/dev/null
     derive "$org"
   fi
+  project_graph
+}
+
+# project_graph runs acr-projector for the organization until the graph holds it, then stops
+# it: acr-api reads subjects and repository grants from that graph.
+project_graph() {
+  local waited=0 graphs
+  compose up -d --no-build acr-projector >/dev/null
+  while :; do
+    graphs="$(compose exec -T falkordb redis-cli GRAPH.LIST 2>/dev/null | grep -c . || true)"
+    [ "${graphs:-0}" -gt 0 ] && break
+    [ "$waited" -lt 600 ] || die 'acr-projector wrote no graph within 600 s'
+    sleep 10; waited=$((waited + 10))
+  done
+  sleep 60
+  compose stop acr-projector >/dev/null
+  note "graph projected (${graphs} graph(s)); projector stopped"
 }
 
 # derive runs the ops job chain for the organization with a worker of this project only, then
@@ -441,6 +503,79 @@ step_counts() {
   note 'P0: every table holds rows of the organization'
 }
 
+# --- B1: the MCP credential ------------------------------------------------------------------
+# Every call below goes to this project's own acr-api on 127.0.0.1. The base URL is built here
+# from the loopback address and the port Compose published for THIS project's acr-api; no
+# variable can point it elsewhere.
+own_api_base() {
+  local published
+  case "$O4_VENUE_PROJECT" in acr-e2e-o4venue-*) ;; *) die 'the token step runs only for an acr-e2e-o4venue-* project' ;; esac
+  published="$(compose port acr-api 8080 2>/dev/null || true)"
+  [ "$published" = "127.0.0.1:${O4_VENUE_API_PORT}" ] || die "acr-api of ${O4_VENUE_PROJECT} is not published on 127.0.0.1:${O4_VENUE_API_PORT}"
+  printf 'http://127.0.0.1:%s' "$O4_VENUE_API_PORT"
+}
+
+json_field() { sed -nE "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"([^\"]+)\".*/\1/p" | head -n 1; }
+
+# web_assertion signs the one approval request with the per-run key (EdDSA JWT bound to the
+# method, path and body; 20 s lifetime; credential:issue only).
+web_assertion() {
+  local user="$1" org="$2" path="$3" body="$4" now header claims signing
+  now="$(date -u +%s)"
+  header="$(printf '{"alg":"EdDSA","typ":"JWT","kid":"o4-venue-web"}' | b64url)"
+  claims="$(printf '{"iss":"o4-venue-web","aud":"acr-api","sub":"%s","org_id":"%s","permissions":["credential:issue"],"iat":%s,"nbf":%s,"exp":%s,"jti":"%s","method":"POST","path":"%s","body_sha256":"%s"}' \
+    "$user" "$org" "$now" "$now" "$((now + 20))" "$(openssl rand -hex 16)" "$path" \
+    "$(printf '%s' "$body" | openssl dgst -sha256 -binary | b64url)" | b64url)"
+  signing="$STATE/web/signing-input"
+  printf '%s.%s' "$header" "$claims" > "$signing"
+  printf '%s.%s.%s' "$header" "$claims" "$(openssl pkeyutl -sign -rawin -inkey "$STATE/web/web-assertion.key" -in "$signing" | b64url)"
+  rm -f "$signing"
+}
+
+provision_user() {
+  local email="o4-venue@example.invalid" org pg user
+  org="$(cat "$SECRETS/org-id")"
+  [ -f "$SECRETS/user-password" ] || write_private "$SECRETS/user-password" "$(random_secret)"
+  dho admin users create --email "$email" --password "$(cat "$SECRETS/user-password")" --full-name 'O4 Venue' >/dev/null 2>&1 || true
+  dho admin users update --email "$email" --verified >/dev/null || die 'the venue user could not be marked verified'
+  pg="$(cat "$SECRETS/postgres-password")"
+  user="$(compose exec -T -e "PGPASSWORD=${pg}" postgres psql -h postgres -U postgres -d postgres -At -q -v ON_ERROR_STOP=1 -c "
+    INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+      SELECT gen_random_uuid(), '${org}', u.id, 'owner', now(), now(), now() FROM users u
+      WHERE u.email = '${email}' AND NOT EXISTS (SELECT 1 FROM memberships m WHERE m.org_id = '${org}' AND m.user_id = u.id);
+    SELECT u.id FROM users u JOIN memberships m ON m.user_id = u.id
+      WHERE u.email = '${email}' AND m.org_id = '${org}' AND m.role = 'owner' AND u.is_verified")"
+  user="$(printf '%s' "$user" | tr -d '[:space:]')"
+  case "$user" in ????????-????-????-????-????????????) ;; *) die 'the venue user is not a verified owner of the organization' ;; esac
+  write_private "$SECRETS/user-id" "$user"
+}
+
+step_token() {
+  prepare_state
+  render_override
+  local base org user client start device user_code body status token
+  base="$(own_api_base)"
+  [ -f "$SECRETS/user-id" ] || provision_user
+  org="$(cat "$SECRETS/org-id")"; user="$(cat "$SECRETS/user-id")"
+  client="$(curl -fsS --noproxy '*' -H 'Content-Type: application/json' -d '{"client_name":"o4-venue","grant_types":["urn:ietf:params:oauth:grant-type:device_code"],"token_endpoint_auth_method":"none"}' "${base}/register" | json_field client_id)"
+  [ -n "$client" ] || die 'client registration failed'
+  start="$(curl -fsS --noproxy '*' --data-urlencode "client_id=${client}" --data-urlencode 'scope=context:read evidence:read data:read' \
+    --data-urlencode "resource=http://127.0.0.1:${O4_VENUE_MCP_PORT}/mcp" "${base}/device_authorization")"
+  device="$(printf '%s' "$start" | json_field device_code)"; user_code="$(printf '%s' "$start" | json_field user_code)"
+  [ -n "$device" ] && [ -n "$user_code" ] || die 'device authorization failed'
+  body="$(printf '{"schema_version":"device_approval_request.v1","user_code":"%s","repository_scopes":["*"]}' "$user_code")"
+  status="$(curl -sS --noproxy '*' -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H 'X-ACR-Client-Version: 1.0.0' \
+    -H "X-ACR-Web-Assertion: $(web_assertion "$user" "$org" /api/v1/oauth/device_approval "$body")" --data-binary "$body" "${base}/api/v1/oauth/device_approval")"
+  [ "$status" = 200 ] || die "device approval answered HTTP ${status}"
+  token="$(curl -fsS --noproxy '*' --data-urlencode 'grant_type=urn:ietf:params:oauth:grant-type:device_code' \
+    --data-urlencode "device_code=${device}" --data-urlencode "client_id=${client}" "${base}/token" | json_field access_token)"
+  [ -n "$token" ] || die 'the device grant issued no token'
+  write_private "$SECRETS/mcp-token" "$token"
+  status="$(curl -sS --noproxy '*' -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H 'X-ACR-Client-Version: 1.0.0' \
+    -H "Authorization: Bearer $(cat "$SECRETS/mcp-token")" -d '{"schema_version":"credential_ack_request.v1"}' "${base}/api/v1/auth/credentials/self/ack")"
+  note "MCP credential stored 0600 (ack HTTP ${status}); it is removed at down"
+}
+
 step_env() {
   prepare_state
   local org reader
@@ -467,7 +602,8 @@ step_down() {
   local residue
   residue="$(docker ps -aq --filter "label=com.docker.compose.project=${O4_VENUE_PROJECT}")$(docker volume ls -q --filter "label=com.docker.compose.project=${O4_VENUE_PROJECT}")$(docker network ls -q --filter "label=com.docker.compose.project=${O4_VENUE_PROJECT}")"
   [ -z "$residue" ] || die "residue of ${O4_VENUE_PROJECT} after down -v"
-  rm -f "$SECRETS/mcp-token" "$SECRETS/o4-clickhouse.dsn" "$ENV_FILE"
+  rm -f "$SECRETS/mcp-token" "$SECRETS/o4-clickhouse.dsn" "$ENV_FILE" "$SECRETS/user-id" "$SECRETS/user-password" "$SECRETS/org-id"
+  rm -f "$STATE/web/web-assertion.key" "$STATE/web/web-assertions.jwks.json"
   note "down -v: ${O4_VENUE_PROJECT} left zero containers, volumes and networks; credentials removed"
 }
 
@@ -478,6 +614,7 @@ case "$1" in
   up) step_up ;;
   seed) step_seed ;;
   counts) step_counts ;;
+  token) step_token ;;
   env) step_env ;;
   down) step_down ;;
   *) usage ;;
