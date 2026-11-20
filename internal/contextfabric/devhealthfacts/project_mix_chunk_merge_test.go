@@ -52,13 +52,13 @@ func (c *chunkedRollupClient) Query(_ context.Context, statement string, binding
 		for i := 0; i < 600; i++ {
 			ids, versions = append(ids, fmt.Sprintf("u%03d", i)), append(versions, int64(1000+i))
 		}
-		return &fakeScanner{rows: [][]any{{ids, versions, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}}}, nil
+		return &fakeScanner{rows: [][]any{{ids, versions, make([]uint64, len(ids)), time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}}}, nil
 	case strings.Contains(statement, "groupArray(link_teams)"):
 		return &fakeScanner{rows: [][]any{{[]string{}, []string{}, []string{}, []string{}, [][]string{}}}}, nil
 	case strings.Contains(statement, "AS chunk_bounds"):
 		return &fakeScanner{rows: [][]any{{[]string{"u300"}}}}, nil
 	case strings.Contains(statement, "AS pinned_present"):
-		return &fakeScanner{rows: [][]any{{uint64(600)}}}, nil
+		return &fakeScanner{rows: [][]any{{uint64(600), uint64(0)}}}, nil
 	case strings.Contains(statement, "AS feature_delivery"):
 		at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 		return &fakeScanner{rows: [][]any{
@@ -122,11 +122,11 @@ func (orderedNativeClient) Query(_ context.Context, statement string, _ []contex
 		}
 		return &fakeScanner{rows: [][]any{row}}, nil
 	case strings.Contains(statement, "groupArrayIf(work_unit_id, in_window)"):
-		return &fakeScanner{rows: [][]any{{units, []int64{1, 2, 3}, at}}}, nil
+		return &fakeScanner{rows: [][]any{{units, []int64{1, 2, 3}, []uint64{1, 1, 1}, at}}}, nil
 	case strings.Contains(statement, "AS chunk_bounds"):
 		return &fakeScanner{rows: [][]any{{[]string{}}}}, nil
 	case strings.Contains(statement, "AS pinned_present"):
-		return &fakeScanner{rows: [][]any{{uint64(3)}}}, nil
+		return &fakeScanner{rows: [][]any{{uint64(3), uint64(0)}}}, nil
 	case strings.Contains(statement, "groupArray(multi_placed)"):
 		return &fakeScanner{rows: [][]any{{[]string{"u2", "u3", "u1"}, []string{"linear", "linear", "linear"}, []string{"p1", "p1", "p1"}, []uint8{0, 0, 0}}}}, nil
 	case strings.Contains(statement, "groupArray(theme_feature_delivery)"):

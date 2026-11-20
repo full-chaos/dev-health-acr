@@ -302,3 +302,6 @@ func BlockerStatementMaxThreadsForTest(ctx context.Context) (uint64, error) {
 
 // BlockerStatementMaxMemoryUsage is the team blocker statements' memory cap (CHAOS-13003).
 var BlockerStatementMaxMemoryUsage = blockerStatementMaxMemoryUsage
+
+// WorkUnitVersionKey is workUnitVersionKey for the external tests.
+const WorkUnitVersionKey = workUnitVersionKey

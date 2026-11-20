@@ -183,13 +183,13 @@ FROM (
 								CAST([], 'Array(String)')) AS evidence_refs
 						FROM (
 							SELECT work_unit_id,
-								(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
-								argMax(from_ts, computed_at) AS from_ts,
-								argMax(to_ts, computed_at) AS to_ts,
+								(argMax(tuple(repo_id), ` + workUnitVersionKey + `)).1 AS repo_id,
+								argMax(from_ts, ` + workUnitVersionKey + `) AS from_ts,
+								argMax(to_ts, ` + workUnitVersionKey + `) AS to_ts,
 								toFloat64(1) AS effort_value,
-								argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
-								argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
-								argMax(structural_evidence_json, computed_at) AS structural_evidence_json
+								argMax(theme_distribution_json, ` + workUnitVersionKey + `) AS theme_distribution_json,
+								argMax(subcategory_distribution_json, ` + workUnitVersionKey + `) AS subcategory_distribution_json,
+								argMax(structural_evidence_json, ` + workUnitVersionKey + `) AS structural_evidence_json
 							FROM work_unit_investments
 							WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + investmentMembershipScopeFilter() + `
 							GROUP BY work_unit_id

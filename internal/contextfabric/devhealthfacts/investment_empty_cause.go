@@ -29,9 +29,9 @@ func ownedUnitCountStatement(bound factTimeBound, scope membershipScope) string 
 	return `SELECT toString(repo_id) AS repo, uniqExact(work_unit_id) AS units, uniqExact(work_unit_id) AS positive
 FROM (
 	SELECT work_unit_id,
-		(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
-		argMax(from_ts, computed_at) AS from_ts,
-		argMax(to_ts, computed_at) AS to_ts,
+		(argMax(tuple(repo_id), ` + workUnitVersionKey + `)).1 AS repo_id,
+		argMax(from_ts, ` + workUnitVersionKey + `) AS from_ts,
+		argMax(to_ts, ` + workUnitVersionKey + `) AS to_ts,
 		toFloat64(1) AS effort_value
 	FROM work_unit_investments
 	WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `

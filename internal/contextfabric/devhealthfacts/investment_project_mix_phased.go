@@ -58,12 +58,21 @@ import (
 // pairs phase 0 selected: the unit's computed_at, in whole milliseconds (the
 // column is DateTime64(3)), must be the one phase 0 saw. A newer version, or a
 // version dated between the unit's selected one and the newest one, is invisible
-// to every phase.
+// to every phase. Two rows of one unit in that millisecond both pass; every phase
+// picks between them by workUnitVersionKey, so it picks phase 0's row. A merge
+// between the phases keeps that order: it takes a contiguous block range, so it
+// either collapses the rows to the one with the largest key or leaves their
+// order as it was. A row of the pinned millisecond written after phase 0 would
+// win the later phases; projectMixPinnedPresenceStatement retries the attempt.
+//
+// A pin is (unit, millisecond, rows of the unit in that millisecond at phase 0).
 const projectMixPinnedFilter = `
                               AND (work_unit_id, toUnixTimestamp64Milli(computed_at)) IN (
                                   SELECT pin.1, pin.2
-                                  FROM (SELECT arrayJoin(JSONExtract({pin_json:String}, 'Array(Tuple(String, Int64))')) AS pin)
+                                  FROM (SELECT arrayJoin(JSONExtract({pin_json:String}, '` + projectMixPinType + `')) AS pin)
                               )`
+
+const projectMixPinType = "Array(Tuple(String, Int64, UInt64))"
 
 // projectMixChunkRangeFilter restricts a chunked phase to its chunk's key range:
 // (org_id, work_unit_id) is the table's ORDER BY key, so the server reads only
@@ -174,6 +183,7 @@ func splitProjectMixScope(scope projectMixScope, starts []string) []projectMixCh
 		cur.hi = id
 		cur.pins.unitIDs = append(cur.pins.unitIDs, id)
 		cur.pins.versionsMs = append(cur.pins.versionsMs, scope.versionsMs[i])
+		cur.pins.versionRows = append(cur.pins.versionRows, scope.versionRows[i])
 	}
 	if len(cur.pins.unitIDs) > 0 {
 		chunks = append(chunks, cur)
@@ -222,16 +232,26 @@ func firstProjectKeys[V any](byKey map[string]V) map[string]V {
 }
 
 // projectMixPinnedPresenceStatement counts the pinned (work unit, version) pairs
-// that are still stored. work_unit_investments is ReplacingMergeTree(computed_at):
-// a newer version and a merge delete the pinned one, and every phase that reads
-// through projectMixPinnedFilter then silently misses that unit. An attempt whose
-// count falls short of the pins it took is retried, never answered.
-const projectMixPinnedPresenceStatement = `SELECT count() AS pinned_present FROM (
-    SELECT work_unit_id, toUnixTimestamp64Milli(computed_at) AS version_ms
+// that are still stored, and the pinned units that now hold MORE rows in their
+// pinned millisecond than phase 0 saw. work_unit_investments is
+// ReplacingMergeTree(computed_at): a newer version and a merge delete the pinned
+// one, and every phase that reads through projectMixPinnedFilter then silently
+// misses that unit; a row written into the pinned millisecond after phase 0 is
+// the unit's latest row for every later phase but not for phase 0. An attempt
+// with either is retried, never answered. Fewer rows (a merge collapsed two rows
+// of the millisecond) keep phase 0's row, which is the one the merge kept. The
+// rows are compared per unit: a collapse in one unit never hides growth in
+// another.
+const projectMixPinnedPresenceStatement = `SELECT count() AS pinned_present, countIf(stored.stored_rows > pins.pin_rows) AS pinned_grown FROM (
+    SELECT work_unit_id, toUnixTimestamp64Milli(computed_at) AS version_ms, count() AS stored_rows
     FROM work_unit_investments
     WHERE org_id = {org_id:String}` + projectMixPinnedFilter + `
     GROUP BY work_unit_id, version_ms
-)`
+) AS stored
+INNER JOIN (
+    SELECT pin.1 AS pin_unit, pin.2 AS pin_ms, pin.3 AS pin_rows
+    FROM (SELECT arrayJoin(JSONExtract({pin_json:String}, '` + projectMixPinType + `')) AS pin)
+) AS pins ON stored.work_unit_id = pins.pin_unit AND stored.version_ms = pins.pin_ms`
 
 // projectMixBoundLinkCTE is the project -> owned repository / owning team link
 // table phase 0 captured, bound as data: a phase never re-derives ownership, so
@@ -242,8 +262,9 @@ const projectMixBoundLinkCTE = `project_link AS (
 )`
 
 type projectMixScope struct {
-	unitIDs    []string
-	versionsMs []int64 // versionsMs[i] is the computed_at, in ms, of unitIDs[i]'s selected version
+	unitIDs     []string
+	versionsMs  []int64  // versionsMs[i] is the computed_at, in ms, of unitIDs[i]'s selected version
+	versionRows []uint64 // versionRows[i] is how many rows unitIDs[i] held in that ms at phase 0
 }
 
 func (s projectMixScope) bindings() []readers.Binding {
@@ -253,7 +274,7 @@ func (s projectMixScope) bindings() []readers.Binding {
 	// JSON also keeps any id that contains a separator intact.
 	pins := make([][]any, 0, len(s.unitIDs))
 	for i, id := range s.unitIDs {
-		pins = append(pins, []any{id, s.versionsMs[i]})
+		pins = append(pins, []any{id, s.versionsMs[i], s.versionRows[i]})
 	}
 	encoded, err := json.Marshal(pins)
 	if err != nil {
@@ -286,11 +307,12 @@ func projectMixScopeStatement(timeBound factTimeBound) string {
 }
 
 func projectMixScopeStatementScoped(timeBound factTimeBound, scope membershipScope) string {
-	return `SELECT groupArrayIf(work_unit_id, in_window) AS unit_ids, groupArrayIf(toUnixTimestamp64Milli(latest_at), in_window) AS version_ms, min(span_from) AS span_from FROM (
-    SELECT work_unit_id, latest_at, from_ts, to_ts, min(from_ts) OVER () AS span_from, (1` + workUnitEndStampPredicate(timeBound, "to_ts") + `) AS in_window FROM (
+	return `SELECT groupArrayIf(work_unit_id, in_window) AS unit_ids, groupArrayIf(toUnixTimestamp64Milli(latest_at), in_window) AS version_ms, groupArrayIf(latest_rows, in_window) AS version_rows, min(span_from) AS span_from FROM (
+    SELECT work_unit_id, latest_at, latest_rows, from_ts, to_ts, min(from_ts) OVER () AS span_from, (1` + workUnitEndStampPredicate(timeBound, "to_ts") + `) AS in_window FROM (
         SELECT work_unit_id, max(computed_at) AS latest_at,
-            argMax(from_ts, computed_at) AS from_ts,
-            argMax(to_ts, computed_at) AS to_ts
+            countEqual(groupArray(computed_at), max(computed_at)) AS latest_rows,
+            argMax(from_ts, ` + workUnitVersionKey + `) AS from_ts,
+            argMax(to_ts, ` + workUnitVersionKey + `) AS to_ts
         FROM work_unit_investments
         WHERE org_id = {org_id:String}` + supersededWorkUnitIDsFilter() + scope.filter() + `
         GROUP BY work_unit_id
@@ -311,14 +333,14 @@ func readProjectMixScope(ctx context.Context, client contextpacket.ClickHouseQue
 	}
 	err = readers.QueryOrgScopedNamed(ctx, client, "ReadProjectMixScope", projectMixScopeStatementScoped(timeBound, membership), orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var spanFrom time.Time
-		if err := row.Scan(&scope.unitIDs, &scope.versionsMs, &spanFrom); err != nil {
+		if err := row.Scan(&scope.unitIDs, &scope.versionsMs, &scope.versionRows, &spanFrom); err != nil {
 			return err
 		}
 		recordInvestmentOrgSpan(ctx, spanFrom, true)
 		return nil
 	}, extra...)
-	if err == nil && len(scope.versionsMs) != len(scope.unitIDs) {
-		err = fmt.Errorf("project mix scope arrays disagree: %d ids, %d versions", len(scope.unitIDs), len(scope.versionsMs))
+	if err == nil && (len(scope.versionsMs) != len(scope.unitIDs) || len(scope.versionRows) != len(scope.unitIDs)) {
+		err = fmt.Errorf("project mix scope arrays disagree: %d ids, %d versions, %d row counts", len(scope.unitIDs), len(scope.versionsMs), len(scope.versionRows))
 	}
 	return scope, err
 }
@@ -429,9 +451,9 @@ FROM (
 	FROM (
 		SELECT *, unit_size_weight AS effort_value
 		FROM ` + sizedUnits(`SELECT work_unit_id, org_id,
-			(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
-			argMax(from_ts, computed_at) AS from_ts,
-			argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
+			(argMax(tuple(repo_id), `+workUnitVersionKey+`)).1 AS repo_id,
+			argMax(from_ts, `+workUnitVersionKey+`) AS from_ts,
+			argMax(theme_distribution_json, `+workUnitVersionKey+`) AS theme_distribution_json,
 			`+latestUnitGatedSQL+` AS gated
 		FROM work_unit_investments
 		WHERE org_id = {org_id:String}`+projectMixPinnedFilter+`
@@ -462,8 +484,8 @@ FROM (
 	FROM (
 		SELECT *, unit_size_weight AS effort_value
 		FROM ` + sizedUnits(`SELECT work_unit_id, org_id,
-			(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
-			argMax(ifNull(subcategory_distribution_json['`+readers.BugfixSubcategoryKey+`'], 0.0), computed_at) AS bugfix_share,
+			(argMax(tuple(repo_id), `+workUnitVersionKey+`)).1 AS repo_id,
+			argMax(ifNull(subcategory_distribution_json['`+readers.BugfixSubcategoryKey+`'], 0.0), `+workUnitVersionKey+`) AS bugfix_share,
 			`+latestUnitGatedSQL+` AS gated
 		FROM work_unit_investments
 		WHERE org_id = {org_id:String}`+projectMixPinnedFilter+projectMixChunkRangeFilter+`
@@ -531,8 +553,8 @@ FROM (
 						)) AS evidence_refs
 					FROM (
 						SELECT work_unit_id,
-							(argMax(tuple(repo_id), computed_at)).1 AS repo_id,
-							argMax(structural_evidence_json, computed_at) AS structural_evidence_json,
+							(argMax(tuple(repo_id), ` + workUnitVersionKey + `)).1 AS repo_id,
+							argMax(structural_evidence_json, ` + workUnitVersionKey + `) AS structural_evidence_json,
 							` + latestUnitGatedSQL + ` AS gated
 						FROM work_unit_investments
 						WHERE org_id = {org_id:String}` + projectMixPinnedFilter + projectMixChunkRangeFilter + `
@@ -628,12 +650,15 @@ func readProjectRollupMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	if err != nil {
 		return nil, false, err
 	}
-	missing, err := readProjectMixPinnedMissing(ctx, client, orgID, ids, scope)
+	missing, grown, err := readProjectMixPinnedMissing(ctx, client, orgID, ids, scope)
 	if err != nil {
 		return nil, false, err
 	}
 	changed := !slices.Equal(before, after)
 	if projectMixPinnedMissing(ctx, "owning_team_rollup", missing) {
+		changed = true
+	}
+	if projectMixPinnedGrown(ctx, "owning_team_rollup", grown) {
 		changed = true
 	}
 	for i := range rows {
@@ -661,7 +686,7 @@ func projectNativePlacementStatement() string {
                     JSONExtract(structural_evidence_json, 'issues', 'Array(String)') AS issue_refs
                 FROM (
                     SELECT work_unit_id,
-                        argMax(structural_evidence_json, computed_at) AS structural_evidence_json
+                        argMax(structural_evidence_json, ` + workUnitVersionKey + `) AS structural_evidence_json
                     FROM work_unit_investments
                     WHERE org_id = {org_id:String}` + projectMixPinnedFilter + projectMixChunkRangeFilter + `
                     GROUP BY work_unit_id
@@ -700,8 +725,8 @@ FROM (
     FROM (
         SELECT *, unit_size_weight AS effort_value
         FROM ` + sizedUnits(`SELECT work_unit_id, org_id,
-            argMax(from_ts, computed_at) AS from_ts,
-            argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
+            argMax(from_ts, `+workUnitVersionKey+`) AS from_ts,
+            argMax(theme_distribution_json, `+workUnitVersionKey+`) AS theme_distribution_json,
             `+latestUnitGatedSQL+` AS gated
         FROM work_unit_investments
         WHERE org_id = {org_id:String}`+projectMixPinnedFilter+`
@@ -718,7 +743,7 @@ FROM (
     SELECT work_unit_id, bugfix_share
     FROM (
         SELECT work_unit_id,
-            argMax(ifNull(subcategory_distribution_json[{bugfix_key:String}], 0.0), computed_at) AS bugfix_share
+            argMax(ifNull(subcategory_distribution_json[{bugfix_key:String}], 0.0), ` + workUnitVersionKey + `) AS bugfix_share
         FROM work_unit_investments
         WHERE org_id = {org_id:String}` + projectMixPinnedFilter + projectMixChunkRangeFilter + `
         GROUP BY work_unit_id
@@ -836,12 +861,15 @@ func readProjectNativeMixRowsOnce(ctx context.Context, client contextpacket.Clic
 	if err != nil {
 		return nil, nil, nil, nil, false, err
 	}
-	missing, err := readProjectMixPinnedMissing(ctx, client, orgID, ids, scope)
+	missing, grown, err := readProjectMixPinnedMissing(ctx, client, orgID, ids, scope)
 	if err != nil {
 		return nil, nil, nil, nil, false, err
 	}
 	changed := !slices.Equal(before, after)
 	if projectMixPinnedMissing(ctx, "project_native", missing) {
+		changed = true
+	}
+	if projectMixPinnedGrown(ctx, "project_native", grown) {
 		changed = true
 	}
 
@@ -988,20 +1016,21 @@ func readProjectMixInputs(ctx context.Context, client contextpacket.ClickHouseQu
 }
 
 // readProjectMixPinnedMissing reports how many of scope's pinned pairs are no
-// longer stored. It runs after the last phase of an attempt: a pinned version
-// deleted before any phase read it is still missing then.
-func readProjectMixPinnedMissing(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, scope projectMixScope) (int, error) {
-	var present uint64
+// longer stored, and how many pinned units hold more rows in their pinned
+// millisecond than phase 0 saw. It runs after the last phase of an attempt: a
+// pinned version deleted before any phase read it is still missing then.
+func readProjectMixPinnedMissing(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, ids []string, scope projectMixScope) (missing, grown int, err error) {
+	var present, grownUnits uint64
 	if err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectMixPinnedVersions", projectMixPinnedPresenceStatement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
-		return row.Scan(&present)
+		return row.Scan(&present, &grownUnits)
 	}, scope.bindings()...); err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	pinned := uint64(len(scope.unitIDs))
-	if present >= pinned {
-		return 0, nil
+	if present < pinned {
+		missing = int(pinned - present)
 	}
-	return int(pinned - present), nil
+	return missing, int(grownUnits), nil
 }
 
 // projectMixPinnedMissing marks an attempt whose pinned versions were not all
@@ -1012,6 +1041,18 @@ func projectMixPinnedMissing(ctx context.Context, mix string, missing int) bool 
 		return false
 	}
 	slog.WarnContext(ctx, "devhealthfacts.project_mix_pinned_versions_missing", "mix", contextfabric.SanitizeLogAttr(mix), "missing", missing)
+	return true
+}
+
+// projectMixPinnedGrown marks an attempt in which a pinned unit gained a row in
+// its pinned millisecond: that row wins the later phases but not phase 0, so the
+// attempt is retried like one whose inputs moved, and the event names the mix
+// and how many units grew.
+func projectMixPinnedGrown(ctx context.Context, mix string, grown int) bool {
+	if grown == 0 {
+		return false
+	}
+	slog.WarnContext(ctx, "devhealthfacts.project_mix_pinned_versions_grown", "mix", contextfabric.SanitizeLogAttr(mix), "grown", grown)
 	return true
 }
 

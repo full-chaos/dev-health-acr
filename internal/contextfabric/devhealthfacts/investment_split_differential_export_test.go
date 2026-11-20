@@ -191,14 +191,14 @@ func InvestmentSplitStatementPairs(start, end time.Time, unitLimit int) []SplitS
 	return []SplitStatementPair{
 		{Name: "repository mix", Bindings: mixBindings,
 			New: repoMixStatementScoped([]factTimeBound{current, prior}, scope, 100000),
-			Old: legacyRepoMixStatement([]factTimeBound{current, prior}, scope, 100000)},
+			Old: latestRowKeyRead(legacyRepoMixStatement([]factTimeBound{current, prior}, scope, 100000))},
 		{Name: "repository unit listing", Bindings: unitBindings,
 			New: investmentUnitsStatementFor(current, false, scope, false),
-			Old: legacyRepositoryUnitsStatement(current, scope)},
-		{Name: "organization unit listing", Bindings: unitBindings, New: orgUnits, Old: legacyOrganizationUnitsStatement(current, false, scope)},
-		{Name: "organization mix", Bindings: boundReaderBindings(current), New: orgMix, Old: legacyOrganizationMixStatement(current)},
+			Old: latestRowKeyRead(legacyRepositoryUnitsStatement(current, scope))},
+		{Name: "organization unit listing", Bindings: unitBindings, New: orgUnits, Old: latestRowKeyRead(legacyOrganizationUnitsStatement(current, false, scope))},
+		{Name: "organization mix", Bindings: boundReaderBindings(current), New: orgMix, Old: latestRowKeyRead(legacyOrganizationMixStatement(current))},
 		{Name: "team linked pull request mix", Bindings: boundReaderBindings(current), New: linked,
-			Old: legacyLinkedPullRequestMixStatement(current, scope, 1000)},
+			Old: latestRowKeyRead(legacyLinkedPullRequestMixStatement(current, scope, 1000))},
 	}
 }
 
@@ -319,7 +319,18 @@ LIMIT {` + unitLimitParam + `:UInt32}`
 func bugfixKeyRead(statement string) string {
 	key := "ifNull(subcategory_distribution_json['" + readers.BugfixSubcategoryKey + "'], 0.0)"
 	statement = strings.Replace(statement, key+" AS bugfix_share,", "bugfix_share,", 1)
-	return strings.Replace(statement, "argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,", "argMax("+key+", computed_at) AS bugfix_share,", 1)
+	statement = strings.Replace(statement, "argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,", "argMax("+key+", computed_at) AS bugfix_share,", 1)
+	return latestRowKeyRead(statement)
+}
+
+// latestRowKeyRead is a legacy split text with every version pick of
+// work_unit_investments ordered by workUnitVersionKey instead of computed_at.
+func latestRowKeyRead(statement string) string {
+	for _, column := range []string{"tuple(repo_id)", "from_ts", "to_ts", "theme_distribution_json", "subcategory_distribution_json", "structural_evidence_json",
+		"ifNull(subcategory_distribution_json['" + readers.BugfixSubcategoryKey + "'], 0.0)"} {
+		statement = strings.ReplaceAll(statement, "argMax("+column+", computed_at)", "argMax("+column+", "+workUnitVersionKey+")")
+	}
+	return statement
 }
 
 // orgRefs is the organization's reference list: a unit with no reference and

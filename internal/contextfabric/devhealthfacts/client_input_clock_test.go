@@ -51,6 +51,11 @@ func (c *universalClient) Query(_ context.Context, statement string, _ []context
 			break
 		}
 	}
+	if strings.Contains(collapsed, "AS pinned_grown") {
+		// Every pin is still stored and none grew: the project mix answers on
+		// its first attempt.
+		scanner.numbers = []float64{1e6, 0}
+	}
 	return scanner, nil
 }
 
