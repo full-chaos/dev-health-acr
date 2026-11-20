@@ -53,6 +53,21 @@ Limit: root `catalog` compares only `owner/name` repository names, as the ops re
 inventory lists only those. The capture reports every other name (for example a GitLab
 nested-group slug) as "not joined: N", never as a silent drop.
 
+Acceptance gate cells the capture cannot build are NOT MEASURED by name, only when listed in
+`internal/contextfabric/factoracle/testdata/venue/not_measured_gates.json` with the unit shape
+the capture lacks. An unlisted cell with no unit fails the gate, and a listed cell whose shape the
+capture holds fails too. On the synthetic venue capture of 2026-11-20:
+
+| Gate cell | Shape the capture holds none of |
+| --- | --- |
+| `AcceptanceGate/MembershipScope` | a categorized work unit in the analytics window outside a complete membership run |
+| `AcceptanceGate/NullRepoID` | a team-owned repository with work-unit effort in the analytics window |
+| `TeamRollupLossWithNoNullRowIsAFinding` | a team-owned repository with work-unit effort in the analytics window |
+
+Cause: the work units with investments come from the `_mg` world, whose one repository no team
+owns, and ops has no existing verb that derives team ownership for a synthetic world (the
+derivation runs only after a git or work-item sync).
+
 ### Venue steps before the capture
 
 - Project the graph of the organization (acr-projector) and stop it: acr-api reads subjects

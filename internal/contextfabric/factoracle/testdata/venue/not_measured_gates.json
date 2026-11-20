@@ -1,0 +1,5 @@
+{
+  "MembershipScope": "a categorized work unit in the analytics window outside a complete membership run",
+  "NullRepoID": "a team-owned repository with work-unit effort in the analytics window",
+  "TeamRollupLossWithNoNullRowIsAFinding": "a team-owned repository with work-unit effort in the analytics window"
+}
