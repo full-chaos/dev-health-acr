@@ -144,8 +144,19 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 			Prompts:   &mcpsdk.PromptCapabilities{},
 			Resources: &mcpsdk.ResourceCapabilities{},
 		}
+		if cfg.tasksEnabled {
+			options.Capabilities.Extensions = map[string]any{tasksExtension: map[string]any{}}
+		}
 	}
 	server := mcpsdk.NewServer(impl, options)
+	if cfg.Transport() == TransportHTTP && cfg.tasksEnabled {
+		// Innermost: it runs after the caller is installed and after the
+		// unlisted-tool and integer-argument checks.
+		server.AddReceivingMiddleware(tasksMiddleware(cfg))
+		if err := registerTaskMethods(server, cfg); err != nil {
+			panic("mcp: tasks/* collide with a standard method: " + err.Error())
+		}
+	}
 	server.AddReceivingMiddleware(callerMiddleware(caller))
 	server.AddReceivingMiddleware(unlistedToolMiddleware(cfg, caller))
 	server.AddReceivingMiddleware(integerArgumentsMiddleware(cfg))

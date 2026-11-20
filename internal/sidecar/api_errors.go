@@ -64,6 +64,14 @@ var (
 	// all -- it has no ClickHouse dependency and stays up through the
 	// exact outage this code reports for data calls.
 	ErrStoreUnavailable = errors.New("acr: hosted API's data store is temporarily unavailable")
+	// ErrStreamUnavailable is the 406 stream_unavailable of a create that
+	// asks for the event stream or an accept-first run on a deployment that
+	// serves neither.
+	ErrStreamUnavailable = errors.New("acr: hosted API does not serve investigations after the response on this deployment")
+	// ErrSubmissionInProgress is the 409 submission_in_progress of a
+	// submission that is still running (a repeat, or a cancel of a run
+	// admitted without the run lease).
+	ErrSubmissionInProgress = errors.New("acr: hosted API reports the submission is still running")
 
 	ErrUnexpectedRedirect        = errors.New("acr: hosted API attempted a redirect, which the client does not follow")
 	ErrResponseTooLarge          = errors.New("acr: hosted API response exceeded the configured size limit")
@@ -98,6 +106,8 @@ var codeSentinels = map[string]error{
 	"interpretation_rejected": ErrInterpretationRejected,
 	"synthesis_rejected":      ErrSynthesisRejected,
 	"store_unavailable":       ErrStoreUnavailable,
+	"stream_unavailable":      ErrStreamUnavailable,
+	"submission_in_progress":  ErrSubmissionInProgress,
 }
 
 // codeSafeMessages maps each recognized hosted error code to a fixed,
@@ -126,6 +136,8 @@ var codeSafeMessages = map[string]string{
 	"interpretation_rejected": "the hosted API rejected the interpreted question against a v1 bound",
 	"synthesis_rejected":      "the hosted API rejected the synthesized answer against a v1 bound",
 	"store_unavailable":       "the hosted API's data store is temporarily unavailable",
+	"stream_unavailable":      "the hosted API does not serve investigations after the response on this deployment",
+	"submission_in_progress":  "the submission is still running",
 }
 
 // unknownCodeSafeMessage is used for a hosted error code this client does

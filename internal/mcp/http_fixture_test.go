@@ -182,6 +182,9 @@ func (l switchLimiter) RetryAfter(string, time.Time) time.Duration {
 type hostedOptions struct {
 	Limiter           auth.AttemptLimiter
 	TrustedProxyCIDRs []string
+	// Routes adds hosted routes; guard wraps one in the fixture's bearer
+	// authentication and the context:read scope, recorded like the others.
+	Routes func(mux *http.ServeMux, guard func(http.Handler) http.Handler)
 }
 
 func newHostedAPI(t *testing.T) *hostedAPI { return newHostedAPIWith(t, hostedOptions{}) }
@@ -234,6 +237,11 @@ func newHostedAPIWith(t *testing.T, opts hostedOptions) *hostedAPI {
 		})
 	})))
 	mux.Handle("GET /api/v1/agent-context/evidence/{id}", h.recordForwarded(authenticator.Middleware(authenticator.RequireScope(auth.ScopeEvidenceRead, http.HandlerFunc(h.evidence)))))
+	if opts.Routes != nil {
+		opts.Routes(mux, func(next http.Handler) http.Handler {
+			return h.recordForwarded(authenticator.Middleware(authenticator.RequireScope(auth.ScopeContextRead, next)))
+		})
+	}
 	h.server = httptest.NewTLSServer(mux)
 	t.Cleanup(h.server.Close)
 
