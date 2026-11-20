@@ -176,7 +176,7 @@ func TestStageHooksAreAddedWithoutDroppingTheCallersHooks(t *testing.T) {
 	own := testcontainers.ContainerLifecycleHooks{PreCreates: []testcontainers.ContainerRequestHook{
 		func(context.Context, testcontainers.ContainerRequest) error { ran++; return nil },
 	}}
-	callerHooks := make([]testcontainers.ContainerLifecycleHooks, 1, 4)
+	callerHooks := make([]testcontainers.ContainerLifecycleHooks, 1, 5)
 	callerHooks[0] = own
 	req := testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{LifecycleHooks: callerHooks}}
 	_, err := generic(context.Background(), req, func(ctx context.Context, got testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
@@ -193,7 +193,12 @@ func TestStageHooksAreAddedWithoutDroppingTheCallersHooks(t *testing.T) {
 	if ran != 1 {
 		t.Fatalf("the caller's own hook must still run once, ran %d", ran)
 	}
-	if len(callerHooks[:cap(callerHooks)][1].PreCreates) != 0 {
-		t.Fatal("the stage hooks were written into the caller's backing array")
+	if len(callerHooks) != 1 || cap(callerHooks) != 5 {
+		t.Fatalf("the caller's hook slice changed: len %d cap %d", len(callerHooks), cap(callerHooks))
+	}
+	for i, h := range callerHooks[:cap(callerHooks)][1:] {
+		if len(h.PreCreates)+len(h.PostCreates)+len(h.PostStarts)+len(h.PostReadies) != 0 {
+			t.Fatalf("the stage hooks were written into the caller's backing array at spare slot %d", i+1)
+		}
 	}
 }

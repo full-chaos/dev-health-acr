@@ -115,6 +115,14 @@ type windowScope struct {
 	recon map[string]reconcilePass
 	// ahead says the scope's last paged read stopped with rows beyond it.
 	ahead bool
+	// boundedWarned holds the identities of the passes that wrote their
+	// bounded-page line and that a rollback can still revisit. It sits outside
+	// windowPass: a rollback of the pass (an unacknowledged batch, a failed read)
+	// must not make the retry of that page write it again. A rollback also puts
+	// seq back, so the retry that starts the pass again has the same identity; a
+	// later pass differs by seq, or, when the frontier moved before it started,
+	// by its window. settle prunes it (pruneBoundedWarned).
+	boundedWarned []passIdentity
 }
 
 // pendingWindow is an emitted window batch whose rows are not yet "seen":
@@ -136,7 +144,23 @@ type windowPass struct {
 	pages     int         // pages the current pass has read
 	rows      int         // source rows the current pass has read
 	bounded   int         // pages of the current pass the page bound ended
+	seq       int         // passes this scope has started: names the current pass
 	nextStart time.Time   // no new pass starts before this (sourcePlan.windowInterval); zero = no pacing
+}
+
+// passIdentity names one pass: its start count and its window.
+type passIdentity struct {
+	seq  int
+	low  time.Time
+	high cursorState
+}
+
+func (a passIdentity) same(b passIdentity) bool {
+	return a.seq == b.seq && a.low.Equal(b.low) && a.high.Since.Equal(b.high.Since) && a.high.After == b.high.After
+}
+
+func (w windowPass) identity() passIdentity {
+	return passIdentity{seq: w.seq, low: w.low, high: w.high}
 }
 
 // pastEdge reports whether c sorts after the keyset position edge, in the
@@ -282,15 +306,18 @@ func (m *windowMemo) settle(scope, ack string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sc := m.scopes[scope]
-	if sc == nil || sc.pending == nil {
+	if sc == nil {
 		return
 	}
-	if ack != "" && ack == sc.pending.ack {
-		sc.recordLocked(sc.pending.rows, sc.pending.overlap)
-	} else {
-		sc.windowPass = sc.pending.before
+	if sc.pending != nil {
+		if ack != "" && ack == sc.pending.ack {
+			sc.recordLocked(sc.pending.rows, sc.pending.overlap)
+		} else {
+			sc.windowPass = sc.pending.before
+		}
+		sc.pending = nil
 	}
-	sc.pending = nil
+	sc.pruneBoundedWarned()
 }
 
 func (m *windowMemo) unseen(scope string, all []candidate) []candidate {
@@ -324,6 +351,43 @@ func (m *windowMemo) pass(scope string) windowPass {
 	return windowPass{}
 }
 
+func (m *windowMemo) boundedWarned(scope string, id passIdentity) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sc := m.scopes[scope]
+	return sc != nil && slices.ContainsFunc(sc.boundedWarned, id.same)
+}
+
+func (m *windowMemo) markBoundedWarned(scope string, id passIdentity) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sc := m.scopeLocked(scope)
+	if !slices.ContainsFunc(sc.boundedWarned, id.same) {
+		sc.boundedWarned = append(sc.boundedWarned, id)
+	}
+}
+
+// pruneBoundedWarned drops the markers no rollback can reach. A rollback puts
+// the pass back to pending.before, a copy of the stored pass taken at the start
+// of the latest call, and a later call starts from the stored pass: its seq
+// never falls below the stored one, so a pass of an older seq is never run
+// again, and neither is another window of the stored seq (the stored pass is
+// the one running; a retry that starts another window starts a later seq or is
+// the stored pass itself). What stays: the stored pass and every later seq, one
+// window per failed attempt since the last acknowledged batch.
+func (sc *windowScope) pruneBoundedWarned() {
+	live := sc.windowPass.identity()
+	sc.boundedWarned = slices.DeleteFunc(sc.boundedWarned, func(id passIdentity) bool {
+		return id.seq < live.seq || (id.seq == live.seq && !id.same(live))
+	})
+}
+
 func (m *windowMemo) setPass(scope string, pass windowPass) {
 	if m == nil {
 		return
@@ -347,7 +411,7 @@ func (m *windowMemo) snapshot() *windowMemo {
 	defer m.mu.Unlock()
 	out := newWindowMemo()
 	for scope, sc := range m.scopes {
-		copied := &windowScope{seen: make(map[string]time.Time, len(sc.seen)), windowPass: sc.windowPass}
+		copied := &windowScope{seen: make(map[string]time.Time, len(sc.seen)), windowPass: sc.windowPass, boundedWarned: slices.Clone(sc.boundedWarned)}
 		if sc.recon != nil {
 			copied.recon = make(map[string]reconcilePass, len(sc.recon))
 			for name, rs := range sc.recon {
@@ -406,6 +470,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		pass.walking, pass.passStart, pass.walk = true, now, cursorState{Since: pass.low}
 		pass.high = cursorState{Since: state.Since, After: state.After}
 		pass.pages, pass.rows, pass.bounded = 0, 0, 0
+		pass.seq++
 		carry.reset()
 	}
 	// A pass resumed from an earlier call may have been passed by rows that
@@ -470,8 +535,9 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 			// A long walk can meet the bound on every page: the pass writes
 			// the line for its first such page and counts the rest.
 			if bounded {
-				if pass.bounded == 0 {
+				if !p.window.boundedWarned(p.windowScope, pass.identity()) {
 					p.logBoundedPage(ctx, orgID, bound)
+					p.window.markBoundedWarned(p.windowScope, pass.identity())
 				}
 				pass.bounded++
 			}
