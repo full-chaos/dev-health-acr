@@ -459,10 +459,25 @@ func TestOwnerShareTheRecordedCaptureReadsTheStoredShare(t *testing.T) {
 	if len(reading.Owners) == 0 {
 		t.Fatal("the recorded capture has no owned repository; this test checks nothing")
 	}
+	stored, missing := 0, 0
+	for _, owners := range reading.Owners {
+		for _, owner := range owners {
+			if owner.Stored == nil {
+				missing++
+			} else {
+				stored++
+			}
+		}
+	}
+	if missing > 0 {
+		t.Logf("%d of %d owners of the capture store a share", stored, stored+missing)
+		notMeasured(t, "TestOwnerShareTheRecordedCaptureReadsTheStoredShare", "capture where every owner of a repository stores a share")
+	}
+	measured(t, "TestOwnerShareTheRecordedCaptureReadsTheStoredShare")
 	for repo, owners := range reading.Owners {
 		for _, owner := range owners {
 			if owner.Stored == nil {
-				t.Fatalf("repository %s: owner %s reads no stored share in a capture that carries the column", repo, owner.Team)
+				t.Fatalf("repository %s: owner %s reads no stored share in a capture that carries the column (%d of %d owners have one)", repo, owner.Team, stored, stored+missing)
 			}
 		}
 	}

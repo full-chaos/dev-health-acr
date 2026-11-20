@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -248,7 +249,7 @@ func compareInvestment(ctx context.Context, o *Oracle, rr *RootReport) error {
 
 	// The reply and the store must describe the same rows before anything
 	// is said about acr: the ops value is recomputed from the store rows.
-	fromStore := o.Store.OrgThemeEffort(o.Window)
+	fromStore := o.Store.OrgThemeEffort(o.analyticsWindow())
 	for _, theme := range themeKeys(ops, fromStore) {
 		rr.Compared++
 		observeOpsFloat32Gap(ops[theme], fromStore[theme])
@@ -284,7 +285,7 @@ func compareUncategorizedCount(o *Oracle, rr *RootReport, root map[string]any) {
 		return
 	}
 	counted, _ := strconv.ParseInt(leaf.V, 10, 64) // typedLeaf parsed it
-	if gated := o.Store.GatedUnits(o.Window); counted != gated {
+	if gated := o.Store.GatedUnits(o.analyticsWindow()); counted != gated {
 		rr.find(Finding{Pair: "ops_reply_vs_store", Key: "uncategorizedCount", Path: path, Detail: fmt.Sprintf("ops counts %d uncategorized units, the store gates %d", counted, gated)})
 		return
 	}
@@ -302,7 +303,7 @@ func compareInvestmentFacts(ctx context.Context, o *Oracle, rr *RootReport) erro
 // compareInvestmentAcr reads the acr repository facts; with ops nil the ops
 // organization value takes no part.
 func compareInvestmentAcr(ctx context.Context, o *Oracle, rr *RootReport, ops map[string]float64) error {
-	repoFacts, err := o.facts(ctx, "investment", "repository", o.Store.RepositoryIDs())
+	repoFacts, err := o.investmentFacts(ctx, "repository", o.Store.RepositoryIDs())
 	if err != nil {
 		return err
 	}
@@ -319,14 +320,14 @@ func compareInvestmentAcr(ctx context.Context, o *Oracle, rr *RootReport, ops ma
 		}
 	}
 	o.RepositoryEffort = byRepo
-	expectedByRepo := o.Store.ExpectedRepositoryEffort(o.Window)
+	expectedByRepo := o.Store.ExpectedRepositoryEffort(o.analyticsWindow())
 	expected := map[string]float64{}
 	for _, effort := range expectedByRepo {
 		for theme, value := range effort {
 			expected[theme] += value
 		}
 	}
-	verdict := classifyInvestment(ops, acr, expected, o.Store.Witnesses(o.Window))
+	verdict := classifyInvestment(ops, acr, expected, o.Store.Witnesses(o.analyticsWindow()))
 	rr.Compared += len(themeKeys(ops, acr))
 	rr.Matches += verdict.Matches
 	for _, d := range verdict.Differences {
@@ -377,7 +378,7 @@ func compareTeamRollup(ctx context.Context, o *Oracle, rr *RootReport, byRepo ma
 	if len(teams) == 0 {
 		return nil
 	}
-	facts, err := o.facts(ctx, "investment", "team", teams)
+	facts, err := o.investmentFacts(ctx, "team", teams)
 	if err != nil {
 		return err
 	}
@@ -429,6 +430,10 @@ func compareTeamRollup(ctx context.Context, o *Oracle, rr *RootReport, byRepo ma
 	return nil
 }
 
+// ownerNameSlug is the slug the ops repository inventory keeps (ops
+// internal/repoinventory Statement): one owner and one name.
+var ownerNameSlug = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?/[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?$`)
+
 // compareCatalog is root catalog, dimension REPO: the ops repository slug
 // list against the acr repository identity facts, as sets.
 func compareCatalog(ctx context.Context, o *Oracle, rr *RootReport) error {
@@ -448,10 +453,19 @@ func compareCatalog(ctx context.Context, o *Oracle, rr *RootReport) error {
 		return err
 	}
 	acr := map[string]bool{}
+	notSlug := 0
 	for _, fact := range facts {
 		if name, isString := fact.Fields["name"].(string); isString {
-			acr[strings.ToLower(strings.TrimSpace(name))] = true
+			name = strings.ToLower(strings.TrimSpace(name))
+			if !ownerNameSlug.MatchString(name) {
+				notSlug++
+				continue
+			}
+			acr[name] = true
 		}
+	}
+	if notSlug > 0 {
+		rr.NotJoined = append(rr.NotJoined, fmt.Sprintf("catalog: %d repository names are not owner/name slugs; the ops repository inventory lists owner/name slugs only (ops internal/repoinventory)", notSlug))
 	}
 	all := map[string]bool{}
 	for k := range ops {
@@ -556,7 +570,7 @@ func compareHealth(ctx context.Context, o *Oracle, rr *RootReport) error {
 			rows := map[string]map[string]any{}
 			for _, row := range items(root["rows"]) {
 				if id, isString := row["scopeId"].(string); isString {
-					rows[strings.ToLower(bareID(id))] = row
+					rows[strings.ToLower(opsScopeKey(sc.kind, id))] = row
 					rr.touch("compoundingRisk.rows[*].scopeId")
 				}
 			}
@@ -573,6 +587,13 @@ func compareHealth(ctx context.Context, o *Oracle, rr *RootReport) error {
 		}
 	}
 	return nil
+}
+
+// opsScopeKey is the subject id an ops row names, in the form bareID gives a
+// fact's canonical id. An ops scopeId is already bare and may itself hold a
+// colon (a provider-composite team id): only a kind prefix is removed.
+func opsScopeKey(kind, id string) string {
+	return strings.TrimPrefix(id, kind+":")
 }
 
 func compareHealthRow(rr *RootReport, key string, row map[string]any, fact ServedFact) {

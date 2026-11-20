@@ -59,7 +59,7 @@ func TestAdvancedPastCaptureEntriesAreRecordedAndAdvanced(t *testing.T) {
 		want     string
 	}{
 		"capture taken again":  {manifest.ShapeCases, recaptured, map[string]string{"investmentBreakdownTeam": "x"}, "is the captured one"},
-		"no case":              {withoutAdvancedCases(manifest.ShapeCases), contractsAtCapture, map[string]string{"investmentBreakdownTeam": "x"}, "has no case"},
+		"no case":              {casesWithout(manifest.ShapeCases, "investmentBreakdownTeam"), contractsAtCapture, map[string]string{"investmentBreakdownTeam": "x"}, "has no case"},
 		"not served":           {manifest.ShapeCases, contractsAtCapture, map[string]string{"noSuchOperation": "x"}, "not a served operation"},
 		"never in the capture": {manifest.ShapeCases, contractsAtCapture, map[string]string{"investmentFull": "x"}, "is the captured one"},
 	} {
@@ -91,9 +91,13 @@ func TestAdvancedPastCaptureEntriesAreRecordedAndAdvanced(t *testing.T) {
 // stops the run.
 func TestARootIsSkippedOnlyWhenEveryOperationIsAdvanced(t *testing.T) {
 	policy := mustPolicy(t)
-	roots := advancedRoots(policy, advancedPastCapture)
+	// The capture is current: no root is skipped.
+	if roots := advancedRoots(policy, advancedPastCapture); len(roots) != 0 {
+		t.Fatalf("the current capture skips roots %v", roots)
+	}
+	// A root whose only operation is advanced is skipped by name.
 	var lines []string
-	for _, root := range roots {
+	for _, root := range advancedRoots(policy, map[string]string{"throughputForecast": "planted: advanced past the capture"}) {
 		lines = append(lines, notMeasuredLine(root))
 	}
 	if want := []string{"throughputForecast: NOT MEASURED (advanced past capture; re-capture 14023)"}; !slices.Equal(lines, want) {
@@ -133,7 +137,7 @@ func TestARootIsSkippedOnlyWhenEveryOperationIsAdvanced(t *testing.T) {
 			cases = append(cases, c)
 		}
 	}
-	oracle := &Oracle{Policy: policy, Store: store, Window: manifest.Window, ShapeCases: cases, OnlyRoots: []string{"analytics"}, NotRecorded: planted,
+	oracle := &Oracle{Policy: policy, Store: store, Window: manifest.Window, Today: captureDay(manifest), ShapeCases: cases, OnlyRoots: []string{"analytics"}, NotRecorded: planted,
 		Planes: fakePlanes{graphQL: func(Shape, map[string]any) (json.RawMessage, error) {
 			return json.RawMessage(`{"call":"operation_unavailable"}`), nil
 		}}}
@@ -235,4 +239,12 @@ func TestTheManifestKeepsItsContractDigests(t *testing.T) {
 	if len(in.ContractDigests) == 0 || !maps.Equal(in.ContractDigests, out.ContractDigests) {
 		t.Fatalf("digests lost in the manifest round trip: %d in, %d out", len(in.ContractDigests), len(out.ContractDigests))
 	}
+}
+
+// casesWithout returns the shape cases without those of operation.
+func casesWithout(cases []ShapeCase, operation string) []ShapeCase {
+	return slices.DeleteFunc(slices.Clone(cases), func(c ShapeCase) bool {
+		parts := strings.SplitN(c.ShapeID, "/", 3)
+		return len(parts) >= 2 && parts[1] == operation
+	})
 }

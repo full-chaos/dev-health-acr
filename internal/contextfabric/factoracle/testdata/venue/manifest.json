@@ -1,28 +1,54 @@
 {
-  "captured_at": "2026-11-03T14:49:22Z",
+  "captured_at": "2026-11-20T19:21:40Z",
   "window": {
-    "start": "2026-10-04T00:00:00Z",
-    "end": "2026-11-04T00:00:00Z"
+    "start": "2026-10-21T00:00:00Z",
+    "end": "2026-11-21T00:00:00Z"
   },
   "fixture_org": "0f0f0f0f-0000-4000-8000-00000000f4c7",
-  "ops_build": "dev-health-ops 0b763a859e3e (askdev-1 query-api 0b763a8)",
-  "acr_build": "acr-api 74fe0f1e (askdev-1 helm rev 87, docker.io/askdev/acr-api@sha256:83c207d048b7c04387634ba0355b8f9e670d34b74f88f0a011d09a5c9332e644)",
-  "schema_digest": "sha256:6d40791c0e2a28c2e0284a3330d1b30ddc3e9b24d397d9ceb237c398d4cd106c",
+  "ops_build": "dev-health-ops 2c115402dbbb3b11f28a0029cdbe3b9da5c3e891 sha-2c11540",
+  "acr_build": "dev-health-acr sha-24513ae",
+  "venue_note": "synthetic organization (ops fixtures generate); the investment categories come from the ops mock categorizer (LLM_PROVIDER=mock), not from a model; work_unit_issue_size is emptied after the derive, so every work unit has weight 1: the issue-size weighting of repository effort, which query-api reads at query time (ops internal/queryapi/analytics/sankeycoverage.go:320-322), is NOT MEASURED by O4",
+  "schema_digest": "sha256:7f8167568a634f87d77d4c28e9fb34efa17078cbff1b5d950b5e0e334d4f26b3",
+  "contract_digests": {
+    "acrRepositoryScopes": "sha256:43fa66efd5d4c5dfc3699253378000be29e86dee1640f22dff19f40a0eb68c6a",
+    "capacityCompletionDistribution": "sha256:be86b79ee399d54ff8d2e22d77c3a3ef260003daaac51b5e8c66f490c7889d6e",
+    "capacityForecast": "sha256:d819e0dba5f5b07865dd70702f3e0a8aba74c49b68ac387904f74b829d3b970c",
+    "capacityForecasts": "sha256:c08fb7e162371f005c8a151a2504b88a521e0f5ad855d96087848000821dc7bf",
+    "catalogValues": "sha256:00ad023c9a2febf03c47ca10f24c66bdcc7916bac2e5ffc688a2a65d8e3d0258",
+    "cognitiveLoad": "sha256:52ce7277e9e7033d638b213773e41b478f6cd9af0c540655998dad13dabc4dfb",
+    "complexityTimeseries": "sha256:5795ecd7c05b216647191e6eca4b6b397c4612a21e2225137590930bf1c65569",
+    "compoundingRisk": "sha256:ded079a60583d070f41a5d5682bd77c32b22923d21843c2c9f2bdfe1ce0360e2",
+    "home": "sha256:518dd7b5e00d9ab67289ce26a8dfe601dc961d971883fc05c2977929fbc2c525",
+    "hotspots": "sha256:30999b82cd7e907ea1711e271b90aae84e66e60f9e93bbee835acf377cdbab23",
+    "investmentBreakdown": "sha256:dcaf3bfe8899a3ba1fff623bb9dff5380212d515c51f073c1f2eb670f1c353df",
+    "investmentBreakdownRepository": "sha256:7eedeea132fc8a31c8c1f2c6af506b587119aa75ece405425df15abff43b2026",
+    "investmentBreakdownTeam": "sha256:67f8a9744d92d26d7363e88b2c1189a090fa329d0f00813adaaf0e298a32dd02",
+    "investmentFull": "sha256:961a15df3b4a1ee6ecd80c0a66a7d856256e97b475039d58d08fbfcd82176dd3",
+    "recommendations": "sha256:2a2a5d0a1c1dcddae195d7c4d7d73517e4113694e6396620222c28a250003ee1",
+    "securityOverview": "sha256:df174e0fc36768a4385f9a9337e64f4e38f1a782704d8394e2e98253dccee9cb",
+    "sourceHealth": "sha256:1e37288fae98f7a84a5f7a2a8d6bea26514c6e4bf284f8d9e528a7e0819ba876",
+    "teamWorkItemBreakdown": "sha256:3676af7fcae8d1fdc031fae2141b9e44e10b5dcea313b298ddb7f8c8aa798c32",
+    "throughputForecast": "sha256:080099573a1f73dd8f739ed711627f037cddc166b3e2bdc5ba97ada243d0c24f",
+    "workGraphArtifacts": "sha256:551ed4f4200e13f02a988d6deab6a9ffc41e41a2d2c72c9d66f224b0d5fe86fc",
+    "workGraphEdges": "sha256:22f4a10da08615255631c5f866313fdeda9c65bd17a6b621f332984e61ce602e",
+    "workGraphFlow": "sha256:d442757b8633c7f9542f48a92a34ef1dbcfacdd994e68c76ad7a31cce1428cf1",
+    "workItemTeamAttributions": "sha256:e3e1700f64773540a6192f8239068aac3b780a4d5cf37c5252f766bf819dda58"
+  },
   "venue_fact_query_versions": [
-    "devhealthfacts.clickhouse.v275"
+    "devhealthfacts.clickhouse.v291"
   ],
-  "fact_query_version": "devhealthfacts.clickhouse.v290",
+  "fact_query_version": "devhealthfacts.clickhouse.v291",
   "rows": {
-    "capacity_forecasts": 127,
-    "compounding_risk_daily": 231,
-    "estimate_coverage_metrics_daily": 1622,
-    "repos": 34,
-    "team_repo_ownership": 52,
-    "teams": 42,
-    "work_item_metrics_daily": 2568,
-    "work_unit_investments": 11188,
-    "work_unit_membership": 6790,
-    "work_unit_membership_runs": 2,
+    "capacity_forecasts": 22,
+    "compounding_risk_daily": 246,
+    "estimate_coverage_metrics_daily": 398,
+    "repos": 19,
+    "team_repo_ownership": 20,
+    "teams": 18,
+    "work_item_metrics_daily": 796,
+    "work_unit_investments": 95,
+    "work_unit_membership": 23,
+    "work_unit_membership_runs": 1,
     "work_unit_supersessions": 0
   },
   "shape_cases": [
@@ -33,8 +59,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -51,8 +77,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -69,8 +95,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -87,8 +113,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -105,8 +131,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -123,8 +149,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -141,8 +167,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -159,8 +185,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -177,8 +203,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -195,8 +221,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -213,8 +239,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -231,8 +257,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -243,638 +269,14 @@
       }
     },
     {
-      "shape": "analytics/investmentBreakdownRepository/all",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "THEME",
-              "measure": "COUNT",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/all",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "SUBCATEGORY",
-              "measure": "COUNT",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/all",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "WORK_TYPE",
-              "measure": "COUNT",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/all",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "THEME",
-              "measure": "ISSUE_SIZE",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/all",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "SUBCATEGORY",
-              "measure": "ISSUE_SIZE",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/all",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "WORK_TYPE",
-              "measure": "ISSUE_SIZE",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:breakdowns",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "THEME",
-              "measure": "COUNT",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:breakdowns",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "SUBCATEGORY",
-              "measure": "COUNT",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:breakdowns",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "WORK_TYPE",
-              "measure": "COUNT",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:breakdowns",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "THEME",
-              "measure": "ISSUE_SIZE",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:breakdowns",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "SUBCATEGORY",
-              "measure": "ISSUE_SIZE",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:breakdowns",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "WORK_TYPE",
-              "measure": "ISSUE_SIZE",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:(root)",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "THEME",
-              "measure": "COUNT",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:(root)",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "SUBCATEGORY",
-              "measure": "COUNT",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:(root)",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "WORK_TYPE",
-              "measure": "COUNT",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:(root)",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "THEME",
-              "measure": "ISSUE_SIZE",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:(root)",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "SUBCATEGORY",
-              "measure": "ISSUE_SIZE",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:(root)",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "WORK_TYPE",
-              "measure": "ISSUE_SIZE",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:evidenceQualityStats",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "THEME",
-              "measure": "COUNT",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:evidenceQualityStats",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "SUBCATEGORY",
-              "measure": "COUNT",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:evidenceQualityStats",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "WORK_TYPE",
-              "measure": "COUNT",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:evidenceQualityStats",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "THEME",
-              "measure": "ISSUE_SIZE",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:evidenceQualityStats",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "SUBCATEGORY",
-              "measure": "ISSUE_SIZE",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
-      "shape": "analytics/investmentBreakdownRepository/branch:evidenceQualityStats",
-      "variables": {
-        "batch": {
-          "breakdowns": [
-            {
-              "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
-              },
-              "dimension": "WORK_TYPE",
-              "measure": "ISSUE_SIZE",
-              "topN": 100
-            }
-          ],
-          "filters": {
-            "scope": {
-              "ids": [
-                "repository:957ba893-b815-434f-903a-7e8ff3045eea"
-              ],
-              "level": "REPO"
-            }
-          }
-        }
-      }
-    },
-    {
       "shape": "analytics/investmentBreakdownTeam/all",
       "variables": {
         "batch": {
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -884,7 +286,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -899,8 +301,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -910,7 +312,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -925,8 +327,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -936,7 +338,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -951,8 +353,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "ISSUE_SIZE",
@@ -962,7 +364,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -977,8 +379,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "ISSUE_SIZE",
@@ -988,7 +390,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1003,8 +405,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "ISSUE_SIZE",
@@ -1014,7 +416,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1029,8 +431,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -1040,7 +442,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1055,8 +457,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -1066,7 +468,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1081,8 +483,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -1092,7 +494,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1107,8 +509,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "ISSUE_SIZE",
@@ -1118,7 +520,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1133,8 +535,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "ISSUE_SIZE",
@@ -1144,7 +546,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1159,8 +561,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "ISSUE_SIZE",
@@ -1170,7 +572,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1185,8 +587,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -1196,7 +598,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1211,8 +613,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -1222,7 +624,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1237,8 +639,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -1248,7 +650,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1263,8 +665,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "ISSUE_SIZE",
@@ -1274,7 +676,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1289,8 +691,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "ISSUE_SIZE",
@@ -1300,7 +702,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1315,8 +717,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "ISSUE_SIZE",
@@ -1326,7 +728,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1341,8 +743,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -1352,7 +754,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1367,8 +769,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -1378,7 +780,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1393,8 +795,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -1404,7 +806,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1419,8 +821,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "ISSUE_SIZE",
@@ -1430,7 +832,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1445,8 +847,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "ISSUE_SIZE",
@@ -1456,7 +858,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
@@ -1471,8 +873,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "ISSUE_SIZE",
@@ -1482,11 +884,83 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b487fe25ced4e088"
+                "team:team-b3a61f81c2eab67e"
               ],
               "level": "TEAM"
             }
           }
+        }
+      }
+    },
+    {
+      "shape": "analytics/teamWorkItemBreakdown/all",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "TEAM",
+              "measure": "CYCLE_TIME_HOURS",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/teamWorkItemBreakdown/branch:breakdowns",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "TEAM",
+              "measure": "CYCLE_TIME_HOURS",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/teamWorkItemBreakdown/branch:evidenceQualityStats",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "TEAM",
+              "measure": "CYCLE_TIME_HOURS",
+              "topN": 100
+            }
+          ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/teamWorkItemBreakdown/branch:(root)",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "TEAM",
+              "measure": "CYCLE_TIME_HOURS",
+              "topN": 100
+            }
+          ]
         }
       }
     },
@@ -1497,8 +971,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -1515,8 +989,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -1533,8 +1007,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -1551,8 +1025,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -1569,8 +1043,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -1587,8 +1061,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -1605,8 +1079,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -1623,8 +1097,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -1641,8 +1115,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
@@ -1659,8 +1133,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "THEME",
               "measure": "COUNT",
@@ -1677,8 +1151,8 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "SUBCATEGORY",
               "measure": "COUNT",
@@ -1695,14 +1169,638 @@
           "breakdowns": [
             {
               "dateRange": {
-                "endDate": "2026-11-04",
-                "startDate": "2026-10-04"
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
               },
               "dimension": "WORK_TYPE",
               "measure": "COUNT",
               "topN": 100
             }
           ]
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/all",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "THEME",
+              "measure": "COUNT",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/all",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "COUNT",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/all",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "COUNT",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/all",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "THEME",
+              "measure": "ISSUE_SIZE",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/all",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "ISSUE_SIZE",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/all",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "ISSUE_SIZE",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:breakdowns",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "THEME",
+              "measure": "COUNT",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:breakdowns",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "COUNT",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:breakdowns",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "COUNT",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:breakdowns",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "THEME",
+              "measure": "ISSUE_SIZE",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:breakdowns",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "ISSUE_SIZE",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:breakdowns",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "ISSUE_SIZE",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:(root)",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "THEME",
+              "measure": "COUNT",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:(root)",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "COUNT",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:(root)",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "COUNT",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:(root)",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "THEME",
+              "measure": "ISSUE_SIZE",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:(root)",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "ISSUE_SIZE",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:(root)",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "ISSUE_SIZE",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:evidenceQualityStats",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "THEME",
+              "measure": "COUNT",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:evidenceQualityStats",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "COUNT",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:evidenceQualityStats",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "COUNT",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:evidenceQualityStats",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "THEME",
+              "measure": "ISSUE_SIZE",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:evidenceQualityStats",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "SUBCATEGORY",
+              "measure": "ISSUE_SIZE",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
+        }
+      }
+    },
+    {
+      "shape": "analytics/investmentBreakdownRepository/branch:evidenceQualityStats",
+      "variables": {
+        "batch": {
+          "breakdowns": [
+            {
+              "dateRange": {
+                "endDate": "2026-11-20",
+                "startDate": "2026-10-21"
+              },
+              "dimension": "WORK_TYPE",
+              "measure": "ISSUE_SIZE",
+              "topN": 100
+            }
+          ],
+          "filters": {
+            "scope": {
+              "ids": [
+                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+              ],
+              "level": "REPO"
+            }
+          }
         }
       }
     },
@@ -1712,7 +1810,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-b487fe25ced4e088"
+          "teamId": "team:team-b3a61f81c2eab67e"
         }
       }
     },
@@ -1722,7 +1820,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-b487fe25ced4e088"
+          "teamId": "team:team-b3a61f81c2eab67e"
         }
       }
     },
@@ -1732,7 +1830,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-b487fe25ced4e088"
+          "teamId": "team:team-b3a61f81c2eab67e"
         }
       }
     },
@@ -1742,7 +1840,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-b487fe25ced4e088"
+          "teamId": "team:team-b3a61f81c2eab67e"
         }
       }
     },
@@ -1752,7 +1850,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-b487fe25ced4e088"
+          "teamId": "team:team-b3a61f81c2eab67e"
         }
       }
     },
@@ -1762,7 +1860,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-b487fe25ced4e088"
+          "teamId": "team:team-b3a61f81c2eab67e"
         }
       }
     },
@@ -1770,9 +1868,9 @@
       "shape": "capacityForecasts/capacityForecasts/all",
       "variables": {
         "filters": {
-          "fromDate": "2026-10-04",
+          "fromDate": "2026-10-21",
           "limit": 50,
-          "toDate": "2026-11-03"
+          "toDate": "2026-11-20"
         }
       }
     },
@@ -1780,9 +1878,9 @@
       "shape": "capacityForecasts/capacityForecasts/branch:edges",
       "variables": {
         "filters": {
-          "fromDate": "2026-10-04",
+          "fromDate": "2026-10-21",
           "limit": 50,
-          "toDate": "2026-11-03"
+          "toDate": "2026-11-20"
         }
       }
     },
@@ -1790,9 +1888,9 @@
       "shape": "capacityForecasts/capacityForecasts/branch:pageInfo",
       "variables": {
         "filters": {
-          "fromDate": "2026-10-04",
+          "fromDate": "2026-10-21",
           "limit": 50,
-          "toDate": "2026-11-03"
+          "toDate": "2026-11-20"
         }
       }
     },
@@ -1800,9 +1898,9 @@
       "shape": "capacityForecasts/capacityForecasts/branch:(root)",
       "variables": {
         "filters": {
-          "fromDate": "2026-10-04",
+          "fromDate": "2026-10-21",
           "limit": 50,
-          "toDate": "2026-11-03"
+          "toDate": "2026-11-20"
         }
       }
     },
@@ -1912,9 +2010,9 @@
       "shape": "cognitiveLoad/cognitiveLoad/all",
       "variables": {
         "input": {
-          "sinceDate": "2026-10-04",
-          "teamId": "team:team-b487fe25ced4e088",
-          "untilDate": "2026-11-03"
+          "sinceDate": "2026-10-21",
+          "teamId": "team:team-b3a61f81c2eab67e",
+          "untilDate": "2026-11-20"
         }
       }
     },
@@ -1922,9 +2020,9 @@
       "shape": "cognitiveLoad/cognitiveLoad/branch:(root)",
       "variables": {
         "input": {
-          "sinceDate": "2026-10-04",
-          "teamId": "team:team-b487fe25ced4e088",
-          "untilDate": "2026-11-03"
+          "sinceDate": "2026-10-21",
+          "teamId": "team:team-b3a61f81c2eab67e",
+          "untilDate": "2026-11-20"
         }
       }
     },
@@ -1932,9 +2030,9 @@
       "shape": "cognitiveLoad/cognitiveLoad/branch:signals",
       "variables": {
         "input": {
-          "sinceDate": "2026-10-04",
-          "teamId": "team:team-b487fe25ced4e088",
-          "untilDate": "2026-11-03"
+          "sinceDate": "2026-10-21",
+          "teamId": "team:team-b3a61f81c2eab67e",
+          "untilDate": "2026-11-20"
         }
       }
     },
@@ -1945,8 +2043,8 @@
           "granularity": "DAY",
           "limit": 1,
           "scope": "REPO",
-          "sinceUtc": "2026-10-04T00:00:00Z",
-          "untilUtc": "2026-11-03T00:00:00Z"
+          "sinceUtc": "2026-10-21T00:00:00Z",
+          "untilUtc": "2026-11-20T00:00:00Z"
         }
       }
     },
@@ -1957,8 +2055,8 @@
           "granularity": "DAY",
           "limit": 1,
           "scope": "REPO",
-          "sinceUtc": "2026-10-04T00:00:00Z",
-          "untilUtc": "2026-11-03T00:00:00Z"
+          "sinceUtc": "2026-10-21T00:00:00Z",
+          "untilUtc": "2026-11-20T00:00:00Z"
         }
       }
     },
@@ -1969,8 +2067,8 @@
           "granularity": "DAY",
           "limit": 1,
           "scope": "REPO",
-          "sinceUtc": "2026-10-04T00:00:00Z",
-          "untilUtc": "2026-11-03T00:00:00Z"
+          "sinceUtc": "2026-10-21T00:00:00Z",
+          "untilUtc": "2026-11-20T00:00:00Z"
         }
       }
     },
@@ -2051,8 +2149,8 @@
       "variables": {
         "input": {
           "limit": 50,
-          "sinceUtc": "2026-10-04T00:00:00Z",
-          "untilUtc": "2026-11-03T00:00:00Z"
+          "sinceUtc": "2026-10-21T00:00:00Z",
+          "untilUtc": "2026-11-20T00:00:00Z"
         }
       }
     },
@@ -2061,8 +2159,8 @@
       "variables": {
         "input": {
           "limit": 50,
-          "sinceUtc": "2026-10-04T00:00:00Z",
-          "untilUtc": "2026-11-03T00:00:00Z"
+          "sinceUtc": "2026-10-21T00:00:00Z",
+          "untilUtc": "2026-11-20T00:00:00Z"
         }
       }
     },
@@ -2071,8 +2169,8 @@
       "variables": {
         "input": {
           "limit": 50,
-          "sinceUtc": "2026-10-04T00:00:00Z",
-          "untilUtc": "2026-11-03T00:00:00Z"
+          "sinceUtc": "2026-10-21T00:00:00Z",
+          "untilUtc": "2026-11-20T00:00:00Z"
         }
       }
     },
@@ -2081,8 +2179,8 @@
       "variables": {
         "input": {
           "limit": 50,
-          "sinceUtc": "2026-10-04T00:00:00Z",
-          "untilUtc": "2026-11-03T00:00:00Z"
+          "sinceUtc": "2026-10-21T00:00:00Z",
+          "untilUtc": "2026-11-20T00:00:00Z"
         }
       }
     },
@@ -2090,8 +2188,8 @@
       "shape": "securityOverview/securityOverview/all",
       "variables": {
         "filters": {
-          "since": "2026-10-04",
-          "until": "2026-11-03"
+          "since": "2026-10-21",
+          "until": "2026-11-20"
         }
       }
     },
@@ -2099,8 +2197,8 @@
       "shape": "securityOverview/securityOverview/branch:kpis",
       "variables": {
         "filters": {
-          "since": "2026-10-04",
-          "until": "2026-11-03"
+          "since": "2026-10-21",
+          "until": "2026-11-20"
         }
       }
     },
@@ -2108,8 +2206,8 @@
       "shape": "securityOverview/securityOverview/branch:severityBreakdown",
       "variables": {
         "filters": {
-          "since": "2026-10-04",
-          "until": "2026-11-03"
+          "since": "2026-10-21",
+          "until": "2026-11-20"
         }
       }
     },
@@ -2117,8 +2215,8 @@
       "shape": "securityOverview/securityOverview/branch:topRepos",
       "variables": {
         "filters": {
-          "since": "2026-10-04",
-          "until": "2026-11-03"
+          "since": "2026-10-21",
+          "until": "2026-11-20"
         }
       }
     },
@@ -2126,8 +2224,8 @@
       "shape": "securityOverview/securityOverview/branch:trend",
       "variables": {
         "filters": {
-          "since": "2026-10-04",
-          "until": "2026-11-03"
+          "since": "2026-10-21",
+          "until": "2026-11-20"
         }
       }
     },
@@ -2135,8 +2233,8 @@
       "shape": "securityOverview/securityOverview/branch:(root)",
       "variables": {
         "filters": {
-          "since": "2026-10-04",
-          "until": "2026-11-03"
+          "since": "2026-10-21",
+          "until": "2026-11-20"
         }
       }
     },
@@ -2146,7 +2244,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b487fe25ced4e088"
+            "team:team-b3a61f81c2eab67e"
           ]
         }
       }
@@ -2157,7 +2255,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b487fe25ced4e088"
+            "team:team-b3a61f81c2eab67e"
           ]
         }
       }
@@ -2168,7 +2266,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b487fe25ced4e088"
+            "team:team-b3a61f81c2eab67e"
           ]
         }
       }
@@ -2179,7 +2277,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b487fe25ced4e088"
+            "team:team-b3a61f81c2eab67e"
           ]
         }
       }
@@ -2190,7 +2288,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b487fe25ced4e088"
+            "team:team-b3a61f81c2eab67e"
           ]
         }
       }
@@ -2201,7 +2299,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b487fe25ced4e088"
+            "team:team-b3a61f81c2eab67e"
           ]
         }
       }
@@ -2212,7 +2310,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b487fe25ced4e088"
+            "team:team-b3a61f81c2eab67e"
           ]
         }
       }
@@ -2223,7 +2321,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b487fe25ced4e088"
+            "team:team-b3a61f81c2eab67e"
           ]
         }
       }
@@ -2234,7 +2332,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b487fe25ced4e088"
+            "team:team-b3a61f81c2eab67e"
           ]
         }
       }
@@ -2309,91 +2407,30 @@
     }
   ],
   "residual": {
-    "feature_delivery": 155.32951407409269,
-    "maintenance": 231.77951864320016,
-    "operational": 59.21284503575103,
-    "quality": 919.2038152126097,
-    "risk": 72.47435389849937
+    "feature_delivery": 1.2525618764414048e-8,
+    "maintenance": -6.441003286283831e-9,
+    "operational": 9.633141506704135e-9,
+    "quality": -1.6258476787101017e-8,
+    "risk": 2.869025461649244e-9
   },
   "expect": {
     "analytics": {
       "mode": "value",
       "listener": "served",
-      "shapes_run": 24,
-      "leaves": 390,
-      "compared": 76,
-      "matches": 71,
-      "by_class": {
-        "attribution_basis": 5
-      },
+      "shapes_run": 76,
+      "leaves": 698,
+      "compared": 16,
+      "matches": 16,
+      "by_class": {},
       "findings": [],
-      "not_joined": [
-        "investment: team team-66d62bb19c3d6b7d is denied to the venue token"
-      ],
+      "not_joined": [],
       "run_operation": "served",
-      "operations_run": 6,
-      "operation_leaves": 195,
-      "cross_paths": 195,
-      "cross_matches": 195,
-      "differences": [
-        {
-          "pair": "investment_org",
-          "key": "feature_delivery",
-          "class": "attribution_basis",
-          "exact": true,
-          "values": {
-            "acr_repository_sum": 651.5902680652681,
-            "ops": 806.9197821393608,
-            "residual": 155.32951407409269
-          }
-        },
-        {
-          "pair": "investment_org",
-          "key": "maintenance",
-          "class": "attribution_basis",
-          "exact": true,
-          "values": {
-            "acr_repository_sum": 666.7333694083692,
-            "ops": 898.5128880515693,
-            "residual": 231.77951864320016
-          }
-        },
-        {
-          "pair": "investment_org",
-          "key": "operational",
-          "class": "attribution_basis",
-          "exact": true,
-          "values": {
-            "acr_repository_sum": 198.13340548340543,
-            "ops": 257.34625051915646,
-            "residual": 59.21284503575103
-          }
-        },
-        {
-          "pair": "investment_org",
-          "key": "quality",
-          "class": "attribution_basis",
-          "exact": true,
-          "values": {
-            "acr_repository_sum": 2544.1085248085237,
-            "ops": 3463.3123400211334,
-            "residual": 919.2038152126097
-          }
-        },
-        {
-          "pair": "investment_org",
-          "key": "risk",
-          "class": "attribution_basis",
-          "exact": true,
-          "values": {
-            "acr_repository_sum": 208.43443223443234,
-            "ops": 280.9087861329317,
-            "residual": 72.47435389849937
-          }
-        }
-      ],
+      "operations_run": 19,
+      "operation_leaves": 349,
+      "cross_paths": 349,
+      "cross_matches": 349,
+      "differences": [],
       "unmeasured": [
-        "analytics.evidenceQualityStats.sizedUnitCount",
         "analytics.sankey.__typename",
         "analytics.sankey.coverage.__typename",
         "analytics.sankey.coverage.repoCoverage",
@@ -2418,7 +2455,7 @@
       "mode": "shape",
       "listener": "served",
       "shapes_run": 6,
-      "leaves": 70,
+      "leaves": 797,
       "compared": 0,
       "matches": 0,
       "by_class": {
@@ -2428,7 +2465,7 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 2,
-      "operation_leaves": 35,
+      "operation_leaves": 397,
       "cross_paths": 0,
       "cross_matches": 0,
       "differences": [
@@ -2452,66 +2489,17 @@
       "mode": "value",
       "listener": "served",
       "shapes_run": 4,
-      "leaves": 2414,
-      "compared": 345,
-      "matches": 340,
+      "leaves": 1070,
+      "compared": 178,
+      "matches": 178,
       "by_class": {},
-      "findings": [
-        {
-          "root": "capacityForecasts",
-          "pair": "workload",
-          "key": "team on 2026-10-12",
-          "path": "capacityForecasts.edges[*].node.backlogSize",
-          "detail": "ops int:164, acr int:208"
-        },
-        {
-          "root": "capacityForecasts",
-          "pair": "workload",
-          "key": "team on 2026-10-12",
-          "path": "capacityForecasts.edges[*].node.throughputMean",
-          "detail": "ops float:26.839993339993338, acr float:84.12539528243057"
-        },
-        {
-          "root": "capacityForecasts",
-          "pair": "workload",
-          "key": "team on 2026-10-12",
-          "path": "capacityForecasts.edges[*].node.throughputStddev",
-          "detail": "ops float:30.974005935017836, acr float:52.1242782230037"
-        },
-        {
-          "root": "capacityForecasts",
-          "pair": "workload",
-          "key": "team work scope",
-          "detail": "an acr workload fact has no ops forecast row for its work scope in the window"
-        },
-        {
-          "root": "capacityForecasts",
-          "pair": "workload",
-          "key": "team work scope",
-          "detail": "an acr workload fact has no ops forecast row for its work scope in the window"
-        }
-      ],
-      "not_joined": [
-        "workload: team team-10148656b28ef450 is denied to the venue token",
-        "workload: team team-12cbf2201bd9e7d5 is denied to the venue token",
-        "workload: team team-26a8d245f4c23e10 is denied to the venue token",
-        "workload: team team-291ba56fe45e46a9 is denied to the venue token",
-        "workload: team team-3390d2f5177d1834 is denied to the venue token",
-        "workload: team team-3eb6b9008943d807 is denied to the venue token",
-        "workload: team team-5a6e6c76f27f2828 is denied to the venue token",
-        "workload: team team-66d62bb19c3d6b7d is denied to the venue token",
-        "workload: team team-685b2d6c9c429d0e is denied to the venue token",
-        "workload: team team-74e212bed0821fae is denied to the venue token",
-        "workload: team team-7e1971c712e11dd7 is denied to the venue token",
-        "workload: team team-911a3eae358bf121 is denied to the venue token",
-        "workload: team team-d43e31e531cd3b4e is denied to the venue token",
-        "workload: team team-f0c7bd0e516c0ca3 is denied to the venue token"
-      ],
+      "findings": [],
+      "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 1207,
-      "cross_paths": 1207,
-      "cross_matches": 1207,
+      "operation_leaves": 535,
+      "cross_paths": 535,
+      "cross_matches": 535,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -2521,24 +2509,19 @@
       "mode": "value",
       "listener": "served",
       "shapes_run": 18,
-      "leaves": 654,
-      "compared": 34,
-      "matches": 33,
+      "leaves": 438,
+      "compared": 15,
+      "matches": 15,
       "by_class": {},
-      "findings": [
-        {
-          "root": "catalog",
-          "pair": "catalog_repositories",
-          "key": "",
-          "detail": "repository name sets differ: 0 only in the ops catalogue, 1 only in the acr identity facts"
-        }
+      "findings": [],
+      "not_joined": [
+        "catalog: 4 repository names are not owner/name slugs; the ops repository inventory lists owner/name slugs only (ops internal/repoinventory)"
       ],
-      "not_joined": [],
       "run_operation": "served",
       "operations_run": 6,
-      "operation_leaves": 327,
-      "cross_paths": 327,
-      "cross_matches": 327,
+      "operation_leaves": 219,
+      "cross_paths": 219,
+      "cross_matches": 219,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -2548,7 +2531,7 @@
       "mode": "shape",
       "listener": "served",
       "shapes_run": 3,
-      "leaves": 8,
+      "leaves": 162,
       "compared": 0,
       "matches": 0,
       "by_class": {},
@@ -2556,19 +2539,11 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 4,
-      "cross_paths": 4,
-      "cross_matches": 4,
+      "operation_leaves": 81,
+      "cross_paths": 81,
+      "cross_matches": 81,
       "differences": [],
-      "unmeasured": [
-        "cognitiveLoad.signals[*].__typename",
-        "cognitiveLoad.signals[*].afterHoursCommitRatio",
-        "cognitiveLoad.signals[*].contextSpreadCount",
-        "cognitiveLoad.signals[*].day",
-        "cognitiveLoad.signals[*].prInterruptionLoad",
-        "cognitiveLoad.signals[*].reviewRequestLoad",
-        "cognitiveLoad.signals[*].weekendCommitRatio"
-      ],
+      "unmeasured": [],
       "code_read": [],
       "invalid": []
     },
@@ -2596,59 +2571,17 @@
       "mode": "value",
       "listener": "served",
       "shapes_run": 8,
-      "leaves": 766,
-      "compared": 17,
-      "matches": 12,
+      "leaves": 1900,
+      "compared": 312,
+      "matches": 312,
       "by_class": {},
-      "findings": [
-        {
-          "root": "compoundingRisk",
-          "pair": "health_rows",
-          "key": "repository on 2026-10-22",
-          "detail": "the acr health fact has no ops row for its own day"
-        },
-        {
-          "root": "compoundingRisk",
-          "pair": "health_rows",
-          "key": "repository on 2026-11-03",
-          "detail": "the acr health fact has no ops row for its own day"
-        },
-        {
-          "root": "compoundingRisk",
-          "pair": "health_rows",
-          "key": "repository on 2026-11-03",
-          "detail": "the acr health fact has no ops row for its own day"
-        },
-        {
-          "root": "compoundingRisk",
-          "pair": "health_rows",
-          "key": "repository on 2026-11-03",
-          "detail": "the acr health fact has no ops row for its own day"
-        },
-        {
-          "root": "compoundingRisk",
-          "pair": "health_rows",
-          "key": "repository on 2026-11-03",
-          "detail": "the acr health fact has no ops row for its own day"
-        }
-      ],
-      "not_joined": [
-        "repository: a health fact states no severity_as_of day (known_severity_stale_beyond_freshness_window)",
-        "repository: a health fact states no severity_as_of day (known_severity_stale_beyond_freshness_window)",
-        "repository: a health fact states no severity_as_of day (known_severity_stale_beyond_freshness_window)",
-        "team: a health fact states no severity_as_of day (known_severity_stale_beyond_freshness_window)",
-        "team: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
-        "team: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
-        "team: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
-        "team: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
-        "team: a health fact states no severity_as_of day (no_known_severity_breakdown_rows)",
-        "team: a subject with compounding risk rows in the store is not a team of the organization tables"
-      ],
+      "findings": [],
+      "not_joined": [],
       "run_operation": "served",
       "operations_run": 2,
-      "operation_leaves": 383,
-      "cross_paths": 381,
-      "cross_matches": 381,
+      "operation_leaves": 950,
+      "cross_paths": 948,
+      "cross_matches": 948,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -2658,7 +2591,7 @@
       "mode": "shape",
       "listener": "served",
       "shapes_run": 4,
-      "leaves": 1402,
+      "leaves": 1246,
       "compared": 0,
       "matches": 0,
       "by_class": {},
@@ -2666,9 +2599,9 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 701,
-      "cross_paths": 701,
-      "cross_matches": 701,
+      "operation_leaves": 623,
+      "cross_paths": 623,
+      "cross_matches": 623,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -2678,7 +2611,7 @@
       "mode": "shape",
       "listener": "served",
       "shapes_run": 6,
-      "leaves": 320,
+      "leaves": 170,
       "compared": 0,
       "matches": 0,
       "by_class": {},
@@ -2686,9 +2619,9 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 160,
-      "cross_paths": 160,
-      "cross_matches": 160,
+      "operation_leaves": 85,
+      "cross_paths": 85,
+      "cross_matches": 85,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -2698,97 +2631,25 @@
       "mode": "value",
       "listener": "served",
       "shapes_run": 9,
-      "leaves": 124,
-      "compared": 169,
-      "matches": 169,
+      "leaves": 132,
+      "compared": 112,
+      "matches": 112,
       "by_class": {
         "forecast_by_design": 1,
-        "latest_day_vs_window": 4
+        "latest_day_vs_window": 2
       },
-      "findings": [
-        {
-          "root": "throughputForecast",
-          "pair": "cross_path",
-          "key": "",
-          "path": "throughputForecast.reviewBottleneck.score",
-          "detail": "run_operation and graphql_query answer differently: 1 and 1 leaves, not the same values"
-        },
-        {
-          "root": "throughputForecast",
-          "pair": "cross_path",
-          "key": "",
-          "path": "throughputForecast.reviewBottleneck.value",
-          "detail": "run_operation and graphql_query answer differently: 1 and 1 leaves, not the same values"
-        }
-      ],
-      "not_joined": [
-        "flow: team team-09fa8c20139e3700 is denied to the venue token",
-        "flow: team team-10148656b28ef450 is denied to the venue token",
-        "flow: team team-12cbf2201bd9e7d5 is denied to the venue token",
-        "flow: team team-1bc431a3ea0f3011 is denied to the venue token",
-        "flow: team team-26a8d245f4c23e10 is denied to the venue token",
-        "flow: team team-2909488a0069edf9 is denied to the venue token",
-        "flow: team team-291ba56fe45e46a9 is denied to the venue token",
-        "flow: team team-3390d2f5177d1834 is denied to the venue token",
-        "flow: team team-3ae9943eba6f7b3d is denied to the venue token",
-        "flow: team team-3eb6b9008943d807 is denied to the venue token",
-        "flow: team team-55f2c26605a191f0 is denied to the venue token",
-        "flow: team team-5a6e6c76f27f2828 is denied to the venue token",
-        "flow: team team-66d62bb19c3d6b7d is denied to the venue token",
-        "flow: team team-685b2d6c9c429d0e is denied to the venue token",
-        "flow: team team-74e212bed0821fae is denied to the venue token",
-        "flow: team team-7e1971c712e11dd7 is denied to the venue token",
-        "flow: team team-7f2faefa0894366d is denied to the venue token",
-        "flow: team team-911a3eae358bf121 is denied to the venue token",
-        "flow: team team-9a83535a57278bbd is denied to the venue token",
-        "flow: team team-bc6d11c20678e2e7 is denied to the venue token",
-        "flow: team team-ca1398e7f64f9acd is denied to the venue token",
-        "flow: team team-d43e31e531cd3b4e is denied to the venue token",
-        "flow: team team-d622f2290d619419 is denied to the venue token",
-        "flow: team team-e05391e3cc3fef2a is denied to the venue token",
-        "flow: team team-f0c7bd0e516c0ca3 is denied to the venue token",
-        "readiness: team team-09fa8c20139e3700 is denied to the venue token",
-        "readiness: team team-10148656b28ef450 is denied to the venue token",
-        "readiness: team team-12cbf2201bd9e7d5 is denied to the venue token",
-        "readiness: team team-1bc431a3ea0f3011 is denied to the venue token",
-        "readiness: team team-26a8d245f4c23e10 is denied to the venue token",
-        "readiness: team team-2909488a0069edf9 is denied to the venue token",
-        "readiness: team team-291ba56fe45e46a9 is denied to the venue token",
-        "readiness: team team-3390d2f5177d1834 is denied to the venue token",
-        "readiness: team team-3ae9943eba6f7b3d is denied to the venue token",
-        "readiness: team team-3eb6b9008943d807 is denied to the venue token",
-        "readiness: team team-55f2c26605a191f0 is denied to the venue token",
-        "readiness: team team-5a6e6c76f27f2828 is denied to the venue token",
-        "readiness: team team-66d62bb19c3d6b7d is denied to the venue token",
-        "readiness: team team-685b2d6c9c429d0e is denied to the venue token",
-        "readiness: team team-74e212bed0821fae is denied to the venue token",
-        "readiness: team team-7e1971c712e11dd7 is denied to the venue token",
-        "readiness: team team-911a3eae358bf121 is denied to the venue token",
-        "readiness: team team-9a83535a57278bbd is denied to the venue token",
-        "readiness: team team-bc6d11c20678e2e7 is denied to the venue token",
-        "readiness: team team-ca1398e7f64f9acd is denied to the venue token",
-        "readiness: team team-d43e31e531cd3b4e is denied to the venue token",
-        "readiness: team team-d622f2290d619419 is denied to the venue token",
-        "readiness: team team-e05391e3cc3fef2a is denied to the venue token",
-        "readiness: team team-f0c7bd0e516c0ca3 is denied to the venue token",
-        "readiness: team team-fc9e7df27ac60331 is denied to the venue token"
-      ],
+      "findings": [],
+      "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 62,
-      "cross_paths": 60,
-      "cross_matches": 58,
+      "operation_leaves": 66,
+      "cross_paths": 64,
+      "cross_matches": 64,
       "differences": [
         {
           "pair": "readiness",
           "key": "all teams",
           "class": "forecast_by_design",
-          "exact": true
-        },
-        {
-          "pair": "window_probe",
-          "key": "throughputForecast.backlogSize",
-          "class": "latest_day_vs_window",
           "exact": true
         },
         {
@@ -2800,12 +2661,6 @@
         {
           "pair": "window_probe",
           "key": "throughputForecast.staleWip",
-          "class": "latest_day_vs_window",
-          "exact": true
-        },
-        {
-          "pair": "window_probe",
-          "key": "throughputForecast.wipCongestion",
           "class": "latest_day_vs_window",
           "exact": true
         }
@@ -2858,7 +2713,7 @@
       "mode": "shape",
       "listener": "served",
       "shapes_run": 3,
-      "leaves": 68,
+      "leaves": 76,
       "compared": 0,
       "matches": 0,
       "by_class": {},
@@ -2866,9 +2721,9 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 34,
-      "cross_paths": 34,
-      "cross_matches": 34,
+      "operation_leaves": 38,
+      "cross_paths": 38,
+      "cross_matches": 38,
       "differences": [],
       "unmeasured": [],
       "code_read": [
@@ -2879,81 +2734,10 @@
   },
   "listener_dark": [],
   "operation_dark": [],
-  "denied_teams": {
-    "flow": [
-      "team-09fa8c20139e3700",
-      "team-10148656b28ef450",
-      "team-12cbf2201bd9e7d5",
-      "team-1bc431a3ea0f3011",
-      "team-26a8d245f4c23e10",
-      "team-2909488a0069edf9",
-      "team-291ba56fe45e46a9",
-      "team-3390d2f5177d1834",
-      "team-3ae9943eba6f7b3d",
-      "team-3eb6b9008943d807",
-      "team-55f2c26605a191f0",
-      "team-5a6e6c76f27f2828",
-      "team-66d62bb19c3d6b7d",
-      "team-685b2d6c9c429d0e",
-      "team-74e212bed0821fae",
-      "team-7e1971c712e11dd7",
-      "team-7f2faefa0894366d",
-      "team-911a3eae358bf121",
-      "team-9a83535a57278bbd",
-      "team-bc6d11c20678e2e7",
-      "team-ca1398e7f64f9acd",
-      "team-d43e31e531cd3b4e",
-      "team-d622f2290d619419",
-      "team-e05391e3cc3fef2a",
-      "team-f0c7bd0e516c0ca3"
-    ],
-    "investment": [
-      "team-66d62bb19c3d6b7d"
-    ],
-    "readiness": [
-      "team-09fa8c20139e3700",
-      "team-10148656b28ef450",
-      "team-12cbf2201bd9e7d5",
-      "team-1bc431a3ea0f3011",
-      "team-26a8d245f4c23e10",
-      "team-2909488a0069edf9",
-      "team-291ba56fe45e46a9",
-      "team-3390d2f5177d1834",
-      "team-3ae9943eba6f7b3d",
-      "team-3eb6b9008943d807",
-      "team-55f2c26605a191f0",
-      "team-5a6e6c76f27f2828",
-      "team-66d62bb19c3d6b7d",
-      "team-685b2d6c9c429d0e",
-      "team-74e212bed0821fae",
-      "team-7e1971c712e11dd7",
-      "team-911a3eae358bf121",
-      "team-9a83535a57278bbd",
-      "team-bc6d11c20678e2e7",
-      "team-ca1398e7f64f9acd",
-      "team-d43e31e531cd3b4e",
-      "team-d622f2290d619419",
-      "team-e05391e3cc3fef2a",
-      "team-f0c7bd0e516c0ca3",
-      "team-fc9e7df27ac60331"
-    ],
-    "workload": [
-      "team-10148656b28ef450",
-      "team-12cbf2201bd9e7d5",
-      "team-26a8d245f4c23e10",
-      "team-291ba56fe45e46a9",
-      "team-3390d2f5177d1834",
-      "team-3eb6b9008943d807",
-      "team-5a6e6c76f27f2828",
-      "team-66d62bb19c3d6b7d",
-      "team-685b2d6c9c429d0e",
-      "team-74e212bed0821fae",
-      "team-7e1971c712e11dd7",
-      "team-911a3eae358bf121",
-      "team-d43e31e531cd3b4e",
-      "team-f0c7bd0e516c0ca3"
-    ]
-  },
-  "subject_team": "team-b487fe25ced4e088",
-  "subject_teams_skipped": 1
+  "subject_team": "team-b3a61f81c2eab67e",
+  "subject_teams_skipped": 3,
+  "repo_scope_id_check": {
+    "compared": 72,
+    "matched": 72
+  }
 }

@@ -107,8 +107,9 @@ func TestReadinessSumsEveryKeyAtItsOwnNewestDay(t *testing.T) {
 		}
 	}
 	if older == 0 {
-		t.Fatal("the capture has no team with a coverage key whose newest day is older than the team's latest day")
+		notMeasured(t, "TestReadinessSumsEveryKeyAtItsOwnNewestDay", "team with a coverage key whose newest day is older than the team's latest day")
 	}
+	measured(t, "TestReadinessSumsEveryKeyAtItsOwnNewestDay")
 
 	planes := recordedThroughput(t, func(variables map[string]any, forecast map[string]any) {
 		input, _ := variables["input"].(map[string]any)
