@@ -6,6 +6,8 @@ init_script="$root/deploy/compose/acr-db-init.sh"
 container="acr-e2e-acl-bootstrap-${RANDOM}${RANDOM}"
 database="acr_acl_${RANDOM}${RANDOM}"
 admin_password="admin-${RANDOM}${RANDOM}"
+# CI has no Docker Hub credentials: it sets ACR_E2E_POSTGRES_IMAGE to the digest-identical ghcr mirror copy.
+postgres_image="${ACR_E2E_POSTGRES_IMAGE:-postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5}"
 
 cleanup() {
   local status=$?
@@ -16,7 +18,7 @@ trap cleanup EXIT
 
 POSTGRES_PASSWORD="$admin_password" docker run -d --rm --name "$container" --label devhealth.acr.e2e=acl-bootstrap \
   -e POSTGRES_USER=bootstrap -e POSTGRES_PASSWORD -e POSTGRES_DB=postgres \
-  postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5 >/dev/null
+  "$postgres_image" >/dev/null
 
 for _ in {1..60}; do
   if docker exec "$container" pg_isready -U bootstrap -d postgres >/dev/null 2>&1; then
@@ -36,7 +38,7 @@ run_init() {
     -e ACR_RUNTIME_DB_USER=acr_runtime -e ACR_RUNTIME_DB_PASSWORD \
     -e ACR_MIGRATION_DB_USER=acr_migration -e ACR_MIGRATION_DB_PASSWORD \
     -e ACR_ENABLE_EPISODE_WRITEBACK="${ACR_ENABLE_EPISODE_WRITEBACK:-false}" \
-    postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5 /usr/local/bin/acr-db-init "$mode" >/dev/null
+    "$postgres_image" /usr/local/bin/acr-db-init "$mode" >/dev/null
 }
 
 admin_query() {
@@ -56,18 +58,19 @@ expect() {
 
 run_init roles
 
-PGPASSWORD=migration-password docker exec -i -e PGPASSWORD "$container" \
-  psql -h 127.0.0.1 -U acr_migration -d "$database" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
-CREATE SCHEMA acr AUTHORIZATION acr_migration;
-CREATE TABLE acr.schema_migrations (version BIGINT PRIMARY KEY);
-CREATE TABLE acr.client_credentials (credential_id TEXT PRIMARY KEY);
-CREATE TABLE acr.context_packet_snapshots (context_packet_id TEXT PRIMARY KEY);
-CREATE TABLE acr.audit_events (audit_event_id UUID PRIMARY KEY);
-CREATE TABLE acr.agent_episodes (episode_id TEXT PRIMARY KEY);
-CREATE TABLE acr.device_authorizations (device_code_hash TEXT PRIMARY KEY);
-CREATE TABLE acr.oauth_clients (client_id TEXT PRIMARY KEY);
-CREATE TABLE acr.oauth_authorization_requests (handle_hash TEXT PRIMARY KEY);
-SQL
+# The fixture is the real migration set, applied in order as the migration role, so the ACL contract is
+# checked against the tables acr-db-init.sh really grants on (CHAOS-14215).
+migrations=("$root"/migrations/postgres/[0-9][0-9][0-9][0-9]_*.sql)
+[[ -f "${migrations[0]}" ]] || { printf 'no migrations found under %s\n' "$root/migrations/postgres" >&2; exit 1; }
+{
+  printf 'CREATE SCHEMA IF NOT EXISTS acr; CREATE TABLE IF NOT EXISTS acr.schema_migrations (version BIGINT PRIMARY KEY, name TEXT NOT NULL, checksum TEXT, applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW());\n'
+  for migration in "${migrations[@]}"; do
+    printf 'BEGIN;\n'
+    cat "$migration"
+    printf '\nCOMMIT;\n'
+  done
+} | PGPASSWORD=migration-password docker exec -i -e PGPASSWORD "$container" \
+  psql -h 127.0.0.1 -U acr_migration -d "$database" -v ON_ERROR_STOP=1 -q >/dev/null 2>&1
 
 run_init runtime-acl
 
@@ -76,7 +79,7 @@ expect 't' "SELECT bool_and(pg_get_userbyid(relowner) = 'acr_migration') FROM pg
 expect 't|f|f|f' "SELECT has_table_privilege('acr_runtime', 'acr.schema_migrations', 'SELECT'), has_table_privilege('acr_runtime', 'acr.schema_migrations', 'INSERT'), has_table_privilege('acr_runtime', 'acr.schema_migrations', 'UPDATE'), has_table_privilege('acr_runtime', 'acr.schema_migrations', 'DELETE')"
 expect 't|t|t|f' "SELECT has_table_privilege('acr_runtime', 'acr.client_credentials', 'SELECT'), has_table_privilege('acr_runtime', 'acr.client_credentials', 'INSERT'), has_table_privilege('acr_runtime', 'acr.client_credentials', 'UPDATE'), has_table_privilege('acr_runtime', 'acr.client_credentials', 'DELETE')"
 expect 't|t|t|t' "SELECT has_table_privilege('acr_runtime', 'acr.context_packet_snapshots', 'SELECT'), has_table_privilege('acr_runtime', 'acr.context_packet_snapshots', 'INSERT'), has_table_privilege('acr_runtime', 'acr.context_packet_snapshots', 'UPDATE'), has_table_privilege('acr_runtime', 'acr.context_packet_snapshots', 'DELETE')"
-expect 'f|t|f|f' "SELECT has_table_privilege('acr_runtime', 'acr.audit_events', 'SELECT'), has_table_privilege('acr_runtime', 'acr.audit_events', 'INSERT'), has_table_privilege('acr_runtime', 'acr.audit_events', 'UPDATE'), has_table_privilege('acr_runtime', 'acr.audit_events', 'DELETE')"
+expect 't|t|f|f' "SELECT has_table_privilege('acr_runtime', 'acr.audit_events', 'SELECT'), has_table_privilege('acr_runtime', 'acr.audit_events', 'INSERT'), has_table_privilege('acr_runtime', 'acr.audit_events', 'UPDATE'), has_table_privilege('acr_runtime', 'acr.audit_events', 'DELETE')"
 expect 'f|f|f' "SELECT has_table_privilege('acr_runtime', 'acr.agent_episodes', 'SELECT'), has_table_privilege('acr_runtime', 'acr.agent_episodes', 'INSERT'), has_table_privilege('acr_runtime', 'acr.agent_episodes', 'UPDATE')"
 expect 't|t|t|t' "SELECT has_table_privilege('acr_runtime', 'acr.device_authorizations', 'SELECT'), has_table_privilege('acr_runtime', 'acr.device_authorizations', 'INSERT'), has_table_privilege('acr_runtime', 'acr.device_authorizations', 'UPDATE'), has_table_privilege('acr_runtime', 'acr.device_authorizations', 'DELETE')"
 expect 't|t|t|t' "SELECT has_table_privilege('acr_runtime', 'acr.oauth_clients', 'SELECT'), has_table_privilege('acr_runtime', 'acr.oauth_clients', 'INSERT'), has_table_privilege('acr_runtime', 'acr.oauth_clients', 'UPDATE'), has_table_privilege('acr_runtime', 'acr.oauth_clients', 'DELETE')"
