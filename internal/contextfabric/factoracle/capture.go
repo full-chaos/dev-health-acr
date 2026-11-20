@@ -38,6 +38,10 @@ type VenueConfig struct {
 	OpsBuild string
 	// AcrBuild names the acr build the venue runs.
 	AcrBuild string
+	// VenueNote says where the venue data comes from (for example that the
+	// investment categories are a mock provider's), so a reader of the
+	// capture never takes them for model output.
+	VenueNote string
 	// ListenerDark and OperationDark name the root fields the venue does not
 	// serve through graphql_query and through run_operation (Oracle).
 	ListenerDark  []string
@@ -309,6 +313,8 @@ type Manifest struct {
 	// OpsBuild is the ops build the recorded replies came from.
 	OpsBuild string `json:"ops_build"`
 	AcrBuild string `json:"acr_build"`
+	// VenueNote is VenueConfig.VenueNote: where the venue data comes from.
+	VenueNote string `json:"venue_note,omitempty"`
 	// SchemaDigest is the SDL the shapes and the replies belong to. A build
 	// that pins another SDL must be captured again.
 	SchemaDigest string `json:"schema_digest"`
@@ -461,7 +467,7 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 	}
 	manifest := Manifest{
 		CapturedAt: time.Now().UTC().Format(time.RFC3339), Window: cfg.Window, FixtureOrg: FixtureOrgID,
-		OpsBuild: cfg.OpsBuild, AcrBuild: cfg.AcrBuild,
+		OpsBuild: cfg.OpsBuild, AcrBuild: cfg.AcrBuild, VenueNote: strings.TrimSpace(cfg.VenueNote),
 		SchemaDigest: run.Oracle.Policy.Catalogue().SchemaDigest(), ContractDigests: contractDigestsOf(run.Oracle.Policy), FactQueryVersion: devhealthfacts.QueryVersion,
 		VenueFactQueryVersions: sortedKeys(run.Oracle.FactVersions),
 		Rows:                   map[string]int{}, Residual: run.Oracle.Residual, Expect: map[string]RootExpectation{},

@@ -54,6 +54,8 @@ usage: o4-venue.sh <step>
   up       pull the pinned images, start the stack from empty volumes, provision the organization
   seed     load the synthetic world and derive the tables (workers run here only)
   counts   P0: rows of the organization in the window, per table (read only)
+  routes   enable the MCP class roots on query-api (dho goapi routing enable, platform-admin
+           token from this project's own login, removed after use)
   token    mint the MCP credential on this project's own acr-api (device grant, approved by a
            per-run web-assertion key that only this project trusts)
   env      write the ACR_O4_* env file (0600) for `make o4-oracle-preflight o4-oracle-capture`
@@ -326,6 +328,8 @@ services:
     extends: { file: "${O4_VENUE_OPS_DIR}/compose.yml", service: go-worker-ops }
     profiles: [o4-derive]
     labels: !reset {}
+    # Investment categories come from the ops mock provider, never a model (docs/o4-venue.md).
+    environment: { LLM_PROVIDER: mock }
     command:
       - worker
       - --queues=${O4_VENUE_WORKER_QUEUES}
@@ -532,9 +536,9 @@ wait_queue_drained() {
   die "the derive chain did not drain within O4_VENUE_DERIVE_TIMEOUT=${O4_VENUE_DERIVE_TIMEOUT}s (pending: ${pending})"
 }
 
-# The extract tables and the tables query-api reads for the value roots. work_unit_issue_size
-# is seeded empty by design (internal/contextfabric/factoracle/extract.go seededEmptyTables).
-COUNT_TABLES="work_unit_investments work_unit_supersessions work_unit_membership_runs work_unit_membership repos teams team_repo_ownership capacity_forecasts compounding_risk_daily work_item_metrics_daily estimate_coverage_metrics_daily work_item_completion_daily repo_metrics_daily incident_metrics_daily work_unit_repo_effort work_item_team_attributions work_items work_item_cycle_times"
+# The extract tables and the tables query-api reads for the value roots
+# (records: P0 list of CHAOS-14023).
+COUNT_TABLES="work_unit_investments work_unit_supersessions work_unit_membership_runs work_unit_membership repos teams team_repo_ownership capacity_forecasts compounding_risk_daily work_item_metrics_daily estimate_coverage_metrics_daily work_item_completion_daily repo_metrics_daily incident_metrics_daily work_unit_issue_size work_unit_repo_effort work_item_team_attributions work_items work_item_cycle_times"
 
 table_count() {
   printf "SELECT count() FROM default.%s WHERE org_id = '%s'" "$1" "$2" | ch_query 2>&1 | mask_ids
@@ -627,6 +631,34 @@ step_token() {
   note "MCP credential stored 0600 (ack HTTP ${status}); it is removed at down"
 }
 
+# --- MCP class roots: `dho goapi routing enable` with a platform admin's user access token ----
+# The token comes from this project's own go-api login (http://go-api:8000 on the project
+# network, called from inside the project); nothing names another base URL.
+step_routes() {
+  prepare_state
+  render_override
+  case "$O4_VENUE_PROJECT" in acr-e2e-o4venue-*) ;; *) die 'the routes step runs only for an acr-e2e-o4venue-* project' ;; esac
+  local email="o4-venue-admin@example.invalid" pg token
+  [ -f "$SECRETS/admin-password" ] || write_private "$SECRETS/admin-password" "$(random_secret)"
+  dho admin users create --email "$email" --password "$(cat "$SECRETS/admin-password")" --full-name 'O4 Venue Admin' >/dev/null 2>&1 || true
+  dho admin users update --email "$email" --verified --superuser >/dev/null || die 'the venue admin could not be marked a verified superuser'
+  # shellcheck disable=SC2016 # expanded by the container's sh.
+  token="$(printf '{"email":"%s","password":"%s"}' "$email" "$(cat "$SECRETS/admin-password")" |
+    compose exec -T auth-issuer sh -c 'wget -qO- --header "Content-Type: application/json" --post-file=/dev/stdin http://go-api:8000/api/v1/auth/login' 2>/dev/null |
+    json_field access_token)"
+  [ -n "$token" ] || die 'the venue admin login returned no access token'
+  write_private "$SECRETS/admin-token" "$token"
+  pg="$(cat "$SECRETS/postgres-password")"
+  compose run --rm --no-deps -T --user "$(id -u):$(id -g)" \
+    -v "$SECRETS/admin-token:/run/o4-venue/admin-token:ro" \
+    -e GO_API_ROUTING_ACCESS_TOKEN_FILE=/run/o4-venue/admin-token \
+    -e "POSTGRES_URI=postgres://postgres:${pg}@postgres:5432/postgres?sslmode=disable" \
+    query-api goapi routing enable -registry-url http://query-api:8090/registry -buildinfo-url http://query-api:8090/buildinfo \
+    -operations all-mcp -mode canary -recorded-by o4-venue -review-evidence 'O4 venue capture on a synthetic organization' 2>&1 | mask_ids >&2
+  rm -f "$SECRETS/admin-token"
+  note 'MCP class roots enabled (canary); the admin token is removed'
+}
+
 step_env() {
   prepare_state
   local org reader
@@ -641,6 +673,7 @@ ACR_O4_CLICKHOUSE_DSN_FILE=${SECRETS}/o4-clickhouse.dsn
 ACR_O4_ORG_ID=${org}
 ACR_O4_OPS_BUILD="dev-health-ops ${O4_VENUE_OPS_COMMIT} ${O4_VENUE_OPS_TAG}"
 ACR_O4_ACR_BUILD="dev-health-acr ${O4_VENUE_ACR_TAG}"
+ACR_O4_VENUE_NOTE="synthetic organization (ops fixtures generate); investment categories come from the ops mock provider (LLM_PROVIDER=mock), not from a model"
 EOF
 )
   note "env file written (0600): ${ENV_FILE}"
@@ -653,7 +686,7 @@ step_down() {
   local residue
   residue="$(docker ps -aq --filter "label=com.docker.compose.project=${O4_VENUE_PROJECT}")$(docker volume ls -q --filter "label=com.docker.compose.project=${O4_VENUE_PROJECT}")$(docker network ls -q --filter "label=com.docker.compose.project=${O4_VENUE_PROJECT}")"
   [ -z "$residue" ] || die "residue of ${O4_VENUE_PROJECT} after down -v"
-  rm -f "$SECRETS/mcp-token" "$SECRETS/o4-clickhouse.dsn" "$ENV_FILE" "$SECRETS/user-id" "$SECRETS/user-password" "$SECRETS/org-id"
+  rm -f "$SECRETS/mcp-token" "$SECRETS/o4-clickhouse.dsn" "$ENV_FILE" "$SECRETS/user-id" "$SECRETS/user-password" "$SECRETS/org-id" "$SECRETS/admin-password" "$SECRETS/admin-token"
   rm -f "$STATE/web/web-assertion.key" "$STATE/web/web-assertions.jwks.json"
   note "down -v: ${O4_VENUE_PROJECT} left zero containers, volumes and networks; credentials removed"
 }
@@ -666,6 +699,7 @@ case "$1" in
   seed) step_seed ;;
   counts) step_counts ;;
   token) step_token ;;
+  routes) step_routes ;;
   env) step_env ;;
   down) step_down ;;
   *) usage ;;
