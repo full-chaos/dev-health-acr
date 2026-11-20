@@ -294,6 +294,10 @@ func (s *dtStack) sessionWith(scopes, repositories []string, clientOptions *mcps
 }
 
 func (s *dtStack) sessionWithDiagnostics(scopes, repositories []string, clientOptions *mcpsdk.ClientOptions, diagnostics io.Writer) (*mcpsdk.ClientSession, *acrmcp.Bootstrap) {
+	return s.sessionWithDiagnosticsWrapped(scopes, repositories, clientOptions, diagnostics, nil)
+}
+
+func (s *dtStack) sessionWithDiagnosticsWrapped(scopes, repositories []string, clientOptions *mcpsdk.ClientOptions, diagnostics io.Writer, wrapServer func(mcpsdk.Transport) mcpsdk.Transport) (*mcpsdk.ClientSession, *acrmcp.Bootstrap) {
 	s.t.Helper()
 	issued, err := s.service.Create(context.Background(), auth.CreateCredentialRequest{OrgID: "org_1", Name: "dt", RepositoryScopes: repositories, Scopes: scopes, CreatedBy: "test_actor"})
 	if err != nil {
@@ -314,7 +318,11 @@ func (s *dtStack) sessionWithDiagnostics(scopes, repositories []string, clientOp
 	boot := &acrmcp.Bootstrap{Config: cfg, Client: client, Capabilities: caps}
 	server := acrmcp.NewServerWithDiagnostics(boot, "test", diagnostics)
 	t1, t2 := mcpsdk.NewInMemoryTransports()
-	ss, err := server.Connect(context.Background(), t1, nil)
+	var serverTransport mcpsdk.Transport = t1
+	if wrapServer != nil {
+		serverTransport = wrapServer(t1)
+	}
+	ss, err := server.Connect(context.Background(), serverTransport, nil)
 	if err != nil {
 		s.t.Fatal(err)
 	}

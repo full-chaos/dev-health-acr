@@ -3,6 +3,7 @@ package contextfabric
 import (
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -457,4 +458,69 @@ func spanReadsAsAName(question string, span BoundWindowSpan) bool {
 	}
 	first, _ := utf8.DecodeRuneInString(question[span.SpanStart:])
 	return unicode.IsUpper(first)
+}
+
+// windowChoicePrepositions are the closed prepositions that, directly before a
+// bare "last month" with no article, make the phrase confusable with "for the
+// last month" (a trailing window) although the engine reads it as the previous
+// calendar month.
+var windowChoicePrepositions = []string{"for", "over", "during", "within"}
+
+// WindowPhraseIsCalendarMonth reports whether question states its window as
+// exactly one bare "last month" that the engine reads as the previous calendar
+// month (not a point in time, no determiner or name reading).
+func WindowPhraseIsCalendarMonth(question string) bool {
+	outcome := ProposeWindowFromSpans(question)
+	if outcome.SpansBound != 1 || outcome.Calendar != CalendarPeriodMonth || outcome.PointInTime {
+		return false
+	}
+	spans := BindWindowSpans(question)
+	return len(spans) == 1 && spans[0].Grammar == "trailing_month"
+}
+
+// spanSentenceFinal reports whether, after span, only optional . ? ! follow and
+// then the end of the text or a new sentence (a . ? ! run followed by a space).
+// A conjunction, comma or any other word after the span is not a sentence end.
+func spanSentenceFinal(question string, span BoundWindowSpan) bool {
+	after := strings.TrimLeftFunc(question[span.SpanEnd:], unicode.IsSpace)
+	if strings.TrimSpace(after) == "" {
+		return true
+	}
+	marks := strings.TrimLeft(after, ".?!")
+	if len(marks) == len(after) {
+		return false
+	}
+	return marks == "" || unicode.IsSpace(rune(marks[0]))
+}
+
+// WindowPhraseNeedsChoice reports whether that bare "last month" ends its
+// sentence and stands directly after one of windowChoicePrepositions: the engine's reading is the
+// previous calendar month and a caller may have meant the trailing 30 days. It
+// changes no engine reading; it only names the phrase a client may be asked
+// about.
+func WindowPhraseNeedsChoice(question string) bool {
+	if !WindowPhraseIsCalendarMonth(question) {
+		return false
+	}
+	spans := BindWindowSpans(question)
+	if !spanSentenceFinal(question, spans[0]) {
+		return false
+	}
+	lowerBefore := strings.ToLower(strings.TrimRightFunc(question[:spans[0].SpanStart], unicode.IsSpace))
+	for _, prep := range windowChoicePrepositions {
+		if _, ok := trimSuffixWord(lowerBefore, prep); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// PreviousCalendarMonthLabel names the previous calendar month at now ("October
+// 2026") with the same UTC rule the engine's calendar window uses.
+func PreviousCalendarMonthLabel(now time.Time) string {
+	start, _, ok := calendarWindowBounds(CalendarPeriodMonth, now)
+	if !ok {
+		return ""
+	}
+	return start.Format("January 2006")
 }
