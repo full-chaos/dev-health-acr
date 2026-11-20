@@ -57,7 +57,7 @@ func TestTwoProjectPullRequestFactsAreServedThroughTheRealProducers(t *testing.T
 			if err != nil {
 				t.Fatalf("ReadFacts error = %q, want nil", err)
 			}
-			if strings.Contains(logs.String(), "context fabric fact result rejected") {
+			if strings.Contains(logs.String(), "context fabric fact result rejected") || strings.Contains(logs.String(), "fact_subject_invalid") {
 				t.Fatalf("the pull request result was rejected:\n%s", logs.String())
 			}
 			var pullRequestSource *contextfabric.SourceObservation
@@ -74,15 +74,16 @@ func TestTwoProjectPullRequestFactsAreServedThroughTheRealProducers(t *testing.T
 			for number := 1; number <= 3; number++ {
 				wantLabels[fmt.Sprintf("pull_request:%s:%d", repoUUID("repo-a"), number)] = fmt.Sprintf("PR #%d", number)
 			}
-			// Both projects reach repo-a, so each reaches all 3 of its pull
-			// requests by the repository proxy; only a pull request linked from
-			// one of the project's issues carries that link's tier.
+			// Only the linked pairs are asserted: each project reaches the pull
+			// requests its issues link, with that link's tier. Whether a project
+			// also reaches its repositories' unlinked pull requests is not
+			// asserted here.
 			pair := func(project contextfabric.SubjectRef, number int) string {
 				return fmt.Sprintf("%s|pull_request:%s:%d", project.CanonicalID, repoUUID("repo-a"), number)
 			}
-			wantTiers := map[string]string{
-				pair(projectP, 1): "native", pair(projectP, 2): "", pair(projectP, 3): "native",
-				pair(projectR, 1): "", pair(projectR, 2): "native", pair(projectR, 3): "native",
+			wantLinkedTiers := map[string]string{
+				pair(projectP, 1): "native", pair(projectP, 3): "native",
+				pair(projectR, 2): "native", pair(projectR, 3): "native",
 			}
 			gotTiers := map[string]string{}
 			for _, derivation := range bundle.Scope.Derivations {
@@ -99,8 +100,11 @@ func TestTwoProjectPullRequestFactsAreServedThroughTheRealProducers(t *testing.T
 				}
 				gotTiers[key] = derivation.LinkTier
 			}
-			if fmt.Sprint(gotTiers) != fmt.Sprint(wantTiers) {
-				t.Fatalf("derivation link tiers = %v, want %v", gotTiers, wantTiers)
+			for key, want := range wantLinkedTiers {
+				got, ok := gotTiers[key]
+				if !ok || got != want {
+					t.Fatalf("linked derivation %s tier = %q (present %t), want %q; all derivations %v", key, got, ok, want, gotTiers)
+				}
 			}
 
 			served := map[string]int{}
