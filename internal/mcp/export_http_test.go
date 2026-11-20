@@ -2,10 +2,12 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/full-chaos/dev-health-acr/internal/version"
 )
@@ -51,3 +53,19 @@ func ServeHTTPOnForTest(ctx context.Context, listener net.Listener, sidecarCfg s
 // EnableTasksForTest turns MCP Tasks on for a hosted process configuration,
 // as ACR_MCP_TASKS_ENABLED=true does through the serve options.
 func EnableTasksForTest(cfg *ProcessConfig) { cfg.tasksEnabled = true }
+
+// RenderTagForTest encodes render arguments as a task id's render tag.
+func RenderTagForTest(budget *contractsv1.MCPInvestigationBudget, includeFullResult bool) string {
+	tag, err := encodeRenderTag(taskRender{Budget: budget, IncludeFullResult: includeFullResult})
+	if err != nil {
+		panic(err)
+	}
+	return tag
+}
+
+// FailTaskIDEncodingForTest makes every task id encoding fail until the
+// returned restore runs.
+func FailTaskIDEncodingForTest() (restore func()) {
+	taskIDEncodeFault = func() error { return errors.New("task id encoding failed") }
+	return func() { taskIDEncodeFault = nil }
+}

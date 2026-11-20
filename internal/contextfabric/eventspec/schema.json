@@ -19587,6 +19587,39 @@
     ]
   },
   {
+    "id": "mcp.task_outcome",
+    "msg": "mcp task outcome",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "tool",
+      "outcome"
+    ],
+    "bounded_aggregation": "one line per investigate_question tools/call that declares the tasks extension while tasks are on; any other call emits none",
+    "fields": [
+      {
+        "key": "tool",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "investigate_question"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "task",
+          "fallback_stream_unavailable",
+          "sync_ineligible",
+          "create_refused",
+          "task_id_failed"
+        ]
+      }
+    ]
+  },
+  {
     "id": "process.otel_export",
     "msg": "acr otel export",
     "level": "info",

@@ -35,6 +35,7 @@ type fakeTasksAPI struct {
 	mu         sync.Mutex
 	subs       map[string]*fakeSubmission
 	createMode string
+	cancelMode string
 	creates    []http.Header
 	syncCalls  int
 	result     contractsv1.ContextFabricInvestigationResult
@@ -108,6 +109,14 @@ func (f *fakeTasksAPI) routes(mux *http.ServeMux, guard func(http.Handler) http.
 		}
 		if sub.status.State != contractsv1.ContextFabricSubmissionRunning {
 			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if f.cancelMode == "not_leased" {
+			w.Header().Set("Retry-After", "3")
+			writeHostedJSON(w, http.StatusConflict, contractsv1.ErrorEnvelope{
+				SchemaVersion: contractsv1.ErrorSchema, RequestID: "req_fixture",
+				Error: contractsv1.ErrorDetail{Code: contractsv1.ErrorCodeSubmissionInProgress, Message: "The submission is running and cannot be canceled", HTTPStatus: http.StatusConflict, Retryable: true, Details: map[string]any{"reason": "not_leased"}},
+			})
 			return
 		}
 		sub.status.State = contractsv1.ContextFabricSubmissionAbandoned
@@ -440,14 +449,10 @@ func TestTasksCancelForwards(t *testing.T) {
 	}
 }
 
-func retag(t *testing.T, taskID string, render map[string]any) string {
+func retag(t *testing.T, taskID string, budget *contractsv1.MCPInvestigationBudget, full bool) string {
 	t.Helper()
 	parts := strings.Split(taskID, ".")
-	encoded, err := json.Marshal(render)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parts[3] = base64.RawURLEncoding.EncodeToString(encoded)
+	parts[3] = acrmcp.RenderTagForTest(budget, full)
 	return strings.Join(parts, ".")
 }
 
@@ -459,7 +464,8 @@ func TestTasksNotFoundInvalidParams(t *testing.T) {
 	shifted := append([]string(nil), parts...)
 	shifted[2] = "zzzzzz"
 	for name, tc := range map[string]struct{ token, id string }{
-		"unknown":               {s.caller.token, "mcpt.aaaaaaaaaaaaaaaaaaaaaaaaaa.t5x0kg.e30"},
+		"unknown":               {s.caller.token, "mcpt.aaaaaaaaaaaaaaaaaaaaaaaaaa.t5x0kg.AA"},
+		"null render tag":       {s.caller.token, strings.Join(append(append([]string(nil), parts[:3]...), base64.RawURLEncoding.EncodeToString([]byte("null"))), ".")},
 		"another credential":    {other.token, task.TaskID},
 		"tampered created time": {s.caller.token, strings.Join(shifted, ".")},
 		"garbled":               {s.caller.token, task.TaskID + "!"},
@@ -547,19 +553,126 @@ func TestTasksTamperedRenderArgumentsAreTheSyncAnswer(t *testing.T) {
 	task := s.createTask(t, nil)
 	s.fake.set(submissionOf(task.TaskID), contractsv1.ContextFabricSubmissionDone, "", &contractsv1.ContextFabricSubmissionTerminal{Kind: contractsv1.ContextFabricSubmissionTerminalResult})
 	for name, tc := range map[string]struct {
-		render map[string]any
+		budget *contractsv1.MCPInvestigationBudget
+		full   bool
 		args   map[string]any
 	}{
-		"budget above the live bound": {map[string]any{"b": map[string]any{"max_serialized_bytes": 1048576, "max_drivers": 50}}, map[string]any{"question": "Is Ask Dev on track?", "budget": map[string]any{"max_serialized_bytes": 1048576, "max_drivers": 50}}},
-		"budget out of range":         {map[string]any{"b": map[string]any{"max_serialized_bytes": 4096}}, map[string]any{"question": "Is Ask Dev on track?", "budget": map[string]any{"max_serialized_bytes": 4096}}},
-		"include_full_result":         {map[string]any{"f": true}, map[string]any{"question": "Is Ask Dev on track?", "include_full_result": true}},
+		"budget above the live bound": {&contractsv1.MCPInvestigationBudget{MaxSerializedBytes: 1048576, MaxDrivers: 50}, false, map[string]any{"question": "Is Ask Dev on track?", "budget": map[string]any{"max_serialized_bytes": 1048576, "max_drivers": 50}}},
+		"budget out of range":         {&contractsv1.MCPInvestigationBudget{MaxSerializedBytes: 4096}, false, map[string]any{"question": "Is Ask Dev on track?", "budget": map[string]any{"max_serialized_bytes": 4096}}},
+		"include_full_result":         {nil, true, map[string]any{"question": "Is Ask Dev on track?", "include_full_result": true}},
 	} {
-		got := decodeTask(t, s.getTask(t, s.caller.token, retag(t, task.TaskID, tc.render)))
+		got := decodeTask(t, s.getTask(t, s.caller.token, retag(t, task.TaskID, tc.budget, tc.full)))
 		if got.Status != "completed" {
 			t.Fatalf("%s: %+v, want completed", name, got)
 		}
 		if answer, want := toolResultJSON(t, got.Result), s.syncAnswer(t, tc.args); answer != want {
 			t.Fatalf("%s: tasks/get answered\n%s\nthe synchronous call answers\n%s", name, answer, want)
 		}
+	}
+}
+
+// Every valid render argument set (each budget field absent or at its
+// smallest, a two-digit and its largest value, with and without
+// include_full_result) is answered with a task.
+func TestTasksEveryValidRenderArgumentSetIsATask(t *testing.T) {
+	s := newTasksStack(t, true)
+	maxima := []int{contractsv1.ContextFabricProjectedDriversMaxCount, contractsv1.ContextFabricProjectedCohortMaxCount, contractsv1.ContextFabricProjectedEvidenceMaxCount, contractsv1.MCPInvestigationBudgetMaxBytes}
+	names := []string{"max_drivers", "max_cohort_members", "max_evidence_refs", "max_serialized_bytes"}
+	calls := 0
+	for mask := 0; mask < 16; mask++ {
+		for _, full := range []bool{false, true} {
+			budget := map[string]any{}
+			for bit, name := range names {
+				if mask&(1<<bit) != 0 {
+					budget[name] = maxima[bit]
+				}
+			}
+			args := map[string]any{"question": "Is Ask Dev on track?", "include_full_result": full}
+			if len(budget) > 0 {
+				args["budget"] = budget
+			}
+			task := s.createTask(t, args)
+			if len(task.TaskID) > 128 {
+				t.Fatalf("mask %04b full=%v: task id of %d bytes", mask, full, len(task.TaskID))
+			}
+			calls++
+		}
+	}
+	if s.fake.createCount() != calls || s.fake.syncCount() != 0 {
+		t.Fatalf("%d creates, %d sync calls for %d calls; want every call a task", s.fake.createCount(), s.fake.syncCount(), calls)
+	}
+}
+
+// A task id that cannot be built creates nothing and is an internal error,
+// never the synchronous answer.
+func TestTasksIDEncodeFailureCreatesNothing(t *testing.T) {
+	s := newTasksStack(t, true)
+	restore := acrmcp.FailTaskIDEncodingForTest()
+	defer restore()
+	reply := s.rpc(t, s.caller.token, "tools/call", investigateParams(nil, tasksMeta("2026-07-28", true)))
+	if reply.Error == nil || reply.Error.Code != -32603 {
+		t.Fatalf("encode failure answered %s, want -32603", reply.raw)
+	}
+	if s.fake.createCount() != 0 || s.fake.syncCount() != 0 {
+		t.Fatalf("encode failure reached acr-api: %d creates, %d sync calls", s.fake.createCount(), s.fake.syncCount())
+	}
+}
+
+func taskOutcomeLines(t *testing.T, e *endpoint) []map[string]any {
+	t.Helper()
+	var lines []map[string]any
+	for _, raw := range bytes.Split(e.logs.Bytes(), []byte("\n")) {
+		var line map[string]any
+		if json.Unmarshal(raw, &line) == nil && line["msg"] == "mcp task outcome" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// One mcp.task_outcome line per declared call, with its outcome and no
+// argument value; none for an undeclared call.
+func TestTasksOutcomeLine(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		setup      func(*tasksStack) func()
+		args       map[string]any
+	}{
+		{"task", "task", nil, nil},
+		{"fallback", "fallback_stream_unavailable", func(s *tasksStack) func() { s.fake.createMode = "stream_unavailable"; return func() {} }, nil},
+		{"ineligible", "sync_ineligible", nil, map[string]any{"question": "Is Ask Dev on track?", "synthesis": "client"}},
+		{"create refused", "create_refused", func(s *tasksStack) func() { s.fake.createMode = "other406"; return func() {} }, nil},
+		{"task id failed", "task_id_failed", func(*tasksStack) func() { return acrmcp.FailTaskIDEncodingForTest() }, nil},
+	} {
+		s := newTasksStack(t, true)
+		if tc.setup != nil {
+			defer tc.setup(s)()
+		}
+		args := tc.args
+		if args == nil {
+			args = map[string]any{"question": "Secret question text 14307?"}
+		}
+		s.rpc(t, s.caller.token, "tools/call", investigateParams(args, tasksMeta("2026-07-28", true)))
+		s.rpc(t, s.caller.token, "tools/call", investigateParams(args, tasksMeta("2026-07-28", false)))
+		lines := taskOutcomeLines(t, s.e)
+		if len(lines) != 1 || lines[0]["outcome"] != tc.want || lines[0]["tool"] != acrmcp.ToolInvestigateQuestionForTest || lines[0]["level"] != "INFO" {
+			t.Fatalf("%s: outcome lines %v, want exactly one %q", tc.name, lines, tc.want)
+		}
+		if strings.Contains(string(s.e.logs.Bytes()), "Secret question text") {
+			t.Fatalf("%s: an argument value reached the log", tc.name)
+		}
+	}
+}
+
+// acr-api answers a cancel of a run admitted without a lease 409
+// submission_in_progress: cancel is cooperative, so tasks/cancel still
+// acknowledges.
+func TestTasksCancelNotLeasedIsAcknowledged(t *testing.T) {
+	s := newTasksStack(t, true)
+	s.fake.cancelMode = "not_leased"
+	task := s.createTask(t, nil)
+	reply := s.rpc(t, s.caller.token, "tasks/cancel", map[string]any{"taskId": task.TaskID, "_meta": tasksMeta("2026-07-28", true)})
+	if reply.Error != nil || !strings.Contains(string(reply.Result), `"resultType":"complete"`) {
+		t.Fatalf("cancel of a not-leased run answered %s, want the empty ack", reply.raw)
 	}
 }

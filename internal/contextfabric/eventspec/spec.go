@@ -6188,6 +6188,7 @@ var All = []Event{
 	PullRequestStatusFilter,
 	AnchorBindingTransition,
 	MCPHostedContextScope,
+	MCPTaskOutcome,
 	MCPHTTPRequest,
 	MCPHTTPServing,
 	MCPHTTPReadiness,
@@ -6550,6 +6551,25 @@ var MCPHostedContextScope = Event{
 		{Key: "has_branch", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "has_commit", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "file_count", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// MCPTaskOutcome records what the hosted acr-mcp did with an
+// investigate_question call whose request declares the MCP tasks extension
+// (ACR_MCP_TASKS_ENABLED on): answered with a task, fell back to the
+// synchronous answer because acr-api runs no accept-first investigations
+// (stream_unavailable), ran synchronously because the call is not
+// task-eligible (synthesis client, a refused or write-back argument set, the
+// tool not given to the caller), answered the tool error acr-api returned
+// for the create, or failed to build its task id (-32603, nothing created).
+// The tool and the outcome only: never an argument, task id or subject.
+var MCPTaskOutcome = Event{
+	ID: "mcp.task_outcome", Msg: "mcp task outcome", Level: LevelInfo,
+	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"tool", "outcome"},
+	BoundedAggregation: "one line per investigate_question tools/call that declares the tasks extension while tasks are on; any other call emits none",
+	Fields: []Field{
+		{Key: "tool", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"investigate_question"}},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"task", "fallback_stream_unavailable", "sync_ineligible", "create_refused", "task_id_failed"}},
 	},
 }
 

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base32"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -85,8 +87,98 @@ type taskUpdateParams struct {
 // UNTRUSTED on every tasks/get: it is validated and clamped to the caller's
 // live limits exactly as the same arguments on a fresh tools/call are.
 type taskRender struct {
-	Budget            *contractsv1.MCPInvestigationBudget `json:"b,omitempty"`
-	IncludeFullResult bool                                `json:"f,omitempty"`
+	Budget            *contractsv1.MCPInvestigationBudget
+	IncludeFullResult bool
+}
+
+// The render tag is one flag byte, then one canonical uvarint per flagged
+// budget field in this order, base64url without padding. A zero budget field
+// is "not supplied" (as on a tools/call) and is never encoded, so every
+// valid argument set has exactly one tag, at most 1+4*5 bytes.
+const (
+	renderFlagDrivers    byte = 1 << 0
+	renderFlagCohort     byte = 1 << 1
+	renderFlagEvidence   byte = 1 << 2
+	renderFlagBytes      byte = 1 << 3
+	renderFlagFullResult byte = 1 << 4
+	renderFlagsKnown          = renderFlagDrivers | renderFlagCohort | renderFlagEvidence | renderFlagBytes | renderFlagFullResult
+	renderFieldMax            = 1<<31 - 1
+	renderTagMaxBytes         = 1 + 4*binary.MaxVarintLen32
+)
+
+// renderFields pairs each budget flag with its field, in tag order.
+func renderFields(b *contractsv1.MCPInvestigationBudget) []struct {
+	flag  byte
+	value *int
+} {
+	return []struct {
+		flag  byte
+		value *int
+	}{
+		{renderFlagDrivers, &b.MaxDrivers}, {renderFlagCohort, &b.MaxCohortMembers},
+		{renderFlagEvidence, &b.MaxEvidenceRefs}, {renderFlagBytes, &b.MaxSerializedBytes},
+	}
+}
+
+// encodeRenderTag encodes the render arguments. A negative or over-range
+// field (the tool's validation refuses both before a task is made) is an
+// error, never a silent clamp.
+func encodeRenderTag(render taskRender) (string, error) {
+	var flags byte
+	var body []byte
+	if render.Budget != nil {
+		budget := *render.Budget
+		for _, field := range renderFields(&budget) {
+			if *field.value < 0 || *field.value > renderFieldMax {
+				return "", errors.New("render argument out of range")
+			}
+			if *field.value != 0 {
+				flags |= field.flag
+				body = binary.AppendUvarint(body, uint64(*field.value))
+			}
+		}
+	}
+	if render.IncludeFullResult {
+		flags |= renderFlagFullResult
+	}
+	return base64.RawURLEncoding.EncodeToString(append([]byte{flags}, body...)), nil
+}
+
+// decodeRenderTag reads a render tag. Anything but the one canonical
+// encoding of a valid argument set is false: no flag byte, an unknown flag
+// bit, a short, non-minimal or zero uvarint, a field over range, or trailing
+// bytes.
+func decodeRenderTag(tag string) (taskRender, bool) {
+	raw, err := base64.RawURLEncoding.DecodeString(tag)
+	if err != nil || len(raw) == 0 || len(raw) > renderTagMaxBytes || base64.RawURLEncoding.EncodeToString(raw) != tag {
+		return taskRender{}, false
+	}
+	flags, rest := raw[0], raw[1:]
+	if flags&^renderFlagsKnown != 0 {
+		return taskRender{}, false
+	}
+	var budget contractsv1.MCPInvestigationBudget
+	present := false
+	for _, field := range renderFields(&budget) {
+		if flags&field.flag == 0 {
+			continue
+		}
+		value, n := binary.Uvarint(rest)
+		if n <= 0 || value == 0 || value > renderFieldMax || len(binary.AppendUvarint(nil, value)) != n {
+			return taskRender{}, false
+		}
+		*field.value = int(value)
+		rest = rest[n:]
+		present = true
+	}
+	if len(rest) != 0 {
+		return taskRender{}, false
+	}
+	render := taskRender{IncludeFullResult: flags&renderFlagFullResult != 0}
+	if present {
+		render.Budget = &budget
+	}
+	return render, true
 }
 
 // taskID is a task's identifier: the acr-api submission id (a random part
@@ -100,24 +192,50 @@ type taskID struct {
 
 var taskIDRandom = base32.StdEncoding.WithPadding(base32.NoPadding)
 
-// newTaskID mints a task id: 128 random bits, the admission second, and the
-// render arguments.
-func newTaskID(now time.Time, render taskRender) (taskID, string, error) {
+// taskIDEncodeFault, when set (tests only), fails the task id encoding.
+var taskIDEncodeFault func() error
+
+// mintTaskID mints a task's identity locally: 128 random bits and the
+// admission second make the acr-api submission id.
+func mintTaskID(now time.Time, render taskRender) (taskID, error) {
 	random := make([]byte, 16)
 	if _, err := rand.Read(random); err != nil {
-		return taskID{}, "", err
+		return taskID{}, err
 	}
 	created := now.UTC().Truncate(time.Second)
 	submission := taskIDPrefix + "." + strings.ToLower(taskIDRandom.EncodeToString(random)) + "." + strconv.FormatInt(created.Unix(), 36)
-	encoded, err := json.Marshal(render)
+	return taskID{submissionID: submission, createdAt: created, render: render}, nil
+}
+
+// encode is the full task id: the submission id and the render tag.
+func (id taskID) encode() (string, error) {
+	if taskIDEncodeFault != nil {
+		if err := taskIDEncodeFault(); err != nil {
+			return "", err
+		}
+	}
+	tag, err := encodeRenderTag(id.render)
+	if err != nil {
+		return "", err
+	}
+	raw := id.submissionID + "." + tag
+	if len(raw) > taskIDMaxBytes || !contractsv1.ValidContextFabricClientCorrelationID(id.submissionID) {
+		return "", errors.New("task id over its bounds")
+	}
+	return raw, nil
+}
+
+// newTaskID mints and encodes a task id.
+func newTaskID(now time.Time, render taskRender) (taskID, string, error) {
+	id, err := mintTaskID(now, render)
 	if err != nil {
 		return taskID{}, "", err
 	}
-	id := submission + "." + base64.RawURLEncoding.EncodeToString(encoded)
-	if len(id) > taskIDMaxBytes || !contractsv1.ValidContextFabricClientCorrelationID(submission) {
-		return taskID{}, "", errors.New("task id over its bounds")
+	raw, err := id.encode()
+	if err != nil {
+		return taskID{}, "", err
 	}
-	return taskID{submissionID: submission, createdAt: created, render: render}, id, nil
+	return id, raw, nil
 }
 
 // parseTaskID reads a task id. Any part out of its form is false: the
@@ -137,14 +255,8 @@ func parseTaskID(raw string) (taskID, bool) {
 	if err != nil || seconds <= 0 || strconv.FormatInt(seconds, 36) != parts[2] {
 		return taskID{}, false
 	}
-	encoded, err := base64.RawURLEncoding.DecodeString(parts[3])
-	if err != nil {
-		return taskID{}, false
-	}
-	var render taskRender
-	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&render) != nil || decoder.More() {
+	render, ok := decodeRenderTag(parts[3])
+	if !ok {
 		return taskID{}, false
 	}
 	submission := strings.Join(parts[:3], ".")
@@ -166,6 +278,26 @@ var (
 	errTaskInternal          = taskProtocolError(jsonrpc.CodeInternalError, "The task could not be read")
 )
 
+// The outcomes of a declared investigate_question call (the closed
+// vocabulary of eventspec.MCPTaskOutcome).
+const (
+	taskOutcomeTask                      = "task"
+	taskOutcomeFallbackStreamUnavailable = "fallback_stream_unavailable"
+	taskOutcomeSyncIneligible            = "sync_ineligible"
+	taskOutcomeCreateRefused             = "create_refused"
+	taskOutcomeTaskIDFailed              = "task_id_failed"
+)
+
+// logTaskOutcome writes the one Info line of a declared call: the tool and
+// what became of it. No argument, id or subject value is on it.
+func logTaskOutcome(ctx context.Context, cfg *ProcessConfig, outcome string) {
+	if cfg == nil || cfg.diagnostics == nil {
+		return
+	}
+	fields := eventspec.NewMCPTaskOutcomeFields(toolInvestigateQuestion, outcome)
+	cfg.diagnostics.InfoContext(ctx, eventspec.MCPTaskOutcome.Msg, fields.SlogArgs()...)
+}
+
 // tasksMiddleware answers an investigate_question tools/call with a task
 // when THIS request declares the tasks extension (clientDeclaresTasks) and
 // the call can be rendered from its stored result. Every other request, and
@@ -184,26 +316,40 @@ func tasksMiddleware(cfg *ProcessConfig) mcpsdk.Middleware {
 			}
 			caller, err := CallerFromContext(ctx)
 			if err != nil || !hostedToolEnabled(caller, toolInvestigateQuestion) {
+				logTaskOutcome(ctx, cfg, taskOutcomeSyncIneligible)
 				return next(ctx, method, req)
 			}
 			input, eligible := taskEligibleInput(call)
 			if !eligible {
+				logTaskOutcome(ctx, cfg, taskOutcomeSyncIneligible)
 				return next(ctx, method, req)
 			}
-			id, raw, err := newTaskID(time.Now(), taskRender{Budget: input.Budget, IncludeFullResult: input.IncludeFullResult})
+			// The whole task id is built before acr-api is called: a failure
+			// here creates no submission, and an eligible call never falls
+			// back to the synchronous answer for it.
+			id, err := mintTaskID(time.Now(), taskRender{Budget: input.Budget, IncludeFullResult: input.IncludeFullResult})
 			if err != nil {
-				return next(ctx, method, req)
+				logTaskOutcome(ctx, cfg, taskOutcomeTaskIDFailed)
+				return nil, errTaskInternal
+			}
+			raw, err := id.encode()
+			if err != nil {
+				logTaskOutcome(ctx, cfg, taskOutcomeTaskIDFailed)
+				return nil, errTaskInternal
 			}
 			status, err := caller.client.InvestigateAsync(ctx, investigationHostedRequest(caller, input), id.submissionID)
 			var apiErr *sidecar.APIError
 			if errors.As(err, &apiErr) && apiErr.Code == contractsv1.ErrorCodeStreamUnavailable {
 				// The deployment runs no accept-first investigations: the
 				// synchronous call answers. Only this code falls back.
+				logTaskOutcome(ctx, cfg, taskOutcomeFallbackStreamUnavailable)
 				return next(ctx, method, req)
 			}
 			if err != nil {
+				logTaskOutcome(ctx, cfg, taskOutcomeCreateRefused)
 				return writeBackAwareErrorResult(err), nil
 			}
+			logTaskOutcome(ctx, cfg, taskOutcomeTask)
 			return &taskResult{
 				ResultType: "task", TaskID: raw, Status: taskStatusWorking,
 				CreatedAt: taskTime(id.createdAt), LastUpdatedAt: taskTime(status.UpdatedAt), PollIntervalMs: tasksPollIntervalMs,

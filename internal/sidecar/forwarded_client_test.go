@@ -62,6 +62,9 @@ func TestForwardedClientIsSentOnEveryClientCall(t *testing.T) {
 			_, _, _ = client.InvestigateWithSynthesisInput(ctx, investigationRequest)
 		},
 		"InvestigationResult":     func() { _, _ = client.InvestigationResult(ctx, "res_00001") },
+		"InvestigateAsync":        func() { _, _ = client.InvestigateAsync(ctx, investigationRequest, "mcpt.submission-0001") },
+		"SubmissionStatus":        func() { _, _ = client.SubmissionStatus(ctx, "mcpt.submission-0001") },
+		"CancelSubmission":        func() { _ = client.CancelSubmission(ctx, "mcpt.submission-0001") },
 		"ReadDirectFacts":         func() { _, _ = client.ReadDirectFacts(ctx, raw) },
 		"ReadDirectRelationships": func() { _, _ = client.ReadDirectRelationships(ctx, raw) },
 		"RecordEpisode":           func() { _, _ = client.RecordEpisode(ctx, validAgentEpisodeCreate()) },
