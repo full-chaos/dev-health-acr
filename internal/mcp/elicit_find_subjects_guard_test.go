@@ -122,7 +122,8 @@ func TestAmbiguousElicitationOutcomeLine(t *testing.T) {
 	}{
 		"accepted":       {whole(3), &scriptedElicit{res: elicitResult{Outcome: elicitAccepted, Value: first}}, "accepted", true, 3},
 		"declined":       {whole(3), &scriptedElicit{res: elicitResult{Outcome: elicitDeclined}}, "declined", true, 3},
-		"client error":   {whole(3), &scriptedElicit{res: elicitResult{Outcome: elicitUnavailable}}, "unavailable", true, 3},
+		"client error":   {whole(3), &scriptedElicit{res: elicitResult{Outcome: elicitUnavailable, Sent: true}}, "unavailable", true, 3},
+		"nothing sent":   {whole(3), &scriptedElicit{res: elicitResult{Outcome: elicitUnavailable}}, "unavailable", false, 3},
 		"no transport":   {whole(3), nil, "unavailable", false, 3},
 		"single subject": {whole(1), &scriptedElicit{}, "not_eligible", false, 0},
 		"not eligible":   {ambiguousShape{subjects: 25, total: 26, complete: false, status: "ambiguous"}, &scriptedElicit{}, "not_eligible", false, 0},

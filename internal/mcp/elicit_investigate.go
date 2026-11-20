@@ -66,7 +66,7 @@ func chooseWindow(ctx context.Context, cfg *ProcessConfig, req *mcpsdk.CallToolR
 		}
 		return unchanged
 	default:
-		logElicitWindowOutcome(ctx, cfg, elicitOutcomeUnavailable, true, offered)
+		logElicitWindowOutcome(ctx, cfg, elicitOutcomeUnavailable, res.Sent, offered)
 		return unchanged
 	}
 }

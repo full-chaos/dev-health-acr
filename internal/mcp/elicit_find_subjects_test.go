@@ -224,3 +224,26 @@ func TestFindSubjectsMalformedRequestCapabilitiesFallBackToSession(t *testing.T)
 		})
 	}
 }
+
+// A per-request form capability with no session capability makes the SDK refuse
+// before it sends anything: the outcome line says unavailable and asked false.
+func TestFindSubjectsPerCallCapabilityWithoutSessionCapabilityAsksNothing(t *testing.T) {
+	withSameLabelRepos(t)
+	st := newDTStack(t)
+	var buf bytes.Buffer
+	cs, _ := st.sessionWithDiagnostics([]string{auth.ScopeContextRead, auth.ScopeDataRead}, []string{"*"}, nil, &buf)
+	params := &mcpsdk.CallToolParams{Name: "find_subjects", Arguments: map[string]any{"query": dtSlugSame, "kind": "repository"}}
+	params.SetMeta(map[string]any{mcpsdk.MetaKeyClientCapabilities: map[string]any{"elicitation": map[string]any{"form": map[string]any{}}}})
+	if _, err := cs.CallTool(context.Background(), params); err != nil {
+		t.Fatal(err)
+	}
+	log, err := certify.Parse(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := certify.Certify(log, certify.Assertion{Event: eventspec.MCPElicitationOutcome, Want: map[string]any{
+		"tool": "find_subjects", "outcome": "unavailable", "asked": false, "offered": float64(2),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+}

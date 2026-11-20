@@ -19229,7 +19229,7 @@
       "tool",
       "outcome"
     ],
-    "bounded_aggregation": "one line per find_subjects call whose answer status is ambiguous, and one line per investigate_question call whose question states a bare last month after for, over, during or within; any other call emits none",
+    "bounded_aggregation": "one line per find_subjects call whose answer status is ambiguous, and one line per investigate_question call whose question states one bare last month that the engine reads as the previous calendar month (outcome not_eligible when the ask rule is not met); a question with no such phrase emits none",
     "fields": [
       {
         "key": "tool",

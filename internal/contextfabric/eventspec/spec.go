@@ -6568,7 +6568,7 @@ var MCPHostedContextScope = Event{
 var MCPElicitationOutcome = Event{
 	ID: "mcp.elicitation_outcome", Msg: "mcp elicitation outcome", Level: LevelInfo,
 	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"tool", "outcome"},
-	BoundedAggregation: "one line per find_subjects call whose answer status is ambiguous, and one line per investigate_question call whose question states a bare last month after for, over, during or within; any other call emits none",
+	BoundedAggregation: "one line per find_subjects call whose answer status is ambiguous, and one line per investigate_question call whose question states one bare last month that the engine reads as the previous calendar month (outcome not_eligible when the ask rule is not met); a question with no such phrase emits none",
 	Fields: []Field{
 		{Key: "tool", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"find_subjects", "investigate_question_window"}},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"not_eligible", "unavailable", "declined", "accepted"}},

@@ -173,6 +173,12 @@ func hasWindowRole(question string, span BoundWindowSpan) bool {
 	if strippedPrecedingPreposition(lowerBefore) {
 		return true
 	}
+	return spanClauseFinal(question, span)
+}
+
+// spanClauseFinal reports whether only whitespace and terminal punctuation
+// follow span.
+func spanClauseFinal(question string, span BoundWindowSpan) bool {
 	after := question[span.SpanEnd:]
 	// isReuseTerminalPunctuation (answer_reuse.go), NOT a hand-rolled set --
 	// codex review finding (W1 round 4): QuestionHash's own CanonicalizeQuestion
@@ -190,12 +196,23 @@ func hasWindowRole(question string, span BoundWindowSpan) bool {
 	trailing := strings.TrimFunc(after, func(r rune) bool {
 		return unicode.IsSpace(r) || isReuseTerminalPunctuation(r)
 	})
-	if trailing == "" {
-		// Clause-final: only trailing whitespace/terminal punctuation
-		// follows the span.
+	// Clause-final: only trailing whitespace/terminal punctuation follows the span.
+	return trailing == ""
+}
+
+// windowClauseBreaks are the closed marks that end a clause right after a span.
+const windowClauseBreaks = ",;:"
+
+// spanEndsItsClause reports whether the text after span closes the clause: the
+// binder's own clause-final read, a coordinating conjunction (the same
+// spanFollowedByConjunction read the calendar reading uses), or a clause
+// break. "last month's release" and "last month of the quarter" do not.
+func spanEndsItsClause(question string, span BoundWindowSpan) bool {
+	if spanClauseFinal(question, span) || spanFollowedByConjunction(question, span) {
 		return true
 	}
-	return false
+	after := strings.TrimLeftFunc(question[span.SpanEnd:], unicode.IsSpace)
+	return after != "" && strings.ContainsRune(windowClauseBreaks, rune(after[0]))
 }
 
 // windowRoleArticles is the closed set hasWindowRole tolerates between a
@@ -488,6 +505,9 @@ func WindowPhraseNeedsChoice(question string) bool {
 		return false
 	}
 	spans := BindWindowSpans(question)
+	if !spanEndsItsClause(question, spans[0]) {
+		return false
+	}
 	lowerBefore := strings.ToLower(strings.TrimRightFunc(question[:spans[0].SpanStart], unicode.IsSpace))
 	for _, prep := range windowChoicePrepositions {
 		if _, ok := trimSuffixWord(lowerBefore, prep); ok {
