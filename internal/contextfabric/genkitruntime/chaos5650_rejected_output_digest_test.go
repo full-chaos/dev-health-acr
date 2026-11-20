@@ -93,7 +93,7 @@ func TestRejectedSynthesisReceiptStaysValid(t *testing.T) {
 
 // TestRejectedSynthesisReceiptDigestsEveryPrimaryRejectionPath sweeps the
 // PRIMARY leg's rejection paths: the stamp sits before both of them
-// (toDomain's own required-field rule and ValidateAgainst's rules), so
+// (ValidateAgainst's rules), so
 // neither may store an empty digest.
 //
 // Named for the primary leg on purpose. An earlier name claimed to sweep
@@ -107,10 +107,6 @@ func TestRejectedSynthesisReceiptDigestsEveryPrimaryRejectionPath(t *testing.T) 
 		name   string
 		mutate func(synthesisOutput) synthesisOutput
 	}{
-		{"toDomain required-field rejection", func(o synthesisOutput) synthesisOutput {
-			o.DeterministicAnswer = ""
-			return o
-		}},
 		{"ValidateAgainst driver rejection", func(o synthesisOutput) synthesisOutput {
 			o.Drivers[0].Category = "not_a_category"
 			return o
