@@ -106,8 +106,9 @@ func TestRespondAsyncRecordBeforeResponse(t *testing.T) {
 		t.Fatalf("opened line %v, want respond_async and leased", opened)
 	}
 	close(harness.investigator.release)
+	// The record is final before the log's terminal: wait for the terminal.
 	waitFor(t, func() bool {
-		return harness.statusBody(0, harness.tokenA, "submission-async-001").State == contractsv1.ContextFabricSubmissionDone
+		return harness.statusBody(0, harness.tokenA, "submission-async-001").Terminal != nil
 	})
 	// The run had no viewer from its start: it never tried the connection.
 	if detached := logs[0].lines("context fabric investigation event stream viewer detached"); len(detached) != 0 {

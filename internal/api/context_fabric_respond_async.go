@@ -2,9 +2,7 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -86,10 +84,9 @@ func submissionStatusOf(record contextfabric.SubmissionRecord) contractsv1.Conte
 }
 
 // acceptInvestigationAsync answers an admitted accept-first create 202 with
-// its submission status, with Content-Length, and flushes it. The caller
-// then hands the run to a detached goroutine and returns, so the connection
-// is free for the client's next request (HTTP/1.1 keep-alive) and an HTTP/2
-// stream ends. A record admitted without its lease is abandoned and refused
+// its submission status. The caller then hands the run to a detached
+// goroutine and returns, so the response ends with the handler and the
+// connection is free for the client's next request (HTTP/1.1 keep-alive). A record admitted without its lease is abandoned and refused
 // 500: a connection-owned run would end with the connection.
 func (a *App) acceptInvestigationAsync(w http.ResponseWriter, r *http.Request, principal storage.Principal, submission *admittedInvestigationSubmission) bool {
 	if submission == nil || !submission.record.Leased() {
@@ -98,22 +95,13 @@ func (a *App) acceptInvestigationAsync(w http.ResponseWriter, r *http.Request, p
 		return false
 	}
 	status := submissionStatusOf(submission.record)
-	encoded, err := json.Marshal(status)
-	if err != nil || status.Validate() != nil {
+	if status.Validate() != nil {
 		a.abandonInvestigationSubmission(r, principal, submission)
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation could not be started", false, nil)
 		return false
 	}
-	encoded = append(encoded, '\n')
-	header := w.Header()
-	header.Set("Content-Type", "application/json")
-	header.Set("Cache-Control", "no-store")
-	header.Set("X-Content-Type-Options", "nosniff")
-	header.Set("Content-Length", strconv.Itoa(len(encoded)))
-	header.Set(contractsv1.ContextFabricPreferenceAppliedHeader, contractsv1.ContextFabricRespondAsyncPreference)
-	w.WriteHeader(http.StatusAccepted)
-	_, _ = w.Write(encoded)
-	_ = http.NewResponseController(w).Flush()
+	w.Header().Set(contractsv1.ContextFabricPreferenceAppliedHeader, contractsv1.ContextFabricRespondAsyncPreference)
+	writeJSON(w, http.StatusAccepted, status)
 	return true
 }
 
