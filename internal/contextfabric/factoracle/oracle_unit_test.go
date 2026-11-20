@@ -218,7 +218,7 @@ func fakeRun(t *testing.T, root string, planes Planes, configure func(*Oracle)) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{root}, Planes: planes}
+	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, Today: captureDay(manifest), ShapeCases: manifest.ShapeCases, OnlyRoots: []string{root}, Planes: planes}
 	if configure != nil {
 		configure(oracle)
 	}
@@ -249,7 +249,7 @@ func TestRunStopsWhenAGeneratedShapeHasNoCase(t *testing.T) {
 	if len(cases) == len(manifest.ShapeCases) {
 		t.Fatalf("the capture has no case for %s", dropped)
 	}
-	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: cases, OnlyRoots: []string{"hotspots"},
+	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, Today: captureDay(manifest), ShapeCases: cases, OnlyRoots: []string{"hotspots"},
 		Planes: fakePlanes{graphQL: func(Shape, map[string]any) (json.RawMessage, error) {
 			return json.RawMessage(`{"call":"operation_unavailable"}`), nil
 		}}}
@@ -734,7 +734,7 @@ func TestShapePassFindsTypeEchoAndLimitProblems(t *testing.T) {
 	good := `{"workGraphFlow":{"__typename":"WorkGraphFlowResult","degradedReason":null,"rows":[{"__typename":"WorkGraphFlowRow","nodeType":"ISSUE","inflow":3,"outflow":4}]}}`
 	run := func(answer json.RawMessage) *RootReport {
 		t.Helper()
-		oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"workGraphFlow"},
+		oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, Today: captureDay(manifest), ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"workGraphFlow"},
 			Planes: fakePlanes{graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
 				switch shape.Name {
 				case "branch:(root)":
@@ -806,7 +806,7 @@ func TestTheTwoPathsMustAnswerTheSame(t *testing.T) {
 	flow := `{"workGraphFlow":{"__typename":"WorkGraphFlowResult","degradedReason":null,"rows":[{"__typename":"WorkGraphFlowRow","nodeType":"ISSUE","inflow":3,"outflow":4},{"__typename":"WorkGraphFlowRow","nodeType":"PR","inflow":1,"outflow":2}]}}`
 	run := func(root, graphQL, operation string) *RootReport {
 		t.Helper()
-		oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{root}, NotRecorded: notRecordedOperations,
+		oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, Today: captureDay(manifest), ShapeCases: manifest.ShapeCases, OnlyRoots: []string{root}, NotRecorded: notRecordedOperations,
 			Planes: fakePlanes{
 				graphQL: func(shape Shape, _ map[string]any) (json.RawMessage, error) {
 					if shape.Name != "all" {
@@ -856,7 +856,7 @@ func TestTheTwoPathsMustAnswerTheSame(t *testing.T) {
 		t.Fatalf("a row missing on the other path is not a finding")
 	}
 	// run_operation must name the operation that was asked.
-	echo := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"workGraphFlow"},
+	echo := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, Today: captureDay(manifest), ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"workGraphFlow"},
 		Planes: fakePlanes{
 			graphQL: func(Shape, map[string]any) (json.RawMessage, error) {
 				return json.RawMessage(`{"call":"operation_unavailable"}`), nil
@@ -1991,7 +1991,7 @@ func readinessRun(t *testing.T, planes Planes) (*Report, error) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"throughputForecast"}, Planes: planes}
+	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, Today: captureDay(manifest), ShapeCases: manifest.ShapeCases, OnlyRoots: []string{"throughputForecast"}, Planes: planes}
 	return oracle.Run(context.Background())
 }
 

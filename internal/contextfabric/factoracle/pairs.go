@@ -249,7 +249,7 @@ func compareInvestment(ctx context.Context, o *Oracle, rr *RootReport) error {
 
 	// The reply and the store must describe the same rows before anything
 	// is said about acr: the ops value is recomputed from the store rows.
-	fromStore := o.Store.OrgThemeEffort(o.Window)
+	fromStore := o.Store.OrgThemeEffort(o.analyticsWindow())
 	for _, theme := range themeKeys(ops, fromStore) {
 		rr.Compared++
 		observeOpsFloat32Gap(ops[theme], fromStore[theme])
@@ -285,7 +285,7 @@ func compareUncategorizedCount(o *Oracle, rr *RootReport, root map[string]any) {
 		return
 	}
 	counted, _ := strconv.ParseInt(leaf.V, 10, 64) // typedLeaf parsed it
-	if gated := o.Store.GatedUnits(o.Window); counted != gated {
+	if gated := o.Store.GatedUnits(o.analyticsWindow()); counted != gated {
 		rr.find(Finding{Pair: "ops_reply_vs_store", Key: "uncategorizedCount", Path: path, Detail: fmt.Sprintf("ops counts %d uncategorized units, the store gates %d", counted, gated)})
 		return
 	}
@@ -303,7 +303,7 @@ func compareInvestmentFacts(ctx context.Context, o *Oracle, rr *RootReport) erro
 // compareInvestmentAcr reads the acr repository facts; with ops nil the ops
 // organization value takes no part.
 func compareInvestmentAcr(ctx context.Context, o *Oracle, rr *RootReport, ops map[string]float64) error {
-	repoFacts, err := o.facts(ctx, "investment", "repository", o.Store.RepositoryIDs())
+	repoFacts, err := o.investmentFacts(ctx, "repository", o.Store.RepositoryIDs())
 	if err != nil {
 		return err
 	}
@@ -320,14 +320,14 @@ func compareInvestmentAcr(ctx context.Context, o *Oracle, rr *RootReport, ops ma
 		}
 	}
 	o.RepositoryEffort = byRepo
-	expectedByRepo := o.Store.ExpectedRepositoryEffort(o.Window)
+	expectedByRepo := o.Store.ExpectedRepositoryEffort(o.analyticsWindow())
 	expected := map[string]float64{}
 	for _, effort := range expectedByRepo {
 		for theme, value := range effort {
 			expected[theme] += value
 		}
 	}
-	verdict := classifyInvestment(ops, acr, expected, o.Store.Witnesses(o.Window))
+	verdict := classifyInvestment(ops, acr, expected, o.Store.Witnesses(o.analyticsWindow()))
 	rr.Compared += len(themeKeys(ops, acr))
 	rr.Matches += verdict.Matches
 	for _, d := range verdict.Differences {
@@ -378,7 +378,7 @@ func compareTeamRollup(ctx context.Context, o *Oracle, rr *RootReport, byRepo ma
 	if len(teams) == 0 {
 		return nil
 	}
-	facts, err := o.facts(ctx, "investment", "team", teams)
+	facts, err := o.investmentFacts(ctx, "team", teams)
 	if err != nil {
 		return err
 	}

@@ -122,7 +122,13 @@ type Oracle struct {
 	// size in the window. SubjectTeamsSkipped counts the teams before it.
 	SubjectTeam         string
 	SubjectTeamsSkipped int
-	generated           []ShapeCase
+	// Today is the start of the UTC day the run reads the venue (the capture
+	// day in recorded mode). The ops analytics readers leave a day that is not
+	// over out of every window (ops D6101, internal/queryapi/analytics
+	// window.go); the analytics pairs read the store and the acr investment
+	// facts over analyticsWindow. Zero: no day is left out.
+	Today     time.Time
+	generated []ShapeCase
 }
 
 // measurableTeam returns the first team, in the order given, for which the
@@ -208,7 +214,25 @@ const (
 	// it compares against the store rows, so a scalar fact that was cut
 	// shows as a difference with the store.
 	readCurrentHeldToStore
+	// readAnalyticsWindowed: readWindowed over analyticsWindow.
+	readAnalyticsWindowed
 )
+
+// analyticsWindow is the window of the ops analytics readers: the oracle window
+// without the day that is not over (Today), as ops D6101 cuts it. The other
+// readers (capacityForecasts, compoundingRisk, throughputForecast) count that day.
+func (o *Oracle) analyticsWindow() Window {
+	w := o.Window
+	if !o.Today.IsZero() && w.End.After(o.Today) && o.Today.After(w.Start) {
+		w.End = o.Today
+	}
+	return w
+}
+
+// investmentFacts reads one investment fact kind over analyticsWindow.
+func (o *Oracle) investmentFacts(ctx context.Context, subjectKind string, ids []string) ([]ServedFact, error) {
+	return o.readFacts(ctx, "investment", subjectKind, ids, readAnalyticsWindowed)
+}
 
 // facts reads one fact kind over the oracle window.
 func (o *Oracle) facts(ctx context.Context, kind, subjectKind string, ids []string) ([]ServedFact, error) {
@@ -243,8 +267,12 @@ func (o *Oracle) readFacts(ctx context.Context, kind, subjectKind string, ids []
 	for start := 0; start < len(ids); start += chunk {
 		end := min(start+chunk, len(ids))
 		request := FactsRequest{Kinds: []string{kind}, MaxBytes: directread.MaxMaxBytes, Tables: directread.TablesOmit}
-		if mode == readWindowed {
-			request.Window = &FactsWindow{Mode: directread.WindowRange, Start: o.Window.Start, End: o.Window.End}
+		if mode == readWindowed || mode == readAnalyticsWindowed {
+			w := o.Window
+			if mode == readAnalyticsWindowed {
+				w = o.analyticsWindow()
+			}
+			request.Window = &FactsWindow{Mode: directread.WindowRange, Start: w.Start, End: w.End}
 			request.Tables = directread.TablesInclude
 		}
 		if chunk == 1 && subjectKind == "team" && o.recordedDenied(kind, ids[start]) {

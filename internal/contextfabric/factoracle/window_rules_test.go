@@ -23,12 +23,29 @@ func TestTheOpsDateRangeEndsOnTheLastDayTheWindowHolds(t *testing.T) {
 	}
 }
 
-// TestTheDefaultVenueWindowHoldsFinishedDaysOnly: ops counts no day that is
-// not over, so the default window ends at the start of the current UTC day.
-func TestTheDefaultVenueWindowHoldsFinishedDaysOnly(t *testing.T) {
+// TestEachReaderCountsTheCaptureDayByItsOwnRule: the default venue window ends
+// at the next UTC midnight. The ops analytics readers leave the capture day out
+// (D6101), so the analytics pairs read up to its start; capacityForecasts asks
+// toDate = the capture day and counts the forecasts computed on it.
+func TestEachReaderCountsTheCaptureDayByItsOwnRule(t *testing.T) {
 	now := time.Date(2026, 11, 20, 16, 30, 13, 0, time.FixedZone("x", 3600))
-	if got, want := venueWindowEnd(now), time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC); !got.Equal(want) {
-		t.Errorf("venueWindowEnd = %s, want %s", got, want)
+	end := venueWindowEnd(now)
+	if want := time.Date(2026, 11, 21, 0, 0, 0, 0, time.UTC); !end.Equal(want) {
+		t.Fatalf("venueWindowEnd = %s, want %s", end, want)
+	}
+	o := &Oracle{Window: Window{Start: end.Add(-MaxWindowDays * 24 * time.Hour), End: end}, Today: now.UTC().Truncate(24 * time.Hour)}
+	if got := o.analyticsWindow().End; !got.Equal(o.Today) {
+		t.Errorf("analytics window ends %s, want the start of the capture day %s", got, o.Today)
+	}
+	if got := o.Window.lastDay(); got != "2026-11-20" {
+		t.Errorf("capacityForecasts toDate = %s, want the capture day 2026-11-20", got)
+	}
+	past := &Oracle{Window: Window{Start: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)}, Today: o.Today}
+	if got := past.analyticsWindow(); got != past.Window {
+		t.Errorf("a window of finished days is cut to %v", got)
+	}
+	if got := (&Oracle{Window: o.Window}).analyticsWindow(); got != o.Window {
+		t.Errorf("with no Today the analytics window is cut to %v", got)
 	}
 }
 

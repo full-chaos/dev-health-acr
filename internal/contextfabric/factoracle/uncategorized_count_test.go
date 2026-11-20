@@ -57,7 +57,7 @@ func compareOrgReply(t *testing.T, reply json.RawMessage) *RootReport {
 	}
 	stop := errors.New("acr plane not called in this test")
 	// The answer caches Run sets up (oracle.go: Run).
-	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, shapes: mustShapes(t),
+	oracle := &Oracle{Policy: mustPolicy(t), Store: store, Window: manifest.Window, Today: captureDay(manifest), shapes: mustShapes(t),
 		answers: map[string]json.RawMessage{}, opAnswers: map[string]json.RawMessage{},
 		Planes: fakePlanes{
 			graphQL: func(Shape, map[string]any) (json.RawMessage, error) { return reply, nil },

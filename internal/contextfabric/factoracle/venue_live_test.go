@@ -33,8 +33,8 @@ func venueEnv(t *testing.T, name string) string {
 	return value
 }
 
-// venueWindow is the oracle window: MaxWindowDays of finished days ending at
-// the start of the current UTC day (venueWindowEnd), or at ACR_O4_WINDOW_END.
+// venueWindow is the oracle window: MaxWindowDays ending at the next UTC
+// midnight (venueWindowEnd), or at ACR_O4_WINDOW_END.
 func venueWindow(t *testing.T) Window {
 	t.Helper()
 	end := venueWindowEnd(time.Now())

@@ -43,6 +43,12 @@ weight the pairs are recorded under). Limit: the issue-size weighting of reposit
 (ops `internal/queryapi/analytics/sankeycoverage.go:320-322`) is NOT MEASURED by O4. The
 capture manifest says so in `venue_note`.
 
+Window rule per reader: the default window ends at the next UTC midnight. The ops analytics
+readers (investment breakdowns, team work items, evidence stats; ops D6101,
+`internal/queryapi/analytics/window.go`) leave a day that is not over out of every window, so the
+oracle's analytics pairs read the store and the acr investment facts up to the start of the
+capture day. capacityForecasts, compoundingRisk and throughputForecast count the capture day.
+
 Limit: root `catalog` compares only `owner/name` repository names, as the ops repository
 inventory lists only those. The capture reports every other name (for example a GitLab
 nested-group slug) as "not joined: N", never as a silent drop.

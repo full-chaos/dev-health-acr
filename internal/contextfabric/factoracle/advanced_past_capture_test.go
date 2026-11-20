@@ -133,7 +133,7 @@ func TestARootIsSkippedOnlyWhenEveryOperationIsAdvanced(t *testing.T) {
 			cases = append(cases, c)
 		}
 	}
-	oracle := &Oracle{Policy: policy, Store: store, Window: manifest.Window, ShapeCases: cases, OnlyRoots: []string{"analytics"}, NotRecorded: planted,
+	oracle := &Oracle{Policy: policy, Store: store, Window: manifest.Window, Today: captureDay(manifest), ShapeCases: cases, OnlyRoots: []string{"analytics"}, NotRecorded: planted,
 		Planes: fakePlanes{graphQL: func(Shape, map[string]any) (json.RawMessage, error) {
 			return json.RawMessage(`{"call":"operation_unavailable"}`), nil
 		}}}

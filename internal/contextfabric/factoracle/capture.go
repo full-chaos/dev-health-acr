@@ -140,11 +140,11 @@ type LiveRun struct {
 // is read before and after, and a run over a store that moved is refused
 // (the error names the tables). Rows a job writes and rows a background merge
 // removes both read as a store that moved.
-// venueWindowEnd is the default end of a venue window: the start of the
-// current UTC day, so the window holds finished days only. ops leaves a day
-// that is not over out of every window (D6101), while the store would count it.
+// venueWindowEnd is the default end of a venue window: the next UTC midnight,
+// so the window holds the capture day. Which readers count that day is each
+// reader's own rule (Oracle.Today, analyticsWindow).
 func venueWindowEnd(now time.Time) time.Time {
-	return now.UTC().Truncate(24 * time.Hour)
+	return now.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
 }
 
 // venuePaceInterval keeps a run under the venue's default request budget of
@@ -177,7 +177,7 @@ func RunLive(ctx context.Context, cfg VenueConfig) (*LiveRun, error) {
 			return nil, err
 		}
 		planes := &VenuePlanes{URL: cfg.MCPURL, TokenFile: cfg.TokenFile, MinInterval: venuePaceInterval, Logf: cfg.Logf}
-		oracle := &Oracle{Policy: policy, Planes: planes, Store: store, Window: cfg.Window,
+		oracle := &Oracle{Policy: policy, Planes: planes, Store: store, Window: cfg.Window, Today: time.Now().UTC().Truncate(24 * time.Hour),
 			ListenerDark: cfg.ListenerDark, OperationDark: cfg.OperationDark}
 		report, err := oracle.Run(ctx)
 		if count, waited := planes.LimitedCalls(); cfg.Logf != nil {
@@ -550,6 +550,16 @@ func ScrubBuild(build string) string {
 		}
 	}
 	return strings.Join(kept, " ")
+}
+
+// captureDay is the start of the UTC day a capture was taken (its Oracle.Today
+// in recorded mode). A manifest with no readable captured_at gives zero.
+func captureDay(m Manifest) time.Time {
+	at, err := time.Parse(time.RFC3339, m.CapturedAt)
+	if err != nil {
+		return time.Time{}
+	}
+	return at.UTC().Truncate(24 * time.Hour)
 }
 
 // contractDigestsOf is contractDigest of every operation the policy serves.
