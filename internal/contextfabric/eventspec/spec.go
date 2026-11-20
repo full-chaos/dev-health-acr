@@ -6189,6 +6189,7 @@ var All = []Event{
 	AnchorBindingTransition,
 	MCPHostedContextScope,
 	MCPTaskOutcome,
+	MCPElicitationOutcome,
 	MCPHTTPRequest,
 	MCPHTTPServing,
 	MCPHTTPReadiness,
@@ -6551,6 +6552,24 @@ var MCPHostedContextScope = Event{
 		{Key: "has_branch", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "has_commit", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "file_count", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// MCPElicitationOutcome records what find_subjects did with an ambiguous
+// answer: the user was asked and accepted or declined, the ask could not be
+// made (no form capability, a hosted or newer-revision session, a client
+// error, a timeout, a value outside the offered ids), or the answer was not
+// eligible to be asked about (the page is not the whole set, or the match
+// count is outside 2 to 25). Counts only, never a subject id, label or name.
+var MCPElicitationOutcome = Event{
+	ID: "mcp.elicitation_outcome", Msg: "mcp elicitation outcome", Level: LevelInfo,
+	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"tool", "outcome"},
+	BoundedAggregation: "one line per find_subjects call whose answer status is ambiguous; any other status emits none",
+	Fields: []Field{
+		{Key: "tool", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"find_subjects"}},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"not_eligible", "unavailable", "declined", "accepted"}},
+		{Key: "asked", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "offered", Type: FieldInt, Presence: PresenceRequired},
 	},
 }
 

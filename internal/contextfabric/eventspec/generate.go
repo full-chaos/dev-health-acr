@@ -440,6 +440,8 @@ func goVarName(e Event) string {
 		return "MCPHostedContextScope"
 	case MCPTaskOutcome.ID:
 		return "MCPTaskOutcome"
+	case MCPElicitationOutcome.ID:
+		return "MCPElicitationOutcome"
 	case MCPHTTPRequest.ID:
 		return "MCPHTTPRequest"
 	case MCPHTTPServing.ID:
