@@ -105,8 +105,25 @@ func checkRepoScopeIDs(extract *Extract, answers []any) ScopeIDCheck {
 	return check
 }
 
+// repoScopeKind is the kind prefix ops puts on a REPO scopeId; the id after
+// it is the repository id (opsScopeKey removes it for the live compare).
+const repoScopeKind = "repository"
+
+// scrubRiskScopeID scrubs a compoundingRisk scopeId as the extract scrubs
+// the stored scope_id, so a replay joins the two: a REPO id keeps its kind
+// prefix and its repository id is replaced like repos.id.
+func scrubRiskScopeID(s *Scrubber, scope, id string) string {
+	if !strings.EqualFold(scope, "repo") {
+		return s.Token("team", id)
+	}
+	if bare, ok := strings.CutPrefix(id, repoScopeKind+":"); ok {
+		return repoScopeKind + ":" + s.UUID(bare)
+	}
+	return s.UUID(id)
+}
+
 func classifyRepoScopeID(id string, exact, folded, hexOnly, other map[string]bool) string {
-	if exact[id] {
+	if exact[opsScopeKey(repoScopeKind, id)] {
 		return ""
 	}
 	lower := strings.ToLower(id)

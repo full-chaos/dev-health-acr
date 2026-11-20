@@ -788,10 +788,8 @@ func scrubReply(s *Scrubber, schema *ast.Schema, shape Shape, variables map[stri
 			case replyWorkScope:
 				return s.Token("scope", t), nil
 			case replyScopeID:
-				if scope, _ := parent["scope"].(string); strings.EqualFold(scope, "repo") {
-					return s.UUID(t), nil
-				}
-				return s.Token("team", t), nil
+				scope, _ := parent["scope"].(string)
+				return scrubRiskScopeID(s, scope, t), nil
 			case replyCatalogValue:
 				switch dimension {
 				case "REPO":
