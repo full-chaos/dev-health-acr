@@ -80,13 +80,9 @@ func formElicitationAvailable(req *mcpsdk.CallToolRequest) bool {
 	}
 	var caps *clientElicitationCaps
 	if req.Params != nil {
-		if raw, ok := req.Params.GetMeta()[mcpsdk.MetaKeyClientCapabilities]; ok {
-			encoded, err := json.Marshal(raw)
-			if err != nil {
-				return false
-			}
+		if raw, ok := requestClientCapabilities(req.Params); ok {
 			caps = &clientElicitationCaps{}
-			if json.Unmarshal(encoded, caps) != nil {
+			if json.Unmarshal(raw, caps) != nil {
 				return false
 			}
 		}
