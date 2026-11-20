@@ -230,14 +230,19 @@ func TestProjectMixSameMillisecondTieTakesTheLaterVersionsWindowAgainstRealClick
 				t.Fatalf("%d of %d tie units hold both versions (%v)", tied, tieUnits, err)
 			}
 			window := devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: at.Add(-10 * 24 * time.Hour), End: at.Add(24 * time.Hour)}
-			wantQuery, wantDirect := newScopedCHAOS7257Client(t, nil)
-			createCHAOS7257Tables(t, ctx, wantDirect)
-			seed(wantDirect, spans[len(spans)-1:])
-			want := runRollupPhased(t, ctx, wantQuery, orgID, ids, window)
-			earlierQuery, earlierDirect := newScopedCHAOS7257Client(t, nil)
-			createCHAOS7257Tables(t, ctx, earlierDirect)
-			seed(earlierDirect, spans[:1])
-			if err := rollupRowsDiffer(want, runRollupPhased(t, ctx, earlierQuery, orgID, ids, window)); err == nil {
+			// Each subtest gets its own scoped database (named after the test).
+			only := func(versions []time.Duration) (rows []rollupRow) {
+				t.Helper()
+				t.Run(versions[0].String(), func(t *testing.T) {
+					onlyQuery, onlyDirect := newScopedCHAOS7257Client(t, nil)
+					createCHAOS7257Tables(t, ctx, onlyDirect)
+					seed(onlyDirect, versions)
+					rows = runRollupPhased(t, ctx, onlyQuery, orgID, ids, window)
+				})
+				return rows
+			}
+			want := only(spans[len(spans)-1:])
+			if err := rollupRowsDiffer(want, only(spans[:1])); err == nil {
 				t.Fatal("control: the earlier versions give the answer of the later ones, so the case proves nothing")
 			}
 			arms := map[string][]rollupRow{
