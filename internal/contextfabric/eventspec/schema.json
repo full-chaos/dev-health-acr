@@ -19221,6 +19221,48 @@
     ]
   },
   {
+    "id": "mcp.elicitation_outcome",
+    "msg": "mcp elicitation outcome",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "tool",
+      "outcome"
+    ],
+    "bounded_aggregation": "one line per find_subjects call whose answer status is ambiguous; any other status emits none",
+    "fields": [
+      {
+        "key": "tool",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "find_subjects"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "not_eligible",
+          "unavailable",
+          "declined",
+          "accepted"
+        ]
+      },
+      {
+        "key": "asked",
+        "type": "bool",
+        "presence": "required"
+      },
+      {
+        "key": "offered",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
     "id": "mcp.hosted_context_scope",
     "msg": "mcp hosted context scope",
     "level": "info",

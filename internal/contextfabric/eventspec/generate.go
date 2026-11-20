@@ -438,6 +438,8 @@ func goVarName(e Event) string {
 		return "AnchorBindingTransition"
 	case MCPHostedContextScope.ID:
 		return "MCPHostedContextScope"
+	case MCPElicitationOutcome.ID:
+		return "MCPElicitationOutcome"
 	case MCPHTTPRequest.ID:
 		return "MCPHTTPRequest"
 	case MCPHTTPServing.ID:

@@ -117,3 +117,49 @@ func TestFindSubjectsAmbiguousElicitation(t *testing.T) {
 		}
 	})
 }
+
+func TestFindSubjectsAmbiguousElicitationOverRealPaging(t *testing.T) {
+	for name, tc := range map[string]struct {
+		extra int
+		limit int
+		asks  int
+	}{
+		"26 matches default page": {extra: 24, limit: 0, asks: 0},
+		"26 matches limit 2":      {extra: 24, limit: 2, asks: 0},
+		"3 matches whole page":    {extra: 1, limit: 0, asks: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			withSameLabelRepos(t)
+			dtExtraSameLabelRepos = tc.extra
+			t.Cleanup(func() { dtExtraSameLabelRepos = 0 })
+			args := map[string]any{"query": dtSlugSame, "kind": "repository"}
+			if tc.limit > 0 {
+				args["limit"] = tc.limit
+			}
+			call := func(opts *mcpsdk.ClientOptions) (string, int) {
+				st := newDTStack(t)
+				cs, _ := st.sessionWith([]string{auth.ScopeContextRead, auth.ScopeDataRead}, []string{"*"}, opts)
+				result, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "find_subjects", Arguments: args})
+				if err != nil {
+					t.Fatal(err)
+				}
+				b, _ := json.Marshal(result.StructuredContent)
+				return string(b), 0
+			}
+			base, _ := call(nil)
+			var asks int
+			got, _ := call(&mcpsdk.ClientOptions{ElicitationHandler: func(_ context.Context, r *mcpsdk.ElicitRequest) (*mcpsdk.ElicitResult, error) {
+				asks++
+				props := r.Params.RequestedSchema.(map[string]any)["properties"].(map[string]any)["subject"].(map[string]any)["oneOf"].([]any)
+				return &mcpsdk.ElicitResult{Action: "accept", Content: map[string]any{"subject": props[0].(map[string]any)["const"]}}, nil
+			}})
+			if asks != tc.asks {
+				t.Fatalf("asks=%d want %d; base=%s", asks, tc.asks, base)
+			}
+			if tc.asks == 0 && got != base {
+				t.Fatalf("bytes differ from base:\n%s\n%s", got, base)
+			}
+			t.Logf("%s: asks=%d base_status=%s", name, asks, base[:min(len(base), 160)])
+		})
+	}
+}

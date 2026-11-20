@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -72,6 +73,9 @@ func dtNodes() []directread.LookupNode {
 	nodes := []directread.LookupNode{node(dtRepoA, dtSlugA), node(dtRepoB, dtSlugB)}
 	if dtSameLabelRepos {
 		nodes = append(nodes, node(dtRepoC, dtSlugSame), node(dtRepoD, dtSlugSame))
+		for i := 0; i < dtExtraSameLabelRepos; i++ {
+			nodes = append(nodes, node(fmt.Sprintf("eeeeeeee-eeee-4eee-8eee-%012d", i), dtSlugSame))
+		}
 	}
 	return nodes
 }
@@ -83,6 +87,9 @@ const (
 )
 
 var dtSameLabelRepos bool
+
+// dtExtraSameLabelRepos adds this many more repositories with the same label.
+var dtExtraSameLabelRepos int
 
 func (dtGraph) ResolveInvestigationBinding(context.Context, storage.Principal) (contextfabric.ResolvedGraphBinding, error) {
 	return contextfabric.ResolvedGraphBinding{GraphKey: "dt", Epoch: 1}, nil
@@ -117,7 +124,7 @@ func (dtGraph) ListSubjectsByKind(_ context.Context, _ storage.Principal, _ cont
 	return page, nil
 }
 
-func (dtGraph) FindSubjectsByExactName(_ context.Context, _ storage.Principal, _ contextfabric.ResolvedGraphBinding, query string, kind string, _ string, _ int) (directread.LookupPage, error) {
+func (dtGraph) FindSubjectsByExactName(_ context.Context, _ storage.Principal, _ contextfabric.ResolvedGraphBinding, query string, kind string, _ string, pageSize int) (directread.LookupPage, error) {
 	var out []directread.LookupNode
 	for _, node := range dtNodes() {
 		{
@@ -128,7 +135,12 @@ func (dtGraph) FindSubjectsByExactName(_ context.Context, _ storage.Principal, _
 			}
 		}
 	}
-	return directread.LookupPage{Nodes: out}, nil
+	page := directread.LookupPage{}
+	if pageSize > 0 && len(out) > pageSize {
+		out, page.More = out[:pageSize], true
+	}
+	page.Nodes = out
+	return page, nil
 }
 
 type dtQueryService struct {
