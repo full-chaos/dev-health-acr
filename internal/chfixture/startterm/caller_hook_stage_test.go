@@ -95,9 +95,8 @@ func TestGenericCallerHookThatFailsOnTheEndedContextNamesItsOwnPhase(t *testing.
 			defer cancel()
 			ran := 0
 			caller := cell.hooks(func() error { ran++; cancel(); return ctx.Err() })
-			req := testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{
-				Image: image, LifecycleHooks: []testcontainers.ContainerLifecycleHooks{caller},
-			}}
+			req := testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{Image: image}}
+			req.LifecycleHooks = []testcontainers.ContainerLifecycleHooks{caller}
 			_, err := generic(ctx, req, func(ctx context.Context, req testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
 				return nil, runAllHooks(ctx, req)
 			})
@@ -180,9 +179,8 @@ func TestFirstFailingCallerHookNamesTheStage(t *testing.T) {
 	fail := func() error { cancel(); return ctx.Err() }
 	first := callerHookCells[0].hooks(fail)
 	later := callerHookCells[3].hooks(fail)
-	req := testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{
-		Image: image, LifecycleHooks: []testcontainers.ContainerLifecycleHooks{first, later},
-	}}
+	req := testcontainers.GenericContainerRequest{ContainerRequest: testcontainers.ContainerRequest{Image: image}}
+	req.LifecycleHooks = []testcontainers.ContainerLifecycleHooks{first, later}
 	_, err := generic(ctx, req, func(ctx context.Context, req testcontainers.GenericContainerRequest) (testcontainers.Container, error) {
 		return nil, runAllPhases(ctx, req)
 	})
