@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "b0f621e5268d9a5f3b6d99968d51d144054daef4",
+    "commit": "2c115402dbbb3b11f28a0029cdbe3b9da5c3e891",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
     "schema_path": "contracts/graphql/v1/schema.graphql"
   },
@@ -782,9 +782,9 @@
     },
     {
       "operation": "testopsTestWindow",
-      "document": "query TestOpsTestWindow($orgId: String!, $input: TestOpsTestWindowInput!) {\n  testopsTestWindow(orgId: $orgId, input: $input) {\n    sinceDate\n    untilDate\n    coverage {\n      completedRuns\n      runsWithTests\n      sharePct\n      __typename\n    }\n    cases {\n      passed\n      failed\n      skipped\n      quarantined\n      total\n      __typename\n    }\n    passRatePct\n    failureRatePct\n    flakeRatePct\n    filterEmptyReason\n    __typename\n  }\n}",
+      "document": "query TestOpsTestWindow($orgId: String!, $input: TestOpsTestWindowInput!) {\n  testopsTestWindow(orgId: $orgId, input: $input) {\n    sinceDate\n    untilDate\n    coverage {\n      completedRuns\n      runsWithTests\n      sharePct\n      __typename\n    }\n    cases {\n      passed\n      failed\n      skipped\n      quarantined\n      total\n      __typename\n    }\n    passRatePct\n    failureRatePct\n    flakeRatePct\n    filterEmptyReason\n    reportCompleteness {\n      reportRuns\n      partialRuns\n      unmarkedRuns\n      unmeasuredDays\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredTestopsTestWindowDocument",
-      "digest": "614e1da8cdd06f40b68d5c57011462c5b3a8c2dbffa465ed95bc98d782389354",
+      "digest": "2f4f9cac166ce3fac54b9eb4eca7aa6f1b279a2ff5b240d9a0310c360dad9f2d",
       "kind": "query"
     },
     {
@@ -792,6 +792,14 @@
       "document": "query TestOpsTestWindow($orgId: String!, $input: TestOpsTestWindowInput!) {\n  testopsTestWindow(orgId: $orgId, input: $input) {\n    sinceDate\n    untilDate\n    coverage {\n      completedRuns\n      runsWithTests\n      sharePct\n      __typename\n    }\n    cases {\n      passed\n      failed\n      skipped\n      quarantined\n      total\n      __typename\n    }\n    passRatePct\n    failureRatePct\n    flakeRatePct\n    __typename\n  }\n}",
       "const_name": "registeredTestopsTestWindowV1Document",
       "digest": "80397810a4c9c1aa724b0a1828ec6cfa2235fd9ad4b320124149dd68a623faa0",
+      "kind": "query",
+      "legacy": true
+    },
+    {
+      "operation": "testopsTestWindow",
+      "document": "query TestOpsTestWindow($orgId: String!, $input: TestOpsTestWindowInput!) {\n  testopsTestWindow(orgId: $orgId, input: $input) {\n    sinceDate\n    untilDate\n    coverage {\n      completedRuns\n      runsWithTests\n      sharePct\n      __typename\n    }\n    cases {\n      passed\n      failed\n      skipped\n      quarantined\n      total\n      __typename\n    }\n    passRatePct\n    failureRatePct\n    flakeRatePct\n    filterEmptyReason\n    __typename\n  }\n}",
+      "const_name": "registeredTestopsTestWindowV2Document",
+      "digest": "614e1da8cdd06f40b68d5c57011462c5b3a8c2dbffa465ed95bc98d782389354",
       "kind": "query",
       "legacy": true
     },
