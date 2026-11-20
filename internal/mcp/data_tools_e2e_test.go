@@ -290,6 +290,11 @@ func (s *dtStack) session(scopes, repositories []string) (*mcpsdk.ClientSession,
 
 func (s *dtStack) sessionWith(scopes, repositories []string, clientOptions *mcpsdk.ClientOptions) (*mcpsdk.ClientSession, *acrmcp.Bootstrap) {
 	s.t.Helper()
+	return s.sessionWithDiagnostics(scopes, repositories, clientOptions, os.Stderr)
+}
+
+func (s *dtStack) sessionWithDiagnostics(scopes, repositories []string, clientOptions *mcpsdk.ClientOptions, diagnostics io.Writer) (*mcpsdk.ClientSession, *acrmcp.Bootstrap) {
+	s.t.Helper()
 	issued, err := s.service.Create(context.Background(), auth.CreateCredentialRequest{OrgID: "org_1", Name: "dt", RepositoryScopes: repositories, Scopes: scopes, CreatedBy: "test_actor"})
 	if err != nil {
 		s.t.Fatal(err)
@@ -307,7 +312,7 @@ func (s *dtStack) sessionWith(scopes, repositories []string, clientOptions *mcps
 		s.t.Fatal(err)
 	}
 	boot := &acrmcp.Bootstrap{Config: cfg, Client: client, Capabilities: caps}
-	server := acrmcp.NewServer(boot, "test")
+	server := acrmcp.NewServerWithDiagnostics(boot, "test", diagnostics)
 	t1, t2 := mcpsdk.NewInMemoryTransports()
 	ss, err := server.Connect(context.Background(), t1, nil)
 	if err != nil {

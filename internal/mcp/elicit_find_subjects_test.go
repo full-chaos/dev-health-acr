@@ -1,12 +1,15 @@
 package mcp_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/eventspec/certify"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -14,8 +17,15 @@ type elicitCall struct{ message, schema string }
 
 func elicitFindSubjects(t *testing.T, opts *mcpsdk.ClientOptions) (structured string, text string) {
 	t.Helper()
+	structured, text, _ = elicitFindSubjectsLogged(t, opts)
+	return structured, text
+}
+
+func elicitFindSubjectsLogged(t *testing.T, opts *mcpsdk.ClientOptions) (structured string, text string, diagnostics string) {
+	t.Helper()
 	st := newDTStack(t)
-	cs, _ := st.sessionWith([]string{auth.ScopeContextRead, auth.ScopeDataRead}, []string{"*"}, opts)
+	var buf bytes.Buffer
+	cs, _ := st.sessionWithDiagnostics([]string{auth.ScopeContextRead, auth.ScopeDataRead}, []string{"*"}, opts, &buf)
 	result, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "find_subjects", Arguments: map[string]any{"query": dtSlugSame, "kind": "repository"}})
 	if err != nil {
 		t.Fatal(err)
@@ -26,7 +36,7 @@ func elicitFindSubjects(t *testing.T, opts *mcpsdk.ClientOptions) (structured st
 		}
 	}
 	b, _ := json.Marshal(result.StructuredContent)
-	return string(b), text
+	return string(b), text, buf.String()
 }
 
 func withSameLabelRepos(t *testing.T) {
@@ -61,16 +71,26 @@ func TestFindSubjectsAmbiguousElicitation(t *testing.T) {
 		action  string
 		content map[string]any
 		err     error
+		outcome string
 	}{
-		"decline":            {action: "decline"},
-		"cancel":             {action: "cancel"},
-		"client error":       {err: errors.New("boom")},
-		"accept not offered": {action: "accept", content: map[string]any{"subject": "repository:" + dtRepoA}},
+		"decline":            {action: "decline", outcome: "declined"},
+		"cancel":             {action: "cancel", outcome: "declined"},
+		"client error":       {err: errors.New("boom"), outcome: "unavailable"},
+		"accept not offered": {action: "accept", content: map[string]any{"subject": "repository:" + dtRepoA}, outcome: "unavailable"},
 	} {
 		t.Run(name+" is byte-equal to base", func(t *testing.T) {
 			withSameLabelRepos(t)
 			var calls []elicitCall
-			gotStruct, gotText := elicitFindSubjects(t, handler(tc.action, tc.content, &calls, tc.err))
+			gotStruct, gotText, diag := elicitFindSubjectsLogged(t, handler(tc.action, tc.content, &calls, tc.err))
+			log, err := certify.Parse([]byte(diag))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := certify.Certify(log, certify.Assertion{Event: eventspec.MCPElicitationOutcome, Want: map[string]any{
+				"tool": "find_subjects", "outcome": tc.outcome, "asked": true, "offered": float64(2),
+			}}); err != nil {
+				t.Fatal(err)
+			}
 			if len(calls) != 1 {
 				t.Fatalf("want 1 elicitation, got %d", len(calls))
 			}
