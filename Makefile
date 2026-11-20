@@ -1,4 +1,4 @@
-.PHONY: content-check install-pre-push-hook fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration web-assertion-integration clients-real vet contract-write contract-test codegraph-contract shard-plan trial-data-checks canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract o4-oracle-live o4-oracle-capture o4-oracle-repin o4-owner-share-live
+.PHONY: content-check install-pre-push-hook fmt fmt-check test test-split test-race test-race-shared test-race-isolated test-race-split test-shuffle-random test-coverage coverage-cobertura isolated-timeout print-gotest-timeout crosscompile hosted-integration web-assertion-integration clients-real vet contract-write contract-test codegraph-contract shard-plan trial-data-checks canonical-receipts build verify release-local release-verify container-contract container-pins container-test container-reproducible container-oci container-scan fullstack-opencode-e2e fullstack-contract o4-oracle-live o4-oracle-capture o4-oracle-preflight o4-oracle-repin o4-owner-share-live
 
 RELEASE_OUTPUT ?= .tmp/release
 RELEASE_VERSION ?=
@@ -351,6 +351,11 @@ o4-oracle-live:
 
 o4-oracle-capture:
 	go test -tags o4venue -count=1 -timeout 25m -run '^TestVenueCapture$$' -v ./internal/contextfabric/factoracle
+
+# Read-only check that a venue can be captured, from the ACR_O4_* environment
+# alone (any host that serves the required services; docs/o4-venue.md).
+o4-oracle-preflight:
+	go test -tags o4venue -count=1 -timeout 5m -run '^TestVenuePreflight$$' -v ./internal/contextfabric/factoracle
 
 # The owner-share pair (CHAOS-12691) on a live venue (never a pull request
 # gate): ops ORG, TEAM and REPO investment through the ops public GraphQL API

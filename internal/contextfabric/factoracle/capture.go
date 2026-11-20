@@ -356,8 +356,9 @@ const (
 // Capture runs the oracle on the venue and writes the scrubbed extract, the
 // scrubbed recorded replies and the manifest to dir.
 func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error) {
-	if strings.TrimSpace(cfg.OpsBuild) == "" {
-		return nil, fmt.Errorf("a capture must name the ops build its replies come from")
+	cfg.OpsBuild, cfg.AcrBuild = ScrubBuild(cfg.OpsBuild), ScrubBuild(cfg.AcrBuild)
+	if cfg.OpsBuild == "" {
+		return nil, fmt.Errorf("a capture must name the ops build (a commit) its replies come from")
 	}
 	run, err := RunLive(ctx, cfg)
 	if err != nil {
@@ -521,6 +522,21 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 		return nil, err
 	}
 	return run, nil
+}
+
+var buildToken = regexp.MustCompile(`^(dev-health-(ops|acr)|(sha-)?[0-9a-f]{7,40}|v?[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9a-z.]+)?)$`)
+
+// ScrubBuild keeps the repository names, commits and versions of a build
+// description and drops every other word: a machine, host or registry name
+// of the venue never reaches the manifest.
+func ScrubBuild(build string) string {
+	var kept []string
+	for _, word := range strings.Fields(build) {
+		if word = strings.Trim(word, "(),;"); buildToken.MatchString(word) {
+			kept = append(kept, word)
+		}
+	}
+	return strings.Join(kept, " ")
 }
 
 // contractDigestsOf is contractDigest of every operation the policy serves.
