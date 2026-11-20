@@ -800,16 +800,23 @@ func scopedInvestmentVariables(w Window, dimension, measure, level, id string) m
 func investmentVariables(w Window, dimension string) map[string]any {
 	return map[string]any{"batch": map[string]any{"breakdowns": []any{map[string]any{
 		"dimension": dimension, "measure": "COUNT",
-		"dateRange": map[string]any{"startDate": w.startDate(), "endDate": w.endDate()},
+		"dateRange": dateRange(w),
 		"topN":      100,
 	}}}}
+}
+
+// dateRange is the ops dateRange of a window. ops reads endDate as the last
+// day the window holds, inclusive (ops D6101, internal/queryapi/analytics
+// window.go), so it is the day before the window's exclusive End.
+func dateRange(w Window) map[string]any {
+	return map[string]any{"startDate": w.startDate(), "endDate": w.lastDay()}
 }
 
 // workItemTeamVariables is the request of teamWorkItemBreakdown: every team's work-item cycle time over the window.
 func workItemTeamVariables(w Window) map[string]any {
 	return map[string]any{"batch": map[string]any{"breakdowns": []any{map[string]any{
 		"dimension": "TEAM", "measure": "CYCLE_TIME_HOURS",
-		"dateRange": map[string]any{"startDate": w.startDate(), "endDate": w.endDate()},
+		"dateRange": dateRange(w),
 		"topN":      100,
 	}}}}
 }

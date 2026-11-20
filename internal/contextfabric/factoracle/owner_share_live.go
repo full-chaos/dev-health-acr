@@ -321,7 +321,7 @@ func ownerShareVariables(orgID, measure string, w Window, level, id string) map[
 		"batch": map[string]any{
 			"breakdowns": []any{map[string]any{
 				"dimension": "THEME", "measure": measure,
-				"dateRange": map[string]any{"startDate": w.startDate(), "endDate": w.endDate()},
+				"dateRange": dateRange(w),
 				"topN":      opsBreakdownTopN,
 			}},
 			"useInvestment": true,

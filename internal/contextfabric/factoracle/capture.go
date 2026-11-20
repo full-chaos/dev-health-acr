@@ -140,6 +140,13 @@ type LiveRun struct {
 // is read before and after, and a run over a store that moved is refused
 // (the error names the tables). Rows a job writes and rows a background merge
 // removes both read as a store that moved.
+// venueWindowEnd is the default end of a venue window: the start of the
+// current UTC day, so the window holds finished days only. ops leaves a day
+// that is not over out of every window (D6101), while the store would count it.
+func venueWindowEnd(now time.Time) time.Time {
+	return now.UTC().Truncate(24 * time.Hour)
+}
+
 // venuePaceInterval keeps a run under the venue's default request budget of
 // 60 per minute per request class and credential.
 const venuePaceInterval = 1100 * time.Millisecond

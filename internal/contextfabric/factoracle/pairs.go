@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -429,6 +430,10 @@ func compareTeamRollup(ctx context.Context, o *Oracle, rr *RootReport, byRepo ma
 	return nil
 }
 
+// ownerNameSlug is the slug the ops repository inventory keeps (ops
+// internal/repoinventory Statement): one owner and one name.
+var ownerNameSlug = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?/[a-z0-9]([a-z0-9._-]{0,98}[a-z0-9])?$`)
+
 // compareCatalog is root catalog, dimension REPO: the ops repository slug
 // list against the acr repository identity facts, as sets.
 func compareCatalog(ctx context.Context, o *Oracle, rr *RootReport) error {
@@ -448,10 +453,19 @@ func compareCatalog(ctx context.Context, o *Oracle, rr *RootReport) error {
 		return err
 	}
 	acr := map[string]bool{}
+	notSlug := 0
 	for _, fact := range facts {
 		if name, isString := fact.Fields["name"].(string); isString {
-			acr[strings.ToLower(strings.TrimSpace(name))] = true
+			name = strings.ToLower(strings.TrimSpace(name))
+			if !ownerNameSlug.MatchString(name) {
+				notSlug++
+				continue
+			}
+			acr[name] = true
 		}
+	}
+	if notSlug > 0 {
+		rr.NotJoined = append(rr.NotJoined, fmt.Sprintf("catalog: %d repository names are not owner/name slugs; the ops repository inventory lists owner/name slugs only (ops internal/repoinventory)", notSlug))
 	}
 	all := map[string]bool{}
 	for k := range ops {
@@ -556,7 +570,7 @@ func compareHealth(ctx context.Context, o *Oracle, rr *RootReport) error {
 			rows := map[string]map[string]any{}
 			for _, row := range items(root["rows"]) {
 				if id, isString := row["scopeId"].(string); isString {
-					rows[strings.ToLower(bareID(id))] = row
+					rows[strings.ToLower(opsScopeKey(sc.kind, id))] = row
 					rr.touch("compoundingRisk.rows[*].scopeId")
 				}
 			}
@@ -573,6 +587,13 @@ func compareHealth(ctx context.Context, o *Oracle, rr *RootReport) error {
 		}
 	}
 	return nil
+}
+
+// opsScopeKey is the subject id an ops row names, in the form bareID gives a
+// fact's canonical id. An ops scopeId is already bare and may itself hold a
+// colon (a provider-composite team id): only a kind prefix is removed.
+func opsScopeKey(kind, id string) string {
+	return strings.TrimPrefix(id, kind+":")
 }
 
 func compareHealthRow(rr *RootReport, key string, row map[string]any, fact ServedFact) {
