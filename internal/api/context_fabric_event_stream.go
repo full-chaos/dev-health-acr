@@ -637,7 +637,10 @@ func (a *App) investigationEventStreamWritable(w http.ResponseWriter, r *http.Re
 // nil for a connection-owned run. A leased run's context is detached from the
 // request (it keeps the request's deadline), its events go to the run's log
 // first, and its holder loop renews the lease and watches for a cancel.
-func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Request, investigator contextfabric.Investigator, principal storage.Principal, request contextfabric.InvestigationRequest, submission *admittedInvestigationSubmission, submissionID, threadID, reserved string, investigateCtx context.Context, collectedSynthesisInput func() *contractsv1.ContextFabricSynthesisInput) (delivered string) {
+//
+// noViewer is the accept-first run: its response was already written, so
+// the stream writes its events to the run's log only.
+func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Request, investigator contextfabric.Investigator, principal storage.Principal, request contextfabric.InvestigationRequest, submission *admittedInvestigationSubmission, submissionID, threadID, reserved string, investigateCtx context.Context, collectedSynthesisInput func() *contractsv1.ContextFabricSynthesisInput, noViewer bool) (delivered string) {
 	requestID := RequestID(r.Context())
 	controller := http.NewResponseController(w)
 	var lease *leasedRun
@@ -665,6 +668,7 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 	stream := &investigationEventStream{
 		w: w, controller: controller, settings: a.eventStream, logger: a.logger, logCtx: context.WithoutCancel(r.Context()),
 		requestID: requestID, reserved: reserved, startedAt: time.Now(), onWriteFailure: cancelRun, onBudgetExhausted: cancelRun,
+		viewerGone: noViewer,
 	}
 	if lease != nil {
 		lease.cancel = cancelRunCause
@@ -761,7 +765,7 @@ func (a *App) serveInvestigationEventStream(w http.ResponseWriter, r *http.Reque
 	}
 	a.logger.InfoContext(r.Context(), "context fabric investigation event stream opened",
 		"request_id", contextfabric.SanitizeLogAttr(requestID), "reserved_result_id", contextfabric.SanitizeLogAttr(reserved), "budget_seconds", budget,
-		"leased", lease != nil)
+		"leased", lease != nil, "respond_async", noViewer)
 	if lease != nil {
 		removeRun = a.runs.add(lease)
 		stopHolder = a.holdRunLease(stream.logCtx, runStore, lease)

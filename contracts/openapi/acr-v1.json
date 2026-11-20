@@ -400,6 +400,9 @@
             "$ref": "#/components/parameters/SubmissionID"
           },
           {
+            "$ref": "#/components/parameters/RespondAsync"
+          },
+          {
             "$ref": "#/components/parameters/ThreadID"
           },
           {
@@ -441,6 +444,16 @@
                 }
               }
             }
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "../jsonschema/v1/context_fabric_submission_status.v1.schema.json"
+                }
+              }
+            },
+            "description": "Accept-first create (Prefer: respond-async with X-ACR-Submission-ID, run lease on): the submission was admitted under the run lease and its record is written; the body is its status, state running, and Preference-Applied: respond-async is set. The run goes on after this answer. A repeat of an admitted submission id is answered as without the preference, never 202."
           },
           "400": {
             "$ref": "#/components/responses/ContextFabricInvestigationBadRequest"
@@ -624,7 +637,7 @@
       "get": {
         "operationId": "getContextFabricSubmissionStatus",
         "summary": "Read the caller's own submission record.",
-        "description": "CHAOS-11913: the record of one X-ACR-Submission-ID the caller admitted on POST /api/v1/context-fabric/investigations. A client that lost a create response polls this (every 3 s) and replays result_id through GET /api/v1/context-fabric/investigations/{result_id} once the state is done; done_unsaved and abandoned mean ask again with a new submission id. Strictly read-only: it runs nothing. The read applies the record's reconcile rule: a running record whose reserved result is stored reads as done, and one past its budget plus 30 seconds reads as abandoned. The record is keyed by the authenticated principal: another principal's submission id, an unknown one and a malformed one all answer the same 404 not_found, so a submission id is never an existence oracle. Each read is authorized afresh.",
+        "description": "CHAOS-11913: the record of one X-ACR-Submission-ID the caller admitted on POST /api/v1/context-fabric/investigations. A client that lost a create response polls this (every 3 s) and replays result_id through GET /api/v1/context-fabric/investigations/{result_id} once the state is done; done_unsaved and abandoned mean ask again with a new submission id. Strictly read-only: it runs nothing. The read applies the record's reconcile rule: a running record whose reserved result is stored reads as done, and one past its budget plus 30 seconds reads as abandoned. The record is keyed by the authenticated principal: another principal's submission id, an unknown one and a malformed one all answer the same 404 not_found, so a submission id is never an existence oracle. Each read is authorized afresh. With the run lease on, a record admitted under the lease also carries the run's view from its event log: last_stage (the last stage started) and, once final, terminal {kind result|unsaved|error, error_code} (canceled, run_lost or the run's own error.v1 code; absent on an abandoned record until the log holds its end). A read of a running leased record whose lease ended takes the run over first (the same takeover an attach makes; two reads take it over once), so it answers abandoned with terminal error_code run_lost. With the run lease off the body carries neither field.",
         "x-required-scope": "context:read",
         "x-required-entitlement": "agent_context_runtime",
         "security": [
@@ -3703,6 +3716,17 @@
           "pattern": "^[A-Za-z0-9._:-]{8,128}$"
         }
       },
+      "RespondAsync": {
+        "name": "Prefer",
+        "in": "header",
+        "required": false,
+        "description": "Optional RFC 7240 preferences. respond-async (a preference name compared case-insensitively; parameters ignored) asks for an accept-first create: the request must name X-ACR-Submission-ID and must not ask for the event stream (400 invalid_request otherwise). It needs the run lease (ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED, which needs ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED); a deployment without it refuses the request 406 stream_unavailable before any admission work. Admitted, the submission's record is written under the run lease and the answer is 202 with its context_fabric_submission_status.v1 (state running) and Preference-Applied: respond-async; the run then goes on with no viewer under the lease, to the service's request timeout (X-ACR-Wait-Budget-Seconds still narrows it). Poll GET .../submissions/{submission_id} (last_stage, terminal, result_id), attach to .../events, cancel with POST .../cancel. Other preferences are ignored.",
+        "schema": {
+          "type": "string",
+          "maxLength": 256,
+          "example": "respond-async"
+        }
+      },
       "ThreadID": {
         "name": "X-ACR-Thread-ID",
         "in": "header",
@@ -3905,7 +3929,7 @@
         }
       },
       "ContextFabricInvestigationStreamUnavailable": {
-        "description": "Structured safe error with code stream_unavailable (CHAOS-11909): the request asked for the event stream (Accept: text/event-stream) and the deployment has ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED off. Written before any admission work: no investigation ran and nothing was stored. Not retryable; there is no fallback to application/json.",
+        "description": "Structured safe error with code stream_unavailable (CHAOS-11909): the request asked for the event stream (Accept: text/event-stream) and the deployment has ACR_CONTEXT_FABRIC_EVENT_STREAM_ENABLED off, or asked for an accept-first create (Prefer: respond-async) and the deployment runs no leased runs (ACR_CONTEXT_FABRIC_RUN_LEASE_ENABLED or the stream off; message names the preference). Written before any admission work: no investigation ran and nothing was stored. Not retryable; there is no fallback to application/json.",
         "content": {
           "application/json": {
             "schema": {

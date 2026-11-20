@@ -58,6 +58,13 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			a.writeInvestigationStreamUnavailable(w, r)
 			return
 		}
+		// Accept-first create: it needs the run lease, so a deployment
+		// without one refuses it here, before any admission work.
+		async := wantsRespondAsync(r)
+		if async && !a.runLeaseServed() {
+			a.writeRespondAsyncUnavailable(w, r)
+			return
+		}
 		// The nil check MUST live inside the handler body, after
 		// protectedRuntimeHandler has already run (auth, scope, rate
 		// limit) -- not as an early return from this factory that skips
@@ -119,6 +126,14 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			a.logSubmissionHeaderRefused(r, contractsv1.ContextFabricThreadRetentionHeader)
 			writeError(w, r, http.StatusBadRequest, "invalid_request", "Context Fabric investigation thread retention needs an X-ACR-Thread-ID", false, nil)
 			return
+		case async && submissionID == "":
+			a.logSubmissionHeaderRefused(r, contractsv1.ContextFabricPreferHeader)
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Prefer: respond-async needs an X-ACR-Submission-ID", false, nil)
+			return
+		case async && stream:
+			a.logSubmissionHeaderRefused(r, contractsv1.ContextFabricPreferHeader)
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Prefer: respond-async does not take Accept: text/event-stream", false, nil)
+			return
 		}
 		principal, ok := auth.PrincipalFromContext(r.Context())
 		if !ok {
@@ -169,7 +184,7 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			// CHAOS-11949: with the run lease on, a streamed submission runs
 			// under this replica's lease, written with the record.
 			var lease *contextfabric.RunLeaseGrant
-			if stream && a.runLeaseServed() {
+			if (stream || async) && a.runLeaseServed() {
 				lease = &contextfabric.RunLeaseGrant{Holder: a.runLease.holder, ExpiresAt: a.now().Add(a.runLease.ttl), RequestID: RequestID(r.Context())}
 			}
 			admitted, proceed := a.admitInvestigationSubmission(w, r, principal, request, submissionID, threadID, retention, contextfabric.DeploymentModelBound(gatedCtx), lease)
@@ -210,8 +225,12 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		defer func() {
 			a.metrics.InvestigationLatency(r.Context(), deliveredStatus, a.now().Sub(investigationStarted))
 		}()
+		if async {
+			deliveredStatus = a.serveInvestigationAsync(w, r, investigator, principal, request, submission, submissionID, threadID, reservedResultID, investigateCtx, collectedSynthesisInput)
+			return
+		}
 		if stream {
-			deliveredStatus = a.serveInvestigationEventStream(w, r, investigator, principal, request, submission, submissionID, threadID, reservedResultID, investigateCtx, collectedSynthesisInput)
+			deliveredStatus = a.serveInvestigationEventStream(w, r, investigator, principal, request, submission, submissionID, threadID, reservedResultID, investigateCtx, collectedSynthesisInput, false)
 			return
 		}
 		result, err := investigateRecovered(investigateCtx, investigator, principal, request)
