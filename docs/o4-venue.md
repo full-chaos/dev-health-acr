@@ -61,8 +61,8 @@ nested-group slug) as "not joined: N", never as a silent drop.
 
 - The issue-size weighting of repository effort (see above).
 - Repository names that are not `owner/name` slugs in root `catalog` (reported as not joined).
-- Seven tests, NOT MEASURED by name, because the synthetic capture holds no unit of their shape
-  (ops ticket CHAOS-14398). They are listed with their reason in
+- Seven tests, NOT MEASURED by name, because the synthetic capture holds no unit of their shape.
+  They are listed with their reason in
   `internal/contextfabric/factoracle/testdata/venue/not_measured_gates.json`; a test fails when it
   is listed and the capture could measure it, or when it is not measured and not listed.
 
