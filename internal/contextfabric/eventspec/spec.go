@@ -6556,17 +6556,25 @@ var MCPHostedContextScope = Event{
 }
 
 // MCPElicitationOutcome records what find_subjects did with an ambiguous
-// answer: the user was asked and accepted or declined, the ask could not be
-// made (no form capability, a hosted or newer-revision session, a client
-// error, a timeout, a value outside the offered ids), or the answer was not
-// eligible to be asked about (the page is not the whole set, or the match
-// count is outside 2 to 25). Counts only, never a subject id, label or name.
+// answer, or what investigate_question did with a window phrase that reads as
+// the previous calendar month and could mean the trailing 30 days (the tool
+// value investigate_question_window). asked is true only when the client
+// replied to the elicitation request (accept, decline or cancel); a session or
+// transport error is no reply. For find_subjects: the user was asked and
+// accepted or declined, the ask could not be made (no form capability, a hosted
+// or newer-revision session, a client error, a timeout, a value outside the
+// offered ids), or the answer was not eligible to be asked about (the page is
+// not the whole set, or the match count is outside 2 to 25). For
+// investigate_question_window, not_eligible means the ask rule was not met (the
+// phrase does not follow for, over, during or within, or does not end its
+// sentence, or the request carries a window, a receipt, a parent result or
+// allow_clarification false). Counts only, never a subject id, label or name.
 var MCPElicitationOutcome = Event{
 	ID: "mcp.elicitation_outcome", Msg: "mcp elicitation outcome", Level: LevelInfo,
 	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"tool", "outcome"},
-	BoundedAggregation: "one line per find_subjects call whose answer status is ambiguous; any other status emits none",
+	BoundedAggregation: "one line per find_subjects call whose answer status is ambiguous, and one line per investigate_question call whose question states one bare last month that the engine reads as the previous calendar month (outcome not_eligible when the ask rule is not met); a question with no such phrase emits none",
 	Fields: []Field{
-		{Key: "tool", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"find_subjects"}},
+		{Key: "tool", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"find_subjects", "investigate_question_window"}},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"not_eligible", "unavailable", "declined", "accepted"}},
 		{Key: "asked", Type: FieldBool, Presence: PresenceRequired},
 		{Key: "offered", Type: FieldInt, Presence: PresenceRequired},

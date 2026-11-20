@@ -33,6 +33,10 @@ type elicitChoice struct {
 type elicitResult struct {
 	Outcome elicitOutcome
 	Value   string
+	// Answered is true only when the client replied to the elicitation/create
+	// request (accept, decline or cancel). A session or transport error is not
+	// a reply.
+	Answered bool
 }
 
 // elicitTransport carries one elicitChoice to the user. It returns
@@ -53,14 +57,15 @@ func elicit(ctx context.Context, t elicitTransport, c elicitChoice) elicitResult
 	defer cancel()
 	res := t.ask(ctx, c)
 	if res.Outcome != elicitAccepted {
-		return elicitResult{Outcome: res.Outcome}
+		return elicitResult{Outcome: res.Outcome, Answered: res.Answered || res.Outcome == elicitDeclined}
 	}
 	for _, o := range c.Options {
 		if o.Value == res.Value {
+			res.Answered = true
 			return res
 		}
 	}
-	return elicitResult{Outcome: elicitUnavailable}
+	return elicitResult{Outcome: elicitUnavailable, Answered: true}
 }
 
 type clientElicitationCaps struct {
@@ -88,21 +93,27 @@ func formElicitationAvailable(req *mcpsdk.CallToolRequest) bool {
 		}
 	}
 	if caps == nil {
-		ss := req.Session
-		if ss == nil {
-			return false
-		}
-		ip := ss.InitializeParams()
-		if ip == nil || ip.Capabilities == nil || ip.Capabilities.Elicitation == nil {
-			return false
-		}
-		e := ip.Capabilities.Elicitation
-		return e.Form != nil || e.URL == nil
+		return sessionFormCapable(req.Session)
 	}
 	if caps.Elicitation == nil {
 		return false
 	}
 	return caps.Elicitation.Form != nil || caps.Elicitation.URL == nil
+}
+
+// sessionFormCapable reports whether the initialize capabilities of ss allow a
+// form elicitation: the same gate ServerSession.Elicit applies before it sends
+// anything. A bare `elicitation: {}` means form mode.
+func sessionFormCapable(ss *mcpsdk.ServerSession) bool {
+	if ss == nil {
+		return false
+	}
+	ip := ss.InitializeParams()
+	if ip == nil || ip.Capabilities == nil || ip.Capabilities.Elicitation == nil {
+		return false
+	}
+	e := ip.Capabilities.Elicitation
+	return e.Form != nil || e.URL == nil
 }
 
 // sessionElicitTransport is the STDIO / pre-2026-07-28 transport: an inline
@@ -120,6 +131,9 @@ func newElicitTransport(cfg *ProcessConfig, req *mcpsdk.CallToolRequest) elicitT
 }
 
 func (s sessionElicitTransport) ask(ctx context.Context, c elicitChoice) elicitResult {
+	if !sessionFormCapable(s.session) {
+		return elicitResult{Outcome: elicitUnavailable}
+	}
 	oneOf := make([]map[string]any, 0, len(c.Options))
 	for _, o := range c.Options {
 		oneOf = append(oneOf, map[string]any{"const": o.Value, "title": o.Title})
@@ -139,11 +153,11 @@ func (s sessionElicitTransport) ask(ctx context.Context, c elicitChoice) elicitR
 		return elicitResult{Outcome: elicitUnavailable}
 	}
 	if res.Action != "accept" {
-		return elicitResult{Outcome: elicitDeclined}
+		return elicitResult{Outcome: elicitDeclined, Answered: true}
 	}
 	v, ok := res.Content[c.Field].(string)
 	if !ok {
-		return elicitResult{Outcome: elicitUnavailable}
+		return elicitResult{Outcome: elicitUnavailable, Answered: true}
 	}
-	return elicitResult{Outcome: elicitAccepted, Value: v}
+	return elicitResult{Outcome: elicitAccepted, Value: v, Answered: true}
 }
