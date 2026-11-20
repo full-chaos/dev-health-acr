@@ -2,6 +2,7 @@ package contextfabric
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -63,6 +64,39 @@ func TestInvestigateStillRefusesAContradictingClaimBehindEmptyAdvisoryProse(t *t
 	for _, claim := range result.ClaimedFacts {
 		if !strings.HasPrefix(claim.ClaimID, "server:fact:") {
 			t.Fatalf("claim %q is not server-minted: the refused draft's claim was served", claim.ClaimID)
+		}
+	}
+}
+
+func TestEmptyAdvisoryProseServesTheSameEvidenceCoverageAndCompleteness(t *testing.T) {
+	t.Parallel()
+	withProse, err := investigateWithDraft(t, bootstrapDraft(acceptanceProject()))
+	if err != nil {
+		t.Fatalf("Investigate(non-empty prose) error = %v", err)
+	}
+	empty := bootstrapDraft(acceptanceProject())
+	empty.DirectJudgment, empty.CurrentState, empty.DeterministicAnswer = "", "", ""
+	withoutProse, err := investigateWithDraft(t, empty)
+	if err != nil {
+		t.Fatalf("Investigate(empty prose) error = %v", err)
+	}
+	if withProse.Status != withoutProse.Status {
+		t.Fatalf("status = %q with prose, %q without", withProse.Status, withoutProse.Status)
+	}
+	pairs := map[string][2]any{
+		"EvidenceRefIDs": {withProse.EvidenceRefIDs, withoutProse.EvidenceRefIDs},
+		"Coverage":       {withProse.Coverage, withoutProse.Coverage},
+		"Completeness":   {withProse.Completeness, withoutProse.Completeness},
+		"Limitations":    {withProse.Limitations, withoutProse.Limitations},
+		"ReadinessGaps":  {withProse.ReadinessGaps, withoutProse.ReadinessGaps},
+		"ClaimedFacts":   {withProse.ClaimedFacts, withoutProse.ClaimedFacts},
+		"Drivers":        {withProse.Drivers, withoutProse.Drivers},
+		"Warnings":       {withProse.Warnings, withoutProse.Warnings},
+		"RefusalBasis":   {withProse.RefusalBasis, withoutProse.RefusalBasis},
+	}
+	for field, pair := range pairs {
+		if !reflect.DeepEqual(pair[0], pair[1]) {
+			t.Errorf("%s differs: with prose %#v, without %#v", field, pair[0], pair[1])
 		}
 	}
 }
