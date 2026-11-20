@@ -1,11 +1,11 @@
 {
-  "captured_at": "2026-11-20T19:21:40Z",
+  "captured_at": "2026-11-20T21:35:27Z",
   "window": {
     "start": "2026-10-21T00:00:00Z",
     "end": "2026-11-21T00:00:00Z"
   },
   "fixture_org": "0f0f0f0f-0000-4000-8000-00000000f4c7",
-  "ops_build": "dev-health-ops 2c115402dbbb3b11f28a0029cdbe3b9da5c3e891 sha-2c11540",
+  "ops_build": "dev-health-ops 2c1fdfb1e0b6ee9993187522cd86838125dc514c sha-2c1fdfb",
   "acr_build": "dev-health-acr sha-24513ae",
   "venue_note": "synthetic organization (ops fixtures generate); the investment categories come from the ops mock categorizer (LLM_PROVIDER=mock), not from a model; work_unit_issue_size is emptied after the derive, so every work unit has weight 1: the issue-size weighting of repository effort, which query-api reads at query time (ops internal/queryapi/analytics/sankeycoverage.go:320-322), is NOT MEASURED by O4",
   "schema_digest": "sha256:7f8167568a634f87d77d4c28e9fb34efa17078cbff1b5d950b5e0e334d4f26b3",
@@ -39,14 +39,14 @@
   ],
   "fact_query_version": "devhealthfacts.clickhouse.v291",
   "rows": {
-    "capacity_forecasts": 22,
-    "compounding_risk_daily": 246,
-    "estimate_coverage_metrics_daily": 398,
+    "capacity_forecasts": 21,
+    "compounding_risk_daily": 249,
+    "estimate_coverage_metrics_daily": 403,
     "repos": 19,
     "team_repo_ownership": 20,
     "teams": 18,
-    "work_item_metrics_daily": 796,
-    "work_unit_investments": 95,
+    "work_item_metrics_daily": 806,
+    "work_unit_investments": 94,
     "work_unit_membership": 23,
     "work_unit_membership_runs": 1,
     "work_unit_supersessions": 0
@@ -286,7 +286,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -312,7 +312,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -338,7 +338,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -364,7 +364,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -390,7 +390,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -416,7 +416,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -442,7 +442,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -468,7 +468,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -494,7 +494,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -520,7 +520,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -546,7 +546,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -572,7 +572,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -598,7 +598,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -624,7 +624,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -650,7 +650,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -676,7 +676,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -702,7 +702,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -728,7 +728,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -754,7 +754,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -780,7 +780,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -806,7 +806,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -832,7 +832,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -858,7 +858,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -884,7 +884,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "team:team-b3a61f81c2eab67e"
+                "team:team-b91461482857b4c7"
               ],
               "level": "TEAM"
             }
@@ -1198,7 +1198,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1224,7 +1224,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1250,7 +1250,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1276,7 +1276,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1302,7 +1302,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1328,7 +1328,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1354,7 +1354,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1380,7 +1380,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1406,7 +1406,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1432,7 +1432,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1458,7 +1458,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1484,7 +1484,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1510,7 +1510,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1536,7 +1536,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1562,7 +1562,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1588,7 +1588,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1614,7 +1614,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1640,7 +1640,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1666,7 +1666,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1692,7 +1692,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1718,7 +1718,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1744,7 +1744,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1770,7 +1770,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1796,7 +1796,7 @@
           "filters": {
             "scope": {
               "ids": [
-                "repository:a30411c5-f56e-44b1-a533-61780da285cd"
+                "repository:54efd52d-f720-4ab6-817f-d06d26785497"
               ],
               "level": "REPO"
             }
@@ -1810,7 +1810,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-b3a61f81c2eab67e"
+          "teamId": "team:team-b91461482857b4c7"
         }
       }
     },
@@ -1820,7 +1820,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-b3a61f81c2eab67e"
+          "teamId": "team:team-b91461482857b4c7"
         }
       }
     },
@@ -1830,7 +1830,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-b3a61f81c2eab67e"
+          "teamId": "team:team-b91461482857b4c7"
         }
       }
     },
@@ -1840,7 +1840,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-b3a61f81c2eab67e"
+          "teamId": "team:team-b91461482857b4c7"
         }
       }
     },
@@ -1850,7 +1850,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-b3a61f81c2eab67e"
+          "teamId": "team:team-b91461482857b4c7"
         }
       }
     },
@@ -1860,7 +1860,7 @@
         "input": {
           "historyDays": 90,
           "simulations": 1000,
-          "teamId": "team:team-b3a61f81c2eab67e"
+          "teamId": "team:team-b91461482857b4c7"
         }
       }
     },
@@ -2011,7 +2011,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-10-21",
-          "teamId": "team:team-b3a61f81c2eab67e",
+          "teamId": "team:team-b91461482857b4c7",
           "untilDate": "2026-11-20"
         }
       }
@@ -2021,7 +2021,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-10-21",
-          "teamId": "team:team-b3a61f81c2eab67e",
+          "teamId": "team:team-b91461482857b4c7",
           "untilDate": "2026-11-20"
         }
       }
@@ -2031,7 +2031,7 @@
       "variables": {
         "input": {
           "sinceDate": "2026-10-21",
-          "teamId": "team:team-b3a61f81c2eab67e",
+          "teamId": "team:team-b91461482857b4c7",
           "untilDate": "2026-11-20"
         }
       }
@@ -2244,7 +2244,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b3a61f81c2eab67e"
+            "team:team-b91461482857b4c7"
           ]
         }
       }
@@ -2255,7 +2255,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b3a61f81c2eab67e"
+            "team:team-b91461482857b4c7"
           ]
         }
       }
@@ -2266,7 +2266,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b3a61f81c2eab67e"
+            "team:team-b91461482857b4c7"
           ]
         }
       }
@@ -2277,7 +2277,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b3a61f81c2eab67e"
+            "team:team-b91461482857b4c7"
           ]
         }
       }
@@ -2288,7 +2288,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b3a61f81c2eab67e"
+            "team:team-b91461482857b4c7"
           ]
         }
       }
@@ -2299,7 +2299,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b3a61f81c2eab67e"
+            "team:team-b91461482857b4c7"
           ]
         }
       }
@@ -2310,7 +2310,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b3a61f81c2eab67e"
+            "team:team-b91461482857b4c7"
           ]
         }
       }
@@ -2321,7 +2321,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b3a61f81c2eab67e"
+            "team:team-b91461482857b4c7"
           ]
         }
       }
@@ -2332,7 +2332,7 @@
         "input": {
           "historyWeeks": 12,
           "teamIds": [
-            "team:team-b3a61f81c2eab67e"
+            "team:team-b91461482857b4c7"
           ]
         }
       }
@@ -2455,7 +2455,7 @@
       "mode": "shape",
       "listener": "served",
       "shapes_run": 6,
-      "leaves": 797,
+      "leaves": 803,
       "compared": 0,
       "matches": 0,
       "by_class": {
@@ -2465,7 +2465,7 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 2,
-      "operation_leaves": 397,
+      "operation_leaves": 401,
       "cross_paths": 0,
       "cross_matches": 0,
       "differences": [
@@ -2489,17 +2489,17 @@
       "mode": "value",
       "listener": "served",
       "shapes_run": 4,
-      "leaves": 1070,
-      "compared": 178,
-      "matches": 178,
+      "leaves": 1022,
+      "compared": 171,
+      "matches": 171,
       "by_class": {},
       "findings": [],
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 1,
-      "operation_leaves": 535,
-      "cross_paths": 535,
-      "cross_matches": 535,
+      "operation_leaves": 511,
+      "cross_paths": 511,
+      "cross_matches": 511,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -2571,7 +2571,7 @@
       "mode": "value",
       "listener": "served",
       "shapes_run": 8,
-      "leaves": 1900,
+      "leaves": 1846,
       "compared": 312,
       "matches": 312,
       "by_class": {},
@@ -2579,9 +2579,9 @@
       "not_joined": [],
       "run_operation": "served",
       "operations_run": 2,
-      "operation_leaves": 950,
-      "cross_paths": 948,
-      "cross_matches": 948,
+      "operation_leaves": 923,
+      "cross_paths": 921,
+      "cross_matches": 921,
       "differences": [],
       "unmeasured": [],
       "code_read": [],
@@ -2734,10 +2734,10 @@
   },
   "listener_dark": [],
   "operation_dark": [],
-  "subject_team": "team-b3a61f81c2eab67e",
+  "subject_team": "team-b91461482857b4c7",
   "subject_teams_skipped": 3,
   "repo_scope_id_check": {
-    "compared": 72,
-    "matched": 72
+    "compared": 69,
+    "matched": 69
   }
 }

@@ -49,3 +49,11 @@ c1dd2c9024876d862b2dd5265ce00c3340587f0a:internal/contextfabric/factoracle/testd
 c1dd2c9024876d862b2dd5265ce00c3340587f0a:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18786
 c1dd2c9024876d862b2dd5265ce00c3340587f0a:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18791
 c1dd2c9024876d862b2dd5265ce00c3340587f0a:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18806
+# CHAOS-14421 r14 capture: scrubber pseudonyms ("h-"+16 hex) in factoracle testdata replies.json, not credentials; append allowed by chris 2026-11-20
+6ec9385bd4426371bb7f2c37aa58c1be30041aad:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2206
+6ec9385bd4426371bb7f2c37aa58c1be30041aad:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:2277
+6ec9385bd4426371bb7f2c37aa58c1be30041aad:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18636
+6ec9385bd4426371bb7f2c37aa58c1be30041aad:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18641
+6ec9385bd4426371bb7f2c37aa58c1be30041aad:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18651
+6ec9385bd4426371bb7f2c37aa58c1be30041aad:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18656
+6ec9385bd4426371bb7f2c37aa58c1be30041aad:internal/contextfabric/factoracle/testdata/venue/replies.json:generic-api-key:18661
