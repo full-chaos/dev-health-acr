@@ -77,8 +77,9 @@ func compareOrgReply(t *testing.T, reply json.RawMessage) *RootReport {
 func TestTheRunComparesTheUncategorizedCountWithTheStoreGate(t *testing.T) {
 	ops, uncategorized := recordedOrgThemeReply(t)
 	if uncategorized == 0 {
-		t.Fatal("the capture counts no uncategorized unit: this test measures nothing")
+		notMeasured(t, "TestTheRunComparesTheUncategorizedCountWithTheStoreGate", "evidence-gated (uncategorized) work unit in scope in the window")
 	}
+	measured(t, "TestTheRunComparesTheUncategorizedCountWithTheStoreGate")
 	finding := func(rr *RootReport) *Finding {
 		for i := range rr.Findings {
 			if rr.Findings[i].Pair == "ops_reply_vs_store" && rr.Findings[i].Key == "uncategorizedCount" {

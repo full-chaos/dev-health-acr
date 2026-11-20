@@ -93,8 +93,9 @@ func TestTheStoreReadingLeavesEvidenceGatedUnitsOutAsOpsDoes(t *testing.T) {
 		}
 	}
 	if uncategorized == 0 {
-		t.Fatal("ops counts no uncategorized unit in the capture: this test measures nothing")
+		notMeasured(t, "TestTheStoreReadingLeavesEvidenceGatedUnitsOutAsOpsDoes", "evidence-gated (uncategorized) work unit in scope in the window")
 	}
+	measured(t, "TestTheStoreReadingLeavesEvidenceGatedUnitsOutAsOpsDoes")
 	if got := store.GatedUnits(gateWindow(manifest)); got != uncategorized {
 		t.Errorf("the store gates %d units in scope and window, ops counts %d uncategorized", got, uncategorized)
 	}

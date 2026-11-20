@@ -1672,8 +1672,12 @@ func TestTheCoverageGrainCountIsComparedWithTheStore(t *testing.T) {
 			older++
 		}
 	}
+	if older == 0 {
+		notMeasured(t, "TestTheCoverageGrainCountIsComparedWithTheStore", "team with a work scope whose newest coverage day is older than the team's latest day")
+	}
+	measured(t, "TestTheCoverageGrainCountIsComparedWithTheStore")
 	latestOnly := run(func(team string, _ EstimateCoverage) any { return onLatestDay[team] }, false)
-	if got := on(latestOnly, grainPath, "store"); older == 0 || got != older {
+	if got := on(latestOnly, grainPath, "store"); got != older {
 		t.Fatalf("%d teams have a work scope with an older newest day, %d grain findings for a latest-day count", older, got)
 	}
 

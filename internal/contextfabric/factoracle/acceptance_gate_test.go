@@ -186,14 +186,23 @@ func gateWindow(m Manifest) Window {
 	return (&Oracle{Window: m.Window, Today: captureDay(m)}).analyticsWindow()
 }
 
-// notMeasuredGatesFile lists the gate cells the capture cannot build, each with
-// the reason. Only the cells in measurableOnlyIfOwned may be listed; a listed
-// cell the capture can build fails, and so does an unlisted cell with no unit.
+// notMeasuredGatesFile lists the tests the capture cannot build, each with
+// the unit shape it lacks. Only the tests in notMeasurableCells may be listed;
+// a listed test the capture can build fails, and so does an unlisted test
+// with no unit.
 const notMeasuredGatesFile = captureDir + "/not_measured_gates.json"
 
-// measurableOnlyIfOwned are the cells that need a team-owned repository with
-// in-scope work-unit effort in the window.
-var measurableOnlyIfOwned = []string{"AcceptanceGate/NullRepoID", "TeamRollupLossWithNoNullRowIsAFinding"}
+// notMeasurableCells are the tests that may be NOT MEASURED on a capture that
+// holds no unit of their shape.
+var notMeasurableCells = []string{
+	"AcceptanceGate/NullRepoID",
+	"TeamRollupLossWithNoNullRowIsAFinding",
+	"TestTheStoreReadingLeavesEvidenceGatedUnitsOutAsOpsDoes",
+	"TestTheRunComparesTheUncategorizedCountWithTheStoreGate",
+	"TestReadinessSumsEveryKeyAtItsOwnNewestDay",
+	"TestTheCoverageGrainCountIsComparedWithTheStore",
+	"TestOwnerShareTheRecordedCaptureReadsTheStoredShare",
+}
 
 func notMeasuredGates(t *testing.T) map[string]string {
 	t.Helper()
@@ -211,22 +220,22 @@ func notMeasuredGates(t *testing.T) map[string]string {
 	return out
 }
 
-// noOwnedEffort ends a cell whose capture holds no team-owned repository with
-// in-scope effort: NOT MEASURED when the cell is listed, a failure when not.
-func noOwnedEffort(t *testing.T, gate string) {
+// notMeasured ends a test whose capture holds no unit of its shape: NOT
+// MEASURED when the test is listed, a failure when not.
+func notMeasured(t *testing.T, cell, shape string) {
 	t.Helper()
-	reason, listed := notMeasuredGates(t)[gate]
+	reason, listed := notMeasuredGates(t)[cell]
 	if !listed {
-		t.Fatalf("%s: no team owns a repository with effort in the window and the cell is not listed in %s: the gate is not measured", gate, notMeasuredGatesFile)
+		t.Fatalf("%s: the capture holds no %s and the test is not listed in %s: it is not measured", cell, shape, notMeasuredGatesFile)
 	}
-	t.Skipf("%s: NOT MEASURED (%s)", gate, reason)
+	t.Skipf("%s: NOT MEASURED (%s)", cell, reason)
 }
 
-// ownedEffortFound fails a listed cell whose capture holds its unit.
-func ownedEffortFound(t *testing.T, gate string) {
+// measured fails a listed test whose capture holds its unit.
+func measured(t *testing.T, cell string) {
 	t.Helper()
-	if _, listed := notMeasuredGates(t)[gate]; listed {
-		t.Fatalf("%s is listed in %s but the capture holds a team-owned repository with effort: remove it from the list", gate, notMeasuredGatesFile)
+	if _, listed := notMeasuredGates(t)[cell]; listed {
+		t.Fatalf("%s is listed in %s but the capture holds its unit: remove it from the list", cell, notMeasuredGatesFile)
 	}
 }
 
@@ -502,9 +511,9 @@ func acceptanceGateNullRepoID(t *testing.T) {
 		}
 	}
 	if team == "" {
-		noOwnedEffort(t, "AcceptanceGate/NullRepoID")
+		notMeasured(t, "AcceptanceGate/NullRepoID", "team-owned repository with in-scope effort in the window")
 	}
-	ownedEffortFound(t, "AcceptanceGate/NullRepoID")
+	measured(t, "AcceptanceGate/NullRepoID")
 
 	// Reference: every valid ownership row of the team for that repository
 	// loses its repo_id and keeps its name. ops resolves such a row by name
@@ -582,9 +591,9 @@ func teamRollupLossWithNoNullRowIsAFinding(t *testing.T) {
 		}
 	}
 	if team == "" {
-		noOwnedEffort(t, "TeamRollupLossWithNoNullRowIsAFinding")
+		notMeasured(t, "TeamRollupLossWithNoNullRowIsAFinding", "team-owned repository with in-scope effort in the window")
 	}
-	ownedEffortFound(t, "TeamRollupLossWithNoNullRowIsAFinding")
+	measured(t, "TeamRollupLossWithNoNullRowIsAFinding")
 	planted := extract.Clone()
 	var kept []Row
 	for _, row := range planted.Tables[tableTeamRepoOwnership] {
@@ -780,11 +789,11 @@ func teamDeniedForInvestment(manifest Manifest, team string) bool {
 	return false
 }
 
-// TestTheNotMeasuredGateListNamesOnlyTheOwnedRepositoryCells: the list may
-// name only the cells that need a team-owned repository, each with a reason.
-func TestTheNotMeasuredGateListNamesOnlyTheOwnedRepositoryCells(t *testing.T) {
+// TestTheNotMeasuredListNamesOnlyKnownTests: the list may
+// name only the tests of notMeasurableCells, each with a reason.
+func TestTheNotMeasuredListNamesOnlyKnownTests(t *testing.T) {
 	for gate, reason := range notMeasuredGates(t) {
-		if !slices.Contains(measurableOnlyIfOwned, gate) {
+		if !slices.Contains(notMeasurableCells, gate) {
 			t.Errorf("%s names %q, which may not be NOT MEASURED", notMeasuredGatesFile, gate)
 		}
 		if strings.TrimSpace(reason) == "" {

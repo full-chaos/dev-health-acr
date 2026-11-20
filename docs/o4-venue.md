@@ -61,12 +61,20 @@ nested-group slug) as "not joined: N", never as a silent drop.
 
 - The issue-size weighting of repository effort (see above).
 - Repository names that are not `owner/name` slugs in root `catalog` (reported as not joined).
-- Two acceptance gate cells, NOT MEASURED by name: `AcceptanceGate/NullRepoID` and
-  `TeamRollupLossWithNoNullRowIsAFinding`. Reason: no team-owned repository with in-scope effort
-  in the window, because membership has no manual ops trigger (only a daily scheduler fanout), so
-  the only membership run comes from the `_mg` world, whose repository no team owns. They are
-  listed in `internal/contextfabric/factoracle/testdata/venue/not_measured_gates.json`; the gate
-  fails when a listed cell could be measured on the capture, or when any other cell is not.
+- Seven tests, NOT MEASURED by name, because the synthetic capture holds no unit of their shape
+  (ops ticket CHAOS-14398). They are listed with their reason in
+  `internal/contextfabric/factoracle/testdata/venue/not_measured_gates.json`; a test fails when it
+  is listed and the capture could measure it, or when it is not measured and not listed.
+
+  | Test | Shape the capture lacks |
+  | --- | --- |
+  | `AcceptanceGate/NullRepoID` | a team-owned repository with in-scope effort in the window (membership has no manual ops trigger) |
+  | `TeamRollupLossWithNoNullRowIsAFinding` | the same |
+  | `TestTheStoreReadingLeavesEvidenceGatedUnitsOutAsOpsDoes` | an evidence-gated (uncategorized) work unit in scope in the analytics window |
+  | `TestTheRunComparesTheUncategorizedCountWithTheStoreGate` | the same |
+  | `TestReadinessSumsEveryKeyAtItsOwnNewestDay` | a team with a coverage key whose newest day is older than the team's latest day |
+  | `TestTheCoverageGrainCountIsComparedWithTheStore` | the same |
+  | `TestOwnerShareTheRecordedCaptureReadsTheStoredShare` | a capture where every owner of a repository stores a share |
 
 ### Venue steps before the capture
 
