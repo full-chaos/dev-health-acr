@@ -26,7 +26,10 @@ Seed one synthetic organization; never use real or production data. ops provides
 the seed and the derive chain, run from the same ops image:
 
 1. `dho fixtures generate --sink <clickhouse dsn> --db-type clickhouse --org <org> --provider mixed --repo-name chaos-fixtures/shared-api --repo-count 18 --days 180 --commits-per-day 0 --pr-count 189 --team-count 8 --seed 9440`
-2. With a reconciler and a worker on the queues `investment,metrics,reports,workgraph`:
+2. With a reconciler and a worker on the queues `investment,metrics,reports,workgraph`, the
+   worker with `LLM_PROVIDER=mock` (the ops mock categorizer, ops
+   `internal/jobs/investment/categorize/providerkind.go:30,81,88-89`): the investment
+   categories are the mock's, not model output, and the capture says so (`venue_note`):
    `dho workers metrics daily-start --org <org> --day <first> --to <last>` (at most 31 days),
    `dho workers investment trigger --org <org> --review-evidence testing`,
    `dho workers workgraph trigger --org <org> --review-evidence testing`; when those jobs are
@@ -34,12 +37,13 @@ the seed and the derive chain, run from the same ops image:
    (the forecast reads the daily metrics). Each verb takes `--reason` and `--correlation-id`.
    Stop the worker and the reconciler before the capture: a store that moves during the run
    is refused.
-3. If `work_unit_investments` or `work_unit_membership_runs` stays empty (the venue has no LLM
-   provider, and membership has no manual ops trigger), also load the `_mg` world for the same
+3. If `work_unit_investments` or `work_unit_membership_runs` stays empty (membership has no
+   manual ops trigger, only a daily scheduler fanout), also load the `_mg` world for the same
    organization (`--provider synthetic --repo-name acme/live-e2e --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph --allow-mixed-org`).
 
-`work_unit_issue_size` must stay empty (acr seeds it empty: every work unit has weight 1, the
-weight the pairs are recorded under). Limit: the issue-size weighting of repository effort
+`work_unit_issue_size` must be empty at the capture (acr seeds it empty: every work unit has
+weight 1, the weight the pairs are recorded under). The mock categorizer writes issue sizes, so
+the venue empties that table after the derive, with one statement in its own ClickHouse. Limit: the issue-size weighting of repository effort
 (ops `internal/queryapi/analytics/sankeycoverage.go:320-322`) is NOT MEASURED by O4. The
 capture manifest says so in `venue_note`.
 

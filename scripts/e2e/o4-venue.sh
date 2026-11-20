@@ -330,6 +330,9 @@ services:
     extends: { file: "${O4_VENUE_OPS_DIR}/compose.yml", service: go-worker-ops }
     profiles: [o4-derive]
     labels: !reset {}
+    # The ops mock categorizer (ops internal/jobs/investment/categorize/providerkind.go:30,81,88-89)
+    # gives the mixed world's work units their investment categories: not model output.
+    environment: { LLM_PROVIDER: mock }
     command:
       - worker
       - --queues=${O4_VENUE_WORKER_QUEUES}
@@ -475,6 +478,22 @@ step_seed() {
     derive "$org"
   fi
   project_graph
+  empty_issue_size
+}
+
+# empty_issue_size removes the issue sizes the mock categorizer wrote (ops
+# internal/jobs/investment/materialize.go:711): the oracle records and replays every work unit
+# at weight 1 (factoracle extract.go seededEmptyTables). One statement, run only inside this
+# project's own ClickHouse container.
+empty_issue_size() {
+  local container project
+  case "$O4_VENUE_PROJECT" in acr-e2e-o4venue-*) ;; *) die 'issue sizes are emptied only in an acr-e2e-o4venue-* project' ;; esac
+  container="$(compose ps -q clickhouse)"
+  [ -n "$container" ] || die "no ClickHouse container in ${O4_VENUE_PROJECT}"
+  project="$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project"}}' "$container")"
+  [ "$project" = "$O4_VENUE_PROJECT" ] || die 'the ClickHouse container is not of this project'
+  printf 'TRUNCATE TABLE default.work_unit_issue_size' | ch_query >/dev/null
+  note 'work_unit_issue_size emptied (unit weight 1)'
 }
 
 # project_graph runs acr-projector for the organization until the graph holds it, then stops
@@ -681,7 +700,7 @@ ACR_O4_CLICKHOUSE_DSN_FILE=${SECRETS}/o4-clickhouse.dsn
 ACR_O4_ORG_ID=${org}
 ACR_O4_OPS_BUILD="dev-health-ops ${O4_VENUE_OPS_COMMIT} ${O4_VENUE_OPS_TAG}"
 ACR_O4_ACR_BUILD="dev-health-acr ${O4_VENUE_ACR_TAG}"
-ACR_O4_VENUE_NOTE="synthetic organization (ops fixtures generate); work_unit_issue_size is empty, so every work unit has weight 1: the issue-size weighting of repository effort (ops internal/queryapi/analytics/sankeycoverage.go:320-322) is NOT MEASURED by O4"
+ACR_O4_VENUE_NOTE="synthetic organization (ops fixtures generate); the investment categories come from the ops mock categorizer (LLM_PROVIDER=mock), not from a model; work_unit_issue_size is emptied after the derive, so every work unit has weight 1: the issue-size weighting of repository effort, which query-api reads at query time (ops internal/queryapi/analytics/sankeycoverage.go:320-322), is NOT MEASURED by O4"
 EOF
 )
   note "env file written (0600): ${ENV_FILE}"
