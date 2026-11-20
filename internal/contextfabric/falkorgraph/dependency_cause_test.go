@@ -38,8 +38,8 @@ func requireDependencyCause(t *testing.T, err error, want string) {
 }
 
 // TestTheProbeCausesMapToTheirReadFailureTokens is the premise probe's five
-// causes: each maps to its read failure token; only the cause with no token
-// maps to "other".
+// causes at the FalkorDB SDK boundary (classifyFalkorError): each maps to its
+// read failure token; only the cause with no token maps to "other".
 func TestTheProbeCausesMapToTheirReadFailureTokens(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -53,7 +53,7 @@ func TestTheProbeCausesMapToTheirReadFailureTokens(t *testing.T) {
 		{"tls alert, no token", errors.New("remote error: tls: bad certificate"), DependencyCauseOther},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			requireDependencyCause(t, safeDependencyError("bootstrap relationship index", tc.raw), tc.want)
+			requireDependencyCause(t, classifyFalkorError("bootstrap relationship index", tc.raw), tc.want)
 		})
 	}
 }
@@ -80,7 +80,7 @@ func TestEveryDriverCauseMapsToItsClassAndKeepsTheServedText(t *testing.T) {
 		{"unknown reply", errors.New("ERR something new"), DependencyCauseOther},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			flat := safeDependencyError(operation, tc.raw)
+			flat := classifyFalkorError(operation, tc.raw)
 			requireDependencyCause(t, flat, tc.want)
 			if got, want := flat.Error(), servedDependencyText(operation); got != want {
 				t.Fatalf("text = %q, want the unchanged served text %q", got, want)
@@ -101,7 +101,7 @@ func TestAFlattenedDependencyErrorCarriesNoAddressOrSecret(t *testing.T) {
 		errors.New("WRONGTYPE at " + plantedAddress + " password=hunter2"),
 	}
 	for _, raw := range raws {
-		flat := safeDependencyError("project entity", raw)
+		flat := classifyFalkorError("project entity", raw)
 		cause, _ := contextfabric.DependencyCause(flat)
 		for _, planted := range []string{plantedAddress, "10.1.2.3", "hunter2", "falkordb.internal"} {
 			if strings.Contains(flat.Error(), planted) || strings.Contains(cause, planted) {
@@ -119,7 +119,7 @@ func TestAFlattenedDependencyErrorCarriesNoAddressOrSecret(t *testing.T) {
 // already flattened error (ProjectionWatermark does) keeps the first cause and
 // takes its own operation text.
 func TestARewrappedDependencyErrorKeepsItsCause(t *testing.T) {
-	inner := safeDependencyError("query context graph", opErrorAt(syscall.ECONNRESET))
+	inner := classifyFalkorError("query context graph", opErrorAt(syscall.ECONNRESET))
 	outer := safeDependencyError("read projection watermark", fmt.Errorf("wrapped: %w", inner))
 	requireDependencyCause(t, outer, ReadFailureConnectionReset)
 	if got, want := outer.Error(), servedDependencyText("read projection watermark"); got != want {
@@ -176,7 +176,7 @@ func TestRealSocketFailuresCarryTheirCause(t *testing.T) {
 func TestTheProjectorTickLineNamesTheDependencyCause(t *testing.T) {
 	var buf bytes.Buffer
 	observer := projectionrun.SlogObserver{Logger: slog.New(slog.NewJSONHandler(&buf, nil))}
-	flat := safeDependencyError("project entity", opErrorAt(syscall.ECONNRESET))
+	flat := classifyFalkorError("project entity", opErrorAt(syscall.ECONNRESET))
 	observer.ObserveProjectionOutcome(projectionrun.Outcome{OrgID: "org_1", Source: "devhealth", Duration: time.Second, Err: fmt.Errorf("apply batch: %w", flat)})
 	line := buf.String()
 	if !strings.Contains(line, `"dependency_cause":"connection_reset"`) {
@@ -191,4 +191,44 @@ func TestTheProjectorTickLineNamesTheDependencyCause(t *testing.T) {
 	if strings.Contains(buf.String(), "dependency_cause") {
 		t.Fatalf("a non-graph error carries dependency_cause: %s", buf.String())
 	}
+}
+
+type refusingEpochResolver struct{ err error }
+
+func (r refusingEpochResolver) ResolveActiveEpoch(context.Context, string) (int64, error) {
+	return 0, r.err
+}
+
+func (r refusingEpochResolver) ResolveBuildEpoch(context.Context, string) (int64, bool, error) {
+	return 0, false, r.err
+}
+
+// TestOtherDependencyRefusalsCarryNoFalkorDBCause: safeDependencyError also
+// flattens Postgres (epoch resolution) and ClickHouse (identity universe)
+// errors. A connection refusal there gets no driver cause, on the error and on
+// the projector line, while the same refusal at the FalkorDB SDK boundary does.
+func TestOtherDependencyRefusalsCarryNoFalkorDBCause(t *testing.T) {
+	refused := realRefused(t)
+	adapter, err := newWithAPI(Config{Addr: "127.0.0.1:1", AllowInsecure: true, GraphPrefix: "acr-cf-cause", EpochResolver: refusingEpochResolver{err: refused}}, &fakeConn{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	_, activeErr := adapter.resolveActiveEpoch(ctx, "org_1")
+	_, buildErr := adapter.resolveWriteKey(ctx, "org_1")
+	identityErr := safeDependencyError("read identity universe", refused)
+	for name, flat := range map[string]error{"postgres active epoch": activeErr, "postgres build epoch": buildErr, "clickhouse identity universe": identityErr} {
+		if !errors.Is(flat, contextfabric.ErrUnavailable) {
+			t.Fatalf("%s: %v does not wrap ErrUnavailable", name, flat)
+		}
+		if cause, ok := contextfabric.DependencyCause(flat); ok {
+			t.Fatalf("%s: a non-FalkorDB refusal carries dependency cause %q", name, cause)
+		}
+		var buf bytes.Buffer
+		projectionrun.SlogObserver{Logger: slog.New(slog.NewJSONHandler(&buf, nil))}.ObserveProjectionOutcome(projectionrun.Outcome{OrgID: "org_1", Source: "devhealth", Duration: time.Second, Err: flat})
+		if strings.Contains(buf.String(), "dependency_cause") {
+			t.Fatalf("%s: the projector line carries dependency_cause: %s", name, buf.String())
+		}
+	}
+	requireDependencyCause(t, classifyFalkorError("query context graph", refused), ReadFailureConnectionRefused)
 }

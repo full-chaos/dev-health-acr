@@ -78,3 +78,41 @@ func TestTheRouteFailureLineNamesTheDependencyCause(t *testing.T) {
 		t.Fatalf("an error with no driver cause logs failure_dependency_cause: %s", controlLogs)
 	}
 }
+
+type refusingEpochResolver struct{ err error }
+
+func (r refusingEpochResolver) ResolveActiveEpoch(context.Context, string) (int64, error) {
+	return 0, r.err
+}
+
+func (r refusingEpochResolver) ResolveBuildEpoch(context.Context, string) (int64, bool, error) {
+	return 0, false, r.err
+}
+
+// TestAPostgresRefusalOnTheRouteCarriesNoDependencyCause: the graph binding
+// resolves the active epoch from Postgres. A refusal there is flattened to
+// ErrUnavailable with no driver cause, so the route line names none.
+func TestAPostgresRefusalOnTheRouteCarriesNoDependencyCause(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	_ = ln.Close()
+	_, refused := net.Dial("tcp", addr)
+	adapter, err := falkorgraph.New(falkorgraph.Config{Addr: addr, GraphPrefix: "acr-cf-test", RequestTimeout: time.Second, MaxAttempts: 1, MaxResults: 25, PoolSize: 1, AllowInsecure: true, EpochResolver: refusingEpochResolver{err: refused}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, bindingErr := adapter.ResolveInvestigationBinding(context.Background(), storage.Principal{OrgID: "org_1"})
+	if bindingErr == nil {
+		t.Fatal("a refused epoch read returned no error")
+	}
+	_, logs, status := servedFailureBody(t, bindingErr)
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", status)
+	}
+	if _, ok := decodeFailureLog(t, logs)["failure_dependency_cause"]; ok {
+		t.Fatalf("a Postgres refusal logs failure_dependency_cause: %s", logs)
+	}
+}

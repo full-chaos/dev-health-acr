@@ -24,14 +24,16 @@ const (
 // the unclassified dependency error is retried; a classified error (unauthorized, timeout, constraint) is final.
 // The test body keeps the production default MaxAttempts 3: a drop after this step still fails a write (writes are
 // sent once), and a read gets the same retry it gets in production.
-func settleLiveFalkor(ctx context.Context, adapter *Adapter, addr string, tries int, pause time.Duration) error {
+func settleLiveFalkor(ctx context.Context, adapter *Adapter, tries int, pause time.Duration) error {
 	org := "settle-14310-" + time.Now().UTC().Format("20060102T150405.000000000")
 	key := graphKey(adapter.config.GraphPrefix, org)
 	defer func() { _ = adapter.PurgeOrganization(context.Background(), org) }()
-	return settleWith(ctx, addr, tries, pause, func(ctx context.Context) error { return adapter.bootstrapSchema(ctx, key) })
+	return settleWith(ctx, tries, pause, func(ctx context.Context) error { return adapter.bootstrapSchema(ctx, key) })
 }
 
-func settleWith(ctx context.Context, addr string, tries int, pause time.Duration, attempt func(context.Context) error) error {
+// settleWith's errors name FalkorDB, the tries and the driver cause, never the
+// address.
+func settleWith(ctx context.Context, tries int, pause time.Duration, attempt func(context.Context) error) error {
 	began := time.Now()
 	var last error
 	for try := 1; try <= tries; try++ {
@@ -39,18 +41,18 @@ func settleWith(ctx context.Context, addr string, tries int, pause time.Duration
 			return nil
 		}
 		if !retryableSettleError(last) {
-			return fmt.Errorf("FalkorDB live dependency at %s failed on try %d (not retried): %w", addr, try, last)
+			return fmt.Errorf("FalkorDB live dependency failed on try %d (not retried): %w", try, last)
 		}
 		if try < tries {
 			select {
 			case <-ctx.Done():
-				return fmt.Errorf("FalkorDB live dependency at %s: %w", addr, ctx.Err())
+				return fmt.Errorf("FalkorDB live dependency: %w", ctx.Err())
 			case <-time.After(pause):
 			}
 		}
 	}
 	cause, _ := contextfabric.DependencyCause(last)
-	return fmt.Errorf("FalkorDB live dependency at %s unavailable after %d tries over %s (driver cause %q): %w", addr, tries, time.Since(began).Round(time.Millisecond), cause, last)
+	return fmt.Errorf("FalkorDB live dependency unavailable after %d tries over %s (driver cause %q): %w", tries, time.Since(began).Round(time.Millisecond), cause, last)
 }
 
 func retryableSettleError(err error) bool {
@@ -115,7 +117,7 @@ func TestLiveSettleAbsorbsConnectionsDroppedDuringTheFirstBootstrap(t *testing.T
 	key := graphKey(adapter.config.GraphPrefix, org)
 	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), org) })
 	calls := 0
-	err := settleWith(ctx, addr, liveSettleTries, 50*time.Millisecond, func(ctx context.Context) error {
+	err := settleWith(ctx, liveSettleTries, 50*time.Millisecond, func(ctx context.Context) error {
 		calls++
 		err := adapter.bootstrapSchema(ctx, key)
 		if calls == 1 {
@@ -137,7 +139,7 @@ func TestLiveSettleAbsorbsConnectionsDroppedDuringTheFirstBootstrap(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := settleLiveFalkor(ctx, adapter, addr, 1, 0); err != nil {
+	if err := settleLiveFalkor(ctx, adapter, 1, 0); err != nil {
 		t.Fatalf("settleLiveFalkor on a quiet server: %v", err)
 	}
 	after, err := adapter.api.listGraphs(ctx)
@@ -151,8 +153,8 @@ func TestLiveSettleAbsorbsConnectionsDroppedDuringTheFirstBootstrap(t *testing.T
 	}
 }
 
-// C2: a dependency that stays down fails inside the bound with a message that names FalkorDB, the address and the
-// tries, and carries the typed unavailable class.
+// C2: a dependency that stays down fails inside the bound with a message that names FalkorDB, the tries and the
+// driver cause, never the address, and carries the typed unavailable class.
 func TestLiveSettleOnADependencyThatStaysDownNamesFalkorDB(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -165,16 +167,22 @@ func TestLiveSettleOnADependencyThatStaysDownNamesFalkorDB(t *testing.T) {
 		t.Fatalf("New against a closed port: %v", err)
 	}
 	began := time.Now()
-	err = settleLiveFalkor(context.Background(), adapter, addr, 3, 10*time.Millisecond)
+	err = settleLiveFalkor(context.Background(), adapter, 3, 10*time.Millisecond)
 	if err == nil {
 		t.Fatal("settle passed against a closed port")
 	}
 	if elapsed := time.Since(began); elapsed > 20*time.Second {
 		t.Fatalf("settle took %s, want it bounded by its tries", elapsed)
 	}
-	for _, want := range []string{"FalkorDB live dependency at " + addr, "unavailable after 3 tries"} {
+	for _, want := range []string{"FalkorDB live dependency unavailable after 3 tries", `driver cause "connection_refused"`} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error = %q, want it to contain %q", err, want)
+		}
+	}
+	_, port, _ := net.SplitHostPort(addr)
+	for _, planted := range []string{addr, "127.0.0.1", ":" + port} {
+		if strings.Contains(err.Error(), planted) {
+			t.Fatalf("error = %q names the address (%q)", err, planted)
 		}
 	}
 	if !errors.Is(err, contextfabric.ErrUnavailable) {
@@ -199,7 +207,7 @@ func TestSettleRetriesOnlyTheUnclassifiedDependencyError(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			calls := 0
-			err := settleWith(context.Background(), "x:1", 3, time.Millisecond, func(context.Context) error { calls++; return c.err })
+			err := settleWith(context.Background(), 3, time.Millisecond, func(context.Context) error { calls++; return c.err })
 			if err == nil || !errors.Is(err, c.err) {
 				t.Fatalf("err = %v, want it to wrap %v", err, c.err)
 			}
@@ -209,7 +217,7 @@ func TestSettleRetriesOnlyTheUnclassifiedDependencyError(t *testing.T) {
 		})
 	}
 	calls := 0
-	if err := settleWith(context.Background(), "x:1", 3, time.Millisecond, func(context.Context) error {
+	if err := settleWith(context.Background(), 3, time.Millisecond, func(context.Context) error {
 		calls++
 		if calls < 3 {
 			return unclassified
