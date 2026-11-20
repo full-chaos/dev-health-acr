@@ -318,6 +318,27 @@ func TestACancelDuringTheReadBackoffEndsTheRead(t *testing.T) {
 	}
 }
 
+// TestTheReadBackoffDoublesFrom50ms pins the waits and that retryRead sleeps
+// them: three attempts on a dropped connection take at least 50ms+100ms.
+func TestTheReadBackoffDoublesFrom50ms(t *testing.T) {
+	for attempt, want := range map[int]time.Duration{1: 50 * time.Millisecond, 2: 100 * time.Millisecond, 3: 200 * time.Millisecond, 4: 400 * time.Millisecond} {
+		if got := readRetryBackoff(attempt); got != want {
+			t.Errorf("readRetryBackoff(%d) = %s, want %s", attempt, got, want)
+		}
+	}
+	s := &sdkAPI{config: Config{MaxAttempts: 3}}
+	calls := 0
+	began := time.Now()
+	_, err := retryRead(context.Background(), s, "list graphs", func() (int, error) { calls++; return 0, io.EOF })
+	spent := time.Since(began)
+	if calls != 3 || !errors.Is(err, io.EOF) {
+		t.Fatalf("calls=%d err=%v, want 3 calls and the last error", calls, err)
+	}
+	if spent < 150*time.Millisecond {
+		t.Fatalf("three attempts took %s, want at least 150ms of backoff", spent)
+	}
+}
+
 // TestAReadIsNeverRetriedOnAContextError: a context error with the caller's own
 // context still live (a lower layer's deadline) is not transient.
 func TestAReadIsNeverRetriedOnAContextError(t *testing.T) {
