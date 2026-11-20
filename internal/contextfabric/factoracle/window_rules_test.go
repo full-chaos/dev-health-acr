@@ -72,3 +72,22 @@ func TestTheCatalogComparesOwnerNameSlugsOnly(t *testing.T) {
 		}
 	}
 }
+
+// TestAWorkUnitIsDatedByItsEnd: a unit that starts in the window and ends on
+// or after its End is outside it, as ops and the acr mix date units by to_ts.
+func TestAWorkUnitIsDatedByItsEnd(t *testing.T) {
+	w := Window{Start: time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC), End: time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)}
+	for name, c := range map[string]struct {
+		from, to time.Time
+		want     bool
+	}{
+		"ends on the cut day":        {time.Date(2026, 11, 13, 5, 0, 0, 0, time.UTC), time.Date(2026, 11, 20, 3, 0, 0, 0, time.UTC), false},
+		"ends the day before":        {time.Date(2026, 11, 12, 7, 0, 0, 0, time.UTC), time.Date(2026, 11, 19, 19, 0, 0, 0, time.UTC), true},
+		"starts before, ends inside": {time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC), true},
+		"ends before the start":      {time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC), false},
+	} {
+		if got := w.holds(unitGeneration{fromTS: c.from, toTS: c.to}); got != c.want {
+			t.Errorf("%s: holds = %t, want %t", name, got, c.want)
+		}
+	}
+}
