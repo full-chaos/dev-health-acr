@@ -36,6 +36,11 @@
 #          <package>-unit-heavy-extra-tests.txt names tests of the mid/fourth
 #          lists that leg 7 runs instead of leg 10 (race jobs unchanged); a name
 #          twice, or in neither list, fails verify and partition.
+#   unit-rest  plain unit leg 5/6 (-skip): the race-rest names minus the optional
+#          <package>-unit-rest-extra-tests.txt, whose names (from the heavy, mid or
+#          fourth list) run in leg 5 instead of leg 7 or 10 (race jobs unchanged); a
+#          name twice, in no race list, or also in the unit-heavy extra list fails
+#          verify and partition.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -129,17 +134,39 @@ extra_problems() {
   [ -z "$dup" ] || printf 'named twice in %s:\n%s\n' "${extra_list##*/}" "$dup"
   [ -z "$stray" ] || printf 'named in %s but in neither the mid nor the fourth list:\n%s\n' "${extra_list##*/}" "$stray"
 }
-unit_heavy() { { LC_ALL=C comm -23 <(names) <({ mid_names; fourth_names; } | LC_ALL=C sort -u); extra_names; } | LC_ALL=C sort -u | join_regex; }
-unit_mid() { LC_ALL=C comm -23 <({ mid_names; fourth_names; } | LC_ALL=C sort -u) <(extra_names) | join_regex; }
+
+# Unit legs only: names of the heavy/mid/fourth lists that leg 5 (unit-rest) runs
+# instead of leg 7 or 10. The race jobs ignore this list.
+rest_extra_list="$root/scripts/ci/$name-unit-rest-extra-tests.txt"
+rest_extra_raw() { if [ -f "$rest_extra_list" ]; then grep -v '^[[:space:]]*\(#\|$\)' "$rest_extra_list" || true; fi; }
+rest_extra_names() { rest_extra_raw | LC_ALL=C sort -u; }
+rest_extra_problems() {
+  local dup stray both
+  dup="$(rest_extra_raw | LC_ALL=C sort | uniq -d)"
+  stray="$(LC_ALL=C comm -23 <(rest_extra_names) <({ names; mid_names; fourth_names; } | LC_ALL=C sort -u))"
+  both="$(LC_ALL=C comm -12 <(rest_extra_names) <(extra_names))"
+  [ -z "$dup" ] || printf 'named twice in %s:\n%s\n' "${rest_extra_list##*/}" "$dup"
+  [ -z "$stray" ] || printf 'named in %s but in no heavy, mid or fourth list:\n%s\n' "${rest_extra_list##*/}" "$stray"
+  [ -z "$both" ] || printf 'named in %s and also in %s:\n%s\n' "${rest_extra_list##*/}" "${extra_list##*/}" "$both"
+}
+unit_heavy() { LC_ALL=C comm -23 <({ LC_ALL=C comm -23 <(names) <({ mid_names; fourth_names; } | LC_ALL=C sort -u); extra_names; } | LC_ALL=C sort -u) <(rest_extra_names) | join_regex; }
+unit_mid() { LC_ALL=C comm -23 <(LC_ALL=C comm -23 <({ mid_names; fourth_names; } | LC_ALL=C sort -u) <(extra_names)) <(rest_extra_names) | join_regex; }
+unit_rest() {
+  [ -f "$rest_extra_list" ] || { race_rest; return; }
+  local listed
+  listed="$({ names; mid_names; fourth_names; } | LC_ALL=C sort -u)"
+  LC_ALL=C comm -23 <(printf '%s\n' "$listed") <(rest_extra_names) | join_regex
+}
 
 # devhealthsource's plain unit legs run three disjoint parts: heavy minus mid
 # (-run, leg 8), mid (-run, leg 9), and everything else (-skip of both, leg 6).
 # devhealthfacts runs the same shape: heavy minus mid/fourth plus the names of
 # <package>-unit-heavy-extra-tests.txt (leg 7), mid plus fourth minus those names
-# (leg 10), everything else (leg 5).
+# (leg 10), everything else (leg 5). Names of <package>-unit-rest-extra-tests.txt
+# leave legs 7 and 10 and run in leg 5.
 unit_partition_three_way() {
   local wf="$root/.github/workflows/ci.yml" want n all a b skipped c counted bad lost problems
-  problems="$(extra_problems)"
+  problems="$(extra_problems; rest_extra_problems)"
   if [ -n "$problems" ]; then printf '%s\n' "$problems" >&2; return 1; fi
   for want in "race-split.sh $name unit-rest)" "race-split.sh $name unit-heavy)" "race-split.sh $name unit-mid)"; do
     # The `unit` job only: `unit-dedicated` carries the same steps (a contract
@@ -155,11 +182,11 @@ unit_partition_three_way() {
       || { printf 'ci.yml must pass "%s" to -%s\n' "$mode" "$flag" >&2; return 1; }
   done
   all="$(go test -list '.' "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
-  problems="$(LC_ALL=C comm -23 <({ names; mid_names; fourth_names; extra_names; } | LC_ALL=C sort -u) <(printf '%s\n' "$all"))"
+  problems="$(LC_ALL=C comm -23 <({ names; mid_names; fourth_names; extra_names; rest_extra_names; } | LC_ALL=C sort -u) <(printf '%s\n' "$all"))"
   if [ -n "$problems" ]; then printf 'a list names no such test:\n%s\n' "$problems" >&2; return 1; fi
   a="$(go test -list "$(unit_heavy)" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
   b="$(go test -list "$(unit_mid)" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
-  skipped="$(go test -list "$(race_rest)" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
+  skipped="$(go test -list "$(unit_rest)" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
   c="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$skipped"))"
   counted="$(printf '%s\n%s\n%s\n' "$a" "$b" "$c" | grep -v '^$' | LC_ALL=C sort | uniq -c)"
   bad="$(printf '%s\n' "$counted" | awk '$1 != 1 {print $1, $2}')"
@@ -215,7 +242,7 @@ case "${2:-}" in
     ;;
   unit-heavy) unit_heavy ;;
   unit-mid) unit_mid ;;
-  unit-rest) race_rest ;;
+  unit-rest) unit_rest ;;
   race-heavy) race_heavy ;;
   race-mid) race_mid ;;
   race-fourth) race_fourth ;;
@@ -282,11 +309,11 @@ case "${2:-}" in
       printf 'heavy list names no such test:\n%s\n' "$missing" >&2
       exit 1
     fi
-    problems="$(extra_problems)"
+    problems="$(extra_problems; rest_extra_problems)"
     if [ -n "$problems" ]; then printf '%s\n' "$problems" >&2; exit 1; fi
     problems="$(rest_list_problems "$existing")"
     if [ -n "$problems" ]; then printf '%s\n' "$problems" >&2; exit 1; fi
-    missing="$(LC_ALL=C comm -23 <(extra_names) <(printf '%s\n' "$existing"))"
+    missing="$(LC_ALL=C comm -23 <({ extra_names; rest_extra_names; } | LC_ALL=C sort -u) <(printf '%s\n' "$existing"))"
     if [ -n "$missing" ]; then
       printf 'unit extra list names no such test:\n%s\n' "$missing" >&2
       exit 1
