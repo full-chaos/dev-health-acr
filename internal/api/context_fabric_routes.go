@@ -238,27 +238,25 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			if !a.acceptInvestigationAsync(w, r, principal, submission) {
 				return
 			}
-			// The run outlives this handler: its request and context keep
-			// the request's deadline (the run limit) and drop its cancel,
-			// the way a leased stream detaches. The handler returns now.
+			// The run outlives this handler, which returns now. The run is
+			// leased, so serveInvestigationEventStream detaches it from the
+			// request the way it detaches a leased stream: the request's
+			// deadline (the run limit) is kept, its cancel is not.
 			detached = true
-			runRequestCtx, endRunRequest := detachedContext(r.Context())
-			runRequest := r.Clone(runRequestCtx)
-			runCtx, endRun := detachedContext(investigateCtx)
+			runRequest := r.Clone(r.Context())
+			logCtx := context.WithoutCancel(r.Context())
 			a.detachedRuns.Add(1)
 			go func() {
 				defer a.detachedRuns.Done()
-				defer endRunRequest()
-				defer endRun()
 				defer func() {
 					if recovered := recover(); recovered != nil {
-						a.logger.ErrorContext(runRequestCtx, "request panic recovered",
-							"request_id", contextfabric.SanitizeLogAttr(RequestID(runRequestCtx)), "status", http.StatusAccepted, "failure_class", "event_stream_panic")
-						a.abandonInvestigationSubmission(runRequest, principal, submission)
+						a.logger.ErrorContext(logCtx, "request panic recovered",
+							"request_id", contextfabric.SanitizeLogAttr(RequestID(logCtx)), "status", http.StatusAccepted, "failure_class", "event_stream_panic")
+						a.abandonInvestigationSubmission(runRequest.WithContext(logCtx), principal, submission)
 					}
 				}()
-				delivered := a.serveInvestigationEventStream(noViewerWriter{header: http.Header{}}, runRequest, investigator, principal, request, submission, submissionID, threadID, reservedResultID, runCtx, collectedSynthesisInput, true)
-				a.metrics.InvestigationLatency(runRequestCtx, delivered, a.now().Sub(investigationStarted))
+				delivered := a.serveInvestigationEventStream(noViewerWriter{header: http.Header{}}, runRequest, investigator, principal, request, submission, submissionID, threadID, reservedResultID, investigateCtx, collectedSynthesisInput, true)
+				a.metrics.InvestigationLatency(logCtx, delivered, a.now().Sub(investigationStarted))
 			}()
 			return
 		}
