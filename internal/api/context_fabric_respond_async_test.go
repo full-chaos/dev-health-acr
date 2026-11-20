@@ -419,3 +419,30 @@ func TestStatusWithoutRunLeaseHasNoRunDetail(t *testing.T) {
 		t.Fatalf("status %+v with the run lease off, want no run detail", status)
 	}
 }
+
+// leaseDroppingSubmissions admits every record without its run lease.
+type leaseDroppingSubmissions struct{ contextfabric.SubmissionStore }
+
+func (s leaseDroppingSubmissions) AdmitSubmission(ctx context.Context, admission contextfabric.SubmissionAdmission, now time.Time) (contextfabric.SubmissionRecord, bool, error) {
+	admission.Lease = nil
+	return s.SubmissionStore.AdmitSubmission(ctx, admission, now)
+}
+
+// An accept-first run is never started without its lease: the client
+// closes its connection after the 202, and a connection-owned run would end
+// with it.
+func TestRespondAsyncRefusesARecordAdmittedWithoutItsLease(t *testing.T) {
+	harness, store, _ := newLeaseHarness(t, 1)
+	harness.apps[0].runtime.InvestigationSubmissions = leaseDroppingSubmissions{SubmissionStore: store}
+	server := harness.serveApp(0)
+	response, body := harness.respondAsync(server, harness.tokenA, "submission-async-nls", nil)
+	if code, _ := errorCodeOf(t, body); response.StatusCode != http.StatusInternalServerError || code != "internal_error" {
+		t.Fatalf("create admitted without a lease = %d %s", response.StatusCode, body)
+	}
+	if got := harness.investigator.executions.Load(); got != 0 {
+		t.Fatalf("executions = %d, want 0", got)
+	}
+	if status := harness.statusBody(0, harness.tokenA, "submission-async-nls"); status.State != contractsv1.ContextFabricSubmissionAbandoned {
+		t.Fatalf("status %+v, want abandoned", status)
+	}
+}
