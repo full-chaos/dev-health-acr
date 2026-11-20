@@ -840,8 +840,8 @@ func compareWorkloadTeam(rr *RootReport, latest map[string]forecastNode, facts [
 const coveragePath = "throughputForecast.estimateCoverage."
 
 // compareReadiness is root throughputForecast: the estimate coverage block
-// of the forecast against the acr readiness facts of the team, on the
-// latest day. The store rows of that day are the third reading: the acr
+// of the forecast against the acr readiness facts of the team, every work
+// scope at its own newest day. The store rows of those days are the third reading: the acr
 // facts are held against them first, so a current read the provider marks
 // truncated is compared only when its facts are whole.
 func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
@@ -881,7 +881,8 @@ func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
 			continue
 		}
 		coverage, hasOps := root["estimateCoverage"].(map[string]any)
-		// ops sums the work scopes that have a row on the team's latest day.
+		// ops sums every work scope at its own newest day; the current read
+		// answers one fact per work scope, each at that day.
 		latestDay := ""
 		for _, fact := range byTeam[team] {
 			if day, isString := fact.Fields["day"].(string); isString && day > latestDay {
@@ -891,9 +892,6 @@ func compareReadiness(ctx context.Context, o *Oracle, rr *RootReport) error {
 		sums := map[string]int64{}
 		scopes := 0
 		for _, fact := range byTeam[team] {
-			if day, _ := fact.Fields["day"].(string); day != latestDay {
-				continue
-			}
 			scopes++
 			for _, f := range counts {
 				leaf, lerr := factInteger(fact.Fields[f.acr])
