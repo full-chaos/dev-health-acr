@@ -233,7 +233,7 @@ services:
   auth-grants: { environment: { AUTH_WORKLOAD_READER_ROLES: devhealth_api } }
   auth-service: { ports: !reset [] }
   query-api:
-    networks: [default, planes, dev-health, o4_query_internal]
+    networks: [default, planes, o4_query_internal]
     environment:
       QUERY_API_INTERNAL_ADDR: ":8095"
       QUERY_API_INTERNAL_ALLOWED_CIDRS: "${O4_VENUE_QUERY_SUBNET}"
@@ -256,6 +256,7 @@ services:
       ACR_CONTEXT_FABRIC_PROJECTION_ENABLED: "true"
       ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED: "true"
       ACR_CONTEXT_FABRIC_FALKOR_ADDR: falkordb:6379
+      ACR_CONTEXT_FABRIC_FALKOR_PASSWORD_FILE: !reset null
   acr-db-init:
     volumes: !override [ "${ACR_ROOT}/deploy/compose/acr-db-init.sh:/usr/local/bin/acr-db-init:ro" ]
   acr-db-acl:
@@ -443,7 +444,7 @@ provision_org() {
 grant_reader() {
   # The statement holds a password: its error text is not shown.
   ch_query <<EOF >/dev/null 2>&1 || die 'the read-only ClickHouse user could not be created'
-CREATE USER IF NOT EXISTS o4_reader IDENTIFIED BY '$(cat "$SECRETS/reader-password")' SETTINGS readonly = 1;
+CREATE USER IF NOT EXISTS o4_reader IDENTIFIED BY '$(cat "$SECRETS/reader-password")' SETTINGS readonly = 2;
 GRANT SELECT ON default.* TO o4_reader;
 EOF
 }
@@ -476,7 +477,7 @@ project_graph() {
   local waited=0 graphs
   compose up -d --no-build acr-projector >/dev/null
   while :; do
-    graphs="$(compose exec -T falkordb redis-cli GRAPH.LIST 2>/dev/null | grep -c . || true)"
+    graphs="$(compose exec -T falkordb redis-cli GRAPH.LIST 2>/dev/null | grep -c '^acr-cf' || true)"
     [ "${graphs:-0}" -gt 0 ] && break
     [ "$waited" -lt 600 ] || die 'acr-projector wrote no graph within 600 s'
     sleep 10; waited=$((waited + 10))
@@ -638,8 +639,8 @@ ACR_O4_MCP_URL=http://127.0.0.1:${O4_VENUE_MCP_PORT}/mcp
 ACR_O4_TOKEN_FILE=${SECRETS}/mcp-token
 ACR_O4_CLICKHOUSE_DSN_FILE=${SECRETS}/o4-clickhouse.dsn
 ACR_O4_ORG_ID=${org}
-ACR_O4_OPS_BUILD=dev-health-ops ${O4_VENUE_OPS_COMMIT} ${O4_VENUE_OPS_TAG}
-ACR_O4_ACR_BUILD=dev-health-acr ${O4_VENUE_ACR_TAG}
+ACR_O4_OPS_BUILD="dev-health-ops ${O4_VENUE_OPS_COMMIT} ${O4_VENUE_OPS_TAG}"
+ACR_O4_ACR_BUILD="dev-health-acr ${O4_VENUE_ACR_TAG}"
 EOF
 )
   note "env file written (0600): ${ENV_FILE}"

@@ -17,7 +17,7 @@ local macOS or Linux stack are all valid venues if they serve these services.
 | ops `auth-service` and its issuer front | the access-token issuer and the workload exchange |
 | `acr-api` | acr main; the workload client (`ACR_AUTH_WORKLOAD_*`); `ACR_DATA_QUERY_URL` and `ACR_DATA_GRAPHQL_URL` set to query-api |
 | `acr-mcp` | the hosted HTTP transport (`ACR_MCP_TRANSPORT=http`) in front of acr-api |
-| ClickHouse | rows of one **synthetic** organization in the 31-day window; a `readonly=1` user for the capture |
+| ClickHouse | rows of one **synthetic** organization in the 31-day window; a read-only user for the capture (`readonly=2`: the capture sets its own memory limit per query) |
 | Postgres, Valkey | as the ops and acr services need them |
 
 ### Data
