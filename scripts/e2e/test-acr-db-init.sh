@@ -20,13 +20,20 @@ POSTGRES_PASSWORD="$admin_password" docker run -d --rm --name "$container" --lab
   -e POSTGRES_USER=bootstrap -e POSTGRES_PASSWORD -e POSTGRES_DB=postgres \
   "$postgres_image" >/dev/null
 
-for _ in {1..60}; do
-  if docker exec "$container" pg_isready -U bootstrap -d postgres >/dev/null 2>&1; then
+# The entrypoint's temporary init server listens on the unix socket only and is then restarted, so the wait is on TCP.
+ready=false
+for _ in {1..90}; do
+  if docker exec "$container" pg_isready -h 127.0.0.1 -U bootstrap -d postgres >/dev/null 2>&1; then
+    ready=true
     break
   fi
   sleep 1
 done
-docker exec "$container" pg_isready -U bootstrap -d postgres >/dev/null
+if [[ "$ready" != true ]]; then
+  printf 'postgres container %s did not accept TCP connections in 90 s\n' "$container" >&2
+  docker logs "$container" >&2 || true
+  exit 1
+fi
 
 run_init() {
   local mode="$1"
