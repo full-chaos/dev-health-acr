@@ -616,7 +616,7 @@ func linkHelperCallersCost(t *testing.T, ctx context.Context, query contextpacke
 			err = rows.Err()
 			_ = rows.Close()
 		}
-		if flushErr := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); flushErr != nil {
+		if flushErr := direct.Exec(ctx, `SYSTEM FLUSH LOGS query_log`); flushErr != nil {
 			t.Fatalf("flush logs: %v", flushErr)
 		}
 		if scanErr := direct.QueryRow(ctx, `SELECT max(memory_usage), max(read_bytes), max(read_rows), max(ProfileEvents['ScalarSubqueriesCacheMiss']), max(ProfileEvents['ScalarSubqueriesLocalCacheHit'] + ProfileEvents['ScalarSubqueriesGlobalCacheHit']), max(exception_code), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
