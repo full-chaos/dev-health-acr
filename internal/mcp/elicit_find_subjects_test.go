@@ -104,7 +104,16 @@ func TestFindSubjectsAmbiguousElicitation(t *testing.T) {
 		withSameLabelRepos(t)
 		var calls []elicitCall
 		picked := "repository:" + dtRepoD
-		gotStruct, _ := elicitFindSubjects(t, handler("accept", map[string]any{"subject": picked}, &calls, nil))
+		gotStruct, _, diag := elicitFindSubjectsLogged(t, handler("accept", map[string]any{"subject": picked}, &calls, nil))
+		log, err := certify.Parse([]byte(diag))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := certify.Certify(log, certify.Assertion{Event: eventspec.MCPElicitationOutcome, Want: map[string]any{
+			"tool": "find_subjects", "outcome": "accepted", "asked": true, "offered": float64(2),
+		}}); err != nil {
+			t.Fatal(err)
+		}
 		if len(calls) != 1 {
 			t.Fatalf("want 1 elicitation, got %d", len(calls))
 		}
