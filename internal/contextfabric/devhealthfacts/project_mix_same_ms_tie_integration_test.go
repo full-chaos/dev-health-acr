@@ -635,3 +635,70 @@ SELECT ?, ?, ?, toUUIDOrNull(?), 0, map(?, 1.0), map(), ?, fromUnixTimestamp64Mi
 		t.Fatalf("insert version %s of %s: %v", label, id, err)
 	}
 }
+
+// The same-part arm of the window cell: both same-millisecond versions of one
+// unit are in ONE part, the earlier row first, so the tie order inside the part
+// is fixed and only _part_offset tells the versions apart. A pick that ignores
+// the insert order reads the earlier row first and keeps it.
+func TestProjectMixSameMillisecondSamePartTieTakesTheLaterVersionsWindowAgainstRealClickHouse(t *testing.T) {
+	t.Parallel()
+	inside, outside := -73*time.Hour, -60*24*time.Hour
+	for name, spans := range map[string][]time.Duration{
+		"in-window version written last":     {outside, inside},
+		"out-of-window version written last": {inside, outside},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			const orgID = "org-7323-tie-window-part"
+			ids := []string{"linear:proj-1", "linear:proj-2", "linear:proj-3"}
+			const evidence = `{"issues":[],"prs":[]}`
+			query, direct := newScopedCHAOS7257Client(t, nil)
+			createCHAOS7257Tables(t, ctx, direct)
+			if err := direct.Exec(ctx, `SYSTEM STOP MERGES work_unit_investments`); err != nil {
+				t.Fatalf("stop merges: %v", err)
+			}
+			at := seedCHAOS7257Parity(t, ctx, direct, orgID)
+			insertMembership(t, ctx, direct, orgID, "wu-part", at)
+			earlier, later := at.Add(spans[0]).Truncate(time.Second), at.Add(spans[1]).Truncate(time.Second)
+			if err := direct.Exec(ctx, `INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, computed_at, org_id)
+SETTINGS optimize_on_insert = 0
+SELECT 'wu-part', span, span, toUUIDOrNull(?), 0, map('risk', 1.0), map(), ?, fromUnixTimestamp64Milli(?, 'UTC'), ?
+FROM (SELECT arrayJoin([?, ?]) AS span)`, repoUUID("r1a"), evidence, at.Add(-time.Hour).UnixMilli(), orgID, earlier, later); err != nil {
+				t.Fatalf("insert the same-part pair: %v", err)
+			}
+			var parts, rows uint64
+			var first, second time.Time
+			if err := direct.QueryRow(ctx, `SELECT uniqExact(_part), count(), argMin(to_ts, _part_offset), argMax(to_ts, _part_offset)
+FROM work_unit_investments WHERE org_id = ? AND work_unit_id = 'wu-part'`, orgID).Scan(&parts, &rows, &first, &second); err != nil ||
+				parts != 1 || rows != 2 || !first.Equal(earlier) || !second.Equal(later) {
+				t.Fatalf("the same-part pair: %d parts, %d rows, offset 0 to_ts %v, offset 1 to_ts %v (%v); want 1 part, 2 rows, the earlier version (%v) at offset 0",
+					parts, rows, first, second, err, earlier)
+			}
+			window := devhealthfacts.ProjectMixWindow{Active: true, HasStart: true, Start: at.Add(-10 * 24 * time.Hour), End: at.Add(24 * time.Hour)}
+			only := func(span time.Duration) (got []rollupRow) {
+				t.Helper()
+				t.Run(span.String(), func(t *testing.T) {
+					onlyQuery, onlyDirect := newScopedCHAOS7257Client(t, nil)
+					createCHAOS7257Tables(t, ctx, onlyDirect)
+					seedCHAOS7257Parity(t, ctx, onlyDirect, orgID)
+					insertMembership(t, ctx, onlyDirect, orgID, "wu-part", at)
+					insertRunVersionAtMilli(t, ctx, onlyDirect, orgID, "wu-part", repoUUID("r1a"), evidence, "risk", span.String(), at.Add(-time.Hour), at.Add(span))
+					got = runRollupPhased(t, ctx, onlyQuery, orgID, ids, window)
+				})
+				return got
+			}
+			want := only(spans[1])
+			if err := rollupRowsDiffer(want, only(spans[0])); err == nil {
+				t.Fatal("control: the earlier version gives the answer of the later one, so the case proves nothing")
+			}
+			if err := rollupRowsDiffer(want, runRollupPhased(t, ctx, query, orgID, ids, window)); err != nil {
+				t.Errorf("phased, same part: the tie did not take the later version's window: %v", err)
+			}
+			mergeWorkUnitInvestments(t, ctx, direct)
+			if err := rollupRowsDiffer(want, runRollupPhased(t, ctx, query, orgID, ids, window)); err != nil {
+				t.Errorf("phased after OPTIMIZE FINAL, same part: the tie did not take the later version's window: %v", err)
+			}
+		})
+	}
+}
