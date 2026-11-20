@@ -192,3 +192,35 @@ func TestFindSubjectsAmbiguousElicitationOverRealPaging(t *testing.T) {
 		})
 	}
 }
+
+func TestFindSubjectsMalformedRequestCapabilitiesFallBackToSession(t *testing.T) {
+	for name, tc := range map[string]struct {
+		withHandler bool
+		wantAsks    int
+	}{
+		"session with elicitation is offered":     {true, 1},
+		"session without elicitation not offered": {false, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			withSameLabelRepos(t)
+			asks := 0
+			var opts *mcpsdk.ClientOptions
+			if tc.withHandler {
+				opts = &mcpsdk.ClientOptions{ElicitationHandler: func(context.Context, *mcpsdk.ElicitRequest) (*mcpsdk.ElicitResult, error) {
+					asks++
+					return &mcpsdk.ElicitResult{Action: "decline"}, nil
+				}}
+			}
+			st := newDTStack(t)
+			cs, _ := st.sessionWith([]string{auth.ScopeContextRead, auth.ScopeDataRead}, []string{"*"}, opts)
+			params := &mcpsdk.CallToolParams{Name: "find_subjects", Arguments: map[string]any{"query": dtSlugSame, "kind": "repository"}}
+			params.SetMeta(map[string]any{mcpsdk.MetaKeyClientCapabilities: "not an object"})
+			if _, err := cs.CallTool(context.Background(), params); err != nil {
+				t.Fatal(err)
+			}
+			if asks != tc.wantAsks {
+				t.Fatalf("want %d elicitations, got %d", tc.wantAsks, asks)
+			}
+		})
+	}
+}
