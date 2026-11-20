@@ -2142,11 +2142,11 @@ func TestARecordedDeniedTeamIsLeftOutOfTheRead(t *testing.T) {
 // the recorded one.
 func TestTheCaptureBaselineIsTheCaptureOfTheManifest(t *testing.T) {
 	manifest, _, _ := loadedCapture(t)
-	if manifest.SchemaDigest != captureSchemaDigest {
+	if len(manifest.ContractDigests) == 0 && manifest.SchemaDigest != captureSchemaDigest {
 		t.Fatalf("the manifest was captured at %s, the baseline names %s: advance contractsAtCapture with the capture", manifest.SchemaDigest, captureSchemaDigest)
 	}
 	policy := mustPolicy(t)
-	for _, name := range operationsWithChangedContract(policy, contractsAtCapture) {
+	for _, name := range operationsWithChangedContract(policy, captureBaseline(manifest)) {
 		t.Errorf("contract of %s is not the one the baseline holds: recapture on the venue", name)
 	}
 }

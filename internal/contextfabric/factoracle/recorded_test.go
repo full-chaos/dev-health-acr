@@ -94,9 +94,19 @@ func withoutAdvancedCases(cases []ShapeCase) []ShapeCase {
 	})
 }
 
-func requireCaptureContractsUnchanged(t *testing.T, policy *directread.GraphQLPolicy, recorded, pinned string) {
+// captureBaseline is the contract digest per operation the capture was taken
+// at: the manifest's own, or contractsAtCapture for a manifest that records none.
+func captureBaseline(manifest Manifest) map[string]string {
+	if len(manifest.ContractDigests) > 0 {
+		return manifest.ContractDigests
+	}
+	return contractsAtCapture
+}
+
+func requireCaptureContractsUnchanged(t *testing.T, policy *directread.GraphQLPolicy, manifest Manifest, pinned string) {
 	t.Helper()
-	if recorded != captureSchemaDigest {
+	recorded := manifest.SchemaDigest
+	if len(manifest.ContractDigests) == 0 && recorded != captureSchemaDigest {
 		t.Fatalf("the capture was recorded against SDL %s, not the %s this test knows it was taken at: it was changed", recorded, captureSchemaDigest)
 	}
 	rootsOf := map[string][]string{}
@@ -105,7 +115,7 @@ func requireCaptureContractsUnchanged(t *testing.T, policy *directread.GraphQLPo
 			rootsOf[name] = append(rootsOf[name], root.Field)
 		}
 	}
-	for _, name := range operationsWithChangedContract(policy, contractsAtCapture) {
+	for _, name := range operationsWithChangedContract(policy, captureBaseline(manifest)) {
 		for _, root := range rootsOf[name] {
 			if _, listed := notRecordedRoots[root]; !listed {
 				t.Fatalf("the contract of %s changed since the capture (SDL %s, this build pins %s) and root %s is not listed as not recorded: run `make o4-oracle-capture` on the venue", name, recorded, pinned, root)
@@ -120,15 +130,22 @@ func requireCaptureContractsUnchanged(t *testing.T, policy *directread.GraphQLPo
 // while this list is empty: the oracle compares operation documents, and an
 // SDL field no document selects cannot change a reply.
 func operationsWithChangedContract(policy *directread.GraphQLPolicy, baseline map[string]string) []string {
+	return slices.DeleteFunc(operationsPastBaseline(policy, baseline), func(name string) bool {
+		_, advanced := advancedPastCapture[name]
+		return advanced
+	})
+}
+
+// operationsPastBaseline names the served operations, not listed as not
+// recorded, whose contract digest is not the baseline's. An operation the
+// baseline does not hold is one of them: a missing digest is never a match.
+func operationsPastBaseline(policy *directread.GraphQLPolicy, baseline map[string]string) []string {
 	var changed []string
 	for _, op := range policy.Catalogue().Operations(directread.CallerUnrestricted) {
 		if _, notRecorded := notRecordedOperations[op.Name]; notRecorded {
 			continue
 		}
-		if _, advanced := advancedPastCapture[op.Name]; advanced {
-			continue
-		}
-		if baseline[op.Name] != contractDigest(op) {
+		if digest, ok := baseline[op.Name]; !ok || digest != contractDigest(op) {
 			changed = append(changed, op.Name)
 		}
 	}
@@ -155,7 +172,10 @@ func loadedCapture(t *testing.T) (Manifest, Recording, *Extract) {
 		t.Fatalf("root policy: %v", err)
 	}
 	if got := policy.Catalogue().SchemaDigest(); got != manifest.SchemaDigest {
-		requireCaptureContractsUnchanged(t, policy, manifest.SchemaDigest, got)
+		requireCaptureContractsUnchanged(t, policy, manifest, got)
+	}
+	if problems := advancedPastCaptureProblems(policy, manifest.ShapeCases, captureBaseline(manifest), advancedPastCapture); len(problems) != 0 {
+		t.Fatalf("advancedPastCapture does not match the capture: %v", problems)
 	}
 	if manifest.FixtureOrg != FixtureOrgID || manifest.OpsBuild == "" {
 		t.Fatalf("the capture names no ops build or another fixture organization")

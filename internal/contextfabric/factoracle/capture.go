@@ -312,6 +312,10 @@ type Manifest struct {
 	// SchemaDigest is the SDL the shapes and the replies belong to. A build
 	// that pins another SDL must be captured again.
 	SchemaDigest string `json:"schema_digest"`
+	// ContractDigests is contractDigest of every served operation under
+	// SchemaDigest, written by Capture. A manifest without it (the 2026-11-03
+	// capture) is judged by contractsAtCapture; a missing digest never matches.
+	ContractDigests map[string]string `json:"contract_digests,omitempty"`
 	// VenueFactQueryVersions are the fact query versions the venue's acr
 	// answered with. FactQueryVersion is the version of the build whose
 	// providers gave Expect (see Repin); the providers run in every test, so
@@ -457,7 +461,7 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 	manifest := Manifest{
 		CapturedAt: time.Now().UTC().Format(time.RFC3339), Window: cfg.Window, FixtureOrg: FixtureOrgID,
 		OpsBuild: cfg.OpsBuild, AcrBuild: cfg.AcrBuild,
-		SchemaDigest: run.Oracle.Policy.Catalogue().SchemaDigest(), FactQueryVersion: devhealthfacts.QueryVersion,
+		SchemaDigest: run.Oracle.Policy.Catalogue().SchemaDigest(), ContractDigests: contractDigestsOf(run.Oracle.Policy), FactQueryVersion: devhealthfacts.QueryVersion,
 		VenueFactQueryVersions: sortedKeys(run.Oracle.FactVersions),
 		Rows:                   map[string]int{}, Residual: run.Oracle.Residual, Expect: map[string]RootExpectation{},
 		ListenerDark: append([]string{}, cfg.ListenerDark...), OperationDark: append([]string{}, cfg.OperationDark...),
@@ -517,6 +521,15 @@ func Capture(ctx context.Context, cfg VenueConfig, dir string) (*LiveRun, error)
 		return nil, err
 	}
 	return run, nil
+}
+
+// contractDigestsOf is contractDigest of every operation the policy serves.
+func contractDigestsOf(policy *directread.GraphQLPolicy) map[string]string {
+	out := map[string]string{}
+	for _, op := range policy.Catalogue().Operations(directread.CallerUnrestricted) {
+		out[op.Name] = contractDigest(op)
+	}
+	return out
 }
 
 // Repin replaces the pinned outcome of a capture with the outcome of a
