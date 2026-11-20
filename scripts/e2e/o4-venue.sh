@@ -507,6 +507,8 @@ derive() {
   workers_verb metrics daily-start --org "$org" --day "$from" --to "$to"
   workers_verb investment trigger --org "$org" --review-evidence testing >/dev/null
   workers_verb workgraph trigger --org "$org" --review-evidence testing >/dev/null
+  wait_queue_drained
+  # The capacity forecast reads work_item_metrics_daily: it runs after the daily jobs.
   workers_verb metrics remaining trigger-backstop --family capacity --all-teams --org "$org" --review-evidence testing >/dev/null
   wait_queue_drained
   compose --profile o4-derive stop o4-worker o4-reconciler >/dev/null
@@ -529,7 +531,9 @@ wait_queue_drained() {
   die "the derive chain did not drain within O4_VENUE_DERIVE_TIMEOUT=${O4_VENUE_DERIVE_TIMEOUT}s (pending: ${pending})"
 }
 
-COUNT_TABLES="work_unit_investments work_unit_supersessions work_unit_membership_runs work_unit_membership repos teams team_repo_ownership capacity_forecasts compounding_risk_daily work_item_metrics_daily estimate_coverage_metrics_daily work_item_completion_daily repo_metrics_daily incident_metrics_daily work_unit_issue_size work_unit_repo_effort work_item_team_attributions work_items work_item_cycle_times"
+# The extract tables and the tables query-api reads for the value roots. work_unit_issue_size
+# is seeded empty by design (internal/contextfabric/factoracle/extract.go seededEmptyTables).
+COUNT_TABLES="work_unit_investments work_unit_supersessions work_unit_membership_runs work_unit_membership repos teams team_repo_ownership capacity_forecasts compounding_risk_daily work_item_metrics_daily estimate_coverage_metrics_daily work_item_completion_daily repo_metrics_daily incident_metrics_daily work_unit_repo_effort work_item_team_attributions work_items work_item_cycle_times"
 
 table_count() {
   printf "SELECT count() FROM default.%s WHERE org_id = '%s'" "$1" "$2" | ch_query 2>&1 | mask_ids
