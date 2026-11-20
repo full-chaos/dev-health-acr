@@ -180,6 +180,49 @@ func TestBoundedPageLineIsNotWrittenAgainWhenTheRetryStartsTheRolledBackPassAgai
 	}
 }
 
+// After the rollback the frontier moved (rows were paged in), so the pass the retry starts is another window and
+// writes its own line.
+func TestBoundedPageLineIsWrittenByAnotherWindowStartedAfterARollback(t *testing.T) {
+	r := newBoundedRetryRig(t)
+	r.landSecondPage()
+	if ack, err := r.call(); err != nil || ack == "" {
+		t.Fatalf("first call: ack=%q err=%v, want the batch of the bounded first page", ack, err)
+	}
+	r.requireOneLineAndOneBoundedPage("the bounded first page")
+	r.plan.window.settle(r.plan.windowScope, "")
+	r.frontier = cursorState{Since: pageCutStamp.Add(2 * time.Minute), After: "zz"}
+	if ack, err := r.call(); err != nil || ack == "" {
+		t.Fatalf("call after the frontier moved: ack=%q err=%v, want a batch", ack, err)
+	}
+	if lines := boundedPageLines(t, r.logs); len(lines) != 2 {
+		t.Fatalf("the pass of the new window wrote %d bounded-page lines in all, want 2", len(lines))
+	}
+}
+
+// Passes that start one after another on a clock that does not move can cover the same window; each still writes
+// its own line, one per pass started.
+func TestBoundedPageLineIsWrittenOncePerPassOverTheSameWindow(t *testing.T) {
+	r := newBoundedRetryRig(t)
+	r.plan.windowInterval = 0
+	r.landSecondPage()
+	for call := 0; call < 80 && r.plan.window.pass(r.plan.windowScope).seq < 4; call++ {
+		ack, err := r.call()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ack != "" {
+			r.plan.window.settle(r.plan.windowScope, ack)
+		}
+	}
+	started := r.plan.window.pass(r.plan.windowScope).seq
+	if started < 4 {
+		t.Fatalf("only %d passes started in 80 calls", started)
+	}
+	if lines := boundedPageLines(t, r.logs); len(lines) != started {
+		t.Fatalf("%d passes started and %d bounded-page lines were written, want one per pass", started, len(lines))
+	}
+}
+
 // A new pass writes its own line: the marker names the pass, it is not kept for the scope's life.
 func TestBoundedPageLineIsWrittenAgainByTheNextPass(t *testing.T) {
 	r := newBoundedRetryRig(t)
