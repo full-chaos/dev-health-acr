@@ -34,12 +34,13 @@ the seed and the derive chain, run from the same ops image:
    `dho workers investment trigger --org <org> --review-evidence testing`,
    `dho workers workgraph trigger --org <org> --review-evidence testing`; when those jobs are
    done, `dho workers metrics remaining trigger-backstop --family capacity --all-teams --org <org> --review-evidence testing`
-   (the forecast reads the daily metrics). Each verb takes `--reason` and `--correlation-id`.
+   (the forecast reads the daily metrics) and
+   `dho workers metrics remaining trigger-backstop --family membership_backfill --org <org> --review-evidence testing`
+   (the membership run reads the investments; the verb also queues a work graph build, and the
+   run starts when that build is done). Each verb takes `--reason` and `--correlation-id`.
+   Wait until `work_unit_membership_runs` holds a row of the organization and the queue is empty.
    Stop the worker and the reconciler before the capture: a store that moves during the run
    is refused.
-3. If `work_unit_investments` or `work_unit_membership_runs` stays empty (membership has no
-   manual ops trigger, only a daily scheduler fanout), also load the `_mg` world for the same
-   organization (`--provider synthetic --repo-name acme/live-e2e --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph --allow-mixed-org`).
 
 `work_unit_issue_size` must be empty at the capture (acr seeds it empty: every work unit has
 weight 1, the weight the pairs are recorded under). The mock categorizer writes issue sizes, so
@@ -61,22 +62,12 @@ nested-group slug) as "not joined: N", never as a silent drop.
 
 - The issue-size weighting of repository effort (see above).
 - Repository names that are not `owner/name` slugs in root `catalog` (reported as not joined).
-- Four tests, NOT MEASURED by name. They are listed with their reason in
-  `internal/contextfabric/factoracle/testdata/venue/not_measured_gates.json`; a test fails when it
-  is listed and the capture could measure it, or when it is not measured and not listed.
-
-  | Test | Shape the capture lacks |
-  | --- | --- |
-  | `AcceptanceGate/NullRepoID` | a team-owned repository with in-scope effort in the window |
-  | `TeamRollupLossWithNoNullRowIsAFinding` | the same |
-  | `TestTheStoreReadingLeavesEvidenceGatedUnitsOutAsOpsDoes` | an evidence-gated (uncategorized) work unit in scope in the analytics window |
-  | `TestTheRunComparesTheUncategorizedCountWithTheStoreGate` | the same |
-
-  The cause is the same for all four, and it is not the fixture world. A work unit is in scope only
-  when the newest work unit membership run holds it, and only the daily scheduler writes such a run:
-  ops has no manual trigger for the membership job. The venue's runs come from the fallback world, so
-  the fixture world's units (its team-owned repositories with effort, and its evidence-gated unit) are
-  in no run. The ops fixture tests that run the daily membership job find both shapes.
+- Tests the capture cannot build. A test whose unit shape is not in the capture is NOT MEASURED
+  only when it is listed, with its reason, in
+  `internal/contextfabric/factoracle/testdata/venue/not_measured_gates.json`. A test fails when it
+  is listed and the capture could measure it, or when it is not measured and not listed. The list is
+  empty now: the venue's membership run holds the fixture world's units, so the team-owned
+  repositories with effort and the evidence-gated units are in scope, and every test is measured.
 
 - Owner shares: ops stores a share only on an ownership row of the inferred derivation. A row from
   provider access, a native team or a manual entry never stores one, and the owners of such a
@@ -135,7 +126,7 @@ It runs on bash 3.2 (macOS) and on Linux.
 export O4_VENUE_OPS_DIR=<ops checkout at O4_VENUE_OPS_COMMIT>
 scripts/e2e/o4-venue.sh check    # tools, host load and disk gates, free ports and subnets
 scripts/e2e/o4-venue.sh up       # pinned images, empty volumes, synthetic organization
-scripts/e2e/o4-venue.sh seed     # world + derive chain + graph; worker, reconciler, projector stop
+scripts/e2e/o4-venue.sh seed     # world + derive chain (membership run included) + graph; worker, reconciler, projector stop
 scripts/e2e/o4-venue.sh counts   # rows per table (all > 0; work_unit_issue_size exactly 0)
 scripts/e2e/o4-venue.sh token    # MCP credential from this project's acr-api (0600)
 scripts/e2e/o4-venue.sh routes   # MCP class roots on; the admin token is removed after use
@@ -145,8 +136,8 @@ scripts/e2e/o4-venue.sh down     # down -v of this project, residue check, crede
 
 | Variable | Default |
 | --- | --- |
-| `O4_VENUE_OPS_COMMIT` | `2c1fdfb1e0b6ee9993187522cd86838125dc514c` |
-| `O4_VENUE_OPS_TAG` / `O4_VENUE_ACR_TAG` | `sha-2c1fdfb` / `sha-24513ae` |
+| `O4_VENUE_OPS_COMMIT` | `9fc0e2f04557fd61207378685910e4f03d2244af` |
+| `O4_VENUE_OPS_TAG` / `O4_VENUE_ACR_TAG` | `sha-9fc0e2f` / `sha-24513ae` |
 | `O4_VENUE_API_PORT`, `O4_VENUE_MCP_PORT` | `28443`, `28081` (127.0.0.1 only) |
 | `O4_VENUE_CH_HTTP_PORT`, `O4_VENUE_CH_NATIVE_PORT` | `28123`, `29000` (127.0.0.1 only) |
 | `O4_VENUE_PLANES_SUBNET`, `O4_VENUE_QUERY_SUBNET` | `10.199.91.0/28`, `10.199.89.0/28` |

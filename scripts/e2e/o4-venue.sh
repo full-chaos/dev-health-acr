@@ -15,8 +15,8 @@ ACR_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 : "${O4_VENUE_PROJECT:=acr-e2e-o4venue-$(date -u +%Y%m%d%H%M%S)}"
 : "${O4_VENUE_OPS_DIR:=}"
-: "${O4_VENUE_OPS_COMMIT:=2c1fdfb1e0b6ee9993187522cd86838125dc514c}"
-: "${O4_VENUE_OPS_TAG:=sha-2c1fdfb}"
+: "${O4_VENUE_OPS_COMMIT:=9fc0e2f04557fd61207378685910e4f03d2244af}"
+: "${O4_VENUE_OPS_TAG:=sha-9fc0e2f}"
 : "${O4_VENUE_ACR_TAG:=sha-24513ae}"
 : "${O4_VENUE_REGISTRY:=ghcr.io/full-chaos}"
 : "${O4_VENUE_STATE_DIR:=${ACR_ROOT}/.tmp/o4venue/${O4_VENUE_PROJECT}}"
@@ -33,9 +33,6 @@ ACR_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 : "${O4_VENUE_DERIVE_TIMEOUT:=1800}"
 # The frozen ops world the organization is seeded with (ops `dho fixtures generate`).
 : "${O4_VENUE_WORLD_ARGS:=--provider mixed --repo-name chaos-fixtures/shared-api --repo-count 18 --days 180 --commits-per-day 0 --pr-count 189 --team-count 8 --seed 9440}"
-# The `_mg` world adds work units, investments and membership runs when the derive chain leaves
-# them empty.
-: "${O4_VENUE_FALLBACK_WORLD_ARGS:=--provider synthetic --repo-name acme/live-e2e --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph}"
 : "${O4_VENUE_WORKER_QUEUES:=investment,metrics,reports,workgraph}"
 : "${O4_VENUE_WORKER_CONCURRENCY:=investment=1,metrics=2,reports=2,workgraph=1}"
 : "${O4_VENUE_JQ_IMAGE:=ghcr.io/jqlang/jq:1.7.1}"
@@ -479,14 +476,6 @@ step_seed() {
   note 'synthetic world loaded'
   fi
   derive "$org"
-  # Work unit membership has no manual ops trigger (only the daily scheduler fanout): the _mg
-  # world carries membership runs, as it carries investments.
-  if [ "$(table_count work_unit_investments "$org")" = 0 ] || [ "$(table_count work_unit_membership_runs "$org")" = 0 ]; then
-    note 'no work unit investments or membership after the derive chain: loading the _mg world for the same organization'
-    # shellcheck disable=SC2086
-    dho_analytics fixtures generate --sink "clickhouse://ch:${ch}@clickhouse:9000/default" --db-type clickhouse --org "$org" --allow-mixed-org $O4_VENUE_FALLBACK_WORLD_ARGS 2>&1 | mask_ids >&2
-    derive "$org"
-  fi
   project_graph
   empty_issue_size
 }
@@ -544,12 +533,29 @@ derive() {
   workers_verb investment trigger --org "$org" --review-evidence testing >/dev/null
   workers_verb workgraph trigger --org "$org" --review-evidence testing >/dev/null
   wait_queue_drained
-  # The capacity forecast reads work_item_metrics_daily: it runs after the daily jobs.
+  # The capacity forecast reads work_item_metrics_daily, and the membership run reads
+  # work_unit_investments: both run after the first jobs. The membership trigger also writes a
+  # work graph build, and its run waits for that build.
   workers_verb metrics remaining trigger-backstop --family capacity --all-teams --org "$org" --review-evidence testing >/dev/null
+  workers_verb metrics remaining trigger-backstop --family membership_backfill --org "$org" --review-evidence testing >/dev/null
+  wait_queue_drained
+  wait_rows work_unit_membership_runs "$org"
   wait_queue_drained
   compose --profile o4-derive stop o4-worker o4-reconciler >/dev/null
   compose --profile o4-derive rm -f o4-worker o4-reconciler >/dev/null
   note 'derive chain done; worker and reconciler stopped'
+}
+
+# wait_rows waits until the organization has rows in a table: a job held behind another job's
+# completion is not in the queue until that job ends.
+wait_rows() {
+  local waited=0 n
+  while :; do
+    n="$(table_count "$1" "$2")"
+    case "$n" in '' | *[!0-9]* | 0) ;; *) return 0 ;; esac
+    [ "$waited" -lt "$O4_VENUE_DERIVE_TIMEOUT" ] || die "no $1 rows of the organization within O4_VENUE_DERIVE_TIMEOUT=${O4_VENUE_DERIVE_TIMEOUT}s"
+    sleep 15; waited=$((waited + 15))
+  done
 }
 
 wait_queue_drained() {

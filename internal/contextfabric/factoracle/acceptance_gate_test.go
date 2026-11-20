@@ -178,7 +178,8 @@ func wantPlanted(t *testing.T, rr *RootReport, pair string, want Class, values m
 // whose whole effort reaches organization repositories: one generation, a
 // repo_id that is an organization repository, every pull request reference
 // in the "<repository uuid>#pr<n>" form with an organization repository, no
-// issue-side reference, in the window and in scope. The pull request share
+// issue-side reference, in the window, in scope and not evidence-gated (a
+// gated unit is in no repository mix). The pull request share
 // partition of such a unit sums to its whole effort.
 // gateWindow is the window the analytics pairs read for the capture: its
 // window without the capture day (Oracle.analyticsWindow).
@@ -272,7 +273,7 @@ func directUnit(t *testing.T, extract *Extract, window Window) (id string, row R
 		if !resolved {
 			continue
 		}
-		if unit == nil || unit.generations != 1 || !hasRepo || !repos[strings.ToLower(repo)] || !store.inScope(unitID) || !window.holds(unit.latest) {
+		if unit == nil || unit.generations != 1 || unit.latest.gated() || !hasRepo || !repos[strings.ToLower(repo)] || !store.inScope(unitID) || !window.holds(unit.latest) {
 			continue
 		}
 		total := 0.0
