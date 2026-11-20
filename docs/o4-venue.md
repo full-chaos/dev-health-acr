@@ -116,12 +116,16 @@ Then, in `recorded_test.go`: set `captureSchemaDigest` to the new manifest's
 
 `scripts/e2e/o4-venue.sh` brings the venue up as its own Compose project
 (`acr-e2e-o4venue-*`). It uses its own volumes, networks and ports, and never
-touches another project. It needs a `dev-health-ops` checkout at the vendored pin
-(`O4_VENUE_OPS_DIR`), Docker with the compose plugin, git, curl and openssl.
+touches another project. It needs a `dev-health-ops` checkout at the venue's ops commit
+(`O4_VENUE_OPS_DIR` at `O4_VENUE_OPS_COMMIT`), Docker with the compose plugin, git, curl and openssl.
+The venue's ops commit may be newer than the vendored ops catalogue
+(`contracts/mcp/ops-catalogue/`) only when the two serve the same contracts: the same
+`contracts/graphql/v1/schema.graphql` and the same registered documents
+(`internal/queryapi/server/query_route.go`).
 It runs on bash 3.2 (macOS) and on Linux.
 
 ```sh
-export O4_VENUE_OPS_DIR=<ops checkout at the pin>
+export O4_VENUE_OPS_DIR=<ops checkout at O4_VENUE_OPS_COMMIT>
 scripts/e2e/o4-venue.sh check    # tools, host load and disk gates, free ports and subnets
 scripts/e2e/o4-venue.sh up       # pinned images, empty volumes, synthetic organization
 scripts/e2e/o4-venue.sh seed     # world + derive chain + graph; worker, reconciler, projector stop
@@ -134,7 +138,8 @@ scripts/e2e/o4-venue.sh down     # down -v of this project, residue check, crede
 
 | Variable | Default |
 | --- | --- |
-| `O4_VENUE_OPS_TAG` / `O4_VENUE_ACR_TAG` | `sha-2c11540` / `sha-24513ae` |
+| `O4_VENUE_OPS_COMMIT` | `2c1fdfb1e0b6ee9993187522cd86838125dc514c` |
+| `O4_VENUE_OPS_TAG` / `O4_VENUE_ACR_TAG` | `sha-2c1fdfb` / `sha-24513ae` |
 | `O4_VENUE_API_PORT`, `O4_VENUE_MCP_PORT` | `28443`, `28081` (127.0.0.1 only) |
 | `O4_VENUE_CH_HTTP_PORT`, `O4_VENUE_CH_NATIVE_PORT` | `28123`, `29000` (127.0.0.1 only) |
 | `O4_VENUE_PLANES_SUBNET`, `O4_VENUE_QUERY_SUBNET` | `10.199.91.0/28`, `10.199.89.0/28` |

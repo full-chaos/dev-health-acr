@@ -15,8 +15,8 @@ ACR_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 : "${O4_VENUE_PROJECT:=acr-e2e-o4venue-$(date -u +%Y%m%d%H%M%S)}"
 : "${O4_VENUE_OPS_DIR:=}"
-: "${O4_VENUE_OPS_COMMIT:=2c115402dbbb3b11f28a0029cdbe3b9da5c3e891}"
-: "${O4_VENUE_OPS_TAG:=sha-2c11540}"
+: "${O4_VENUE_OPS_COMMIT:=2c1fdfb1e0b6ee9993187522cd86838125dc514c}"
+: "${O4_VENUE_OPS_TAG:=sha-2c1fdfb}"
 : "${O4_VENUE_ACR_TAG:=sha-24513ae}"
 : "${O4_VENUE_REGISTRY:=ghcr.io/full-chaos}"
 : "${O4_VENUE_STATE_DIR:=${ACR_ROOT}/.tmp/o4venue/${O4_VENUE_PROJECT}}"
@@ -75,7 +75,7 @@ require_tools() {
   done
   docker compose version >/dev/null 2>&1 || die 'the docker compose plugin (v2) is required'
   case "$(openssl version)" in OpenSSL\ [3-9]*) ;; *) die 'OpenSSL 3 is required (Ed25519 signing; macOS: brew install openssl@3 and put it first on PATH)' ;; esac
-  [ -n "$O4_VENUE_OPS_DIR" ] || die 'O4_VENUE_OPS_DIR must name a dev-health-ops checkout at the vendored pin'
+  [ -n "$O4_VENUE_OPS_DIR" ] || die 'O4_VENUE_OPS_DIR must name a dev-health-ops checkout at O4_VENUE_OPS_COMMIT'
   [ -f "$O4_VENUE_OPS_DIR/compose.yml" ] || die 'O4_VENUE_OPS_DIR has no compose.yml'
   local head
   head="$(git -C "$O4_VENUE_OPS_DIR" rev-parse HEAD 2>/dev/null || true)"

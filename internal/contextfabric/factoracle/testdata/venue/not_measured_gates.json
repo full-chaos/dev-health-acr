@@ -4,6 +4,5 @@
   "TestTheStoreReadingLeavesEvidenceGatedUnitsOutAsOpsDoes": "no evidence-gated (uncategorized) work unit in scope in the analytics window",
   "TestTheRunComparesTheUncategorizedCountWithTheStoreGate": "no evidence-gated (uncategorized) work unit in scope in the analytics window",
   "TestReadinessSumsEveryKeyAtItsOwnNewestDay": "no team with a coverage key whose newest day is older than the team's latest day",
-  "TestTheCoverageGrainCountIsComparedWithTheStore": "no team with a work scope whose newest coverage day is older than the team's latest day",
-  "TestOwnerShareTheRecordedCaptureReadsTheStoredShare": "not every owner of a repository stores a share in team_repo_ownership"
+  "TestTheCoverageGrainCountIsComparedWithTheStore": "no team with a work scope whose newest coverage day is older than the team's latest day"
 }

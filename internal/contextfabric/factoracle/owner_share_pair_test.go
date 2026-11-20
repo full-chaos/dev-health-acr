@@ -439,14 +439,27 @@ func TestOwnerShareTheExtractCarriesTheShare(t *testing.T) {
 	t.Fatal("the extract has no ownership table")
 }
 
-// The capture of CHAOS-12808 carries the share (the extract keeps the column
-// since CHAOS-12691): at the window's end every owner reads its stored share,
-// no owned repository splits equally, and nothing is a breach. On askdev-1
-// each owned repository has one owner.
+// The capture carries the share (the extract keeps the column since
+// CHAOS-12691). ops stores a share only on a row of the inferred derivation;
+// a provider_access, native or manual row never carries one (ops
+// RepoOwnershipShape), and the owners of a repository with such an owner
+// split it equally (D5988). So at the window's end every repository whose
+// owners all store a share reads those shares, exactly the others split
+// equally, and nothing is a breach.
 func TestOwnerShareTheRecordedCaptureReadsTheStoredShare(t *testing.T) {
 	manifest, _, extract, err := LoadCapture(captureDir)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for i, row := range extract.Tables[tableTeamRepoOwnership] {
+		source, _ := rowString(row, "source")
+		share, err := rowNullableFloat(row, "share")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if inferred := source == "inferred"; inferred != (share != nil) {
+			t.Fatalf("team_repo_ownership row %d: source %q with share stored = %t; ops stores a share on an inferred row only", i, source, share != nil)
+		}
 	}
 	store, err := NewStore(extract)
 	if err != nil {
@@ -459,29 +472,30 @@ func TestOwnerShareTheRecordedCaptureReadsTheStoredShare(t *testing.T) {
 	if len(reading.Owners) == 0 {
 		t.Fatal("the recorded capture has no owned repository; this test checks nothing")
 	}
-	stored, missing := 0, 0
-	for _, owners := range reading.Owners {
+	split := map[string]bool{}
+	for _, repo := range reading.EqualSplit {
+		split[repo] = true
+	}
+	measuredRepos := 0
+	for repo, owners := range reading.Owners {
+		unmeasured := 0
 		for _, owner := range owners {
 			if owner.Stored == nil {
-				missing++
-			} else {
-				stored++
+				unmeasured++
 			}
 		}
+		if split[repo] != (unmeasured > 0) {
+			t.Fatalf("repository %s: %d of %d owners store no share, equal split = %t", repo, unmeasured, len(owners), split[repo])
+		}
+		if unmeasured == 0 {
+			measuredRepos++
+		}
 	}
-	if missing > 0 {
-		t.Logf("%d of %d owners of the capture store a share", stored, stored+missing)
-		notMeasured(t, "TestOwnerShareTheRecordedCaptureReadsTheStoredShare", "capture where every owner of a repository stores a share")
+	if measuredRepos == 0 {
+		notMeasured(t, "TestOwnerShareTheRecordedCaptureReadsTheStoredShare", "repository whose owners all store a share")
 	}
 	measured(t, "TestOwnerShareTheRecordedCaptureReadsTheStoredShare")
-	for repo, owners := range reading.Owners {
-		for _, owner := range owners {
-			if owner.Stored == nil {
-				t.Fatalf("repository %s: owner %s reads no stored share in a capture that carries the column (%d of %d owners have one)", repo, owner.Team, stored, stored+missing)
-			}
-		}
-	}
-	if len(reading.EqualSplit) != 0 || len(reading.Breaches) != 0 {
+	if len(reading.Breaches) != 0 {
 		t.Fatalf("%d of %d owned repositories split equally, breaches %+v", len(reading.EqualSplit), len(reading.Owners), reading.Breaches)
 	}
 }
