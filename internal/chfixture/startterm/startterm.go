@@ -105,7 +105,7 @@ func generic(ctx context.Context, req testcontainers.GenericContainerRequest, cr
 		stage := &startStage{}
 		began := time.Now()
 		tracked := req
-		tracked.LifecycleHooks = append(slices.Clone(req.LifecycleHooks), stage.hooks())
+		tracked.LifecycleHooks = stage.track(req.LifecycleHooks)
 		c, err := create(ctx, tracked)
 		if err != nil {
 			err = endedByCaller(ctx, req.Image, began, stage, err)
@@ -119,7 +119,12 @@ func postgresRun(ctx context.Context, image string, opts []testcontainers.Contai
 	return startUntilImageServes(ctx, func() (*tcpostgres.PostgresContainer, error) {
 		stage := &startStage{}
 		began := time.Now()
-		tracked := append(slices.Clone(opts), testcontainers.WithAdditionalLifecycleHooks(stage.hooks()))
+		// Last, so it sees the hooks of every customizer, including one that assigns the list.
+		track := testcontainers.CustomizeRequestOption(func(req *testcontainers.GenericContainerRequest) error {
+			req.LifecycleHooks = stage.track(req.LifecycleHooks)
+			return nil
+		})
+		tracked := append(slices.Clone(opts), track)
 		pc, err := run(ctx, image, tracked...)
 		if err != nil {
 			err = endedByCaller(ctx, image, began, stage, err)
@@ -150,10 +155,61 @@ var stageNames = [...]string{
 	stageReady:     "post-ready hooks",
 }
 
-// startStage records the last lifecycle stage one start reached.
-type startStage struct{ reached atomic.Int32 }
+// startStage records the last lifecycle stage one start reached and the stage of the first caller hook that failed.
+// testcontainers runs the rest of a phase's callbacks after one fails, so a stage marker that follows the failed
+// hook advances reached: the failed hook's own stage wins (failed holds stage+1; 0 = none).
+type startStage struct{ reached, failed atomic.Int32 }
 
-func (s *startStage) name() string { return stageNames[s.reached.Load()] }
+func (s *startStage) name() string {
+	if f := s.failed.Load(); f != 0 {
+		return stageNames[f-1]
+	}
+	return stageNames[s.reached.Load()]
+}
+
+// track returns a fresh hook list: each of the caller's callbacks wrapped to record the stage it ran in when it
+// fails, then the stage markers. The caller's list and its backing array are not written.
+func (s *startStage) track(caller []testcontainers.ContainerLifecycleHooks) []testcontainers.ContainerLifecycleHooks {
+	out := make([]testcontainers.ContainerLifecycleHooks, 0, len(caller)+1)
+	for _, h := range caller {
+		h.PreCreates = wrapRequestHooks(s, stageCreate, h.PreCreates)
+		h.PostCreates = wrapContainerHooks(s, stageCreate, h.PostCreates)
+		h.PostStarts = wrapContainerHooks(s, stageStart, h.PostStarts)
+		h.PostReadies = wrapContainerHooks(s, stageReady, h.PostReadies)
+		out = append(out, h)
+	}
+	return append(out, s.hooks())
+}
+
+func (s *startStage) fail(stage int32) { s.failed.CompareAndSwap(0, stage+1) }
+
+func wrapRequestHooks(s *startStage, stage int32, hooks []testcontainers.ContainerRequestHook) []testcontainers.ContainerRequestHook {
+	var out []testcontainers.ContainerRequestHook
+	for _, hook := range hooks {
+		out = append(out, func(ctx context.Context, req testcontainers.ContainerRequest) error {
+			err := hook(ctx, req)
+			if err != nil {
+				s.fail(stage)
+			}
+			return err
+		})
+	}
+	return out
+}
+
+func wrapContainerHooks(s *startStage, stage int32, hooks []testcontainers.ContainerHook) []testcontainers.ContainerHook {
+	var out []testcontainers.ContainerHook
+	for _, hook := range hooks {
+		out = append(out, func(ctx context.Context, c testcontainers.Container) error {
+			err := hook(ctx, c)
+			if err != nil {
+				s.fail(stage)
+			}
+			return err
+		})
+	}
+	return out
+}
 
 func (s *startStage) hooks() testcontainers.ContainerLifecycleHooks {
 	enter := func(stage int32) func() { return func() { s.reached.Store(stage) } }
