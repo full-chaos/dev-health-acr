@@ -69,8 +69,20 @@ func dtNodes() []directread.LookupNode {
 			"subject_kind": "repository", "canonical_id": "repository:" + id, "label": slug, "authorization_repositories": []string{slug},
 		}}
 	}
-	return []directread.LookupNode{node(dtRepoA, dtSlugA), node(dtRepoB, dtSlugB)}
+	nodes := []directread.LookupNode{node(dtRepoA, dtSlugA), node(dtRepoB, dtSlugB)}
+	if dtSameLabelRepos {
+		nodes = append(nodes, node(dtRepoC, dtSlugSame), node(dtRepoD, dtSlugSame))
+	}
+	return nodes
 }
+
+const (
+	dtRepoC    = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+	dtRepoD    = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+	dtSlugSame = "example-org/dup-service"
+)
+
+var dtSameLabelRepos bool
 
 func (dtGraph) ResolveInvestigationBinding(context.Context, storage.Principal) (contextfabric.ResolvedGraphBinding, error) {
 	return contextfabric.ResolvedGraphBinding{GraphKey: "dt", Epoch: 1}, nil
@@ -261,6 +273,10 @@ func newDTStackWithModelConfigs(t *testing.T, entitlements api.EntitlementProvid
 // session connects a real MCP server, built from the hosted capabilities this
 // credential really gets, to an in-memory client.
 func (s *dtStack) session(scopes, repositories []string) (*mcpsdk.ClientSession, *acrmcp.Bootstrap) {
+	return s.sessionWith(scopes, repositories, nil)
+}
+
+func (s *dtStack) sessionWith(scopes, repositories []string, clientOptions *mcpsdk.ClientOptions) (*mcpsdk.ClientSession, *acrmcp.Bootstrap) {
 	s.t.Helper()
 	issued, err := s.service.Create(context.Background(), auth.CreateCredentialRequest{OrgID: "org_1", Name: "dt", RepositoryScopes: repositories, Scopes: scopes, CreatedBy: "test_actor"})
 	if err != nil {
@@ -285,7 +301,7 @@ func (s *dtStack) session(scopes, repositories []string) (*mcpsdk.ClientSession,
 	if err != nil {
 		s.t.Fatal(err)
 	}
-	cs, err := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "0.0.1"}, nil).Connect(context.Background(), t2, nil)
+	cs, err := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "test-client", Version: "0.0.1"}, clientOptions).Connect(context.Background(), t2, nil)
 	if err != nil {
 		s.t.Fatal(err)
 	}
