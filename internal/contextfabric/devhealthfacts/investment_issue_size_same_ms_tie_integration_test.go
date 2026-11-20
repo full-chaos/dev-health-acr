@@ -18,7 +18,7 @@ import (
 // readers.IssueSizedSource puts in every sized statement.
 func TestIssueSizeSameMillisecondVersionsPickTheLaterInsertAgainstRealClickHouse(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newCHAOS3780IntegrationClient(t, ctx)
+	query, direct := newDedicatedClickHouseIntegrationClient(t, ctx)
 	createCHAOS5930Tables(t, ctx, direct)
 	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactInvestment)
 	at := ts(2026, 9, 18, 0, 0, 0)
