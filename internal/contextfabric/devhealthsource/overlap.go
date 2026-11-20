@@ -115,6 +115,11 @@ type windowScope struct {
 	recon map[string]reconcilePass
 	// ahead says the scope's last paged read stopped with rows beyond it.
 	ahead bool
+	// boundedWarned says the current pass already wrote its bounded-page line.
+	// It sits outside windowPass: a rollback of the pass (an unacknowledged
+	// batch, a failed read) must not make the retry of that page write it again.
+	// Only the start of a pass clears it.
+	boundedWarned bool
 }
 
 // pendingWindow is an emitted window batch whose rows are not yet "seen":
@@ -324,6 +329,25 @@ func (m *windowMemo) pass(scope string) windowPass {
 	return windowPass{}
 }
 
+func (m *windowMemo) boundedWarned(scope string) bool {
+	if m == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sc := m.scopes[scope]
+	return sc != nil && sc.boundedWarned
+}
+
+func (m *windowMemo) setBoundedWarned(scope string, warned bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.scopeLocked(scope).boundedWarned = warned
+}
+
 func (m *windowMemo) setPass(scope string, pass windowPass) {
 	if m == nil {
 		return
@@ -347,7 +371,7 @@ func (m *windowMemo) snapshot() *windowMemo {
 	defer m.mu.Unlock()
 	out := newWindowMemo()
 	for scope, sc := range m.scopes {
-		copied := &windowScope{seen: make(map[string]time.Time, len(sc.seen)), windowPass: sc.windowPass}
+		copied := &windowScope{seen: make(map[string]time.Time, len(sc.seen)), windowPass: sc.windowPass, boundedWarned: sc.boundedWarned}
 		if sc.recon != nil {
 			copied.recon = make(map[string]reconcilePass, len(sc.recon))
 			for name, rs := range sc.recon {
@@ -406,6 +430,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		pass.walking, pass.passStart, pass.walk = true, now, cursorState{Since: pass.low}
 		pass.high = cursorState{Since: state.Since, After: state.After}
 		pass.pages, pass.rows, pass.bounded = 0, 0, 0
+		p.window.setBoundedWarned(p.windowScope, false)
 		carry.reset()
 	}
 	// A pass resumed from an earlier call may have been passed by rows that
@@ -470,8 +495,9 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 			// A long walk can meet the bound on every page: the pass writes
 			// the line for its first such page and counts the rest.
 			if bounded {
-				if pass.bounded == 0 {
+				if !p.window.boundedWarned(p.windowScope) {
 					p.logBoundedPage(ctx, orgID, bound)
+					p.window.setBoundedWarned(p.windowScope, true)
 				}
 				pass.bounded++
 			}
