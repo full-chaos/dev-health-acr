@@ -22,6 +22,7 @@ type boundedRetryRig struct {
 	repos     *liveKeysetRows
 	later     keysetRows
 	failAfter string
+	now       time.Time
 	frontier  cursorState
 }
 
@@ -51,11 +52,11 @@ func newBoundedRetryRig(t *testing.T) *boundedRetryRig {
 	laterTable := entityTable{name: "later", query: func(ctx context.Context, _ contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 		return fetch(ctx, r.later, "", rowLimitBindings(orgID, cursor, limit), limit, scanKeysetRow)
 	}}
-	now := pageCutStamp.Add(10 * time.Minute)
+	r.now = pageCutStamp.Add(10 * time.Minute)
 	r.plan = sourcePlan{
 		client: keysetRows{}, source: "bounded_warn_retry_test", version: ClickHouseSourceVersion,
 		tables:         []entityTable{repositoryKeysetTable(r.repos), fullTable, laterTable},
-		now:            func() time.Time { return now },
+		now:            func() time.Time { return r.now },
 		overlap:        15 * time.Minute,
 		window:         newWindowMemo(),
 		windowScope:    windowScopeFor("org", 0),
@@ -164,19 +165,44 @@ func TestBoundedPageLineIsNotWrittenAgainWhenTheRetryFollowsAFailedRead(t *testi
 	}
 }
 
-// A new pass writes its own line: the marker is cleared at the start of a pass, not kept for the scope's life.
+// The first page of a pass is the bounded one and its batch is not acknowledged: the pass goes back to before it
+// started, and the retry starts it again. That is still the same pass.
+func TestBoundedPageLineIsNotWrittenAgainWhenTheRetryStartsTheRolledBackPassAgain(t *testing.T) {
+	r := newBoundedRetryRig(t)
+	r.landSecondPage()
+	for attempt := 1; attempt <= 3; attempt++ {
+		ack, err := r.call()
+		if err != nil || ack == "" {
+			t.Fatalf("attempt %d: ack=%q err=%v, want the batch of the bounded first page", attempt, ack, err)
+		}
+		r.requireOneLineAndOneBoundedPage(fmt.Sprintf("attempt %d", attempt))
+		r.plan.window.settle(r.plan.windowScope, "")
+	}
+}
+
+// A new pass writes its own line: the marker names the pass, it is not kept for the scope's life.
 func TestBoundedPageLineIsWrittenAgainByTheNextPass(t *testing.T) {
 	r := newBoundedRetryRig(t)
 	r.passAtSecondPage()
-	if ack, err := r.call(); err != nil || ack == "" {
-		t.Fatalf("second call: ack=%q err=%v, want the batch of the bounded page", ack, err)
+	drain := func(until func() bool) {
+		t.Helper()
+		for call := 0; call < 60 && !until(); call++ {
+			ack, err := r.call()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ack != "" {
+				r.plan.window.settle(r.plan.windowScope, ack)
+			}
+		}
 	}
-	r.requireOneLineAndOneBoundedPage("the bounded page")
-	r.plan.window.setPass(r.plan.windowScope, windowPass{})
-	if _, err := r.call(); err != nil {
-		t.Fatal(err)
+	drain(func() bool { return !r.plan.window.pass(r.plan.windowScope).walking })
+	if lines := boundedPageLines(t, r.logs); len(lines) != 1 {
+		t.Fatalf("the first pass wrote %d bounded-page lines, want 1: one per pass", len(lines))
 	}
+	r.now = r.now.Add(2 * time.Hour)
+	drain(func() bool { return len(boundedPageLines(t, r.logs)) == 2 })
 	if lines := boundedPageLines(t, r.logs); len(lines) != 2 {
-		t.Fatalf("a new pass wrote %d bounded-page lines in all, want 2: one per pass", len(lines))
+		t.Fatalf("the second pass wrote %d bounded-page lines in all, want 2: one per pass", len(lines))
 	}
 }

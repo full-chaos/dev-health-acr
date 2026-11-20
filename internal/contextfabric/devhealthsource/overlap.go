@@ -115,11 +115,12 @@ type windowScope struct {
 	recon map[string]reconcilePass
 	// ahead says the scope's last paged read stopped with rows beyond it.
 	ahead bool
-	// boundedWarned says the current pass already wrote its bounded-page line.
-	// It sits outside windowPass: a rollback of the pass (an unacknowledged
-	// batch, a failed read) must not make the retry of that page write it again.
-	// Only the start of a pass clears it.
-	boundedWarned bool
+	// boundedWarnedSeq is the windowPass.seq of the pass that wrote its
+	// bounded-page line last. It sits outside windowPass: a rollback of the pass
+	// (an unacknowledged batch, a failed read) must not make the retry of that
+	// page write it again. A rollback also puts seq back, so the retry that
+	// starts the pass again names it by the same seq; only a later pass differs.
+	boundedWarnedSeq int
 }
 
 // pendingWindow is an emitted window batch whose rows are not yet "seen":
@@ -141,6 +142,7 @@ type windowPass struct {
 	pages     int         // pages the current pass has read
 	rows      int         // source rows the current pass has read
 	bounded   int         // pages of the current pass the page bound ended
+	seq       int         // passes this scope has started: names the current pass
 	nextStart time.Time   // no new pass starts before this (sourcePlan.windowInterval); zero = no pacing
 }
 
@@ -329,23 +331,23 @@ func (m *windowMemo) pass(scope string) windowPass {
 	return windowPass{}
 }
 
-func (m *windowMemo) boundedWarned(scope string) bool {
+func (m *windowMemo) boundedWarned(scope string, seq int) bool {
 	if m == nil {
 		return false
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	sc := m.scopes[scope]
-	return sc != nil && sc.boundedWarned
+	return sc != nil && sc.boundedWarnedSeq == seq
 }
 
-func (m *windowMemo) setBoundedWarned(scope string, warned bool) {
+func (m *windowMemo) markBoundedWarned(scope string, seq int) {
 	if m == nil {
 		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.scopeLocked(scope).boundedWarned = warned
+	m.scopeLocked(scope).boundedWarnedSeq = seq
 }
 
 func (m *windowMemo) setPass(scope string, pass windowPass) {
@@ -371,7 +373,7 @@ func (m *windowMemo) snapshot() *windowMemo {
 	defer m.mu.Unlock()
 	out := newWindowMemo()
 	for scope, sc := range m.scopes {
-		copied := &windowScope{seen: make(map[string]time.Time, len(sc.seen)), windowPass: sc.windowPass, boundedWarned: sc.boundedWarned}
+		copied := &windowScope{seen: make(map[string]time.Time, len(sc.seen)), windowPass: sc.windowPass, boundedWarnedSeq: sc.boundedWarnedSeq}
 		if sc.recon != nil {
 			copied.recon = make(map[string]reconcilePass, len(sc.recon))
 			for name, rs := range sc.recon {
@@ -430,7 +432,7 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		pass.walking, pass.passStart, pass.walk = true, now, cursorState{Since: pass.low}
 		pass.high = cursorState{Since: state.Since, After: state.After}
 		pass.pages, pass.rows, pass.bounded = 0, 0, 0
-		p.window.setBoundedWarned(p.windowScope, false)
+		pass.seq++
 		carry.reset()
 	}
 	// A pass resumed from an earlier call may have been passed by rows that
@@ -495,9 +497,9 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 			// A long walk can meet the bound on every page: the pass writes
 			// the line for its first such page and counts the rest.
 			if bounded {
-				if !p.window.boundedWarned(p.windowScope) {
+				if !p.window.boundedWarned(p.windowScope, pass.seq) {
 					p.logBoundedPage(ctx, orgID, bound)
-					p.window.setBoundedWarned(p.windowScope, true)
+					p.window.markBoundedWarned(p.windowScope, pass.seq)
 				}
 				pass.bounded++
 			}
