@@ -119,8 +119,19 @@ func (p *WorkloadProvider) ReadFacts(ctx context.Context, principal storage.Prin
 		rejectedCount += rejected
 	}
 
+	// A daily_workload display-cap cut is named on the fact that lost rows;
+	// when it is the only truncation, the cut is subject-local.
+	var dailyOmitted int64
+	for _, fact := range facts {
+		if value, ok := fact.Fields["daily_workload_omitted_count"]; ok && value.Integer != nil {
+			dailyOmitted += *value.Integer
+		}
+	}
+	subjectLocal := !truncated && markSubjectLocalCuts(facts, int(dailyOmitted))
+	truncated = truncated || dailyOmitted > 0
+
 	state, retentionReason := timeBound.retentionState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: truncated}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainExact), Truncated: truncated, TruncationSubjectLocal: subjectLocal}
 	return result, nil
 }
 
@@ -338,16 +349,9 @@ func (p *WorkloadProvider) readTeamWorkload(ctx context.Context, orgID string, s
 	if seriesErr != nil {
 		return 0, rejected, seriesErr
 	}
-	// The daily-series query caps each team's own rows; the largest one is
-	// folded into rowCount so a team hitting its own cap reads as truncated.
-	dailySeriesRowCount := 0
-	for _, dailyRows := range dailyByTeam {
-		dailySeriesRowCount = max(dailySeriesRowCount, len(dailyRows))
-	}
+	// The daily-series query caps each team's own rows; a team cut by the
+	// display cap names it on its own fact (daily_workload_omitted_count).
 	rowCount := len(rows)
-	if dailySeriesRowCount > rowCount {
-		rowCount = dailySeriesRowCount
-	}
 	// CHAOS-12607: the same latest rows' completion forecast, read with the
 	// NULL and empty scopes kept apart, and joined back on (team, scope,
 	// computed_at). Its own row bound is the same DefaultRowLimit, so it

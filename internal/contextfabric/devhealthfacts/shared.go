@@ -1544,11 +1544,11 @@ func withRowLimitPerKey(statement, key string, keys int) string {
 	return statement + "\nLIMIT " + strconv.Itoa(maxFactRowsPerQuery) + " BY " + key + "\nLIMIT " + strconv.Itoa(maxFactRowsPerQuery*max(keys, 1))
 }
 
-// factOmittedRowCount sums the integer *_omitted_count fields a fact carries.
+// factOmittedRowCount sums the integer daily_*_omitted_count fields a fact carries: the rows a daily table lost.
 func factOmittedRowCount(fact contextfabric.CanonicalFact) int64 {
 	var total int64
 	for name, value := range fact.Fields {
-		if strings.HasSuffix(name, "_omitted_count") && value.Integer != nil {
+		if strings.HasPrefix(name, "daily_") && strings.HasSuffix(name, "_omitted_count") && value.Integer != nil {
 			total += *value.Integer
 		}
 	}
@@ -1558,9 +1558,18 @@ func factOmittedRowCount(fact contextfabric.CanonicalFact) int64 {
 // markSubjectLocalCuts handles a read whose only truncation is rows the
 // provider dropped and named on the facts that lost them: those facts say
 // truncated, every other fact says available, and the result reports the
-// truncation as subject-local.
+// truncation as subject-local. It reports false, changing nothing, when the
+// daily tables do not account for every omitted row (a scope or team
+// breakdown cut is not a daily cut).
 func markSubjectLocalCuts(facts []contextfabric.CanonicalFact, omitted int) bool {
 	if omitted <= 0 {
+		return false
+	}
+	var named int64
+	for _, fact := range facts {
+		named += factOmittedRowCount(fact)
+	}
+	if named != int64(omitted) {
 		return false
 	}
 	for index := range facts {

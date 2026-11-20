@@ -366,19 +366,15 @@ func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids
 	// RankCohort's healthRiskSignal (which reads ONLY fields["severity"])
 	// cannot observe a difference.
 	var dailyByTeam map[string][]healthDailyRow
-	dailySeriesRowCount := 0
 	if scope == "team" {
 		var seriesErr error
 		dailyByTeam, seriesErr = p.queryTeamHealthDailySeries(ctx, orgID, ids, timeBound)
 		if seriesErr != nil {
 			return 0, 0, seriesErr
 		}
-		// queryTeamHealthDailySeries caps each team's own rows; the largest
-		// one is folded into rowCount so a team hitting its own cap reads
-		// as truncated, as the scalar read's own cap does.
-		for _, rows := range dailyByTeam {
-			dailySeriesRowCount = max(dailySeriesRowCount, len(rows))
-		}
+		// queryTeamHealthDailySeries caps each team's own rows; a team cut
+		// by the display cap names it on its own fact
+		// (daily_health_omitted_count).
 	}
 	// The hash tiebreak's ifNull(compounding_risk, -1) sentinel is only
 	// unambiguous while -1 is outside compounding_risk's real domain.
@@ -524,9 +520,6 @@ ORDER BY scope_id`)
 		})
 		return nil
 	}, timeBound.bindings()...)
-	if dailySeriesRowCount > rowCount {
-		rowCount = dailySeriesRowCount
-	}
 	return rowCount, dailyOmitted, scanErr
 }
 

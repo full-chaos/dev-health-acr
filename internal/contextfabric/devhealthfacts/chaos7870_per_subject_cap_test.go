@@ -168,3 +168,104 @@ func TestChaos7870TeamDailySeriesStatementsCapPerTeam(t *testing.T) {
 		}
 	}
 }
+
+func chaos7870DayString(i int) string {
+	return time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -i).Format("2006-01-02")
+}
+
+func chaos7870ExpectCut(t *testing.T, result contextfabric.FactProviderResult, cutField, cutSubject string, otherSubjects ...string) {
+	t.Helper()
+	if !result.Truncated || !result.TruncationSubjectLocal {
+		t.Errorf("Truncated=%v TruncationSubjectLocal=%v, want both true", result.Truncated, result.TruncationSubjectLocal)
+	}
+	for _, fact := range result.Facts {
+		_, cut := fact.Fields[cutField]
+		want := fact.Subject.CanonicalID == cutSubject
+		if cut != want {
+			t.Errorf("%s %s present = %v, want %v", fact.Subject.CanonicalID, cutField, cut, want)
+		}
+		wantState := contextfabric.SourceAvailable
+		if want {
+			wantState = contextfabric.SourceTruncated
+		}
+		if fact.SourceState != wantState {
+			t.Errorf("%s source state = %q, want %q", fact.Subject.CanonicalID, fact.SourceState, wantState)
+		}
+	}
+}
+
+func TestChaos7870WorkloadDisplayCutIsSubjectLocal(t *testing.T) {
+	t.Parallel()
+	var series [][]any
+	for i := 0; i < 74; i++ {
+		series = append(series, workloadDailySeriesRow("a", chaos7870DayString(i), 5, 1.5, 0.5))
+	}
+	for i := 0; i < 28; i++ {
+		series = append(series, workloadDailySeriesRow("b", chaos7870DayString(i), 5, 1.5, 0.5))
+	}
+	client := &fakeClient{tables: []fakeTable{
+		{match: workloadBaseQueryMatch, rows: [][]any{workloadRow("a", "s1"), workloadRow("b", "s1")}},
+		{match: workloadDailySeriesMatch, rows: series, honorLimit: true},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactWorkload)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactWorkload, Subjects: []contextfabric.SubjectRef{teamSubject("a"), teamSubject("b")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	chaos7870ExpectCut(t, result, "daily_workload_omitted_count", "team:a")
+}
+
+// A team that reads exactly the per-team cap is not a cut by itself, and the
+// other team is read whole.
+func TestChaos7870HealthDailyAtTheCapDoesNotTruncateTheOtherTeam(t *testing.T) {
+	t.Parallel()
+	var series [][]any
+	for i := 0; i < 200; i++ {
+		series = append(series, healthTeamDailySeriesRow("A", chaos7870DayString(i), "high", uint8(1), 0.61))
+	}
+	for i := 0; i < 28; i++ {
+		series = append(series, healthTeamDailySeriesRow("B", chaos7870DayString(i), "high", uint8(1), 0.61))
+	}
+	client := &fakeClient{tables: []fakeTable{
+		{match: healthScalarMatch, rows: [][]any{healthRow("A"), healthRow("B")}},
+		{match: healthDailySeriesMatch, rows: series, honorLimit: true},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{teamSubject("A"), teamSubject("B")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	chaos7870ExpectCut(t, result, "daily_health_omitted_count", "team:A")
+}
+
+// A scope breakdown cut is not a daily display cut: the kind stays truncated
+// for every subject.
+func TestChaos7870FlowScopeBreakdownCutStaysKindWide(t *testing.T) {
+	t.Parallel()
+	var scopes [][]any
+	for i := 0; i < contextfabric.MaxFactValueRows+1; i++ {
+		scopes = append(scopes, workItemMetricsDailyRow("team-a", "scope-"+strings.Repeat("x", i%3)+string(rune('a'+i%26))+string(rune('A'+i/26)), 10, 6, 4))
+	}
+	scopes = append(scopes, workItemMetricsDailyRow("team-b", "scope-b", 10, 6, 4))
+	client := &fakeClient{tables: []fakeTable{
+		{match: "work_scope_id ORDER BY day DESC", rows: scopes},
+		{match: flowDailySeriesMatch, rows: [][]any{flowDailySeriesRow("team-a", "2026-02-21", 1, 1, 1), flowDailySeriesRow("team-b", "2026-02-21", 1, 1, 1)}, honorLimit: true},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactFlow)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactFlow, Subjects: []contextfabric.SubjectRef{teamSubject("team-a"), teamSubject("team-b")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if !result.Truncated || result.TruncationSubjectLocal {
+		t.Errorf("Truncated=%v TruncationSubjectLocal=%v, want true false: a scope breakdown cut is kind-wide", result.Truncated, result.TruncationSubjectLocal)
+	}
+}
