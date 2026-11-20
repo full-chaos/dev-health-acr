@@ -434,33 +434,33 @@ func (s *Store) RiskSubjects(scope string) map[string]bool {
 	return out
 }
 
-// EstimateCoverage is the store reading of one team's estimate coverage on
-// its latest day.
+// EstimateCoverage is the store reading of one team's estimate coverage:
+// every (provider, work scope) key of the team at its own newest day.
 type EstimateCoverage struct {
+	// Day is the newest of those days.
 	Day string
-	// Scopes counts the (provider, work scope) rows of that day.
+	// Scopes counts the (provider, work scope) keys.
 	Scopes int
-	// Grains counts the team's (provider, work scope) keys in the extract,
-	// each at its own newest day: the grains ops reads for grainCount.
+	// Grains counts the team's (provider, work scope) keys in the extract:
+	// the grains ops reads for grainCount.
 	Grains int
 	// Counts sums estimated_count, unestimated_count and backlog_size over
-	// those rows.
+	// those keys.
 	Counts map[string]int64
 }
 
-// LatestEstimateCoverage reads, per team, the estimate coverage rows of the
-// team's latest day in the extract: one row per provider and work scope (the
-// latest by computed_at), summed. It is what both planes state for the team:
-// ops as the coverage block of the forecast, acr as the readiness facts of
-// that day.
+// LatestEstimateCoverage reads, per team, the estimate coverage row of each
+// (provider, work scope) key at that key's own newest day (the latest by
+// computed_at within the day), summed. It is what both planes state for the
+// team: ops as the coverage block of the forecast, acr as the readiness facts
+// of the keys.
 func (s *Store) LatestEstimateCoverage() (map[string]EstimateCoverage, error) {
-	type scopeRow struct {
+	type keyRow struct {
+		day    string
 		at     time.Time
 		counts map[string]int64
 	}
-	latestDay := map[string]string{}
-	rows := map[string]map[string]scopeRow{}
-	grains := map[string]map[string]bool{}
+	rows := map[string]map[string]keyRow{}
 	for _, row := range s.extract.Tables[tableEstimateCoverageMetricsDaily] {
 		team, ok := rowString(row, "team_id")
 		if !ok || team == "" {
@@ -473,21 +473,14 @@ func (s *Store) LatestEstimateCoverage() (map[string]EstimateCoverage, error) {
 		provider, _ := rowString(row, "provider")
 		scope, _ := rowString(row, "work_scope_id")
 		key := provider + "\x00" + scope
-		if grains[team] == nil {
-			grains[team] = map[string]bool{}
-		}
-		grains[team][key] = true
-		if day < latestDay[team] {
-			continue
-		}
-		if day > latestDay[team] {
-			latestDay[team], rows[team] = day, map[string]scopeRow{}
+		if rows[team] == nil {
+			rows[team] = map[string]keyRow{}
 		}
 		at, err := rowTime(row, "computed_at")
 		if err != nil {
 			return nil, err
 		}
-		if prior, seen := rows[team][key]; seen && !at.After(prior.at) {
+		if prior, seen := rows[team][key]; seen && (day < prior.day || (day == prior.day && !at.After(prior.at))) {
 			continue
 		}
 		counts := map[string]int64{}
@@ -498,12 +491,15 @@ func (s *Store) LatestEstimateCoverage() (map[string]EstimateCoverage, error) {
 			}
 			counts[column] = int64(value)
 		}
-		rows[team][key] = scopeRow{at: at, counts: counts}
+		rows[team][key] = keyRow{day: day, at: at, counts: counts}
 	}
 	out := map[string]EstimateCoverage{}
-	for team, day := range latestDay {
-		coverage := EstimateCoverage{Day: day, Scopes: len(rows[team]), Grains: len(grains[team]), Counts: map[string]int64{}}
-		for _, row := range rows[team] {
+	for team, keys := range rows {
+		coverage := EstimateCoverage{Scopes: len(keys), Grains: len(keys), Counts: map[string]int64{}}
+		for _, row := range keys {
+			if row.day > coverage.Day {
+				coverage.Day = row.day
+			}
 			for column, value := range row.counts {
 				coverage.Counts[column] += value
 			}
