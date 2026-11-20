@@ -33,11 +33,13 @@ ACR_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 : "${O4_VENUE_DERIVE_TIMEOUT:=1800}"
 # The frozen ops world the organization is seeded with (ops `dho fixtures generate`).
 : "${O4_VENUE_WORLD_ARGS:=--provider mixed --repo-name chaos-fixtures/shared-api --repo-count 18 --days 180 --commits-per-day 0 --pr-count 189 --team-count 8 --seed 9440}"
-# The `_mg` world adds work units and investments when the derive chain leaves them empty.
+# The `_mg` world adds work units, investments and membership runs when the derive chain leaves
+# them empty.
 : "${O4_VENUE_FALLBACK_WORLD_ARGS:=--provider synthetic --repo-name acme/live-e2e --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph}"
 : "${O4_VENUE_WORKER_QUEUES:=investment,metrics,reports,workgraph}"
 : "${O4_VENUE_WORKER_CONCURRENCY:=investment=1,metrics=2,reports=2,workgraph=1}"
 : "${O4_VENUE_JQ_IMAGE:=ghcr.io/jqlang/jq:1.7.1}"
+: "${O4_VENUE_CURL_IMAGE:=curlimages/curl:8.11.1}"
 
 STATE="$O4_VENUE_STATE_DIR"
 SECRETS="$STATE/secrets"
@@ -466,8 +468,10 @@ step_seed() {
   note 'synthetic world loaded'
   fi
   derive "$org"
-  if [ "$(table_count work_unit_investments "$org")" = 0 ]; then
-    note 'no work unit investments after the derive chain: loading the _mg world for the same organization'
+  # Work unit membership has no manual ops trigger (only the daily scheduler fanout): the _mg
+  # world carries membership runs, as it carries investments.
+  if [ "$(table_count work_unit_investments "$org")" = 0 ] || [ "$(table_count work_unit_membership_runs "$org")" = 0 ]; then
+    note 'no work unit investments or membership after the derive chain: loading the _mg world for the same organization'
     # shellcheck disable=SC2086
     dho_analytics fixtures generate --sink "clickhouse://ch:${ch}@clickhouse:9000/default" --db-type clickhouse --org "$org" --allow-mixed-org $O4_VENUE_FALLBACK_WORLD_ARGS 2>&1 | mask_ids >&2
     derive "$org"
@@ -638,14 +642,15 @@ step_routes() {
   prepare_state
   render_override
   case "$O4_VENUE_PROJECT" in acr-e2e-o4venue-*) ;; *) die 'the routes step runs only for an acr-e2e-o4venue-* project' ;; esac
-  local email="o4-venue-admin@example.invalid" pg token
+  local email="o4-venue-admin@example.com" pg token
   [ -f "$SECRETS/admin-password" ] || write_private "$SECRETS/admin-password" "$(random_secret)"
   dho admin users create --email "$email" --password "$(cat "$SECRETS/admin-password")" --full-name 'O4 Venue Admin' >/dev/null 2>&1 || true
   dho admin users update --email "$email" --verified --superuser >/dev/null || die 'the venue admin could not be marked a verified superuser'
   # shellcheck disable=SC2016 # expanded by the container's sh.
+  # The login runs in a throwaway curl container on this project's own network only.
   token="$(printf '{"email":"%s","password":"%s"}' "$email" "$(cat "$SECRETS/admin-password")" |
-    compose exec -T auth-issuer sh -c 'wget -qO- --header "Content-Type: application/json" --post-file=/dev/stdin http://go-api:8000/api/v1/auth/login' 2>/dev/null |
-    json_field access_token)"
+    docker run --rm -i --network "${O4_VENUE_PROJECT}_default" "$O4_VENUE_CURL_IMAGE" -sS -H 'Content-Type: application/json' --data-binary @- \
+      http://go-api:8000/api/v1/auth/login 2>/dev/null | json_field access_token || true)"
   [ -n "$token" ] || die 'the venue admin login returned no access token'
   write_private "$SECRETS/admin-token" "$token"
   pg="$(cat "$SECRETS/postgres-password")"

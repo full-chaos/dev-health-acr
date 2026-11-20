@@ -36,7 +36,7 @@ the seed and the derive chain, run from the same ops image:
    (the forecast reads the daily metrics). Each verb takes `--reason` and `--correlation-id`.
    Stop the worker and the reconciler before the capture: a store that moves during the run
    is refused.
-3. If `work_unit_investments` stays empty, also load the `_mg` world for the same
+3. If `work_unit_investments` or `work_unit_membership_runs` stays empty (membership has no manual ops trigger), also load the `_mg` world for the same
    organization (`--provider synthetic --repo-name acme/live-e2e --days 14 --commits-per-day 6 --pr-count 24 --team-count 10 --seed 20260219 --with-metrics --with-work-graph --allow-mixed-org`).
 
 ### Venue steps before the capture
