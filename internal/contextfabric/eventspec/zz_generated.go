@@ -214,6 +214,7 @@ var ByID = map[string]Event{
 	"mcp.http_readiness":                                               MCPHTTPReadiness,
 	"mcp.http_request":                                                 MCPHTTPRequest,
 	"mcp.http_serving":                                                 MCPHTTPServing,
+	"mcp.task_outcome":                                                 MCPTaskOutcome,
 	"process.otel_export":                                              OTelExport,
 	"projectionrun.graph_count_check_finished":                         GraphCountCheckFinished,
 }
@@ -14006,6 +14007,53 @@ func (f MCPHTTPServingFields) SlogArgs() []any {
 		"max_body_bytes", f.MaxBodyBytes,
 		"trusted_proxy_networks", f.TrustedProxyNetworks,
 		"trusted_proxy_exclusions", f.TrustedProxyExclusions,
+	}
+}
+
+// MCPTaskOutcomeFields is mcp.task_outcome's generated typed construction interface
+// (CHAOS-5516): one Go field per Field MCPTaskOutcome.Fields declares in spec.go.
+type MCPTaskOutcomeFields struct {
+	Tool         string
+	Outcome      string
+	BudgetFields int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every MCPTaskOutcomeFields uniformly, set ONLY by NewMCPTaskOutcomeFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewMCPTaskOutcomeFields is the generated constructor for MCPTaskOutcomeFields -- every
+// field MCPTaskOutcome.Fields declares is a required parameter.
+func NewMCPTaskOutcomeFields(tool string, outcome string, budgetFields int) MCPTaskOutcomeFields {
+	return MCPTaskOutcomeFields{
+		Tool:         tool,
+		Outcome:      outcome,
+		BudgetFields: budgetFields,
+		constructed:  true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewMCPTaskOutcomeFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f MCPTaskOutcomeFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns MCPTaskOutcome's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f MCPTaskOutcomeFields) SlogArgs() []any {
+	return []any{
+		"tool", contextfabric.SanitizeLogAttr(f.Tool),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"budget_fields", f.BudgetFields,
 	}
 }
 

@@ -38,6 +38,10 @@ type ProcessConfig struct {
 	// resolves repository and scope from the request alone.
 	transport string
 
+	// tasksEnabled turns on MCP Tasks for investigate_question on the
+	// hosted transport (ACR_MCP_TASKS_ENABLED, default off).
+	tasksEnabled bool
+
 	diagnostics *slog.Logger
 	// metrics counts tool calls and delivered answers; nil records nothing.
 	metrics *hostedmetrics.Instruments

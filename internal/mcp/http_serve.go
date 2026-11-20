@@ -33,7 +33,11 @@ const (
 	HTTPWriteTimeoutEnvironment      = "ACR_MCP_HTTP_WRITE_TIMEOUT"
 	HTTPIdleTimeoutEnvironment       = "ACR_MCP_HTTP_IDLE_TIMEOUT"
 	HTTPShutdownTimeoutEnvironment   = "ACR_MCP_HTTP_SHUTDOWN_TIMEOUT"
-	HTTPMaxBodyBytesEnvironment      = "ACR_MCP_HTTP_MAX_BODY_BYTES"
+	// TasksEnabledEnvironment turns on MCP Tasks (the 2026-07-28 tasks
+	// extension) for investigate_question: a strconv.ParseBool value,
+	// default off.
+	TasksEnabledEnvironment     = "ACR_MCP_TASKS_ENABLED"
+	HTTPMaxBodyBytesEnvironment = "ACR_MCP_HTTP_MAX_BODY_BYTES"
 	// ResourceURLEnvironment is this endpoint's public URL, its OAuth
 	// protected resource identifier (RFC 9728, RFC 8707).
 	ResourceURLEnvironment = "ACR_MCP_RESOURCE_URL"
@@ -82,6 +86,7 @@ type ServeOptions struct {
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
 	ShutdownTimeout   time.Duration
+	TasksEnabled      bool
 	MaxBodyBytes      int64
 	// ResourceURL and AuthorizationServer are set together or not at all.
 	// Set, the endpoint advertises OAuth discovery (protected resource
@@ -183,6 +188,11 @@ func ServeOptionsFromEnvironment(lookup func(string) (string, bool)) (ServeOptio
 		set(AuthorizationServerEnvironment, func(v string) error { opts.AuthorizationServer = v; return nil }),
 		set(HopTokenFileEnvironment, func(v string) error { opts.HopTokenFile = strings.TrimSpace(v); return nil }),
 		set(TrustedProxyCIDRsEnvironment, func(v string) error { opts.TrustedProxyCIDRs = v; return nil }),
+		set(TasksEnabledEnvironment, func(v string) error {
+			enabled, err := strconv.ParseBool(v)
+			opts.TasksEnabled = enabled
+			return err
+		}),
 		set(HTTPMaxBodyBytesEnvironment, func(v string) error {
 			n, err := strconv.ParseInt(v, 10, 64)
 			opts.MaxBodyBytes = n
@@ -379,7 +389,12 @@ func newServeProcessConfig(sidecarCfg sidecar.Config, identity version.Info, dia
 	if sidecarCfg.InvestigationWait > 0 && opts.WriteTimeout < sidecarCfg.InvestigationWait+reserve {
 		return nil, &ErrServeOptionInvalid{Setting: HTTPWriteTimeoutEnvironment}
 	}
-	return NewHTTPProcessConfig(sidecarCfg, identity, diagnostics)
+	cfg, err := NewHTTPProcessConfig(sidecarCfg, identity, diagnostics)
+	if err != nil {
+		return nil, err
+	}
+	cfg.tasksEnabled = opts.TasksEnabled
+	return cfg, nil
 }
 
 // serveHandlerOptions maps serve options onto the handler's options.

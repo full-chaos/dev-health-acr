@@ -35,6 +35,12 @@ func newLiveFalkorAdapter(t *testing.T, ctx context.Context) (*Adapter, string) 
 		MaxAttempts: 1, MaxResults: 25, PoolSize: 10, AllowInsecure: true, TLS: false,
 	})
 	require.NoError(t, err, "construct Adapter")
+	if err := settleLiveFalkor(ctx, adapter, addr, liveSettleTries, liveSettlePause); err != nil {
+		raw := redis.NewClient(&redis.Options{Addr: addr})
+		defer raw.Close()
+		pingErr := raw.Ping(ctx).Err()
+		t.Fatalf("%v (raw PING of the same address: %v)", err, pingErr)
+	}
 	return adapter, addr
 }
 

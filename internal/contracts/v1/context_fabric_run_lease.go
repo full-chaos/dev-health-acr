@@ -49,6 +49,19 @@ const ContextFabricRunLeaseSeconds = 15
 // ContextFabricRunCancelEffectiveSeconds bounds t_eff - t_req.
 const ContextFabricRunCancelEffectiveSeconds = 5
 
+// Accept-first create (RFC 7240). A create that names an
+// X-ACR-Submission-ID and sends `Prefer: respond-async` is admitted under the
+// run lease and answered 202 with its submission status (state running) once
+// the record is written; the run goes on with no viewer. A deployment that
+// runs no leased runs refuses it 406 stream_unavailable with
+// ContextFabricRespondAsyncUnavailableMessage before any admission work.
+const (
+	ContextFabricPreferHeader                   = "Prefer"
+	ContextFabricPreferenceAppliedHeader        = "Preference-Applied"
+	ContextFabricRespondAsyncPreference         = "respond-async"
+	ContextFabricRespondAsyncUnavailableMessage = "This deployment does not run investigations after the response; send the request without Prefer: respond-async"
+)
+
 // ContextFabricLastEventIDHeader is the SSE resume header of an attach.
 const ContextFabricLastEventIDHeader = "Last-Event-ID"
 

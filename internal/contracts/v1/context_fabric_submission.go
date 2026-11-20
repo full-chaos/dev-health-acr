@@ -115,6 +115,35 @@ type ContextFabricSubmissionStatus struct {
 	// it named one.
 	ThreadID  string    `json:"thread_id,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// LastStage is the last stage the run started, read from its event log;
+	// absent for a run with no log (not leased) or no stage started yet.
+	LastStage ContextFabricInvestigationStage `json:"last_stage,omitempty"`
+	// Terminal is how a leased run ended, read from its event log; absent
+	// while the run is running and for a run with no log.
+	Terminal *ContextFabricSubmissionTerminal `json:"terminal,omitempty"`
+}
+
+// ContextFabricSubmissionTerminal is the end of a leased run as its event log
+// holds it: a stored result, an answer that was not stored, or an error.v1
+// error.code (canceled and run_lost included).
+type ContextFabricSubmissionTerminal struct {
+	Kind      ContextFabricSubmissionTerminalKind `json:"kind"`
+	ErrorCode string                              `json:"error_code,omitempty"`
+}
+
+// ContextFabricSubmissionTerminalKind is the closed kind of a run's end.
+type ContextFabricSubmissionTerminalKind string
+
+const (
+	ContextFabricSubmissionTerminalResult  ContextFabricSubmissionTerminalKind = "result"
+	ContextFabricSubmissionTerminalUnsaved ContextFabricSubmissionTerminalKind = "unsaved"
+	ContextFabricSubmissionTerminalError   ContextFabricSubmissionTerminalKind = "error"
+)
+
+// ContextFabricSubmissionTerminalKindVocabulary is the closed set of kinds,
+// in the published enum's order.
+func ContextFabricSubmissionTerminalKindVocabulary() [3]ContextFabricSubmissionTerminalKind {
+	return [3]ContextFabricSubmissionTerminalKind{ContextFabricSubmissionTerminalResult, ContextFabricSubmissionTerminalUnsaved, ContextFabricSubmissionTerminalError}
 }
 
 // Validate holds the status to its schema.
@@ -137,6 +166,21 @@ func (s ContextFabricSubmissionStatus) Validate() error {
 		return fmt.Errorf("submission status thread_id violates v1 bounds")
 	case s.UpdatedAt.IsZero():
 		return fmt.Errorf("submission status updated_at is required")
+	case s.LastStage != "" && s.LastStage.Order() == 0:
+		return fmt.Errorf("submission status last_stage is not a member of the closed vocabulary")
+	case s.Terminal == nil:
+		return nil
+	case s.State == ContextFabricSubmissionRunning:
+		return fmt.Errorf("submission status terminal is absent while the state is running")
+	}
+	kinds := ContextFabricSubmissionTerminalKindVocabulary()
+	switch {
+	case !slices.Contains(kinds[:], s.Terminal.Kind):
+		return fmt.Errorf("submission status terminal.kind is not a member of the closed vocabulary")
+	case (s.Terminal.Kind == ContextFabricSubmissionTerminalError) != (s.Terminal.ErrorCode != ""):
+		return fmt.Errorf("submission status terminal.error_code is present exactly when terminal.kind is error")
+	case s.Terminal.ErrorCode != "" && !validErrorCode(s.Terminal.ErrorCode):
+		return fmt.Errorf("submission status terminal.error_code is not an error.v1 code")
 	}
 	return nil
 }
