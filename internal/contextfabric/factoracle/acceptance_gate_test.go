@@ -2,9 +2,7 @@ package factoracle
 
 import (
 	"encoding/json"
-	"errors"
 	"math"
-	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -186,49 +184,7 @@ func gateWindow(m Manifest) Window {
 	return (&Oracle{Window: m.Window, Today: captureDay(m)}).analyticsWindow()
 }
 
-// notMeasuredGatesFile lists, per gate cell, the unit shape the capture
-// holds none of. A cell is NOT MEASURED only when it is listed here.
-const notMeasuredGatesFile = captureDir + "/not_measured_gates.json"
-
-// knownGates are the cells notMeasuredGatesFile may name.
-var knownGates = []string{"MembershipScope", "Supersession", "NullableArgmax", "NullRepoID", "TeamRollupLossWithNoNullRowIsAFinding", "EveryValuePairFindsAChangedValue", "EffortMovedBetweenRepositoriesIsAFinding", "AReplyThatIsNotOfTheStoreIsAFinding"}
-
-func notMeasuredGates(t *testing.T) map[string]string {
-	t.Helper()
-	raw, err := os.ReadFile(notMeasuredGatesFile)
-	if errors.Is(err, os.ErrNotExist) {
-		return map[string]string{}
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out map[string]string
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("%s: %v", notMeasuredGatesFile, err)
-	}
-	return out
-}
-
-// gateCannotBeBuilt ends a gate cell whose capture holds no unit of the shape
-// it plants on: NOT MEASURED when the cell is listed, a failure when not.
-func gateCannotBeBuilt(t *testing.T, gate, shape string) {
-	t.Helper()
-	if _, listed := notMeasuredGates(t)[gate]; !listed {
-		t.Fatalf("%s: the capture holds no unit of shape %q and the cell is not listed in %s: the gate is not measured", gate, shape, notMeasuredGatesFile)
-	}
-	t.Skipf("%s: NOT MEASURED (the capture holds no unit of shape: %s)", gate, shape)
-}
-
-// gateCanBeBuilt fails a cell listed as not measured whose shape the capture
-// holds: the list cannot outlive a capture that measures the cell.
-func gateCanBeBuilt(t *testing.T, gate string) {
-	t.Helper()
-	if _, listed := notMeasuredGates(t)[gate]; listed {
-		t.Fatalf("%s is listed in %s but the capture holds its shape: remove it from the list", gate, notMeasuredGatesFile)
-	}
-}
-
-func directUnit(t *testing.T, gate string, extract *Extract, window Window) (id string, row Row) {
+func directUnit(t *testing.T, extract *Extract, window Window) (id string, row Row) {
 	t.Helper()
 	store, err := NewStore(extract)
 	if err != nil {
@@ -273,9 +229,8 @@ func directUnit(t *testing.T, gate string, extract *Extract, window Window) (id 
 		}
 	}
 	if id == "" || best <= 0 {
-		gateCannotBeBuilt(t, gate, "a categorized work unit in the analytics window whose whole effort reaches organization repositories")
+		t.Fatal("the extract has no work unit whose whole effort reaches organization repositories: the gate case cannot be built")
 	}
-	gateCanBeBuilt(t, gate)
 	return id, row
 }
 
@@ -311,9 +266,8 @@ func acceptanceGateMembershipScope(t *testing.T) {
 		outside += v
 	}
 	if store.scopeRun == "" || outside <= 0 {
-		gateCannotBeBuilt(t, "MembershipScope", "a categorized work unit in the analytics window outside a complete membership run")
+		t.Fatal("the extract has no complete membership run with work units outside it: the gate case cannot be built")
 	}
-	gateCanBeBuilt(t, "MembershipScope")
 	controlOracle, control := gateRun(t, manifest, recording, extract, extract)
 	wantClean(t, control, ClassAttributionBasis)
 
@@ -329,7 +283,7 @@ func acceptanceGateMembershipScope(t *testing.T) {
 
 func acceptanceGateSupersession(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
-	_, source := directUnit(t, "Supersession", extract, gateWindow(manifest))
+	_, source := directUnit(t, extract, gateWindow(manifest))
 	store, err := NewStore(extract)
 	if err != nil {
 		t.Fatal(err)
@@ -366,7 +320,7 @@ func acceptanceGateSupersession(t *testing.T) {
 
 func acceptanceGateNullableArgmax(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
-	id, source := directUnit(t, "NullableArgmax", extract, gateWindow(manifest))
+	id, source := directUnit(t, extract, gateWindow(manifest))
 	at, err := rowTime(source, "computed_at")
 	if err != nil {
 		t.Fatal(err)
@@ -462,7 +416,7 @@ func acceptanceGateNullableArgmax(t *testing.T) {
 		}
 	}
 	if plantedUnits == 0 {
-		gateCannotBeBuilt(t, "NullableArgmax", "a work unit with a revivable repository")
+		t.Fatal("no unit has a revivable repository: the gate case cannot be built")
 	}
 	_, rr := gateRun(t, manifest, recording, reference, planted)
 	wantPlanted(t, rr, "investment_org", ClassNullableArgmax, wantEffort)
@@ -502,9 +456,8 @@ func acceptanceGateNullRepoID(t *testing.T) {
 		}
 	}
 	if team == "" {
-		gateCannotBeBuilt(t, "NullRepoID", "a team-owned repository with work-unit effort in the analytics window")
+		t.Fatal("no team owns a repository with effort in the window: the gate case cannot be built")
 	}
-	gateCanBeBuilt(t, "NullRepoID")
 
 	// Reference: every valid ownership row of the team for that repository
 	// loses its repo_id and keeps its name. ops resolves such a row by name
@@ -582,9 +535,8 @@ func teamRollupLossWithNoNullRowIsAFinding(t *testing.T) {
 		}
 	}
 	if team == "" {
-		gateCannotBeBuilt(t, "TeamRollupLossWithNoNullRowIsAFinding", "a team-owned repository with work-unit effort in the analytics window")
+		t.Fatal("no team owns a repository with effort in the window")
 	}
-	gateCanBeBuilt(t, "TeamRollupLossWithNoNullRowIsAFinding")
 	planted := extract.Clone()
 	var kept []Row
 	for _, row := range planted.Tables[tableTeamRepoOwnership] {
@@ -638,7 +590,7 @@ func everyValuePairFindsAChangedValue(t *testing.T) {
 	}
 	// A unit weighs one however it is sized, so a changed value is a unit
 	// that is gone: the unit that reaches organization repositories whole.
-	droppedUnit, _ := directUnit(t, "EveryValuePairFindsAChangedValue", extract, gateWindow(manifest))
+	droppedUnit, _ := directUnit(t, extract, gateWindow(manifest))
 	kept := planted.Tables[tableWorkUnitInvestments][:0]
 	for _, row := range planted.Tables[tableWorkUnitInvestments] {
 		if rowID, _ := rowString(row, "work_unit_id"); rowID != droppedUnit {
@@ -697,7 +649,7 @@ func everyValuePairFindsAChangedValue(t *testing.T) {
 // was. The repository-by-repository compare sees it.
 func effortMovedBetweenRepositoriesIsAFinding(t *testing.T) {
 	manifest, recording, extract := loadedCapture(t)
-	id, source := directUnit(t, "EffortMovedBetweenRepositoriesIsAFinding", extract, gateWindow(manifest))
+	id, source := directUnit(t, extract, gateWindow(manifest))
 	from, _ := rowString(source, "repo_id")
 	store, err := NewStore(extract)
 	if err != nil {
@@ -748,7 +700,7 @@ func aReplyThatIsNotOfTheStoreIsAFinding(t *testing.T) {
 	other := extract.Clone()
 	// Every unit weighs one, so a reference store that is not the venue's is
 	// one with a unit fewer: the unit that reaches organization repositories.
-	droppedUnit, _ := directUnit(t, "AReplyThatIsNotOfTheStoreIsAFinding", extract, gateWindow(manifest))
+	droppedUnit, _ := directUnit(t, extract, gateWindow(manifest))
 	kept := other.Tables[tableWorkUnitInvestments][:0]
 	for _, row := range other.Tables[tableWorkUnitInvestments] {
 		if rowID, _ := rowString(row, "work_unit_id"); rowID != droppedUnit {
@@ -778,17 +730,4 @@ func teamDeniedForInvestment(manifest Manifest, team string) bool {
 		}
 	}
 	return false
-}
-
-// TestTheNotMeasuredGateListNamesKnownCellsWithAShape: every listed cell is a
-// gate cell and names the unit shape the capture lacks.
-func TestTheNotMeasuredGateListNamesKnownCellsWithAShape(t *testing.T) {
-	for gate, shape := range notMeasuredGates(t) {
-		if !slices.Contains(knownGates, gate) {
-			t.Errorf("%s names %q, which is no gate cell", notMeasuredGatesFile, gate)
-		}
-		if strings.TrimSpace(shape) == "" {
-			t.Errorf("%s: %s names no unit shape", notMeasuredGatesFile, gate)
-		}
-	}
 }
