@@ -83,7 +83,9 @@ func prepareServer(ctx context.Context, request serverBuildRequest) (serverRunne
 	if request.wrapHandler != nil {
 		handler = request.wrapHandler(handler)
 	}
-	server, err := request.newServer(serverConfig(request.config), handler, request.logger)
+	serverCfg := serverConfig(request.config)
+	serverCfg.Drain = app.DrainDetachedRuns
+	server, err := request.newServer(serverCfg, handler, request.logger)
 	if err != nil {
 		return nil, nil, closeBuildFailure(closeApplication, fmt.Errorf("initialize server: %w", err))
 	}

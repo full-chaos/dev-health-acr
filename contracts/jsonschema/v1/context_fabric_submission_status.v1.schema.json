@@ -11,7 +11,7 @@
     "submission_id": { "type": "string", "minLength": 8, "maxLength": 128, "pattern": "^[A-Za-z0-9._:-]{8,128}$" },
     "state": {
       "enum": ["running", "done", "done_unsaved", "abandoned"],
-      "description": "running: the run is live. done: result_id names the final result. done_unsaved: the answer was served but not stored, so there is nothing to replay. abandoned: the run ended without an answer, or ran past its budget plus 30 seconds. No state runs the request again."
+      "description": "running: the run is live. done: result_id names the final result. done_unsaved: the answer was served but not stored, so there is nothing to replay; for an accept-first create (Prefer: respond-async) the answer reached no one, so ask again. abandoned: the run ended without an answer, or ran past its budget plus 30 seconds. No state runs the request again."
     },
     "reserved_result_id": { "type": "string", "minLength": 8, "maxLength": 256 },
     "result_id": {
@@ -36,7 +36,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["kind"],
-      "description": "How a run admitted under the run lease ended, read from its event log. Absent while state is running, for a submission with no lease, on a deployment with the run lease off, and on an abandoned record whose log does not hold its end yet (read again). A read of a running record whose lease ended takes the run over first, so it answers abandoned with error_code run_lost.",
+      "description": "How a run admitted under the run lease ended, read from its event log. Absent while state is running, for a submission with no lease, on a deployment with the run lease off, and on a final record whose log does not hold its end yet (the delivery can still end in an error after the record is final; read again). A read of a running record whose lease ended takes the run over first, so it answers abandoned with error_code run_lost; a read of a final record whose lease ended with no end in its log appends the end its state implies (run_lost for abandoned), once.",
       "properties": {
         "kind": {
           "enum": ["result", "unsaved", "error"],

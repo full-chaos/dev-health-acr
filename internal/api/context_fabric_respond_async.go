@@ -13,19 +13,55 @@ import (
 )
 
 // wantsRespondAsync reports whether the request carries the RFC 7240
-// respond-async preference in any Prefer value. Preference names are
-// case-insensitive; parameters after ';' are ignored.
+// respond-async preference as a top-level preference name in any Prefer
+// value. Names compare case-insensitively; a parameter or value after it is
+// ignored, and text inside a quoted-string (escapes included) is never a
+// name.
 func wantsRespondAsync(r *http.Request) bool {
 	for _, value := range r.Header.Values(contractsv1.ContextFabricPreferHeader) {
-		for _, preference := range strings.Split(value, ",") {
-			name, _, _ := strings.Cut(preference, ";")
-			name, _, _ = strings.Cut(name, "=")
-			if strings.EqualFold(strings.TrimSpace(name), contractsv1.ContextFabricRespondAsyncPreference) {
+		for _, name := range preferenceNames(value) {
+			if strings.EqualFold(name, contractsv1.ContextFabricRespondAsyncPreference) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// preferenceNames lists the top-level preference names of one Prefer field
+// value: each comma-separated element's token before its first '=' or ';',
+// trimmed, with commas, '=' and ';' inside a quoted-string not splitting
+// anything. An unterminated quoted-string ends the value.
+func preferenceNames(value string) []string {
+	var names []string
+	var name strings.Builder
+	inName, quoted, escaped := true, false, false
+	for _, c := range value {
+		switch {
+		case quoted && escaped:
+			escaped = false
+		case quoted && c == '\\':
+			escaped = true
+		case quoted:
+			quoted = c != '"'
+		case c == '"':
+			quoted = true
+		case c == ',':
+			names = append(names, strings.TrimSpace(name.String()))
+			name.Reset()
+			inName = true
+		case c == '=' || c == ';':
+			inName = false
+		case inName:
+			name.WriteRune(c)
+		}
+	}
+	if !quoted {
+		names = append(names, strings.TrimSpace(name.String()))
+	} else if inName {
+		names = append(names, "")
+	}
+	return names
 }
 
 // writeRespondAsyncUnavailable is the refusal of an accept-first create on a
@@ -49,24 +85,24 @@ func submissionStatusOf(record contextfabric.SubmissionRecord) contractsv1.Conte
 	}
 }
 
-// serveInvestigationAsync answers an admitted accept-first create 202 with
-// its submission status, then runs it as a leased run with no viewer: the
-// run's events go to its log only, and the submission status, attach and
-// cancel routes serve it from any replica. The 202 carries Content-Length
-// and is flushed before the run starts, so the client has the whole answer
-// while this handler goes on running.
-func (a *App) serveInvestigationAsync(w http.ResponseWriter, r *http.Request, investigator contextfabric.Investigator, principal storage.Principal, request contextfabric.InvestigationRequest, submission *admittedInvestigationSubmission, submissionID, threadID, reserved string, investigateCtx context.Context, collectedSynthesisInput func() *contractsv1.ContextFabricSynthesisInput) string {
+// acceptInvestigationAsync answers an admitted accept-first create 202 with
+// its submission status, with Content-Length, and flushes it. The caller
+// then hands the run to a detached goroutine and returns, so the connection
+// is free for the client's next request (HTTP/1.1 keep-alive) and an HTTP/2
+// stream ends. A record admitted without its lease is abandoned and refused
+// 500: a connection-owned run would end with the connection.
+func (a *App) acceptInvestigationAsync(w http.ResponseWriter, r *http.Request, principal storage.Principal, submission *admittedInvestigationSubmission) bool {
 	if submission == nil || !submission.record.Leased() {
 		a.abandonInvestigationSubmission(r, principal, submission)
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation could not be started", false, nil)
-		return "error"
+		return false
 	}
 	status := submissionStatusOf(submission.record)
 	encoded, err := json.Marshal(status)
 	if err != nil || status.Validate() != nil {
 		a.abandonInvestigationSubmission(r, principal, submission)
 		writeError(w, r, http.StatusInternalServerError, "internal_error", "Context Fabric investigation could not be started", false, nil)
-		return "error"
+		return false
 	}
 	encoded = append(encoded, '\n')
 	header := w.Header()
@@ -78,7 +114,25 @@ func (a *App) serveInvestigationAsync(w http.ResponseWriter, r *http.Request, in
 	w.WriteHeader(http.StatusAccepted)
 	_, _ = w.Write(encoded)
 	_ = http.NewResponseController(w).Flush()
-	return a.serveInvestigationEventStream(noViewerWriter{header: http.Header{}}, r, investigator, principal, request, submission, submissionID, threadID, reserved, investigateCtx, collectedSynthesisInput, true)
+	return true
+}
+
+// DrainDetachedRuns waits for the accept-first runs this replica still runs,
+// until ctx ends (the server's shutdown bound). A run still going then ends
+// through its lease: another replica's read or sweep takes it over as
+// run_lost.
+func (a *App) DrainDetachedRuns(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		a.detachedRuns.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // noViewerWriter is the writer of a run whose response is already written:

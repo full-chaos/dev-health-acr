@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/auth"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
@@ -136,13 +137,21 @@ func (a *App) ContextFabricSubmissionStatusHandler(submissions contextfabric.Sub
 
 // submissionRunDetail adds the run lease's view to a leased record, when
 // this deployment runs leased runs: the last stage started and, once final,
-// the terminal from the run's event log (a done or done_unsaved record whose
-// log holds none yet gets the terminal its state implies; an abandoned one
-// gets none until the log holds the cause). A running record whose lease ended
-// is taken over first (the same single-run takeover an attach makes), so the
-// read answers abandoned with run_lost instead of running; that makes this
-// read a write. A record with no lease, or a deployment without the run
-// lease, gets no detail.
+// the terminal the run's event log holds. No terminal is named until the log
+// holds one: the delivery can still end in an error after the record is
+// final. Two reads are writes:
+//
+//   - a running record whose lease ended is taken over first (the same
+//     single-run takeover an attach makes), so it answers abandoned with
+//     run_lost;
+//   - a final record whose lease ended with no terminal in its log (its
+//     holder stopped between the record and the log, or the record was
+//     reconciled final after both expiries) gets the terminal its state
+//     implies -- run_lost for abandoned -- appended once: the log keeps the
+//     first terminal, whoever writes it.
+//
+// A record with no lease, or a deployment without the run lease, gets no
+// detail.
 func (a *App) submissionRunDetail(ctx context.Context, submissions contextfabric.SubmissionStore, key contextfabric.SubmissionKey, record contextfabric.SubmissionRecord) (contextfabric.SubmissionRecord, contractsv1.ContextFabricInvestigationStage, *contractsv1.ContextFabricSubmissionTerminal, error) {
 	runs := a.investigationRuns()
 	if !a.runLeaseServed() || !record.Leased() {
@@ -170,21 +179,44 @@ func (a *App) submissionRunDetail(ctx context.Context, submissions contextfabric
 	if err != nil {
 		return record, "", nil, err
 	}
-	var end contextfabric.RunTerminal
-	switch {
-	case logged != nil && logged.Terminal != nil:
-		end = *logged.Terminal
-	case record.State == contextfabric.SubmissionAbandoned:
-		// The holder writes the record before the log's terminal: until the
-		// log holds it, the cause (canceled, run_lost, the run's own error)
-		// is not known, so none is named.
-		return record, page.LastStageStarted, nil, nil
-	default:
-		end = derivedRunTerminal(record)
+	if logged == nil && !record.LeaseExpiresAt.After(a.now()) {
+		if logged, err = a.appendFinalRecordTerminal(ctx, runs, run, record, page); err != nil {
+			return record, "", nil, err
+		}
 	}
-	terminal := &contractsv1.ContextFabricSubmissionTerminal{Kind: contractsv1.ContextFabricSubmissionTerminalKind(end.Kind)}
-	if end.Kind == contextfabric.RunTerminalError && end.Error != nil {
-		terminal.ErrorCode = end.Error.Error.Code
+	if logged == nil || logged.Terminal == nil {
+		return record, page.LastStageStarted, nil, nil
+	}
+	terminal := &contractsv1.ContextFabricSubmissionTerminal{Kind: contractsv1.ContextFabricSubmissionTerminalKind(logged.Terminal.Kind)}
+	if logged.Terminal.Kind == contextfabric.RunTerminalError && logged.Terminal.Error != nil {
+		terminal.ErrorCode = logged.Terminal.Error.Error.Code
 	}
 	return record, page.LastStageStarted, terminal, nil
+}
+
+// appendFinalRecordTerminal appends the terminal a final leased record's
+// state implies to a log that holds none, and reads back the log's terminal:
+// its own, or one another writer appended first.
+func (a *App) appendFinalRecordTerminal(ctx context.Context, runs contextfabric.RunStore, run contextfabric.RunKey, record contextfabric.SubmissionRecord, page contextfabric.RunEventPage) (*contextfabric.RunEvent, error) {
+	end := derivedRunTerminal(record)
+	eventType := contractsv1.ContextFabricInvestigationEventResult
+	if end.Kind == contextfabric.RunTerminalError {
+		eventType = contractsv1.ContextFabricInvestigationEventError
+	}
+	writeCtx := context.WithoutCancel(ctx)
+	appended, err := runs.AppendRunEvent(writeCtx, run, contextfabric.RunEvent{
+		Seq: page.LastSeq + 1, Type: eventType, LastStageStarted: page.LastStageStarted, Terminal: &end,
+	}, a.runLease.maxEvents, a.now())
+	if err != nil && !errors.Is(err, contextfabric.ErrRunEventSeq) {
+		return nil, err
+	}
+	a.logger.WarnContext(ctx, ContextFabricRunTakeoverLogMessage,
+		"org_id", contextfabric.SanitizeLogAttr(run.OrgID),
+		"request_id", contextfabric.SanitizeLogAttr(record.RunRequestID),
+		"reserved_result_id", contextfabric.SanitizeLogAttr(run.ReservedResultID),
+		"previous_holder", contextfabric.SanitizeLogAttr(record.LeaseHolder),
+		"taker", contextfabric.SanitizeLogAttr(a.runLease.holder),
+		"lease_expired_at", record.LeaseExpiresAt.UTC().Format(time.RFC3339Nano),
+		"state", string(record.State), "terminal_appended", appended)
+	return runs.RunTerminalOf(writeCtx, run)
 }

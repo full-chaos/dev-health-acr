@@ -18,6 +18,10 @@ type ServerConfig struct {
 	WriteTimeout      time.Duration
 	IdleTimeout       time.Duration
 	ShutdownTimeout   time.Duration
+	// Drain, when set, waits for work the handler started that outlives its
+	// requests (accept-first investigation runs), inside the same shutdown
+	// bound, after the HTTP server stopped taking requests.
+	Drain func(context.Context) error
 }
 
 type Server struct {
@@ -82,6 +86,11 @@ func (s *Server) Serve(ctx context.Context, listener net.Listener) error {
 			s.logger.Error("graceful shutdown failed; forcing close", "error", telemetryscrub.ErrorClass(err))
 			_ = s.http.Close()
 			return fmt.Errorf("shutdown: %w", err)
+		}
+		if s.config.Drain != nil {
+			if err := s.config.Drain(shutdownCtx); err != nil {
+				s.logger.Warn("detached runs still running at the shutdown bound; their leases end them", "error", telemetryscrub.ErrorClass(err))
+			}
 		}
 		err := <-errCh
 		if errors.Is(err, http.ErrServerClosed) || err == nil {

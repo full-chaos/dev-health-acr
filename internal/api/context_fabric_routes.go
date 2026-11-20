@@ -134,6 +134,12 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 			a.logSubmissionHeaderRefused(r, contractsv1.ContextFabricPreferHeader)
 			writeError(w, r, http.StatusBadRequest, "invalid_request", "Prefer: respond-async does not take Accept: text/event-stream", false, nil)
 			return
+		case async && request.SynthesisMode == contractsv1.ContextFabricSynthesisModeClient:
+			// The synthesis input is only in the create's own answer, which
+			// an accept-first create never delivers.
+			a.logSubmissionHeaderRefused(r, contractsv1.ContextFabricPreferHeader)
+			writeError(w, r, http.StatusBadRequest, "invalid_request", "Prefer: respond-async does not take synthesis_mode client", false, nil)
+			return
 		}
 		principal, ok := auth.PrincipalFromContext(r.Context())
 		if !ok {
@@ -222,11 +228,38 @@ func (a *App) ContextFabricInvestigationHandler(investigator contextfabric.Inves
 		// status of the answer it delivered; every earlier exit (a failure,
 		// or a response-size gate that refuses the answer) is "error".
 		deliveredStatus := "error"
+		detached := false
 		defer func() {
-			a.metrics.InvestigationLatency(r.Context(), deliveredStatus, a.now().Sub(investigationStarted))
+			if !detached {
+				a.metrics.InvestigationLatency(r.Context(), deliveredStatus, a.now().Sub(investigationStarted))
+			}
 		}()
 		if async {
-			deliveredStatus = a.serveInvestigationAsync(w, r, investigator, principal, request, submission, submissionID, threadID, reservedResultID, investigateCtx, collectedSynthesisInput)
+			if !a.acceptInvestigationAsync(w, r, principal, submission) {
+				return
+			}
+			// The run outlives this handler: its request and context keep
+			// the request's deadline (the run limit) and drop its cancel,
+			// the way a leased stream detaches. The handler returns now.
+			detached = true
+			runRequestCtx, endRunRequest := detachedContext(r.Context())
+			runRequest := r.Clone(runRequestCtx)
+			runCtx, endRun := detachedContext(investigateCtx)
+			a.detachedRuns.Add(1)
+			go func() {
+				defer a.detachedRuns.Done()
+				defer endRunRequest()
+				defer endRun()
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						a.logger.ErrorContext(runRequestCtx, "request panic recovered",
+							"request_id", contextfabric.SanitizeLogAttr(RequestID(runRequestCtx)), "status", http.StatusAccepted, "failure_class", "event_stream_panic")
+						a.abandonInvestigationSubmission(runRequest, principal, submission)
+					}
+				}()
+				delivered := a.serveInvestigationEventStream(noViewerWriter{header: http.Header{}}, runRequest, investigator, principal, request, submission, submissionID, threadID, reservedResultID, runCtx, collectedSynthesisInput, true)
+				a.metrics.InvestigationLatency(runRequestCtx, delivered, a.now().Sub(investigationStarted))
+			}()
 			return
 		}
 		if stream {

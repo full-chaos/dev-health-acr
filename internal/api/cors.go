@@ -31,8 +31,8 @@ import (
 
 const (
 	corsAllowMethods  = "GET, POST, DELETE, OPTIONS"
-	corsAllowHeaders  = "Authorization, Content-Type, X-ACR-Client-Version, X-ACR-Submission-ID, X-ACR-Thread-ID, X-ACR-Wait-Budget-Seconds, X-ACR-Resource, X-Request-ID, Last-Event-ID"
-	corsExposeHeaders = "Retry-After, X-Request-ID"
+	corsAllowHeaders  = "Authorization, Content-Type, X-ACR-Client-Version, X-ACR-Submission-ID, X-ACR-Thread-ID, X-ACR-Wait-Budget-Seconds, X-ACR-Resource, X-Request-ID, Last-Event-ID, Prefer"
+	corsExposeHeaders = "Retry-After, X-Request-ID, Preference-Applied"
 	corsMaxAgeSeconds = "600"
 )
 

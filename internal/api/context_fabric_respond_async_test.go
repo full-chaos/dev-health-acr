@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -353,6 +357,16 @@ func TestWantsRespondAsync(t *testing.T) {
 		{[]string{"wait=10"}, false},
 		{[]string{"return=respond-async"}, false},
 		{[]string{"respond-async=1"}, true},
+		{[]string{`include="status, respond-async, result"`}, false},
+		{[]string{`include="a\"b, respond-async"`}, false},
+		{[]string{`wait=10; note="respond-async, x"`}, false},
+		{[]string{`x`, `include="respond-async"`}, false},
+		{[]string{`include="respond-async=1"`}, false},
+		{[]string{`include="respond-async; wait=1"`}, false},
+		{[]string{`include="status, x", respond-async`}, true},
+		{[]string{`include="a\"b", respond-async`}, true},
+		{[]string{`include="respond-async`}, false},
+		{[]string{`note="a\", respond-async`}, false},
 	} {
 		request := httptest.NewRequest(http.MethodPost, ContextFabricInvestigationsPath, nil)
 		for _, value := range tc.values {
@@ -444,5 +458,212 @@ func TestRespondAsyncRefusesARecordAdmittedWithoutItsLease(t *testing.T) {
 	}
 	if status := harness.statusBody(0, harness.tokenA, "submission-async-nls"); status.State != contractsv1.ContextFabricSubmissionAbandoned {
 		t.Fatalf("status %+v, want abandoned", status)
+	}
+}
+
+// The 202 frees its connection: on HTTP/1.1 keep-alive the next request on
+// the SAME connection (a status poll, a cancel) is answered while the run is
+// still held.
+func TestRespondAsyncKeepAliveConnectionServesTheNextRequest(t *testing.T) {
+	harness, _, _ := newLeaseHarness(t, 1)
+	harness.investigator.mode.Store(int32(runBlockThenSave))
+	server := harness.serveApp(0)
+	var dials atomic.Int32
+	transport := &http.Transport{MaxConnsPerHost: 1, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+		dials.Add(1)
+		return (&net.Dialer{}).DialContext(ctx, network, address)
+	}}
+	t.Cleanup(transport.CloseIdleConnections)
+	client := &http.Client{Transport: transport}
+	send := func(request *http.Request) (*http.Response, []byte, bool) {
+		t.Helper()
+		reused := false
+		trace := &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) { reused = info.Reused }}
+		ctx, cancel := context.WithTimeout(httptrace.WithClientTrace(context.Background(), trace), 3*time.Second)
+		defer cancel()
+		response, err := client.Do(request.WithContext(ctx))
+		if err != nil {
+			t.Fatalf("%s %s on the kept-alive connection: %v", request.Method, request.URL.Path, err)
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			t.Fatalf("%s %s body: %v", request.Method, request.URL.Path, err)
+		}
+		return response, body, reused
+	}
+	create := harness.streamRequest(server, harness.tokenA, "submission-async-kpa")
+	create.Header.Set(contractsv1.ContextFabricPreferHeader, contractsv1.ContextFabricRespondAsyncPreference)
+	if response, body, _ := send(create); response.StatusCode != http.StatusAccepted {
+		t.Fatalf("create = %d %s", response.StatusCode, body)
+	}
+	waitEntered(t, harness.investigator.entered)
+	routed := func(method, path string) *http.Request {
+		request, err := http.NewRequest(method, server.URL+strings.Replace(path, "{submission_id}", "submission-async-kpa", 1), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", "Bearer "+harness.tokenA)
+		request.Header.Set("X-ACR-Client-Version", "1.0.0")
+		request.Header.Set("X-Request-ID", submissionTestRequestID)
+		return request
+	}
+	poll, body, reused := send(routed(http.MethodGet, ContextFabricSubmissionStatusPath))
+	if poll.StatusCode != http.StatusOK || !reused || !bytes.Contains(body, []byte(`"state":"running"`)) {
+		t.Fatalf("poll = %d reused=%v %s, want 200 running on the same connection", poll.StatusCode, reused, body)
+	}
+	cancelled, body, reused := send(routed(http.MethodPost, ContextFabricSubmissionCancelPath))
+	if cancelled.StatusCode != http.StatusAccepted || !reused {
+		t.Fatalf("cancel = %d reused=%v %s, want 202 on the same connection", cancelled.StatusCode, reused, body)
+	}
+	if got := dials.Load(); got != 1 {
+		t.Fatalf("%d connections dialed, want 1", got)
+	}
+	waitFor(t, func() bool { return harness.statusBody(0, harness.tokenA, "submission-async-kpa").Terminal != nil })
+}
+
+// The app drains its detached runs within the bound it is given.
+func TestDrainDetachedRunsIsBounded(t *testing.T) {
+	harness, _, _ := newLeaseHarness(t, 1)
+	harness.investigator.mode.Store(int32(runBlockThenSave))
+	server := harness.serveApp(0)
+	if response, body := harness.respondAsync(server, harness.tokenA, "submission-async-drn", nil); response.StatusCode != http.StatusAccepted {
+		t.Fatalf("create = %d %s", response.StatusCode, body)
+	}
+	waitEntered(t, harness.investigator.entered)
+	short, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := harness.apps[0].DrainDetachedRuns(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("drain with a held run = %v, want the bound's deadline", err)
+	}
+	close(harness.investigator.release)
+	long, cancelLong := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelLong()
+	if err := harness.apps[0].DrainDetachedRuns(long); err != nil {
+		t.Fatalf("drain after the run ended = %v", err)
+	}
+}
+
+// Past BOTH the lease and the submission expiry, a read still names the
+// lost run: one run_lost terminal, however many reads race.
+func TestRespondAsyncLateReadAfterBothExpiriesRunLostOnce(t *testing.T) {
+	harness, _, _ := lostAsyncRun(t, 3, "submission-async-lat")
+	harness.clock.Advance(10 * time.Minute)
+	var wg sync.WaitGroup
+	statuses := make([]contractsv1.ContextFabricSubmissionStatus, 2)
+	codes := make([]int, 2)
+	for index, app := range []int{1, 2} {
+		wg.Add(1)
+		go func(index, app int) {
+			defer wg.Done()
+			recorder := harness.status(app, harness.tokenA, "submission-async-lat")
+			codes[index] = recorder.Code
+			_ = json.Unmarshal(recorder.Body.Bytes(), &statuses[index])
+		}(index, app)
+	}
+	wg.Wait()
+	for index, status := range statuses {
+		if codes[index] != http.StatusOK || status.State != contractsv1.ContextFabricSubmissionAbandoned || status.Terminal == nil || status.Terminal.ErrorCode != contractsv1.ErrorCodeRunLost {
+			t.Fatalf("late read %d = %d %+v / %+v, want abandoned + run_lost", index, codes[index], status, status.Terminal)
+		}
+	}
+	run := contextfabric.RunKey{OrgID: "org_1", ReservedResultID: statuses[0].ReservedResultID}
+	page, err := harness.apps[1].investigationRuns().ReadRunEvents(context.Background(), run, 0, contextfabric.RunEventLogMaxEvents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminals := 0
+	for _, event := range page.Events {
+		if event.Terminal != nil {
+			terminals++
+		}
+	}
+	if terminals != 1 {
+		t.Fatalf("%d terminal events in the log, want exactly 1", terminals)
+	}
+}
+
+// A done record whose log holds no terminal yet names none: the delivery can
+// still end in an error after the save. The terminal is the log's.
+func TestRespondAsyncDoneBeforeLogTerminalNamesNone(t *testing.T) {
+	harness, store, _ := newLeaseHarness(t, 1)
+	holding := &terminalHoldingRunStore{RunStore: store, held: make(chan struct{}, 1), release: make(chan struct{})}
+	harness.apps[0].runtime.InvestigationRuns = holding
+	server := harness.serveApp(0)
+	var once sync.Once
+	release := func() { once.Do(func() { close(holding.release) }) }
+	t.Cleanup(release)
+	_, body := harness.respondAsync(server, harness.tokenA, "submission-async-dbt", nil)
+	var accepted contractsv1.ContextFabricSubmissionStatus
+	if err := json.Unmarshal(body, &accepted); err != nil {
+		t.Fatal(err)
+	}
+	<-holding.held
+	status := harness.statusBody(0, harness.tokenA, "submission-async-dbt")
+	if status.State != contractsv1.ContextFabricSubmissionDone || status.Terminal != nil {
+		t.Fatalf("status %+v / %+v, want done with no terminal before the log holds it", status, status.Terminal)
+	}
+	run := contextfabric.RunKey{OrgID: "org_1", ReservedResultID: accepted.ReservedResultID}
+	page, err := store.ReadRunEvents(context.Background(), run, 0, contextfabric.RunEventLogMaxEvents)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := contractsv1.ErrorEnvelope{SchemaVersion: contractsv1.ErrorSchema, RequestID: submissionTestRequestID,
+		Error: contractsv1.ErrorDetail{Code: "budget_refusal", Message: "Context Fabric investigation response exceeded service limits", HTTPStatus: http.StatusRequestEntityTooLarge}}
+	if appended, err := store.AppendRunEvent(context.Background(), run, contextfabric.RunEvent{
+		Seq: page.LastSeq + 1, Type: contractsv1.ContextFabricInvestigationEventError,
+		Terminal: &contextfabric.RunTerminal{Kind: contextfabric.RunTerminalError, Error: &envelope},
+	}, contextfabric.RunEventLogMaxEvents, harness.clock.Now()); err != nil || !appended {
+		t.Fatalf("error terminal append = %v %v", appended, err)
+	}
+	release()
+	final := harness.statusBody(0, harness.tokenA, "submission-async-dbt")
+	if final.State != contractsv1.ContextFabricSubmissionDone || final.Terminal == nil || final.Terminal.Kind != contractsv1.ContextFabricSubmissionTerminalError || final.Terminal.ErrorCode != "budget_refusal" {
+		t.Fatalf("status %+v / %+v, want done with the log's error terminal", final, final.Terminal)
+	}
+}
+
+// A client-synthesis turn needs its synthesis_input in the create's answer,
+// which an accept-first create never delivers: refused before admission.
+func TestRespondAsyncClientSynthesisRefusedBeforeAdmission(t *testing.T) {
+	harness, _, _ := newLeaseHarness(t, 1)
+	server := harness.serveApp(0)
+	response, body := harness.respondAsync(server, harness.tokenA, "submission-async-cls", func(r *http.Request) {
+		request := investigationRequestBody()
+		request.Question = submissionQuestion
+		request.SynthesisMode = contractsv1.ContextFabricSynthesisModeClient
+		encoded, err := json.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Body = io.NopCloser(bytes.NewReader(encoded))
+		r.ContentLength = int64(len(encoded))
+	})
+	code, message := errorCodeOf(t, body)
+	if response.StatusCode != http.StatusBadRequest || code != "invalid_request" || message != "Prefer: respond-async does not take synthesis_mode client" {
+		t.Fatalf("client synthesis = %d %s", response.StatusCode, body)
+	}
+	if harness.investigator.executions.Load() != 0 || harness.status(0, harness.tokenA, "submission-async-cls").Code != http.StatusNotFound {
+		t.Fatal("a refused client-synthesis accept-first create admitted or ran something")
+	}
+}
+
+// The browser route lets the web origin send Prefer and read
+// Preference-Applied.
+func TestRespondAsyncCORSAllowsPreferAndExposesPreferenceApplied(t *testing.T) {
+	harness := corsHarness(t)
+	preflight := harness.cors(0, corsCall{method: http.MethodOptions, path: ContextFabricInvestigationsPath, origin: corsTestOrigin, headers: map[string]string{
+		"Access-Control-Request-Method":  "POST",
+		"Access-Control-Request-Headers": "authorization, content-type, x-acr-submission-id, prefer",
+	}})
+	allowed := strings.ToLower(preflight.Header().Get("Access-Control-Allow-Headers"))
+	if preflight.Code != http.StatusNoContent || !containsValue(strings.Split(strings.ReplaceAll(allowed, " ", ""), ","), "prefer") {
+		t.Fatalf("preflight = %d allow-headers %q, want prefer allowed", preflight.Code, allowed)
+	}
+	actual := harness.cors(0, corsCall{method: http.MethodPost, path: ContextFabricInvestigationsPath, origin: corsTestOrigin, token: harness.tokenA,
+		headers: map[string]string{"X-ACR-Client-Version": "1.0.0", "Content-Type": "application/json"}, body: createBody(t)})
+	exposed := strings.Split(strings.ReplaceAll(actual.Header().Get("Access-Control-Expose-Headers"), " ", ""), ",")
+	if !containsValue(exposed, contractsv1.ContextFabricPreferenceAppliedHeader) {
+		t.Fatalf("expose-headers %q, want Preference-Applied", actual.Header().Get("Access-Control-Expose-Headers"))
 	}
 }
