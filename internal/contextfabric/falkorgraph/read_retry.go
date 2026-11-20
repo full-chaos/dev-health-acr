@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
 
 // Read attempt failure causes: the closed vocabulary of the cause field of
@@ -37,7 +39,8 @@ type GraphReadAttemptTelemetry interface {
 
 func (t SlogTelemetry) RecordGraphReadAttemptFailed(ctx context.Context, operation string, attempt, maxAttempts int, cause string, retried bool) {
 	t.logger().WarnContext(ctx, "context_fabric: graph read attempt failed",
-		"operation", operation, "attempt", attempt, "max_attempts", maxAttempts, "cause", cause, "retried", retried)
+		"operation", contextfabric.SanitizeLogAttr(operation), "attempt", attempt, "max_attempts", maxAttempts,
+		"cause", contextfabric.SanitizeLogAttr(cause), "retried", retried)
 }
 
 // readFailureCause classifies a raw driver error from the read client.
@@ -95,7 +98,7 @@ func retryRead[T any](ctx context.Context, s *sdkAPI, operation string, call fun
 		if cause == "" {
 			return value, err
 		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
+		if ctxErr := contextEnded(ctx); ctxErr != nil {
 			return value, ctxErr
 		}
 		wait := readRetryBackoff(attempt)
@@ -112,6 +115,19 @@ func retryRead[T any](ctx context.Context, s *sdkAPI, operation string, call fun
 		case <-timer.C:
 		}
 	}
+}
+
+// contextEnded reports the caller's end. The read client's socket deadline is
+// the context deadline, and the socket can time out before the context's own
+// timer marks it done, so a passed deadline counts as ended too.
+func contextEnded(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 func waitEndsBeforeDeadline(ctx context.Context, wait time.Duration) bool {

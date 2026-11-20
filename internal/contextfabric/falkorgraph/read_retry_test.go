@@ -339,6 +339,30 @@ func TestTheReadBackoffDoublesFrom50ms(t *testing.T) {
 	}
 }
 
+// passedDeadlineContext has a deadline in the past while Err is still nil:
+// the window between the socket deadline and the context timer.
+type passedDeadlineContext struct{ context.Context }
+
+func (passedDeadlineContext) Deadline() (time.Time, bool) {
+	return time.Now().Add(-time.Millisecond), true
+}
+
+// TestAReadTimeoutAtThePassedDeadlineReturnsTheDeadline: a socket timeout that
+// lands before the context timer fires is the caller's deadline, not a
+// dependency failure, and is reported as context.DeadlineExceeded.
+func TestAReadTimeoutAtThePassedDeadlineReturnsTheDeadline(t *testing.T) {
+	sink := &readAttemptRecorder{}
+	s := &sdkAPI{config: Config{MaxAttempts: 5, Telemetry: sink}}
+	calls := 0
+	_, err := retryRead(passedDeadlineContext{context.Background()}, s, "list graphs", func() (int, error) { calls++; return 0, os.ErrDeadlineExceeded })
+	if calls != 1 || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("calls=%d err=%v, want 1 call and context.DeadlineExceeded", calls, err)
+	}
+	if got := sink.all(); len(got) != 0 {
+		t.Fatalf("attempt records %+v, want none: the caller's deadline is not a dependency timeout", got)
+	}
+}
+
 // TestAReadIsNeverRetriedOnAContextError: a context error with the caller's own
 // context still live (a lower layer's deadline) is not transient.
 func TestAReadIsNeverRetriedOnAContextError(t *testing.T) {
