@@ -19616,6 +19616,11 @@
           "create_refused",
           "task_id_failed"
         ]
+      },
+      {
+        "key": "budget_fields",
+        "type": "int",
+        "presence": "required"
       }
     ]
   },

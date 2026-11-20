@@ -638,7 +638,7 @@ func TestTasksOutcomeLine(t *testing.T) {
 		setup      func(*tasksStack) func()
 		args       map[string]any
 	}{
-		{"task", "task", nil, nil},
+		{"task", "task", nil, map[string]any{"question": "Secret question text 14307?", "budget": map[string]any{"max_drivers": 3, "max_evidence_refs": 10}}},
 		{"fallback", "fallback_stream_unavailable", func(s *tasksStack) func() { s.fake.createMode = "stream_unavailable"; return func() {} }, nil},
 		{"ineligible", "sync_ineligible", nil, map[string]any{"question": "Is Ask Dev on track?", "synthesis": "client"}},
 		{"create refused", "create_refused", func(s *tasksStack) func() { s.fake.createMode = "other406"; return func() {} }, nil},
@@ -655,8 +655,12 @@ func TestTasksOutcomeLine(t *testing.T) {
 		s.rpc(t, s.caller.token, "tools/call", investigateParams(args, tasksMeta("2026-07-28", true)))
 		s.rpc(t, s.caller.token, "tools/call", investigateParams(args, tasksMeta("2026-07-28", false)))
 		lines := taskOutcomeLines(t, s.e)
-		if len(lines) != 1 || lines[0]["outcome"] != tc.want || lines[0]["tool"] != acrmcp.ToolInvestigateQuestionForTest || lines[0]["level"] != "INFO" {
-			t.Fatalf("%s: outcome lines %v, want exactly one %q", tc.name, lines, tc.want)
+		wantBudgetFields := float64(0)
+		if _, ok := args["budget"]; ok {
+			wantBudgetFields = 2
+		}
+		if len(lines) != 1 || lines[0]["outcome"] != tc.want || lines[0]["tool"] != acrmcp.ToolInvestigateQuestionForTest || lines[0]["level"] != "INFO" || lines[0]["budget_fields"] != wantBudgetFields {
+			t.Fatalf("%s: outcome lines %v, want exactly one %q with budget_fields %v", tc.name, lines, tc.want, wantBudgetFields)
 		}
 		if strings.Contains(string(s.e.logs.Bytes()), "Secret question text") {
 			t.Fatalf("%s: an argument value reached the log", tc.name)

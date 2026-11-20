@@ -290,11 +290,19 @@ const (
 
 // logTaskOutcome writes the one Info line of a declared call: the tool and
 // what became of it. No argument, id or subject value is on it.
-func logTaskOutcome(ctx context.Context, cfg *ProcessConfig, outcome string) {
+func logTaskOutcome(ctx context.Context, cfg *ProcessConfig, outcome string, budget *contractsv1.MCPInvestigationBudget) {
 	if cfg == nil || cfg.diagnostics == nil {
 		return
 	}
-	fields := eventspec.NewMCPTaskOutcomeFields(toolInvestigateQuestion, outcome)
+	supplied := 0
+	if budget != nil {
+		for _, value := range []int{budget.MaxDrivers, budget.MaxCohortMembers, budget.MaxEvidenceRefs, budget.MaxSerializedBytes} {
+			if value != 0 {
+				supplied++
+			}
+		}
+	}
+	fields := eventspec.NewMCPTaskOutcomeFields(toolInvestigateQuestion, outcome, supplied)
 	cfg.diagnostics.InfoContext(ctx, eventspec.MCPTaskOutcome.Msg, fields.SlogArgs()...)
 }
 
@@ -316,12 +324,12 @@ func tasksMiddleware(cfg *ProcessConfig) mcpsdk.Middleware {
 			}
 			caller, err := CallerFromContext(ctx)
 			if err != nil || !hostedToolEnabled(caller, toolInvestigateQuestion) {
-				logTaskOutcome(ctx, cfg, taskOutcomeSyncIneligible)
+				logTaskOutcome(ctx, cfg, taskOutcomeSyncIneligible, nil)
 				return next(ctx, method, req)
 			}
 			input, eligible := taskEligibleInput(call)
 			if !eligible {
-				logTaskOutcome(ctx, cfg, taskOutcomeSyncIneligible)
+				logTaskOutcome(ctx, cfg, taskOutcomeSyncIneligible, input.Budget)
 				return next(ctx, method, req)
 			}
 			// The whole task id is built before acr-api is called: a failure
@@ -329,12 +337,12 @@ func tasksMiddleware(cfg *ProcessConfig) mcpsdk.Middleware {
 			// back to the synchronous answer for it.
 			id, err := mintTaskID(time.Now(), taskRender{Budget: input.Budget, IncludeFullResult: input.IncludeFullResult})
 			if err != nil {
-				logTaskOutcome(ctx, cfg, taskOutcomeTaskIDFailed)
+				logTaskOutcome(ctx, cfg, taskOutcomeTaskIDFailed, input.Budget)
 				return nil, errTaskInternal
 			}
 			raw, err := id.encode()
 			if err != nil {
-				logTaskOutcome(ctx, cfg, taskOutcomeTaskIDFailed)
+				logTaskOutcome(ctx, cfg, taskOutcomeTaskIDFailed, input.Budget)
 				return nil, errTaskInternal
 			}
 			status, err := caller.client.InvestigateAsync(ctx, investigationHostedRequest(caller, input), id.submissionID)
@@ -342,14 +350,14 @@ func tasksMiddleware(cfg *ProcessConfig) mcpsdk.Middleware {
 			if errors.As(err, &apiErr) && apiErr.Code == contractsv1.ErrorCodeStreamUnavailable {
 				// The deployment runs no accept-first investigations: the
 				// synchronous call answers. Only this code falls back.
-				logTaskOutcome(ctx, cfg, taskOutcomeFallbackStreamUnavailable)
+				logTaskOutcome(ctx, cfg, taskOutcomeFallbackStreamUnavailable, input.Budget)
 				return next(ctx, method, req)
 			}
 			if err != nil {
-				logTaskOutcome(ctx, cfg, taskOutcomeCreateRefused)
+				logTaskOutcome(ctx, cfg, taskOutcomeCreateRefused, input.Budget)
 				return writeBackAwareErrorResult(err), nil
 			}
-			logTaskOutcome(ctx, cfg, taskOutcomeTask)
+			logTaskOutcome(ctx, cfg, taskOutcomeTask, input.Budget)
 			return &taskResult{
 				ResultType: "task", TaskID: raw, Status: taskStatusWorking,
 				CreatedAt: taskTime(id.createdAt), LastUpdatedAt: taskTime(status.UpdatedAt), PollIntervalMs: tasksPollIntervalMs,

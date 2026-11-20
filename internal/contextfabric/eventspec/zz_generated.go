@@ -13962,8 +13962,9 @@ func (f MCPHTTPServingFields) SlogArgs() []any {
 // MCPTaskOutcomeFields is mcp.task_outcome's generated typed construction interface
 // (CHAOS-5516): one Go field per Field MCPTaskOutcome.Fields declares in spec.go.
 type MCPTaskOutcomeFields struct {
-	Tool    string
-	Outcome string
+	Tool         string
+	Outcome      string
+	BudgetFields int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every MCPTaskOutcomeFields uniformly, set ONLY by NewMCPTaskOutcomeFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -13977,11 +13978,12 @@ type MCPTaskOutcomeFields struct {
 
 // NewMCPTaskOutcomeFields is the generated constructor for MCPTaskOutcomeFields -- every
 // field MCPTaskOutcome.Fields declares is a required parameter.
-func NewMCPTaskOutcomeFields(tool string, outcome string) MCPTaskOutcomeFields {
+func NewMCPTaskOutcomeFields(tool string, outcome string, budgetFields int) MCPTaskOutcomeFields {
 	return MCPTaskOutcomeFields{
-		Tool:        tool,
-		Outcome:     outcome,
-		constructed: true,
+		Tool:         tool,
+		Outcome:      outcome,
+		BudgetFields: budgetFields,
+		constructed:  true,
 	}
 }
 
@@ -14000,6 +14002,7 @@ func (f MCPTaskOutcomeFields) SlogArgs() []any {
 	return []any{
 		"tool", contextfabric.SanitizeLogAttr(f.Tool),
 		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"budget_fields", f.BudgetFields,
 	}
 }
 
