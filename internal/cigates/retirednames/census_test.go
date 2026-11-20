@@ -3,10 +3,12 @@
 package retirednames
 
 import (
+	"bytes"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"regexp/syntax"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +25,86 @@ var retiredNames = map[string]*regexp.Regexp{
 	"ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE (service token entitlement credential removed, CHAOS-13600)": regexp.MustCompile(`ACR_DEV_HEALTH_ENTITLEMENT_TOKEN_FILE`),
 	"svc_acr_ credential prefix (retired with the ops service credential, CHAOS-13170; CHAOS-11249)":    regexp.MustCompile(`\bsvc_acr_`),
 	"service_token entitlement credential value (removed, CHAOS-13600)":                                 regexp.MustCompile(`\bservice_token\b`),
+}
+
+// retiredLiterals holds, for every retiredNames pattern, the literals one of
+// which each of its matches must contain, derived from the parsed pattern. The
+// tree walk line-scans only a file that holds one of them: eight patterns per
+// line over the whole tree cost about 350 s under -race, a substring search
+// costs almost nothing. nil means some pattern has no required literal, and
+// then every file is line-scanned.
+var retiredLiterals = func() [][]byte {
+	var all [][]byte
+	for _, re := range retiredNames {
+		tree, err := syntax.Parse(re.String(), syntax.Perl)
+		if err != nil {
+			return nil
+		}
+		literals := requiredLiterals(tree.Simplify())
+		if literals == nil {
+			return nil
+		}
+		for _, literal := range literals {
+			all = append(all, []byte(literal))
+		}
+	}
+	return all
+}()
+
+// requiredLiterals returns strings one of which every match of re contains,
+// or nil when it cannot name such a set.
+func requiredLiterals(re *syntax.Regexp) []string {
+	switch re.Op {
+	case syntax.OpLiteral:
+		if re.Flags&syntax.FoldCase != 0 {
+			return nil
+		}
+		return []string{string(re.Rune)}
+	case syntax.OpCapture:
+		return requiredLiterals(re.Sub[0])
+	case syntax.OpConcat:
+		var best []string
+		for _, sub := range re.Sub {
+			literals := requiredLiterals(sub)
+			if literals != nil && (best == nil || shortestLength(literals) > shortestLength(best)) {
+				best = literals
+			}
+		}
+		return best
+	case syntax.OpAlternate:
+		var all []string
+		for _, sub := range re.Sub {
+			literals := requiredLiterals(sub)
+			if literals == nil {
+				return nil
+			}
+			all = append(all, literals...)
+		}
+		return all
+	}
+	return nil
+}
+
+func shortestLength(literals []string) int {
+	shortest := len(literals[0])
+	for _, literal := range literals[1:] {
+		shortest = min(shortest, len(literal))
+	}
+	return shortest
+}
+
+// mayHoldRetiredName is false only when data holds none of retiredLiterals,
+// so no retiredNames pattern can match it.
+func mayHoldRetiredName(data []byte) bool {
+	if retiredLiterals == nil {
+		return true
+	}
+	for _, literal := range retiredLiterals {
+		if bytes.Contains(data, literal) {
+			return true
+		}
+	}
+	return false
 }
 
 // allowed is the exact-path allowlist: a listed path may name a retired name because it bans it.
@@ -102,7 +184,7 @@ func TestNoRetiredNameInTree(t *testing.T) {
 			return err
 		}
 		scanned++
-		if allowed[rel] {
+		if allowed[rel] || !mayHoldRetiredName(data) {
 			return nil
 		}
 		hits = append(hits, scanText(rel, data)...)
@@ -146,9 +228,70 @@ func TestEveryRetiredNameIsDetected(t *testing.T) {
 			t.Errorf("planted line for %q was not detected", prefix)
 		}
 	}
+	for prefix, line := range planted {
+		if !mayHoldRetiredName([]byte(line)) {
+			t.Errorf("the file prefilter misses the planted line for %q, so the tree walk would skip its file", prefix)
+		}
+	}
 	for _, kept := range []string{"internal_service_credential_audits", "ACR_DEV_HEALTH_ENTITLEMENT_CREDENTIAL=workload", "a_service_token_b", "internal_svc_acr_token", "svc_acr"} {
 		if got := scanText("x", []byte(kept)); len(got) != 0 {
 			t.Errorf("%q is live and must not match: %v", kept, got)
 		}
 	}
+}
+
+// TestEveryRetiredPatternHasARequiredLiteral keeps the file prefilter in force:
+// a pattern with no required literal would turn it off for the whole tree.
+func TestEveryRetiredPatternHasARequiredLiteral(t *testing.T) {
+	if retiredLiterals == nil {
+		t.Fatal("a retiredNames pattern has no required literal, so the tree walk line-scans every file")
+	}
+	for name, re := range retiredNames {
+		tree, err := syntax.Parse(re.String(), syntax.Perl)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if requiredLiterals(tree.Simplify()) == nil {
+			t.Errorf("%s: no required literal", name)
+		}
+	}
+}
+
+func TestRequiredLiteralsNamesWhatEveryMatchHolds(t *testing.T) {
+	for _, tc := range []struct {
+		pattern string
+		want    []string
+	}{
+		{`AUTH_ACR_WORKLOAD_SUBJECT`, []string{"AUTH_ACR_WORKLOAD_SUBJECT"}},
+		{`\binternal_service_credentials\b`, []string{"internal_service_credentials"}},
+		{`mint_ops_service_token|ops-probe-token`, []string{"mint_ops_service_token", "ops-probe-token"}},
+		{`(svc)_acr_\w+`, []string{"_acr_"}},
+		{`(?i)svc_acr_`, nil},
+		{`[a-z]+`, nil},
+		{`svc_acr_|[0-9]+`, nil},
+	} {
+		tree, err := syntax.Parse(tc.pattern, syntax.Perl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := requiredLiterals(tree.Simplify())
+		re := regexp.MustCompile(tc.pattern)
+		if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+			t.Errorf("requiredLiterals(%q) = %q, want %q", tc.pattern, got, tc.want)
+		}
+		for _, line := range []string{"x AUTH_ACR_WORKLOAD_SUBJECT y", "internal_service_credentials", "ops-probe-token", "svc_acr_abc", "SVC_ACR_x", "abc", "123"} {
+			if got != nil && re.MatchString(line) && !containsAny(line, got) {
+				t.Errorf("%q matches %q but holds none of %q", line, tc.pattern, got)
+			}
+		}
+	}
+}
+
+func containsAny(line string, literals []string) bool {
+	for _, literal := range literals {
+		if strings.Contains(line, literal) {
+			return true
+		}
+	}
+	return false
 }
