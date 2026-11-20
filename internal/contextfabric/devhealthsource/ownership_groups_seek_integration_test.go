@@ -373,14 +373,17 @@ SELECT ?, 'github', 'TEAM-GITHUB', concat(?, leftPad(toString(number), 4, '0')),
 		f.orgID, prefix, prefix, ownershipFirstSeen, ownershipLaterAssertion, uint64(n))
 }
 
-// ownershipPageReadBound is six index granules: the page statement reads the
-// log seek twice (the page itself and the row-key set of the current lookup,
-// ownershipGroupsPageStatement), each at most two granules for a contiguous
-// keyset range, and the current granules that hold the page's row keys, at
-// most two. A page whose range crosses a granule boundary reads all six. The
-// granularity is read from both tables, not assumed; the bound is stated for
-// 8192 only.
-func ownershipPageReadBound(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) uint64 {
+// ownershipPageReadGranules is the page read bound in index granules: the page
+// statement reads the log seek twice (the page itself and the row-key set of
+// the current lookup, ownershipGroupsPageStatement), each at most two granules
+// for a contiguous keyset range, and the current granules that hold the page's
+// row keys, at most two. A page whose range crosses a granule boundary reads
+// all six.
+const ownershipPageReadGranules = 6
+
+// ownershipGroupsGranularity is the index_granularity of both stored group
+// tables, read from them, not assumed; the page bound is stated for 8192 only.
+func ownershipGroupsGranularity(t *testing.T, ctx context.Context, direct clickhousedriver.Conn) uint64 {
 	t.Helper()
 	rows, err := direct.Query(ctx, `SELECT name, toUInt64OrZero(extract(engine_full, 'index_granularity = ([0-9]+)')) FROM system.tables WHERE database = currentDatabase() AND name IN (?, ?)`,
 		"project_team_ownership_groups_log", "project_team_ownership_groups_current")
@@ -405,7 +408,74 @@ func ownershipPageReadBound(t *testing.T, ctx context.Context, direct clickhouse
 			t.Fatalf("%s index_granularity = %d (read from system.tables), the page bound 6 x granularity is stated for 8192 only: restate the bound", table, seen[table])
 		}
 	}
-	return 6 * seen["project_team_ownership_groups_log"]
+	return seen["project_team_ownership_groups_log"]
+}
+
+// ownershipPageCostFindings is C1's verdict over the read rows of each page:
+// no page reads more than ownershipPageReadGranules granules, and the median
+// page at 10,400 groups reads at most 1.1x the median page at 5,200 groups
+// counted in whole granules. A page pays each granule it touches in full; a
+// part's last granule is short only by where the part ends, so the 5,200
+// median is rounded up to whole granules before the compare.
+func ownershipPageCostFindings(granularity uint64, small, large []uint64) []string {
+	bound := ownershipPageReadGranules * granularity
+	var findings []string
+	for _, side := range []struct {
+		label string
+		reads []uint64
+	}{{"5200", small}, {"10400", large}} {
+		for _, read := range side.reads {
+			if read > bound {
+				findings = append(findings, fmt.Sprintf("%s: a page read %d rows, bound %d", side.label, read, bound))
+			}
+		}
+	}
+	smallMedian, largeMedian := medianReadRows(small), medianReadRows(large)
+	baseline := (smallMedian + granularity - 1) / granularity * granularity
+	if smallMedian == 0 || float64(largeMedian) > 1.1*float64(baseline) {
+		findings = append(findings, fmt.Sprintf("page cost grows with the organization: median %d rows at 10400 groups, %d at 5200 (%d in whole granules; bound 1.1x)", largeMedian, smallMedian, baseline))
+	}
+	return findings
+}
+
+func medianReadRows(v []uint64) uint64 {
+	s := append([]uint64(nil), v...)
+	sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+	return s[len(s)/2]
+}
+
+// The C1 verdict alone, no ClickHouse: the read rows are the ones CI logged.
+func TestOwnershipPageCostCountsTheSmallMedianInWholeGranules(t *testing.T) {
+	const g = 8192
+	pages := func(first, rest uint64) []uint64 { return []uint64{first, rest, rest, rest, rest, rest} }
+	cases := []struct {
+		name         string
+		small, large []uint64
+		want         []string
+	}{
+		{"green main 9f9f10e3", pages(24576, 24576), pages(32345, 24576), nil},
+		{"green main with a short extra part at 5200", pages(24576, 24600), pages(24576, 24576), nil},
+		{"red main 30165943: the 5200 pages end on a short part-tail granule", pages(17498, 17498), pages(32345, 24576), nil},
+		{"red PR 2132", pages(17786, 17786), pages(32447, 24576), nil},
+		{"one granule more at 10400 over a full baseline", pages(24576, 24576), pages(32768, 32768), []string{"page cost grows"}},
+		{"one granule more at 10400 over a rounded-up baseline", pages(17498, 17498), pages(32768, 32768), []string{"page cost grows"}},
+		{"a page at exactly six granules", pages(6*g, 24576), pages(6*g, 24576), nil},
+		{"a page one granule above the bound at 10400", pages(24576, 24576), pages(7*g, 24576), []string{"10400: a page read 57344 rows, bound 49152"}},
+		{"a page one granule above the bound at 5200", pages(7*g, 24576), pages(24576, 24576), []string{"5200: a page read 57344 rows, bound 49152"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := ownershipPageCostFindings(g, c.small, c.large)
+			if len(got) != len(c.want) {
+				t.Fatalf("findings %q, want %d matching %q", got, len(c.want), c.want)
+			}
+			for i, want := range c.want {
+				if !strings.Contains(got[i], want) {
+					t.Errorf("finding %d = %q, want it to contain %q", i, got[i], want)
+				}
+			}
+		})
+	}
 }
 
 // C1: a page's cost is bounded and does not grow with the organization. The
@@ -420,7 +490,7 @@ func ownershipPageReadBound(t *testing.T, ctx context.Context, direct clickhouse
 // measure, as background merges do in time, and each page logs the parts and
 // marks it selected.
 func subOwnershipPageCostIsBoundedAndFlat(t *testing.T, ctx context.Context, f *ownershipFixture) {
-	bound := ownershipPageReadBound(t, ctx, f.direct)
+	granularity := ownershipGroupsGranularity(t, ctx, f.direct)
 	big := newOwnershipFixture(t, ctx, f.query, f.direct, "30000000-0000-4000-8000-0000000063ff")
 	seedBoundBlock(t, ctx, f, 2600)
 	seedBoundBlock(t, ctx, big, 5200)
@@ -461,22 +531,14 @@ func subOwnershipPageCostIsBoundedAndFlat(t *testing.T, ctx context.Context, f *
 				t.Fatalf("%s: no finished statement carries log_comment %s", label, tag)
 			}
 			t.Logf("C1 %s %s read_rows=%d statements=%d selected_parts=%d selected_marks=%d", label, tag, read, statements, parts, marks)
-			if read > bound {
-				t.Errorf("%s: a page read %d rows, bound %d", label, read, bound)
-			}
 			out = append(out, read)
 		}
 		return out
 	}
-	median := func(v []uint64) uint64 {
-		s := append([]uint64(nil), v...)
-		sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
-		return s[len(s)/2]
-	}
-	small, large := median(measure(f, "5200")), median(measure(big, "10400"))
-	t.Logf("C1 median read_rows per page: 5200 groups %d, 10400 groups %d", small, large)
-	if small == 0 || float64(large) > 1.1*float64(small) {
-		t.Errorf("page cost grows with the organization: median %d rows at 10400 groups, %d at 5200 (bound 1.1x)", large, small)
+	small, large := measure(f, "5200"), measure(big, "10400")
+	t.Logf("C1 median read_rows per page: 5200 groups %d, 10400 groups %d (granularity %d)", medianReadRows(small), medianReadRows(large), granularity)
+	for _, finding := range ownershipPageCostFindings(granularity, small, large) {
+		t.Error(finding)
 	}
 }
 
