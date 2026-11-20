@@ -178,7 +178,10 @@ func (c memoryCappedQueryClient) Query(ctx context.Context, statement string, bi
 	rows, err := c.inner.Query(clickhousedriver.Context(ctx, driverOptions...), statement, bindings)
 	if err != nil {
 		c.observeRefused(ctx, statement, err, peak.Load())
-		return rows, err
+		if rows != nil {
+			_ = rows.Close()
+		}
+		return nil, err
 	}
 	if rows == nil || (c.observer == nil && c.unobserved == nil) {
 		return rows, err
