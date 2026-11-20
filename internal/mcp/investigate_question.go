@@ -113,6 +113,21 @@ const clientSynthesisFlowLine = "\n\nThe service wrote no answer text on this tu
 // A non-nil supplied interpretation and supplied synthesis are the only
 // differences between the tools that call it.
 func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *CallerContext, surface string, input contractsv1.MCPInvestigateQuestionRequest, supplied *contractsv1.ContextFabricSuppliedInterpretation, suppliedSynthesis *contractsv1.ContextFabricSuppliedSynthesis) (*mcpsdk.CallToolResult, error) {
+	hosted := investigationHostedRequest(caller, input)
+	hosted.SuppliedInterpretation = supplied
+	hosted.SuppliedSynthesis = suppliedSynthesis
+
+	hostedResponse, currentRequestID, err := caller.client.InvestigateWithSynthesisInput(ctx, hosted)
+	if err != nil {
+		return writeBackAwareErrorResult(err), nil
+	}
+	return renderInvestigationAnswer(ctx, cfg, caller, surface, input, hostedResponse.ContextFabricInvestigationResult, hostedResponse.SynthesisInput, currentRequestID)
+}
+
+// investigationHostedRequest maps a validated tool input onto the hosted
+// investigation request, budgets clamped to this caller's live limits. The
+// synchronous call and the accept-first task create send the same request.
+func investigationHostedRequest(caller *CallerContext, input contractsv1.MCPInvestigateQuestionRequest) contractsv1.ContextFabricInvestigationRequest {
 	budget := answerBudget(input.Budget, caller.Capabilities().Limits)
 	hosted := hostedInvestigationRequest(input, budget)
 	// The answer budget is the shedding target (answer_budget_bytes); the body
@@ -128,14 +143,16 @@ func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *Calle
 			hosted.Options.AnswerBudgetBytes = min(budget.MaxSerializedBytes, hosted.Options.MaxSerializedBytes)
 		}
 	}
-	hosted.SuppliedInterpretation = supplied
-	hosted.SuppliedSynthesis = suppliedSynthesis
+	return hosted
+}
 
-	hostedResponse, currentRequestID, err := caller.client.InvestigateWithSynthesisInput(ctx, hosted)
-	if err != nil {
-		return writeBackAwareErrorResult(err), nil
-	}
-	result := hostedResponse.ContextFabricInvestigationResult
+// renderInvestigationAnswer renders one canonical result as the tool answer:
+// the shared bounded projection to this caller's live budget, the untrusted
+// content declaration and the bounded markdown. The synchronous call renders
+// the result its POST returned; a completed task renders the stored result
+// by id with the same inputs, so both answers are the same.
+func renderInvestigationAnswer(ctx context.Context, cfg *ProcessConfig, caller *CallerContext, surface string, input contractsv1.MCPInvestigateQuestionRequest, result contractsv1.ContextFabricInvestigationResult, synthesisInput *contractsv1.ContextFabricSynthesisInput, currentRequestID string) (*mcpsdk.CallToolResult, error) {
+	budget := answerBudget(input.Budget, caller.Capabilities().Limits)
 	budget.MaxEvidenceRefs = cohortEvidenceRefBudget(budget.MaxEvidenceRefs, input.Budget, result)
 
 	projection := answerprojection.Project(result, answerprojection.Budget{
@@ -161,7 +178,7 @@ func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *Calle
 		attachFullResult(&response, result, budget.MaxSerializedBytes)
 	}
 
-	response.SynthesisInput = hostedResponse.SynthesisInput
+	response.SynthesisInput = synthesisInput
 	markdownMax := investigationRenderedMarkdownMax
 	if response.SynthesisInput != nil {
 		markdownMax -= len(clientSynthesisFlowLine)

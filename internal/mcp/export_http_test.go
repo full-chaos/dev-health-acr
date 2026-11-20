@@ -47,3 +47,7 @@ func ServeHTTPOnForTest(ctx context.Context, listener net.Listener, sidecarCfg s
 	}
 	return serveHTTPOn(ctx, listener, cfg, identity, opts)
 }
+
+// EnableTasksForTest turns MCP Tasks on for a hosted process configuration,
+// as ACR_MCP_TASKS_ENABLED=true does through the serve options.
+func EnableTasksForTest(cfg *ProcessConfig) { cfg.tasksEnabled = true }

@@ -19391,6 +19391,9 @@
           "logging/setLevel",
           "subscriptions/listen",
           "notifications/cancelled",
+          "tasks/get",
+          "tasks/update",
+          "tasks/cancel",
           "other"
         ]
       },
