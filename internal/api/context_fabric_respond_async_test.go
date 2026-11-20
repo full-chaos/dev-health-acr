@@ -105,6 +105,10 @@ func TestRespondAsyncRecordBeforeResponse(t *testing.T) {
 	waitFor(t, func() bool {
 		return harness.statusBody(0, harness.tokenA, "submission-async-001").State == contractsv1.ContextFabricSubmissionDone
 	})
+	// The run had no viewer from its start: it never tried the connection.
+	if detached := logs[0].lines("context fabric investigation event stream viewer detached"); len(detached) != 0 {
+		t.Fatalf("an accept-first run wrote to a connection: %v", detached)
+	}
 	done := harness.statusBody(0, harness.tokenA, "submission-async-001")
 	if done.Terminal == nil || done.Terminal.Kind != contractsv1.ContextFabricSubmissionTerminalResult || done.ResultID == "" {
 		t.Fatalf("done status %+v, want terminal result", done)
@@ -385,12 +389,15 @@ func TestRespondAsyncAbandonedBeforeLogTerminalNamesNoCause(t *testing.T) {
 	if response, body := harness.respondAsync(server, harness.tokenA, "submission-async-win", nil); response.StatusCode != http.StatusAccepted {
 		t.Fatalf("create = %d %s", response.StatusCode, body)
 	}
+	var once sync.Once
+	release := func() { once.Do(func() { close(holding.release) }) }
+	t.Cleanup(release)
 	<-holding.held
 	status := harness.statusBody(0, harness.tokenA, "submission-async-win")
 	if status.State != contractsv1.ContextFabricSubmissionAbandoned || status.Terminal != nil {
 		t.Fatalf("status %+v / %+v, want abandoned with no terminal before the log holds it", status, status.Terminal)
 	}
-	close(holding.release)
+	release()
 	waitFor(t, func() bool { return harness.statusBody(0, harness.tokenA, "submission-async-win").Terminal != nil })
 	final := harness.statusBody(0, harness.tokenA, "submission-async-win")
 	if final.Terminal.Kind != contractsv1.ContextFabricSubmissionTerminalError || final.Terminal.ErrorCode == "" ||
