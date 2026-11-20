@@ -45,7 +45,7 @@ func TestAdvancedPastCaptureEntriesAreRecordedAndAdvanced(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := mustPolicy(t)
-	if problems := advancedPastCaptureProblems(policy, manifest.ShapeCases, contractsAtCapture, advancedPastCapture); len(problems) != 0 {
+	if problems := advancedPastCaptureProblems(policy, manifest.ShapeCases, captureBaseline(manifest), advancedPastCapture); len(problems) != 0 {
 		t.Fatalf("advancedPastCapture: %v", problems)
 	}
 	// Each guard fails on the input it exists for.
@@ -139,5 +139,100 @@ func TestARootIsSkippedOnlyWhenEveryOperationIsAdvanced(t *testing.T) {
 		}}}
 	if _, err := oracle.Run(context.Background()); err == nil || !strings.Contains(err.Error(), dropped+" has no case") {
 		t.Fatalf("a root with one advanced operation and a missing case of another ran to %v", err)
+	}
+}
+
+// advancedByBaseline is the advanced-past-capture set a baseline implies.
+func advancedByBaseline(policy *directread.GraphQLPolicy, baseline map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, name := range operationsPastBaseline(policy, baseline) {
+		out[name] = "contract is not the baseline's"
+	}
+	return out
+}
+
+func notMeasuredLines(policy *directread.GraphQLPolicy, advanced map[string]string) []string {
+	var lines []string
+	for _, root := range advancedRoots(policy, advanced) {
+		lines = append(lines, notMeasuredLine(root))
+	}
+	return lines
+}
+
+// A capture taken again at the current SDL records the current contracts, so
+// the advancedPastCapture entries the old capture needed are refused.
+func TestAFreshCaptureRetiresTheAdvancedEntries(t *testing.T) {
+	manifest, _, _, err := LoadCapture(captureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := mustPolicy(t)
+	fresh := manifest
+	fresh.ContractDigests = contractDigestsOf(policy)
+	problems := advancedPastCaptureProblems(policy, fresh.ShapeCases, captureBaseline(fresh), advancedPastCapture)
+	joined := strings.Join(problems, "; ")
+	for name := range advancedPastCapture {
+		if !strings.Contains(joined, name+": its contract is the captured one") {
+			t.Errorf("a fresh capture keeps the entry %s: %v", name, problems)
+		}
+	}
+}
+
+// The manifest of the 2026-11-03 capture holds no digests: contractsAtCapture
+// judges it, and the recorded run leaves out the same roots as before.
+func TestAManifestWithoutDigestsIsJudgedByContractsAtCapture(t *testing.T) {
+	manifest, _, _, err := LoadCapture(captureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.ContractDigests) != 0 {
+		t.Skip("the capture on disk records its digests")
+	}
+	policy := mustPolicy(t)
+	baseline := captureBaseline(manifest)
+	if !maps.Equal(baseline, contractsAtCapture) {
+		t.Fatal("a manifest without digests is not judged by contractsAtCapture")
+	}
+	want := notMeasuredLines(policy, advancedPastCapture)
+	if got := notMeasuredLines(policy, advancedByBaseline(policy, baseline)); !slices.Equal(got, want) {
+		t.Fatalf("not measured roots = %q, want %q", got, want)
+	}
+}
+
+// One changed digest, or a missing one, takes the operation past the capture:
+// a missing digest is never a match.
+func TestAChangedOrMissingManifestDigestMakesTheRootNotMeasured(t *testing.T) {
+	policy := mustPolicy(t)
+	want := []string{notMeasuredLine("throughputForecast")}
+	for name, edit := range map[string]func(map[string]string){
+		"changed": func(d map[string]string) { d["throughputForecast"] = "sha256:0" },
+		"missing": func(d map[string]string) { delete(d, "throughputForecast") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			digests := contractDigestsOf(policy)
+			edit(digests)
+			if got := notMeasuredLines(policy, advancedByBaseline(policy, captureBaseline(Manifest{ContractDigests: digests}))); !slices.Equal(got, want) {
+				t.Fatalf("not measured roots = %q, want %q", got, want)
+			}
+		})
+	}
+	if got := notMeasuredLines(policy, advancedByBaseline(policy, contractDigestsOf(policy))); len(got) != 0 {
+		t.Fatalf("a baseline equal to the contracts leaves roots out: %q", got)
+	}
+}
+
+func TestTheManifestKeepsItsContractDigests(t *testing.T) {
+	policy := mustPolicy(t)
+	in := Manifest{ContractDigests: contractDigestsOf(policy)}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out Manifest
+	if err := decodeNumbered(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(in.ContractDigests) == 0 || !maps.Equal(in.ContractDigests, out.ContractDigests) {
+		t.Fatalf("digests lost in the manifest round trip: %d in, %d out", len(in.ContractDigests), len(out.ContractDigests))
 	}
 }
