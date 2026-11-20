@@ -300,7 +300,7 @@ FROM (
 	)
 	GROUP BY work_unit_id) AS folded_units) AS sized_unit
             LEFT JOIN (
-                SELECT org_id, work_unit_id, argMax(issue_size, computed_at) AS issue_size
+                SELECT org_id, work_unit_id, argMax(issue_size, (work_unit_issue_size.computed_at, toUInt64OrZero(splitByChar('_', work_unit_issue_size._part)[3]), work_unit_issue_size._part_offset)) AS issue_size
                 FROM work_unit_issue_size
                 WHERE org_id = {org_id:String}
                 GROUP BY org_id, work_unit_id
