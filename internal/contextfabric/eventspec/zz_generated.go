@@ -13101,6 +13101,7 @@ type OfferPoolSummaryFields struct {
 	BelowFloorExcluded int
 	SimilarityFloor    float64
 	EmptiedByExclusion bool
+	OfferedByKind      map[string]int
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every OfferPoolSummaryFields uniformly, set ONLY by NewOfferPoolSummaryFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -13114,7 +13115,7 @@ type OfferPoolSummaryFields struct {
 
 // NewOfferPoolSummaryFields is the generated constructor for OfferPoolSummaryFields -- every
 // field OfferPoolSummary.Fields declares is a required parameter.
-func NewOfferPoolSummaryFields(requestID string, pass int, vectorOnlyExcluded int, vectorOnlyDemoted int, belowFloorExcluded int, similarityFloor float64, emptiedByExclusion bool) OfferPoolSummaryFields {
+func NewOfferPoolSummaryFields(requestID string, pass int, vectorOnlyExcluded int, vectorOnlyDemoted int, belowFloorExcluded int, similarityFloor float64, emptiedByExclusion bool, offeredByKind map[string]int) OfferPoolSummaryFields {
 	return OfferPoolSummaryFields{
 		RequestID:          requestID,
 		Pass:               pass,
@@ -13123,6 +13124,7 @@ func NewOfferPoolSummaryFields(requestID string, pass int, vectorOnlyExcluded in
 		BelowFloorExcluded: belowFloorExcluded,
 		SimilarityFloor:    similarityFloor,
 		EmptiedByExclusion: emptiedByExclusion,
+		OfferedByKind:      offeredByKind,
 		constructed:        true,
 	}
 }
@@ -13148,6 +13150,7 @@ func (f OfferPoolSummaryFields) SlogArgs() []any {
 		"below_floor_excluded", f.BelowFloorExcluded,
 		"similarity_floor", f.SimilarityFloor,
 		"emptied_by_exclusion", f.EmptiedByExclusion,
+		"offered_by_kind", f.OfferedByKind,
 	}
 }
 

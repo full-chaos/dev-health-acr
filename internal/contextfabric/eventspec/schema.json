@@ -18621,6 +18621,28 @@
         "key": "emptied_by_exclusion",
         "type": "bool",
         "presence": "required"
+      },
+      {
+        "key": "offered_by_kind",
+        "type": "count_map",
+        "presence": "required",
+        "closed_vocabulary": [
+          "organization",
+          "team",
+          "project",
+          "repository",
+          "work_item",
+          "pull_request",
+          "deployment",
+          "incident",
+          "document",
+          "decision",
+          "episode",
+          "metric",
+          "pull_request_review",
+          "ci_pipeline_run",
+          "work_item_ref"
+        ]
       }
     ]
   },

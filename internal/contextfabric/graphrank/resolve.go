@@ -1593,6 +1593,9 @@ type ResolutionTraceEvent struct {
 	// and a field present in only one of its two states cannot be told
 	// apart from a build that does not emit it.
 	OfferPoolEmptiedByExclusion bool
+	// OfferPoolOfferedByKind counts the candidates this pass offered, by
+	// subject kind (CHAOS-10033). ALWAYS a non-nil map; empty when none offered.
+	OfferPoolOfferedByKind map[string]int
 	// CHAOS-5388. What the kind-scoped rescue arm did for each kind THIS
 	// QUESTION'S OWN FRAME OR RECEIPT declared, on the same once-per-pass
 	// line. ALWAYS a list, never nil: a frame that declared nothing renders

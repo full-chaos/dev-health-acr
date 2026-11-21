@@ -289,7 +289,8 @@ func (t SlogResolutionTracer) Trace(event ResolutionTraceEvent) {
 				"vector_only_demoted", event.OfferPoolVectorOnlyDemoted,
 				"below_floor_excluded", event.OfferPoolBelowFloorExcluded,
 				"similarity_floor", event.OfferPoolSimilarityFloor,
-				"emptied_by_exclusion", event.OfferPoolEmptiedByExclusion)
+				"emptied_by_exclusion", event.OfferPoolEmptiedByExclusion,
+				"offered_by_kind", event.OfferPoolOfferedByKind)
 			return
 		}
 		t.logger.DebugContext(ctx, "context fabric resolution trace: offer pool",
