@@ -187,7 +187,7 @@ func newWorkItemReadLimitFixture(t *testing.T, ctx context.Context) (*runtimecli
 			}
 		}
 		runningBeforeTerminate := container.IsRunning()
-		if err := container.Terminate(context.Background()); err != nil {
+		if err := container.Terminate(context.Background(), testcontainers.StopTimeout(0)); err != nil {
 			t.Errorf("terminate work-item read-limit ClickHouse container (container_id=%q): %v", containerID, err)
 		}
 		t.Logf("work-item read-limit fixture terminated: container_id=%q running_before_terminate=%t running_after_terminate=%t", containerID, runningBeforeTerminate, container.IsRunning())

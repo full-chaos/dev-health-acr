@@ -425,7 +425,7 @@ func newCompletionLimitProbeFixture(t *testing.T, ctx context.Context) (*runtime
 				t.Errorf("close completion limit-probe native client (container_id=%q): %v", containerID, err)
 			}
 		}
-		if err := container.Terminate(context.Background()); err != nil {
+		if err := container.Terminate(context.Background(), testcontainers.StopTimeout(0)); err != nil {
 			t.Errorf("terminate completion limit-probe ClickHouse container (container_id=%q): %v", containerID, err)
 		}
 	})
