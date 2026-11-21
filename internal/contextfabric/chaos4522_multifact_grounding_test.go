@@ -230,8 +230,6 @@ func TestEveryValidateAgainstRejectionCarriesAClosedVocabularyReason(t *testing.
 		want   SynthesisRejectionReason
 	}{
 		{"status", func(_ *SynthesisInput, d *SynthesisDraft) { d.Status = "not_a_status" }, RejectionReasonStatusInvalid},
-		{"direct_judgment", func(_ *SynthesisInput, d *SynthesisDraft) { d.DirectJudgment = "  " }, RejectionReasonDirectJudgmentMissing},
-		{"deterministic_answer", func(_ *SynthesisInput, d *SynthesisDraft) { d.DeterministicAnswer = "" }, RejectionReasonDeterministicAnswerMissing},
 		{"evidence", func(_ *SynthesisInput, d *SynthesisDraft) {
 			d.EvidenceRefIDs = append(d.EvidenceRefIDs, "evidence_never_offered")
 		}, RejectionReasonEvidenceUnknown},

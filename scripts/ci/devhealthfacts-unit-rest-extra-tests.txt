@@ -1,0 +1,9 @@
+# Unit legs only (race jobs ignore this list): tests of the heavy, mid or fourth list
+# that unit leg 5 runs instead of leg 7 or 10. Leg 7 held the three slowest
+# statement-memory tests; on a slow runner they ran 1.5-1.8x their usual time and
+# the leg reached 1434-1558s against the 1530s guard (main, 2026-11-20). Moving two
+# tests to leg 5 keeps legs 5, 7 and 10 near 900-1050s, and near 1380s on such a runner.
+# Every name must be in the heavy, mid or fourth list, at most once, and not in
+# devhealthfacts-unit-heavy-extra-tests.txt (race-split.sh verify, partition).
+TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse
+TestTeamLinkedInvestmentStatementMemoryOnTheProdShape

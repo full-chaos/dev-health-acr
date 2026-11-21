@@ -748,8 +748,7 @@ func validSynthesisOutput() synthesisOutput {
 
 func validDraft() contextfabric.SynthesisDraft {
 	output := validSynthesisOutput()
-	draft, _ := output.toDomain()
-	return draft
+	return output.toDomain()
 }
 
 func validReceipt(operation contextfabric.ModelOperation) contextfabric.ModelExecutionReceipt {

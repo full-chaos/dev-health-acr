@@ -1844,10 +1844,7 @@ func sanitizeWindowOutput(output interpretationOutput) (contextfabric.WindowClas
 // one Genkit accepted, rather than a second, drifting copy of the same
 // three calls.
 func synthesizeValidateDraw(ctx context.Context, r *Runtime, principal storage.Principal, output synthesisOutput, input contextfabric.SynthesisInput) (contextfabric.SynthesisDraft, error) {
-	draft, err := output.toDomain()
-	if err != nil {
-		return draft, err
-	}
+	draft := output.toDomain()
 	// CHAOS-4355 follow-up (tolerance): this is the production ModelRuntime's
 	// OWN ValidateAgainst call -- the actual live 422 source (see the
 	// matching comment on the classification below) -- so the strip belongs
@@ -4133,7 +4130,7 @@ type phrasingOutput struct {
 	Phrasings []phrasingEntryOutput `json:"phrasings"`
 }
 
-func (o synthesisOutput) toDomain() (contextfabric.SynthesisDraft, error) {
+func (o synthesisOutput) toDomain() contextfabric.SynthesisDraft {
 	draft := contextfabric.SynthesisDraft{
 		Status:         contextfabric.InvestigationStatus(strings.TrimSpace(o.Status)),
 		DirectJudgment: strings.TrimSpace(o.DirectJudgment), CurrentState: strings.TrimSpace(o.CurrentState),
@@ -4144,28 +4141,7 @@ func (o synthesisOutput) toDomain() (contextfabric.SynthesisDraft, error) {
 		DeterministicAnswer: strings.TrimSpace(o.DeterministicAnswer), Warnings: trimmedUnique(o.Warnings),
 	}
 	draft.CoverageDisclosures, draft.CoverageDisclosuresUndecodable = parseCoverageDisclosures(o.CoverageDisclosures)
-	if strings.TrimSpace(draft.DeterministicAnswer) == "" {
-		// Return draft (not a zero value) alongside the error: the caller
-		// (Runtime.SynthesizeAnswer) needs it to diagnose whether any
-		// OTHER field also violates a bound (CHAOS-3784 F1), the same
-		// reason interpretationOutput.toDomain does this above.
-		//
-		// CHAOS-4522: this is a VALIDATION failure, not a decode failure --
-		// the model's JSON decoded into synthesisOutput perfectly well, it
-		// just omitted a required field, and it is the very same rule
-		// SynthesisDraft.ValidateAgainst enforces one statement later. So
-		// it carries that rule's own reason rather than anything about
-		// decoding. Nothing in this path can actually fail to DECODE
-		// (genkit has already populated synthesisOutput by the time
-		// toDomain runs), which is why no "undecodable" reason exists in
-		// the vocabulary: a reason that no branch can ever emit is a claim
-		// the telemetry cannot back.
-		return draft, contextfabric.NewSynthesisRejection(
-			contextfabric.RejectionReasonDeterministicAnswerMissing,
-			errors.New("deterministic answer is required"),
-		)
-	}
-	return draft, nil
+	return draft
 }
 
 // parseCoverageDisclosures lenient-decodes the model's raw

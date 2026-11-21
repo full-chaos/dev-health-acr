@@ -59,11 +59,7 @@ func (s *SuppliedSynthesizer) Parse(raw []byte) (contextfabric.SynthesisDraft, e
 	if err != nil {
 		return contextfabric.SynthesisDraft{}, rejectSuppliedSynthesis(contextfabric.RejectionReasonOutputSchemaMismatch, err)
 	}
-	draft, err := output.toDomain()
-	if err != nil {
-		return contextfabric.SynthesisDraft{}, rejectSuppliedSynthesis(contextfabric.SynthesisRejectionReasonOf(err), err)
-	}
-	return draft, nil
+	return output.toDomain(), nil
 }
 
 func rejectSuppliedSynthesis(reason contextfabric.SynthesisRejectionReason, cause error) error {

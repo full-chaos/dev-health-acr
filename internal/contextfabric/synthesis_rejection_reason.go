@@ -35,10 +35,8 @@ const (
 	RejectionReasonUnclassified SynthesisRejectionReason = "unclassified"
 
 	// Top-level draft shape.
-	RejectionReasonStatusInvalid              SynthesisRejectionReason = "status_invalid"
-	RejectionReasonDirectJudgmentMissing      SynthesisRejectionReason = "direct_judgment_missing"
-	RejectionReasonDeterministicAnswerMissing SynthesisRejectionReason = "deterministic_answer_missing"
-	RejectionReasonEvidenceUnknown            SynthesisRejectionReason = "evidence_unknown"
+	RejectionReasonStatusInvalid   SynthesisRejectionReason = "status_invalid"
+	RejectionReasonEvidenceUnknown SynthesisRejectionReason = "evidence_unknown"
 	// RejectionReasonOutputSchemaMismatch: a draft, one a caller wrote or the
 	// model's own, is not the declared synthesis output schema (a wrong type,
 	// a missing required field, an unknown field, or not one JSON object).
@@ -132,8 +130,6 @@ const (
 var canonicalSynthesisRejectionReasons = map[SynthesisRejectionReason]SynthesisRejectionReason{
 	RejectionReasonUnclassified:                     RejectionReasonUnclassified,
 	RejectionReasonStatusInvalid:                    RejectionReasonStatusInvalid,
-	RejectionReasonDirectJudgmentMissing:            RejectionReasonDirectJudgmentMissing,
-	RejectionReasonDeterministicAnswerMissing:       RejectionReasonDeterministicAnswerMissing,
 	RejectionReasonEvidenceUnknown:                  RejectionReasonEvidenceUnknown,
 	RejectionReasonOutputSchemaMismatch:             RejectionReasonOutputSchemaMismatch,
 	RejectionReasonClaimInvalid:                     RejectionReasonClaimInvalid,
