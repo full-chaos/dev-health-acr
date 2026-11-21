@@ -5,7 +5,7 @@
     "repository": "full-chaos/dev-health-ops",
     "commit": "2c115402dbbb3b11f28a0029cdbe3b9da5c3e891",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
-    "schema_digest": "sha256:7f8167568a634f87d77d4c28e9fb34efa17078cbff1b5d950b5e0e334d4f26b3",
+    "schema_digest": "sha256:963a889d2e612b923be407d9191aed05ef5b9bc9d5d6dd758e5a238e20185667",
     "registry_sha256": "a5b10041070294faf37a75253ff2a024af2656442b341562b8202c65f6ca26c0",
     "registry_rows": 67
   },
