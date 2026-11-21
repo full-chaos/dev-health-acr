@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/llm"
 )
 
 // CHAOS-5380. The decision event carried `attempts` (a COUNT) and `outcome`
@@ -66,14 +67,14 @@ func (g *sequencedGenerator) Phrase(context.Context, generationRequest) (phrasin
 }
 
 // retryableUnavailable is a STRUCTURED transport failure: retryable() only
-// trusts a modelStatusError statuses, never message text (CHAOS-3770 F2), so a
+// trusts an llm.Error class, never message text (CHAOS-3770 F2), so a
 // plain errors.New would not retry at all and the pin would measure nothing.
 func retryableUnavailable() error {
-	return &modelStatusError{Status: statusUnavailable, Message: "provider unavailable"}
+	return clientError(llm.ClassServer)
 }
 
 func retryableRateLimited() error {
-	return &modelStatusError{Status: statusResourceExhausted, Message: "rate limited"}
+	return clientError(llm.ClassRateLimit)
 }
 
 func attrInt(t *testing.T, attrs map[string]any, key string) int {

@@ -3450,15 +3450,14 @@ func boundedJSON(value any, maximum int) ([]byte, error) {
 
 // retryable decides whether a generation failure may be retried with the
 // EXACT SAME encoded payload. It classifies ONLY on structured status/code
-// (a Genkit gRPC-style status, a shared-client error class, or
-// context.DeadlineExceeded) -- never by
+// (a shared-client error class or context.DeadlineExceeded) -- never by
 // sniffing an error's message text (CHAOS-3770 F2).
 //
 // That restriction is deliberate, not merely cautious: the OpenAI SDK's own
 // error type (openai-go/internal/apierror.Error, aliased as openai.Error)
 // formats Error() as "%s %q: %d %s %s" with the raw provider response body
 // as the last verbatim component, and compat_oai/generate.go wraps that
-// error with a plain fmt.Errorf rather than a modelStatusError. So by the
+// error with a plain fmt.Errorf. So by the
 // time an error from the real production transport reaches this function,
 // it is routinely UNSTRUCTURED, and its message can legitimately be a
 // non-transient validation failure whose body happens to contain a word
@@ -3484,26 +3483,6 @@ func retryable(err error) bool {
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
-	}
-	// Genkit (and well-behaved plugins) surface transport and provider
-	// failures as *modelStatusError with a gRPC-style status. Prefer that
-	// structured signal over string sniffing when it is present -- and once
-	// present, trust it completely: an unmatched status (e.g. INTERNAL, or
-	// anything else Genkit's own validation paths raise) is not retryable
-	// either, never falling through to string matching on its own Message.
-	var genkitErr *modelStatusError
-	if errors.As(err, &genkitErr) {
-		switch genkitErr.Status {
-		case statusResourceExhausted, statusUnavailable, statusDeadlineExceeded, statusAborted:
-			return true
-		default:
-			// Includes INVALID_ARGUMENT (malformed request or
-			// schema-incompatible output; the model is not going to
-			// succeed against the same input, so this fails closed
-			// instead of retrying -- ADR 0008: invalid output fails
-			// closed) and every other structured status.
-			return false
-		}
 	}
 	// No structured signal: not retryable. See the function doc comment.
 	return false
@@ -3562,30 +3541,6 @@ func classifyModelErrorKind(err error) error {
 	}
 	if classified, ok := classifyLLMError(err); ok {
 		return classified
-	}
-	var genkitErr *modelStatusError
-	if errors.As(err, &genkitErr) {
-		switch genkitErr.Status {
-		case statusResourceExhausted:
-			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelRateLimited, genkitErr.Status)
-		case statusInvalidArgument:
-			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelOutput, genkitErr.Status)
-		case statusInternal:
-			// Genkit reports its own structured-output/schema mismatch as
-			// INTERNAL (see ai.jsonHandler.ParseMessage), so INTERNAL is
-			// ambiguous between a genuine provider fault and invalid model
-			// output. Distinguish by the fixed prefix Genkit always uses for
-			// the schema-mismatch case; never inspect or forward the rest of
-			// the message, which may quote the malformed output.
-			if strings.HasPrefix(genkitErr.Message, genkitSchemaMismatchPrefix) {
-				return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelOutput, genkitErr.Status)
-			}
-			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
-		case statusUnavailable, statusDeadlineExceeded, statusAborted:
-			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
-		default:
-			return fmt.Errorf("%w: provider status %s", contextfabric.ErrModelUnavailable, genkitErr.Status)
-		}
 	}
 	text := err.Error()
 	// Prefer the ACR-controlled sanitized-status token when present: it is
