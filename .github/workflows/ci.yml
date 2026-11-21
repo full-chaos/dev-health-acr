@@ -1526,7 +1526,7 @@ jobs:
       - plan
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthfacts-fifth')
     runs-on: ubuntu-latest
-    # CHAOS-12667: actions: read lets the budget guard fetch main's last race-json
+    # actions: read lets the budget guard fetch main's last race-json
     # artifact of this job, so a trip prints each test's change against main.
     permissions:
       contents: read
@@ -1560,7 +1560,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify the heavy-test list names real tests
         run: scripts/ci/race-split.sh devhealthfacts verify
-      # CHAOS-12667: main's last race-json of this job, for the guard's real span
+      # main's last race-json of this job, for the guard's real span
       # report. The token is used in this step only; it runs gh and nothing else.
       - uses: ./.github/actions/race-baseline
         with:
