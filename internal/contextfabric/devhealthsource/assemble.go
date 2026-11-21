@@ -441,7 +441,7 @@ func (p sourcePlan) pagedBatch(ctx context.Context, orgID, cursor string, state 
 		}
 		sortCandidates(all)
 		read := len(all)
-		all, bounded := truncateToCompleteRows(all, incrementalBatchCap, bound)
+		all, bounded := truncateToCompleteRows(all, incrementalBatchCap, bound, nil)
 		ahead = ahead || len(all) < read
 		p.window.setAhead(p.windowScope, ahead)
 		if len(all) == 0 {

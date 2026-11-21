@@ -531,7 +531,12 @@ func (p sourcePlan) overlapBatch(ctx context.Context, orgID, cursor string, stat
 		}
 		if len(pageRows) > 0 {
 			sortCandidates(pageRows)
-			complete, bounded := truncateToCompleteRows(pageRows, incrementalBatchCap, bound)
+			// The batch carries the unseen rows inside the pass's edge; the cut
+			// measures those.
+			complete, bounded := truncateToCompleteRows(pageRows, incrementalBatchCap, bound, func(rows []candidate) []candidate {
+				inside, _ := withinEdge(rows, pass.high)
+				return p.window.unseen(p.windowScope, inside)
+			})
 			// A long walk can meet the bound on every page: the pass writes
 			// the line for its first such page and counts the rest.
 			if bounded {

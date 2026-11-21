@@ -720,11 +720,12 @@ func sortCandidates(all []candidate) {
 // returned. bounded reports that the bound, not the cap, ended the page.
 //
 // One row can carry many items (an incident has an edge per repository of its
-// service), so 200 rows can hold more than one batch may. When the rows'
-// items pass a batch item bound, the page ends after the most rows whose items,
+// service), so 200 rows can hold more than one batch may. A page whose items,
 // judged as the batch judges them (normalization, quarantine, deduplication),
-// fit (cutToBatchItemBounds). A page inside the bounds is never cut.
-func truncateToCompleteRows(all []candidate, maxRows int, bound pageBound) (kept []candidate, bounded bool) {
+// fit is never cut. Else the page ends after the most rows whose judged items
+// fit (cutToBatchItemBounds). publishes maps rows to the rows of them a batch
+// publishes (nil: all of them); the judgement measures those.
+func truncateToCompleteRows(all []candidate, maxRows int, bound pageBound, publishes func([]candidate) []candidate) (kept []candidate, bounded bool) {
 	if maxRows <= 0 {
 		return nil, false
 	}
@@ -743,19 +744,29 @@ func truncateToCompleteRows(all []candidate, maxRows int, bound pageBound) (kept
 			starts = append(starts, i)
 		}
 	}
-	return cutToBatchItemBounds(all[:end], starts), bounded
+	return cutToBatchItemBounds(all[:end], starts, publishes), bounded
 }
 
-// cutToBatchItemBounds keeps the most whole rows of page (each row starts at
-// its index in starts) whose items fit one batch as the batch judges them. The
-// first row is always kept, or the read could never move on; items of that one
-// row past a bound are quarantined (partitionProjectableCandidates).
-func cutToBatchItemBounds(page []candidate, starts []int) []candidate {
+// cutToBatchItemBounds keeps page whole when the items it publishes fit one
+// batch as the batch judges them; else it keeps the most whole rows (each row
+// starts at its index in starts) whose judged items fit. Judged counts do not
+// grow with rows (a quarantined endpoint late on a page removes an earlier edge
+// to it), so the whole page is judged first: a page that publishes today is
+// published unchanged. The first row is always kept, or the read could never
+// move on; items of that one row past a bound are quarantined
+// (partitionProjectableCandidates).
+func cutToBatchItemBounds(page []candidate, starts []int, publishes func([]candidate) []candidate) []candidate {
 	var raw batchItems
 	for _, c := range page {
 		raw.add(c)
 	}
-	if raw.fit() {
+	judged := func(rows []candidate) bool {
+		if publishes != nil {
+			rows = publishes(rows)
+		}
+		return judgedItemsFit(rows)
+	}
+	if raw.fit() || judged(page) {
 		return page
 	}
 	rowsEnd := func(rows int) int {
@@ -780,7 +791,7 @@ func cutToBatchItemBounds(page []candidate, starts []int) []candidate {
 	high := len(starts)
 	for low < high {
 		mid := (low + high + 1) / 2
-		if judgedItemsFit(page[:rowsEnd(mid)]) {
+		if judged(page[:rowsEnd(mid)]) {
 			low = mid
 		} else {
 			high = mid - 1
@@ -808,11 +819,15 @@ func judgedItemsFit(rows []candidate) bool {
 		probe[i] = c
 	}
 	normalizeCandidates(probe, nil)
-	var items batchItems
-	for _, c := range judgeCandidates(probe, nil, false) {
-		items.add(c)
+	return itemsFit(judgeCandidates(probe, nil, nil))
+}
+
+func itemsFit(items []candidate) bool {
+	var counts batchItems
+	for _, c := range items {
+		counts.add(c)
 	}
-	return items.fit()
+	return counts.fit()
 }
 
 // batchItems counts the items of each kind a batch bounds.

@@ -231,18 +231,59 @@ func oversizeScalarMap(properties map[string]contractsv1.ContextFabricScalarValu
 // would move the watermark backwards whenever the last row on a page was
 // quarantined, and those rows would be re-read, re-dropped and re-counted on
 // every subsequent tick.
+//
+// The items it keeps fit one batch's item bounds. Only a single row can bring
+// more than that (truncateToCompleteRows cuts a page before any later row
+// would): the kept items past a bound are then quarantined like any other item
+// a batch cannot carry, dependents included, and judged again. The bound
+// counts what survives deduplication and quarantine, so a page that fits is
+// never cut short. The item's own data breaks no bound, so quarantineReason
+// names it contract_bound_violation.
 func partitionProjectableCandidates(all []candidate, observe func(quarantineObservation)) []candidate {
-	return judgeCandidates(all, observe, true)
+	var held []quarantineObservation
+	hold := func(o quarantineObservation) { held = append(held, o) }
+	kept := judgeCandidates(all, hold, nil)
+	past := map[any]struct{}{}
+	for !itemsFit(kept) {
+		var counts batchItems
+		for _, c := range kept {
+			if !counts.add(c) {
+				past[itemOf(c)] = struct{}{}
+			}
+		}
+		held = held[:0]
+		kept = judgeCandidates(all, hold, past)
+	}
+	if observe != nil {
+		for _, o := range held {
+			observe(o)
+		}
+	}
+	return kept
 }
 
-// judgeCandidates is partitionProjectableCandidates; bounded false keeps valid
-// items past a batch item bound, to measure what a page would carry.
-func judgeCandidates(all []candidate, observe func(quarantineObservation), bounded bool) []candidate {
+// itemOf is the item a candidate carries, as a comparable key.
+func itemOf(c candidate) any {
+	switch {
+	case c.entity != nil:
+		return c.entity
+	case c.relationship != nil:
+		return c.relationship
+	case c.episode != nil:
+		return c.episode
+	case c.tombstone != nil:
+		return c.tombstone
+	}
+	return nil
+}
+
+// judgeCandidates is partitionProjectableCandidates without the batch bound:
+// it also quarantines the items in past (items a batch cannot carry).
+func judgeCandidates(all []candidate, observe func(quarantineObservation), past map[any]struct{}) []candidate {
 	kept := make([]candidate, 0, len(all))
 	quarantinedRelationships := make(map[string]struct{})
 	quarantinedEntities := make(map[string]struct{})
 	ignored := make(map[string]int)
-	var items batchItems
 	for _, c := range all {
 		if c.ignoredType != "" {
 			ignored[c.ignoredType]++
@@ -250,12 +291,7 @@ func judgeCandidates(all []candidate, observe func(quarantineObservation), bound
 			continue
 		}
 		kind, err := validateCandidateItem(c)
-		if err == nil && !items.add(c) && bounded {
-			// Only one row can bring this (truncateToCompleteRows cuts a page
-			// before any later row would): its items past the bound are dropped
-			// like any other item a batch cannot carry, dependents included.
-			// The item's own data breaks no bound, so quarantineReason names it
-			// contract_bound_violation.
+		if _, isPast := past[itemOf(c)]; isPast && err == nil {
 			err = errPastBatchBound
 		}
 		if err == nil {

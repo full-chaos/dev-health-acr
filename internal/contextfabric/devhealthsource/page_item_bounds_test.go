@@ -354,7 +354,7 @@ func TestPageCutCountsEveryBoundedKind(t *testing.T) {
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			sortCandidates(tc.all)
-			kept, bounded := truncateToCompleteRows(tc.all, len(tc.all), pageBound{})
+			kept, bounded := truncateToCompleteRows(tc.all, len(tc.all), pageBound{}, nil)
 			if bounded {
 				t.Fatal("an item bound cut reported a truncated-table bound")
 			}
