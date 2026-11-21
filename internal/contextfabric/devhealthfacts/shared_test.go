@@ -679,15 +679,17 @@ func TestQueryVersionMovedPastTheStatusWithoutTimeInState(t *testing.T) {
 	}
 }
 
+// A QueryVersion bump also bumps currentQueryVersionNumber below.
 func TestQueryVersionMovedPastTheThreeCopyLandscape(t *testing.T) {
 	t.Parallel()
 	const prefix = "devhealthfacts.clickhouse.v"
+	const currentQueryVersionNumber = 292
 	number, err := strconv.Atoi(strings.TrimPrefix(devhealthfacts.QueryVersion, prefix))
 	if err != nil {
 		t.Fatalf("QueryVersion = %q: %v", devhealthfacts.QueryVersion, err)
 	}
-	if number < 213 {
-		t.Fatalf("QueryVersion = %q, want v213 or later -- an answer saved when a landscape fact held each identity's stats once per map must not be reused", devhealthfacts.QueryVersion)
+	if number < currentQueryVersionNumber {
+		t.Fatalf("QueryVersion = %q, want v%d or later -- a stamp must never decrease: an answer saved under a later stamp must not be reused", devhealthfacts.QueryVersion, currentQueryVersionNumber)
 	}
 }
 
