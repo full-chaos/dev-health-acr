@@ -35,6 +35,10 @@ func TestScopeExpander_ProjectToPullRequest_CarriesTheLinkTier(t *testing.T) {
 		"gitlab:acme/web#7", chaos4099GitLabRepoID, orgID, "GitLab issue (second project)", "open", "", "", otherProjectKey, at)
 	seedIssueLink(t, ctx, direct, orgID, "gitlab:acme/web#7", chaos4099GitLabRepoID, 3, "explicit_text", at)
 
+	// The same issue also holds a native link to pull request 2, so its
+	// explicit_text link to pull request 3 is covered (issue-side cover).
+	seedIssueLink(t, ctx, direct, orgID, "gitlab:acme/web#7", chaos4099GitLabRepoID, 2, "native", at)
+
 	first := chaos4099ProjectSubject(t)
 	secondID, omitted, err := identity.Derive(identity.KindProject, []string{"gitlab", otherProjectID}, nil)
 	if err != nil || omitted {
@@ -56,8 +60,8 @@ func TestScopeExpander_ProjectToPullRequest_CarriesTheLinkTier(t *testing.T) {
 	prefix := "pull_request:" + chaos4099GitLabRepoID + ":"
 	want := map[string]map[string]string{
 		prefix + "1": {contextfabric.FactSubjectKey(first): "native"},
-		prefix + "2": {},
-		prefix + "3": {contextfabric.FactSubjectKey(second): "explicit_text"},
+		prefix + "2": {contextfabric.FactSubjectKey(second): "native"},
+		prefix + "3": {},
 	}
 	if len(result.Targets) != len(want) {
 		t.Fatalf("targets = %+v, want %d pull requests", result.Targets, len(want))

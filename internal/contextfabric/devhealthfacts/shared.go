@@ -1483,7 +1483,14 @@ import (
 // work_unit_investments orders by ops' latest-row key (computed_at, then insert
 // order), the row a merge keeps. An answer saved under v290 may hold an
 // arbitrary pick of two versions stored in the same millisecond.
-const QueryVersion = "devhealthfacts.clickhouse.v291"
+//
+// v291 -> v292: a pull request reached from a project carries a link tier only
+// at the strongest tier its issue holds across every pull request (an issue's
+// native link covers its lower-tier link to another pull request), as the pull
+// request side already covered. The prod link writer stores no such row, so
+// served answers move only for a store that holds one. An answer saved under
+// v291 holds a lower-tier link its issue's native link covers.
+const QueryVersion = "devhealthfacts.clickhouse.v292"
 
 // repositoryFromOpsVersionSuffix marks the version of a deployment that reads
 // the repository investment mix from ops (CHAOS-12690): the numbers differ for
