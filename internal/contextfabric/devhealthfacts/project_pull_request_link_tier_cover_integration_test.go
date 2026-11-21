@@ -127,7 +127,8 @@ func TestScopeExpander_ProjectToPullRequest_NativeLinkCoversLowerTiersAcrossProj
 	s.issue("gitlab:acme/api#31", "acme/api")
 	s.link("gitlab:acme/api#31", 3, "explicit_text")
 	s.link("gitlab:acme/web#7", 3, "native")
-	// PR 4: both requested projects hold the same tier, so both keep it.
+	// PR 4: both requested projects hold a heuristic link, but second's issue
+	// also holds a native link to PR 3, so second's heuristic link is covered.
 	s.issue("gitlab:acme/api#41", "acme/api")
 	s.link("gitlab:acme/api#41", 4, "heuristic")
 	s.link("gitlab:acme/web#7", 4, "heuristic")
@@ -146,8 +147,8 @@ func TestScopeExpander_ProjectToPullRequest_NativeLinkCoversLowerTiersAcrossProj
 	}{
 		{1, first, "native", 1},
 		{3, second, "native", 1},
-		{4, first, "heuristic", 2},
-		{4, second, "heuristic", 2},
+		{4, first, "heuristic", 1},
+		{4, second, "", 1},
 		{5, first, "", 0},
 	} {
 		tier, count := tierOf(result, chaos4099GitLabRepoID, row.number, row.root)
