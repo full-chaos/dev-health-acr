@@ -419,3 +419,41 @@ func TestPageCutCountsRepairsOnce(t *testing.T) {
 	requireOnce(t, "relationship", walk.relationships, relationships)
 	requireOnce(t, "tombstone", walk.tombstones, tombstones)
 }
+
+// A row past a bound on a page that also drops items for another reason
+// reports every drop once.
+func TestOverflowQuarantineReportsEachDropOnce(t *testing.T) {
+	all := overflowEntities(contractsv1.ContextFabricProjectionBatchMaxEntities + 2)
+	twin := *all[0].entity
+	all = append(all, candidate{observedAt: all[0].observedAt, sortKey: all[0].sortKey, entity: &twin})
+	counts := map[string]int{}
+	items := partitionProjectableCandidates(all, func(o quarantineObservation) { counts[o.Kind+"/"+o.Reason]++ })
+	if len(items) != contractsv1.ContextFabricProjectionBatchMaxEntities {
+		t.Fatalf("kept %d entities, want %d", len(items), contractsv1.ContextFabricProjectionBatchMaxEntities)
+	}
+	want := map[string]int{"entity/" + quarantineContractBoundViolation: 2, "entity/" + quarantineDuplicateWithinBatch: 1}
+	if fmt.Sprint(counts) != fmt.Sprint(want) {
+		t.Fatalf("quarantined %v, want %v", counts, want)
+	}
+}
+
+// A page whose whole judged items pass a bound keeps the most rows whose
+// judged items fit, past the rows whose raw items fit: an incident read twice
+// carries its items once.
+func TestPageCutKeepsTheMostRowsWhoseJudgedItemsFit(t *testing.T) {
+	incident := overflowRows([]fanOutIncident{{id: fanOutIncidentID(0), active: 2600}})
+	again := overflowRows([]fanOutIncident{{id: fanOutIncidentID(0), active: 2600}})
+	other := overflowRows([]fanOutIncident{{id: fanOutIncidentID(1), active: 2600}})
+	var page []candidate
+	for row, rows := range [][]candidate{incident, again, other} {
+		for _, c := range rows {
+			c.sortKey = fmt.Sprintf("row-%d", row)
+			c.cursorAt = fanOutStamp.Add(time.Duration(row) * time.Millisecond)
+			page = append(page, c)
+		}
+	}
+	kept, _ := truncateToCompleteRows(page, incrementalBatchCap, pageBound{}, nil)
+	if want := len(incident) + len(again); len(kept) != want {
+		t.Fatalf("kept %d candidates, want the incident and its second read (%d)", len(kept), want)
+	}
+}
