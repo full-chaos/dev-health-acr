@@ -678,8 +678,8 @@ var ProductionColumns = map[string][]Column{
 	// 2026-08-28, matching the same freshness convention as every other
 	// entry above. repo_id/4 (Nullable(UUID)) is read here: the project
 	// theme-mix roll-up joins it directly to team_repo_ownership.repo_id,
-	// sidestepping the evidence-JSON/work-item-attribution path
-	// readTeamThemeMix uses for the team subject -- verified live against
+	// and the team mix sums owned repositories through the same column, never
+	// the evidence-JSON/work-item-attribution vote -- verified live against
 	// the trial ClickHouse (acr-trial-data, db dh_0906, system.columns).
 	// categorization_status/13 (String, ops baseline head.json) is read so the
 	// mix leaves out a unit the evidence gate stopped before any model call.
@@ -755,8 +755,8 @@ var ProductionColumns = map[string][]Column{
 		{Name: "work_item_id", Type: "String"},
 		{Name: "team_id", Type: "Nullable(String)"},
 		// CHAOS-4398: team_name is production position 6, between team_id
-		// (5) and source (7). Read by readTeamThemeMix's majority-vote
-		// label (devhealthfacts/investment.go).
+		// (5) and source (7). No acr query reads it; declared so the column
+		// layout matches production.
 		{Name: "team_name", Type: "Nullable(String)"},
 		{Name: "source", Type: "Enum8('native_team' = 1, 'linked_issue' = 2, 'project_ownership' = 3, 'repo_ownership' = 4, 'assignee_membership' = 5, 'unassigned' = 6, 'issue_project' = 7, 'manual_fallback' = 8, 'author_membership' = 9)"},
 		{Name: "is_primary", Type: "UInt8"},
