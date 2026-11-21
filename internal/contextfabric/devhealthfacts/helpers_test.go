@@ -90,7 +90,7 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 	if strings.Contains(statement, completionForecastQueryMarker) {
 		for _, table := range c.tables {
 			if strings.Contains(table.match, completionForecastQueryMarker) {
-				return &fakeScanner{rows: table.rowsFor(statement)}, table.err
+				return &fakeScanner{rows: table.rowsFor(statement, bindings)}, table.err
 			}
 		}
 		return &fakeScanner{}, nil
@@ -100,7 +100,7 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 	if strings.Contains(statement, projectPopulationMarker) {
 		for _, table := range c.tables {
 			if strings.Contains(table.match, projectPopulationMarker) {
-				return &fakeScanner{rows: table.rowsFor(statement)}, nil
+				return &fakeScanner{rows: table.rowsFor(statement, bindings)}, nil
 			}
 		}
 		return &fakeScanner{}, nil
@@ -168,17 +168,44 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 			if table.err != nil {
 				return nil, table.err
 			}
-			return &fakeScanner{rows: table.rowsFor(statement)}, nil
+			return &fakeScanner{rows: table.rowsFor(statement, bindings)}, nil
 		}
 	}
 	return &fakeScanner{}, nil
 }
 
-func (t fakeTable) rowsFor(statement string) [][]any {
+func (t fakeTable) rowsFor(statement string, bindings []contextpacket.ClickHouseBinding) [][]any {
 	if t.honorLimit {
-		return limitedRows(statement, t.rows)
+		return limitedRows(statement, requestedKeyRows(statement, bindings, t.rows))
 	}
 	return t.rows
+}
+
+// requestedKeyRows keeps, for a statement read per key, only the canned rows of
+// the requested keys, as the server's own ids filter does: canned rows shared
+// by a team and a project statement must not fill each other's budget.
+func requestedKeyRows(statement string, bindings []contextpacket.ClickHouseBinding, rows [][]any) [][]any {
+	if !limitByKey.MatchString(statement) {
+		return rows
+	}
+	for _, binding := range bindings {
+		ids, ok := binding.Value.([]string)
+		if binding.Name != "ids" || !ok {
+			continue
+		}
+		requested := map[any]bool{}
+		for _, id := range ids {
+			requested[id] = true
+		}
+		var kept [][]any
+		for _, row := range rows {
+			if requested[row[0]] {
+				kept = append(kept, row)
+			}
+		}
+		return kept
+	}
+	return rows
 }
 
 var limitByKey = regexp.MustCompile(`\nLIMIT (\d+) BY [^\n]+\nLIMIT \d+\s*$`)
@@ -189,6 +216,19 @@ var trailingLimit = regexp.MustCompile(`\nLIMIT (\d+)\s*$`)
 // server would, so a case that returns more rows than the statement admits
 // reads only what the statement admits.
 func limitedRows(statement string, rows [][]any) [][]any {
+	// A daily series counts each key's days before its LIMIT BY, as the server
+	// does: the count is appended to every canned row of the key.
+	if strings.Contains(statement, "count() OVER (PARTITION BY ") {
+		totals := map[any]uint64{}
+		for _, row := range rows {
+			totals[row[0]]++
+		}
+		counted := make([][]any, 0, len(rows))
+		for _, row := range rows {
+			counted = append(counted, append(append([]any(nil), row...), totals[row[0]]))
+		}
+		rows = counted
+	}
 	if m := limitByKey.FindStringSubmatch(statement); m != nil {
 		per, _ := strconv.Atoi(m[1])
 		seen := map[any]int{}

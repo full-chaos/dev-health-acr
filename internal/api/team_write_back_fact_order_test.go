@@ -128,7 +128,8 @@ func newTeamStoreClient() *teamStoreClient {
 	return &teamStoreClient{tables: []teamTable{
 		{match: "PARTITION BY team_id, work_scope_id, provider ORDER BY day DESC", rows: func(call int) [][]any { return reorderedFor(readiness, call) }},
 		{match: "provider, work_scope_id, day ORDER BY computed_at DESC", rows: func(int) [][]any {
-			return [][]any{{"CHAOS", "2026-10-03", int64(0), int64(6), int64(6)}, {"CHAOS", "2026-08-07", int64(0), int64(8), int64(8)}}
+			// The last column is the team's day count, which the statement reads beside every row.
+			return [][]any{{"CHAOS", "2026-10-03", int64(0), int64(6), int64(6), uint64(2)}, {"CHAOS", "2026-08-07", int64(0), int64(8), int64(8), uint64(2)}}
 		}},
 		{match: "FROM team_repo_ownership", rows: func(call int) [][]any { return reorderedFor(owned, call) }},
 		{match: "FROM work_unit_investments", rows: func(call int) [][]any { return reorderedFor(mix, call) }},
