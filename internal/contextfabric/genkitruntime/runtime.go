@@ -2164,7 +2164,9 @@ func (r *Runtime) SynthesizeAnswer(ctx context.Context, principal storage.Princi
 	// A redraw that was rejected or failed in transport serves the valid
 	// zero-claim draft it followed: an honest degraded answer, never a failure
 	// the first draw did not have. zeroClaimRedraw already reads "failed".
-	if held != nil && (generationErr != nil || err != nil) {
+	// A refusal is terminal, never served around: the held draft is not an answer
+	// the provider stood behind once it refused the same input.
+	if held != nil && (generationErr != nil || err != nil) && !errors.Is(generationErr, errModelRefusal) {
 		output, draft, attemptOutcomes = held.output, held.draft, held.attempts
 		generationErr, err = nil, nil
 	}

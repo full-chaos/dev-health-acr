@@ -61,7 +61,9 @@ func schemaRejectionReason(cause error) contextfabric.InterpretationRejectionRea
 	return contractsv1.ContextFabricInterpretationRejectionOutputSchemaViolation
 }
 
-// errModelRefusal marks a reply whose stop reason is a refusal. It is the
+// errModelRefusal marks a reply the provider refused: llm.Result.Refused (the
+// OpenAI and compatible clients) or, where a client sets no flag, the
+// "refusal" stop reason (Anthropic). It is the
 // terminal outcome of its draw: the provider billed the input, and another
 // draw of the same input would only be billed again.
 var errModelRefusal = errors.New("model refused the request")
@@ -287,7 +289,7 @@ func (g llmGenerator) complete(ctx context.Context, operation string, request ge
 	}
 	usage := llmUsage(result.Usage)
 	g.logCall(ctx, operation, client, result)
-	if result.StopReason == llmRefusalStopReason {
+	if result.Refused || result.StopReason == llmRefusalStopReason {
 		g.logger.InfoContext(ctx, llmRefusedMessage, "operation", contextfabric.SanitizeLogAttr(operation),
 			"llm_kind", contextfabric.SanitizeLogAttr(string(client.Kind())), "outcome", "model_refusal",
 			"input_tokens", usage.InputTokens, "output_tokens", usage.OutputTokens)
