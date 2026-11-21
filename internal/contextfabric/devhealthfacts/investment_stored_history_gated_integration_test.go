@@ -68,7 +68,7 @@ func TestStoredHistorySpanCountsGatedUnitsAgainstRealClickHouse(t *testing.T) {
 		if mixFacts != 1 || !strings.Contains(got, "1 of 2 work units in the window") {
 			t.Fatalf("%s: the read did not see the gated and the categorized unit: mix facts %d, reasons %q", subject.CanonicalID, mixFacts, got)
 		}
-		if !strings.Contains(got, "investment_window_beyond_stored_history: "+subject.CanonicalID+": the window starts 2026-01-01T00:00:00Z but its earliest persisted work unit starts 2026-01-10T00:00:00Z") ||
+		if !strings.Contains(got, "investment_window_beyond_stored_history: "+subject.CanonicalID+": the window starts 2026-01-01T00:00:00Z but its first stored unit starts 2026-01-10T00:00:00Z") ||
 			!strings.Contains(got, "the stored history covers 2026-01-10T00:00:00Z to 2026-04-01T00:00:00Z only") {
 			t.Errorf("%s from 2026-01-01: want the stored-history reason at the gated unit's start, named as stored history; got %q", subject.CanonicalID, got)
 		}

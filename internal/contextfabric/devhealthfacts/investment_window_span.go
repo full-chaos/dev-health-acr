@@ -119,7 +119,7 @@ func (s *investmentSpan) reasonFor(subjectID, projectKey string, project bool, b
 	if !ok || !b.start.Before(earliest) {
 		return ""
 	}
-	return fmt.Sprintf("%s: %s: the window starts %s but its earliest persisted work unit starts %s; the stored history covers %s to %s only and the days before are not stored (not zero)",
+	return fmt.Sprintf("%s: %s: the window starts %s but its first stored unit starts %s; the stored history covers %s to %s only and the days before are not stored (not zero)",
 		investmentSpanReasonToken, subjectID, b.start.UTC().Format(time.RFC3339), earliest.UTC().Format(time.RFC3339), earliest.UTC().Format(time.RFC3339), b.end.UTC().Format(time.RFC3339))
 }
 
@@ -144,6 +144,6 @@ func (s *investmentSpan) currentAxisReasonFor(subjectID, projectKey string, proj
 	if !ok || !b.start.Before(earliest) {
 		return ""
 	}
-	return fmt.Sprintf("%s: %s: the window starts before its earliest persisted work unit, which starts %s; the stored history covers %s to the window end only and the days before are not stored (not zero)",
+	return fmt.Sprintf("%s: %s: the window starts before its first stored unit, which starts %s; the stored history covers %s to the window end only and the days before are not stored (not zero)",
 		investmentSpanReasonToken, subjectID, earliest.UTC().Format(time.RFC3339), earliest.UTC().Format(time.RFC3339))
 }
