@@ -197,7 +197,8 @@ func rowLimitBindings(orgID string, cursor cursorState, limit int) []contextpack
 // in order) and reports whether more than limit rows were available. scan
 // may return more than one candidate per row (e.g. an entity plus its
 // BELONGS_TO_REPOSITORY relationship); truncation is still decided per row,
-// not per candidate, to match the SQL LIMIT. Every candidate scan returns
+// not per candidate, to match the SQL LIMIT (the merged page is cut again at
+// the batch's item bounds, whole rows: truncateToCompleteRows). Every candidate scan returns
 // for one row MUST share the same sortKey (the row's keyset-pagination
 // identity -- see sincePredicate) regardless of how many candidates that
 // row produces.

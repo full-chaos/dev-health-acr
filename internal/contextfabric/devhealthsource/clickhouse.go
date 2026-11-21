@@ -717,23 +717,70 @@ func sortCandidates(all []candidate) {
 // tables and can sort after rows the first table has not returned yet. bound
 // stops the page there: it never ends past the last row a truncated table
 // returned. bounded reports that the bound, not the cap, ended the page.
+//
+// One row can carry many items (an incident has an edge per repository of its
+// service), so the page also ends before the row whose items would pass one of
+// the batch's item bounds: 200 rows can hold more than a batch may. The first
+// row is always kept, or the read could never move; items of that one row past
+// a bound are quarantined (partitionProjectableCandidates).
 func truncateToCompleteRows(all []candidate, maxRows int, bound pageBound) (kept []candidate, bounded bool) {
 	if maxRows <= 0 {
 		return nil, false
 	}
 	rows := 0
-	for i, c := range all {
-		if i == 0 || !c.position().Equal(all[i-1].position()) || c.sortKey != all[i-1].sortKey {
-			if rows == maxRows {
-				return all[:i], false
-			}
-			if bound.passedBy(c) {
-				return all[:i], true
-			}
-			rows++
+	var page batchItems
+	for start := 0; start < len(all); {
+		end := start + 1
+		for end < len(all) && all[end].position().Equal(all[start].position()) && all[end].sortKey == all[start].sortKey {
+			end++
 		}
+		if rows == maxRows {
+			return all[:start], false
+		}
+		if bound.passedBy(all[start]) {
+			return all[:start], true
+		}
+		withRow := page
+		for _, c := range all[start:end] {
+			withRow.add(c)
+		}
+		if rows > 0 && !withRow.fit() {
+			return all[:start], false
+		}
+		page = withRow
+		rows++
+		start = end
 	}
 	return all, false
+}
+
+// batchItems counts the items of each kind a batch bounds.
+type batchItems struct{ entities, relationships, episodes, tombstones int }
+
+// add counts c's item; it reports false when that item passes its kind's bound.
+func (b *batchItems) add(c candidate) bool {
+	switch {
+	case c.entity != nil:
+		b.entities++
+		return b.entities <= contractsv1.ContextFabricProjectionBatchMaxEntities
+	case c.relationship != nil:
+		b.relationships++
+		return b.relationships <= contractsv1.ContextFabricProjectionBatchMaxRelationships
+	case c.episode != nil:
+		b.episodes++
+		return b.episodes <= contractsv1.ContextFabricProjectionBatchMaxEpisodes
+	case c.tombstone != nil:
+		b.tombstones++
+		return b.tombstones <= contractsv1.ContextFabricProjectionBatchMaxTombstones
+	}
+	return true
+}
+
+func (b batchItems) fit() bool {
+	return b.entities <= contractsv1.ContextFabricProjectionBatchMaxEntities &&
+		b.relationships <= contractsv1.ContextFabricProjectionBatchMaxRelationships &&
+		b.episodes <= contractsv1.ContextFabricProjectionBatchMaxEpisodes &&
+		b.tombstones <= contractsv1.ContextFabricProjectionBatchMaxTombstones
 }
 
 // pageBound is the furthest place one merged page may end: the last row of

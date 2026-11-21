@@ -58,6 +58,10 @@ const (
 // content-safety one.
 const maxQuarantineDetailRunes = 64
 
+// errPastBatchBound marks a valid item that one batch cannot carry: its kind's
+// batch bound is already full.
+var errPastBatchBound = errors.New("item is past the batch item bound")
+
 // quarantineObservation is one dropped item, reported to the owning source's
 // telemetry hook. Counts and closed tokens only.
 type quarantineObservation struct {
@@ -232,6 +236,7 @@ func partitionProjectableCandidates(all []candidate, observe func(quarantineObse
 	quarantinedRelationships := make(map[string]struct{})
 	quarantinedEntities := make(map[string]struct{})
 	ignored := make(map[string]int)
+	var items batchItems
 	for _, c := range all {
 		if c.ignoredType != "" {
 			ignored[c.ignoredType]++
@@ -239,6 +244,14 @@ func partitionProjectableCandidates(all []candidate, observe func(quarantineObse
 			continue
 		}
 		kind, err := validateCandidateItem(c)
+		if err == nil && !items.add(c) {
+			// Only one row can bring this (truncateToCompleteRows cuts a page
+			// before any later row would): its items past the bound are dropped
+			// like any other item a batch cannot carry, dependents included.
+			// The item's own data breaks no bound, so quarantineReason names it
+			// contract_bound_violation.
+			err = errPastBatchBound
+		}
 		if err == nil {
 			kept = append(kept, c)
 			continue
