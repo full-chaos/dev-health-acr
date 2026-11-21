@@ -558,6 +558,8 @@ func TestPreCallCancellationOnALaterAttemptStaysUnavailable(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	generator := &cancelAfterFirstAttemptGenerator{cancel: cancel}
 	runtime := mustRuntime(t, generator, Config{Logger: logger, MaxAttempts: 2})
+	// A shared-client retry pauses first; a no-op pause lets attempt 2 reach its own pre-call ctx check.
+	runtime.sleep = func(context.Context, time.Duration) error { return nil }
 	if _, _, err := runtime.InterpretQuestion(ctx, storage.Principal{OrgID: "org_1"}, validRequest()); err == nil {
 		t.Fatal("InterpretQuestion() error = nil, want the terminal failure surfaced")
 	}
