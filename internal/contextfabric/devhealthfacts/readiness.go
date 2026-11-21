@@ -96,11 +96,15 @@ func (p *ReadinessProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	}
 
 	if projectSubjects := subjectsOfKind(query.Subjects, contextfabric.SubjectProject); len(projectSubjects) > 0 {
+		first := len(facts)
 		rowCount, rejected, breakdownTruncated, scanErr := p.readProjectReadiness(ctx, orgID, projectSubjects, &facts, timeBound)
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project readiness", scanErr)
 		}
 		truncated = truncated || rowCount >= maxFactRowsPerQuery || breakdownTruncated
+		for _, fact := range facts[first:] {
+			omittedRows += int(factOmittedRowCount(fact))
+		}
 		rejectedCount += rejected
 	}
 
@@ -129,6 +133,7 @@ func (p *ReadinessProvider) ReadFacts(ctx context.Context, principal storage.Pri
 type readinessDailyRow struct {
 	day                                           string
 	estimatedCount, unestimatedCount, backlogSize int64
+	totalDays                                     uint64
 }
 
 func (r readinessDailyRow) toFactValueRow() contextfabric.FactValueRow {
@@ -157,7 +162,7 @@ func readinessDailyTable(rows []readinessDailyRow, grain contextfabric.TemporalG
 	for _, r := range rows {
 		valueRows = append(valueRows, r.toFactValueRow())
 	}
-	valueRows, omitted := capFactValueRows(valueRows)
+	valueRows, omitted := capDailySeriesRows(valueRows, rows[0].totalDays)
 	return contextfabric.TableFactValue(contextfabric.FactTable{
 		Shape:    contextfabric.FactTableTimeSeries,
 		Key:      []string{"day"},
@@ -187,7 +192,8 @@ func readinessDailyTable(rows []readinessDailyRow, grain contextfabric.TemporalG
 // matching (the exact bug flow.go's queryTeamFlowDailySeries was found and
 // fixed for).
 func (p *ReadinessProvider) queryTeamReadinessDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]readinessDailyRow, err error) {
-	seriesSQL := `SELECT toString(team_id), toString(day), toInt64(sum(estimated_count)), toInt64(sum(unestimated_count)), toInt64(sum(backlog_size))
+	seriesSQL := `SELECT toString(team_id), toString(day), toInt64(sum(estimated_count)), toInt64(sum(unestimated_count)), toInt64(sum(backlog_size)),
+	` + dailySeriesTotalDaysSQL("team_id") + `
 FROM (
 	SELECT team_id, provider, work_scope_id, day, estimated_count, unestimated_count, backlog_size,
 		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size)) DESC) AS rn
@@ -202,7 +208,7 @@ ORDER BY team_id, day DESC`
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r readinessDailyRow
 		var teamID string
-		if err := row.Scan(&teamID, &r.day, &r.estimatedCount, &r.unestimatedCount, &r.backlogSize); err != nil {
+		if err := row.Scan(&teamID, &r.day, &r.estimatedCount, &r.unestimatedCount, &r.backlogSize, &r.totalDays); err != nil {
 			return err
 		}
 		byTeam[teamID] = append(byTeam[teamID], r)
@@ -320,7 +326,8 @@ func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string,
 // part of the same project's coverage picture, so a daily total is honest
 // where team_breakdown's cross-scope total would not be.
 func (p *ReadinessProvider) queryProjectReadinessDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string][]readinessDailyRow, err error) {
-	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), toString(ec.day), toInt64(sum(ec.estimated_count)), toInt64(sum(ec.unestimated_count)), toInt64(sum(ec.backlog_size))
+	seriesSQL := `SELECT concat(p.provider, ':', p.id), toString(ec.day), toInt64(sum(ec.estimated_count)), toInt64(sum(ec.unestimated_count)), toInt64(sum(ec.backlog_size)),
+	` + dailySeriesTotalDaysSQL("p.provider, p.id") + `
 FROM ` + projectIdentityJoinSQL() + `
 INNER JOIN (
 	SELECT team_id, provider, work_scope_id, day, estimated_count, unestimated_count, backlog_size,
@@ -329,12 +336,13 @@ INNER JOIN (
 	WHERE org_id = {org_id:String} AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
 ) AS ec ON ` + projectIdentityMatchSQL("ec", "work_scope_id") + ` AND ec.rn = 1
 GROUP BY p.provider, p.id, ec.day
-ORDER BY p.id, ec.day DESC`)
+ORDER BY p.provider, p.id, ec.day DESC`
+	statement := withRowLimitPerKey(seriesSQL, "p.provider, p.id", len(ids))
 	byProject = make(map[string][]readinessDailyRow)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r readinessDailyRow
 		var projectKey string
-		if err := row.Scan(&projectKey, &r.day, &r.estimatedCount, &r.unestimatedCount, &r.backlogSize); err != nil {
+		if err := row.Scan(&projectKey, &r.day, &r.estimatedCount, &r.unestimatedCount, &r.backlogSize, &r.totalDays); err != nil {
 			return err
 		}
 		byProject[projectKey] = append(byProject[projectKey], r)
@@ -455,17 +463,8 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 		return a.Day > b.Day
 	})
 	rowCount = len(scanned)
-	// codex CHAOS-4645 round-1 P2 (EXECUTED): see readTeamReadiness's
-	// identical note -- the daily-series query's own withRowLimit(200) cap,
-	// shared across every requested project in one query, must also surface
-	// as Truncated.
-	dailySeriesRowCount := 0
-	for _, dailyRows := range dailyByProject {
-		dailySeriesRowCount += len(dailyRows)
-	}
-	if dailySeriesRowCount > rowCount {
-		rowCount = dailySeriesRowCount
-	}
+	// The daily-series query caps each project's own rows; a project cut by
+	// the display cap names it on its own fact (daily_readiness_omitted_count).
 	byProject := make(map[string][]readers.ReadinessProjectRow)
 	var projectOrder []string
 	for _, r := range scanned {
@@ -587,7 +586,6 @@ func (p *ReadinessProvider) readProjectReadiness(ctx context.Context, orgID stri
 		if dailyTable, ok, dailyOmitted := readinessDailyTable(dailyByProject[projectKey], timeBound.effectiveGrain(grainDaily)); ok {
 			fields["daily_readiness"] = dailyTable
 			if dailyOmitted > 0 {
-				breakdownTruncated = true
 				fields["daily_readiness_omitted_count"] = contextfabric.IntegerFactValue(int64(dailyOmitted))
 			}
 			// CHAOS-4681: same gap and same fix as readProjectWorkload's

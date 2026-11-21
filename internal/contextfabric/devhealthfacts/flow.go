@@ -112,7 +112,7 @@ func (p *FlowProvider) ReadFacts(ctx context.Context, principal storage.Principa
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query project flow", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery || rowsOmitted > 0
+		truncated = truncated || rowCount >= maxFactRowsPerQuery
 		omittedRows += rowsOmitted
 		rejectedCount += rejected
 	}
@@ -303,6 +303,7 @@ type flowDailyRow struct {
 	itemsStarted, itemsCompleted, wipCountEndOfDay int64
 	bugCompletedRatioAvg, storyPointsCompletedSum  float64
 	bugState, storyPointsState                     uint8
+	totalDays                                      uint64
 }
 
 func (r flowDailyRow) toFactValueRow() contextfabric.FactValueRow {
@@ -331,7 +332,8 @@ func (r flowDailyRow) toFactValueRow() contextfabric.FactValueRow {
 func (p *FlowProvider) queryTeamFlowDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]flowDailyRow, err error) {
 	seriesSQL := `SELECT toString(team_id), toString(day), toInt64(sum(items_started)), toInt64(sum(items_completed)), toInt64(sum(wip_count_end_of_day)),
 	` + flowMeasureAggregateSQL("", flowMeasureBugCompletedRatio, "avgIf") + `,
-	` + flowMeasureAggregateSQL("", flowMeasureStoryPointsCompleted, "sumIf") + `
+	` + flowMeasureAggregateSQL("", flowMeasureStoryPointsCompleted, "sumIf") + `,
+	` + dailySeriesTotalDaysSQL("team_id") + `
 FROM (
 	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed,
 		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY ` + devhealthschema.WorkItemMetricsViewOrder("org") + `, computed_at DESC, cityHash64(tuple(items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed)) DESC) AS rn
@@ -346,7 +348,7 @@ ORDER BY team_id, day DESC`
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r flowDailyRow
 		var teamID string
-		if err := row.Scan(&teamID, &r.day, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay, &r.bugCompletedRatioAvg, &r.bugState, &r.storyPointsCompletedSum, &r.storyPointsState); err != nil {
+		if err := row.Scan(&teamID, &r.day, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay, &r.bugCompletedRatioAvg, &r.bugState, &r.storyPointsCompletedSum, &r.storyPointsState, &r.totalDays); err != nil {
 			return err
 		}
 		r.teamID = teamID
@@ -368,7 +370,7 @@ func flowDailyTable(rows []flowDailyRow, grain contextfabric.TemporalGrain) (con
 	for _, r := range rows {
 		valueRows = append(valueRows, r.toFactValueRow())
 	}
-	valueRows, omitted := capFactValueRows(valueRows)
+	valueRows, omitted := capDailySeriesRows(valueRows, rows[0].totalDays)
 	return contextfabric.TableFactValue(contextfabric.FactTable{
 		Shape:        contextfabric.FactTableTimeSeries,
 		Key:          []string{"day"},
@@ -761,17 +763,8 @@ ORDER BY p.id, wm.team_id`)
 	if seriesErr != nil {
 		return rowCount, 0, rejected, seriesErr
 	}
-	// codex CHAOS-4645 round-1 P2 (EXECUTED): see readTeamFlow's identical
-	// note -- the daily-series query's own withRowLimit(200) cap, shared
-	// across every requested project in one query, must also surface as
-	// Truncated.
-	dailySeriesRowCount := 0
-	for _, rows := range dailyByProject {
-		dailySeriesRowCount += len(rows)
-	}
-	if dailySeriesRowCount > rowCount {
-		rowCount = dailySeriesRowCount
-	}
+	// The daily-series query caps each project's own rows; a project cut by
+	// the display cap names it on its own fact (daily_flow_omitted_count).
 	windowByProject, windowErr := p.queryProjectFlowWindowTotals(ctx, orgID, ids, timeBound)
 	if windowErr != nil {
 		return rowCount, 0, rejected, windowErr
@@ -897,9 +890,10 @@ ORDER BY p.id, wm.team_id`)
 // additive counts only, matching readProjectFlow's own "additive counts
 // summed, percentiles dropped" rule for the analogous team_breakdown.
 func (p *FlowProvider) queryProjectFlowDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string][]flowDailyRow, err error) {
-	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), toString(wm.day), toInt64(sum(wm.items_started)), toInt64(sum(wm.items_completed)), toInt64(sum(wm.wip_count_end_of_day)),
+	seriesSQL := `SELECT concat(p.provider, ':', p.id), toString(wm.day), toInt64(sum(wm.items_started)), toInt64(sum(wm.items_completed)), toInt64(sum(wm.wip_count_end_of_day)),
 	` + flowMeasureAggregateSQL("wm.", flowMeasureBugCompletedRatio, "avgIf") + `,
-	` + flowMeasureAggregateSQL("wm.", flowMeasureStoryPointsCompleted, "sumIf") + `
+	` + flowMeasureAggregateSQL("wm.", flowMeasureStoryPointsCompleted, "sumIf") + `,
+	` + dailySeriesTotalDaysSQL("p.provider, p.id") + `
 FROM ` + projectIdentityJoinSQL() + `
 INNER JOIN (
 	SELECT team_id, provider, work_scope_id, day, items_started, items_completed, wip_count_end_of_day, bug_completed_ratio, story_points_completed,
@@ -908,12 +902,13 @@ INNER JOIN (
 	WHERE org_id = {org_id:String} AND ` + devhealthschema.WorkItemMetricsViewPredicate("org") + ` AND ` + devhealthschema.ActiveTeamScopePredicate("team_id") + timeBound.dayPredicate("day") + `
 ) AS wm ON ` + projectIdentityMatchSQL("wm", "work_scope_id") + ` AND wm.rn = 1
 GROUP BY p.provider, p.id, wm.day
-ORDER BY p.id, wm.day DESC`)
+ORDER BY p.provider, p.id, wm.day DESC`
+	statement := withRowLimitPerKey(seriesSQL, "p.provider, p.id", len(ids))
 	byProject = make(map[string][]flowDailyRow)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r flowDailyRow
 		var projectKey string
-		if err := row.Scan(&projectKey, &r.day, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay, &r.bugCompletedRatioAvg, &r.bugState, &r.storyPointsCompletedSum, &r.storyPointsState); err != nil {
+		if err := row.Scan(&projectKey, &r.day, &r.itemsStarted, &r.itemsCompleted, &r.wipCountEndOfDay, &r.bugCompletedRatioAvg, &r.bugState, &r.storyPointsCompletedSum, &r.storyPointsState, &r.totalDays); err != nil {
 			return err
 		}
 		byProject[projectKey] = append(byProject[projectKey], r)

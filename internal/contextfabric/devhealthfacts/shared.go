@@ -1537,18 +1537,34 @@ func withRowLimitOf(statement string, limit int) string {
 	return statement + "\nLIMIT " + strconv.Itoa(limit)
 }
 
-// withRowLimitPerKey bounds each key's own rows to maxFactRowsPerQuery, so one
-// subject that fills the cap cannot starve the next; the outer LIMIT only
-// bounds the whole read at that cap times the number of keys.
+// withRowLimitPerKey bounds each key's own rows to the display cap, the most
+// rows a daily table keeps, so one subject that fills the cap cannot starve
+// the next; the outer LIMIT only bounds the whole read at that cap times the
+// number of keys.
 func withRowLimitPerKey(statement, key string, keys int) string {
-	return statement + "\nLIMIT " + strconv.Itoa(maxFactRowsPerQuery) + " BY " + key + "\nLIMIT " + strconv.Itoa(maxFactRowsPerQuery*max(keys, 1))
+	return statement + "\nLIMIT " + strconv.Itoa(contextfabric.MaxFactValueRows) + " BY " + key + "\nLIMIT " + strconv.Itoa(contextfabric.MaxFactValueRows*max(keys, 1))
 }
 
-// factOmittedRowCount sums the integer daily_*_omitted_count fields a fact carries: the rows a daily table lost.
-// Only a team's table counts here: a project's daily series keep their earlier
-// reading, so a project's own cut never makes a read subject-local.
+// dailySeriesTotalDaysSQL counts a key's days in the window. It must sit at
+// the level of the per-day GROUP BY or dedup, so it counts days, and before
+// the LIMIT BY, so the cap cannot saturate it.
+func dailySeriesTotalDaysSQL(key string) string {
+	return "toUInt64(count() OVER (PARTITION BY " + key + "))"
+}
+
+// capDailySeriesRows caps a daily table and counts every day the window holds
+// that the table does not show; totalDays is the statement's own day count, and
+// it is never fewer than the rows read.
+func capDailySeriesRows(rows []contextfabric.FactValueRow, totalDays uint64) (capped []contextfabric.FactValueRow, omitted int) {
+	capped, _ = capFactValueRows(rows)
+	return capped, max(int(totalDays), len(rows)) - len(capped)
+}
+
+// factOmittedRowCount sums the integer daily_*_omitted_count fields a team or
+// project fact carries: the rows a daily table lost. Both daily series are
+// read per key, so a cut of one subject is that subject's own.
 func factOmittedRowCount(fact contextfabric.CanonicalFact) int64 {
-	if fact.Subject.Kind != contextfabric.SubjectTeam {
+	if fact.Subject.Kind != contextfabric.SubjectTeam && fact.Subject.Kind != contextfabric.SubjectProject {
 		return 0
 	}
 	return factDailyOmittedCount(fact)

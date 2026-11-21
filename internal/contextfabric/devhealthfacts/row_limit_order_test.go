@@ -12,9 +12,17 @@ import (
 // row, and an argument the guard cannot read because it is a variable (its
 // statement is checked at its own definition).
 var rowLimitWithoutOrder = map[string]string{
-	"investment.go|investmentWatermarkStatement": "one aggregate row, nothing to cut",
-	"investment_org_mix.go|statement":            "one aggregate row over the whole organization, nothing to cut",
-	"workitems.go|statement":                     "built above with ORDER BY p.id; the variable cannot be read here",
+	"investment.go|investmentWatermarkStatement":             "one aggregate row, nothing to cut",
+	"investment_org_mix.go|statement":                        "one aggregate row over the whole organization, nothing to cut",
+	"workitems.go|statement":                                 "built above with ORDER BY p.id; the variable cannot be read here",
+	"flow.go|seriesSQL, \"team_id\", len(ids)":               "built above with ORDER BY team_id, day DESC; the variable cannot be read here",
+	"flow.go|seriesSQL, \"p.provider, p.id\", len(ids)":      "built above with ORDER BY p.provider, p.id, wm.day DESC; the variable cannot be read here",
+	"readiness.go|seriesSQL, \"team_id\", len(ids)":          "built above with ORDER BY team_id, day DESC; the variable cannot be read here",
+	"readiness.go|seriesSQL, \"p.provider, p.id\", len(ids)": "built above with ORDER BY p.provider, p.id, ec.day DESC; the variable cannot be read here",
+	"workload.go|seriesSQL, \"team_id\", len(ids)":           "built above with ORDER BY team_id, toDate(computed_at) DESC; the variable cannot be read here",
+	"workload.go|seriesSQL, \"p.provider, p.id\", len(ids)":  "built above with ORDER BY p.provider, p.id, toDate(cf.computed_at) DESC; the variable cannot be read here",
+	"health.go|seriesSQL, \"scope_id\", len(ids)":            "built above with ORDER BY scope_id, day DESC; the variable cannot be read here",
+	"health.go|seriesSQL, \"project_key\", len(ids)":         "built above with ORDER BY project_key, day DESC; the variable cannot be read here",
 }
 
 func matchingParen(text string, open int) int {
@@ -34,7 +42,7 @@ func matchingParen(text string, open int) int {
 }
 
 // TestEveryRowLimitedStatementOrdersItsRows requires a top-level ORDER BY on
-// every statement that is cut by withRowLimit, withRowProbeLimit or withProjectPopulationLimit: a LIMIT
+// every statement that is cut by withRowLimit, withRowLimitPerKey, withRowProbeLimit or withProjectPopulationLimit: a LIMIT
 // over an unordered set changes WHICH rows are served, which no later sort
 // can repair.
 func TestEveryRowLimitedStatementOrdersItsRows(t *testing.T) {
@@ -53,7 +61,7 @@ func TestEveryRowLimitedStatementOrdersItsRows(t *testing.T) {
 			t.Fatal(err)
 		}
 		text := string(raw)
-		for _, marker := range []string{"withRowLimit(", "withRowProbeLimit(", "withProjectPopulationLimit("} {
+		for _, marker := range []string{"withRowLimit(", "withRowLimitPerKey(", "withRowProbeLimit(", "withProjectPopulationLimit("} {
 			for from := 0; ; {
 				at := strings.Index(text[from:], marker)
 				if at < 0 {
