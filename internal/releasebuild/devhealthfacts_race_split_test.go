@@ -8,12 +8,12 @@ import (
 	"testing"
 )
 
-// TestDevhealthfactsRaceSplit_fourJobsAreWired pins that the four
+// TestDevhealthfactsRaceSplit_fiveJobsAreWired pins that the five
 // devhealthfacts race jobs each run through the budget wrapper with their own
 // race-split.sh mode, and that the aggregate verify job waits for all of them.
 // The one-job-per-test partition itself is proved by race-split.sh
 // race-partition inside the jobs.
-func TestDevhealthfactsRaceSplit_fourJobsAreWired(t *testing.T) {
+func TestDevhealthfactsRaceSplit_fiveJobsAreWired(t *testing.T) {
 	ci, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
 	if err != nil {
 		t.Fatal(err)
@@ -24,6 +24,7 @@ func TestDevhealthfactsRaceSplit_fourJobsAreWired(t *testing.T) {
 		{"race-devhealthfacts-heavy", "race (devhealthfacts heavy, isolated scope)", "race-heavy"},
 		{"race-devhealthfacts-mid", "race (devhealthfacts mid, isolated scope)", "race-mid"},
 		{"race-devhealthfacts-fourth", "race (devhealthfacts fourth, isolated scope)", "race-fourth"},
+		{"race-devhealthfacts-fifth", "race (devhealthfacts fifth, isolated scope)", "race-fifth"},
 	}
 	jobHeader := regexp.MustCompile(`(?m)^  [A-Za-z0-9_-]+:\s*$`)
 	for _, j := range jobs {

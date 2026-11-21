@@ -146,6 +146,30 @@ cmp -s "$dir/ci.new" "$dir/.github/workflows/ci.yml" && { echo "CONTROL SETUP FA
 mv "$dir/ci.new" "$dir/.github/workflows/ci.yml"
 expect_fail_mode 'a race-mid selector passed to -skip' "$dir" race-partition
 
+# devhealthfacts' fifth race list: each name runs in the fifth job only, so a
+# fifth name in another race list, a stray name, or -skip of race-fifth fails.
+echo "positive: real tree, devhealthfacts fifth list"
+"$root/scripts/ci/race-split.sh" devhealthfacts verify
+"$root/scripts/ci/race-split.sh" devhealthfacts race-partition
+fifth="scripts/ci/devhealthfacts-race-fifth-tests.txt"
+dir="$(fixture facts-fifth-and-mid)"
+awk '!/^[[:space:]]*(#|$)/ { print; exit }' "$dir/$fifth" >>"$dir/scripts/ci/devhealthfacts-race-mid-tests.txt"
+expect_fail_mode 'a fifth name that is also in the mid list' "$dir" verify devhealthfacts
+expect_fail_mode 'a fifth name that is also in the mid list' "$dir" race-partition devhealthfacts
+dir="$(fixture facts-fifth-no-such-test)"
+printf 'TestNoSuchTestExists\n' >>"$dir/$fifth"
+expect_fail_mode 'a fifth name that is no real test' "$dir" verify devhealthfacts
+dir="$(fixture facts-race-fifth-skip)"
+sed 's/-run=\(.*devhealthfacts race-fifth)\)/-skip=\1/' "$dir/.github/workflows/ci.yml" >"$dir/ci.new"
+cmp -s "$dir/ci.new" "$dir/.github/workflows/ci.yml" && { echo "CONTROL SETUP FAILED: facts-race-fifth-skip" >&2; exit 1; }
+mv "$dir/ci.new" "$dir/.github/workflows/ci.yml"
+expect_fail_mode 'a race-fifth selector passed to -skip' "$dir" race-partition devhealthfacts
+dir="$(fixture facts-fifth-not-wired)"
+sed 's/race-split\.sh devhealthfacts race-fifth)/race-split.sh devhealthfacts race-fifth-gone)/' "$dir/.github/workflows/ci.yml" >"$dir/ci.new"
+cmp -s "$dir/ci.new" "$dir/.github/workflows/ci.yml" && { echo "CONTROL SETUP FAILED: facts-fifth-not-wired" >&2; exit 1; }
+mv "$dir/ci.new" "$dir/.github/workflows/ci.yml"
+expect_fail_mode 'a fifth list with no race-fifth job' "$dir" race-partition devhealthfacts
+
 # The unit-only rest-extra list moves named heavy/mid/fourth tests from leg 7 or
 # 10 to leg 5 (race jobs unchanged). Each name must run in leg 5 and in neither
 # -run leg; a name in no race list, named twice, or also in the
