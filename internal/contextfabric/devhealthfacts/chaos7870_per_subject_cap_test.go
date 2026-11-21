@@ -333,7 +333,7 @@ func TestChaos7870TeamCutKeepsTheProjectStale(t *testing.T) {
 // A project's own daily display cut is read per project like a team's: the
 // project fact names every day it does not show and reads truncated, the cut
 // is subject-local, and a stale project keeps its stale state.
-func TestChaos7870ProjectDisplayCutIsSubjectLocal(t *testing.T) {
+func TestProjectDailyDisplayCutIsSubjectLocal(t *testing.T) {
 	t.Parallel()
 	for _, days := range []int{65, 199} {
 		fresh := chaos7870WorkloadProjectRead(t, 0, days, 0, false)
