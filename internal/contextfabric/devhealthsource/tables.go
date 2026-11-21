@@ -985,27 +985,31 @@ func readIncidentDescriptions(ctx context.Context, client contextpacket.ClickHou
 FROM operational_incidents AS i
 PREWHERE i.org_id = {org_id:String} AND (` + strings.Join(terms, " OR ") + `)
 GROUP BY i.id`
-		rows, err := client.Query(ctx, statement, bindings)
-		if err != nil {
-			return err
-		}
-		for rows.Next() {
-			var id, description string
-			if err := rows.Scan(&id, &description); err != nil {
-				rows.Close()
-				return err
-			}
-			for _, entity := range entities[id] {
-				setStringProperty(entity.Properties, "description", description, 800)
-			}
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
+		if err := readIncidentDescriptionChunk(ctx, client, statement, bindings, entities); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// readIncidentDescriptionChunk closes its rows (deferred, so a panic in Scan
+// still closes them) before the next chunk's statement opens.
+func readIncidentDescriptionChunk(ctx context.Context, client contextpacket.ClickHouseQueryClient, statement string, bindings []contextpacket.ClickHouseBinding, entities map[string][]*contractsv1.ContextFabricEntityProjection) error {
+	rows, err := client.Query(ctx, statement, bindings)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id, description string
+		if err := rows.Scan(&id, &description); err != nil {
+			return err
+		}
+		for _, entity := range entities[id] {
+			setStringProperty(entity.Properties, "description", description, 800)
+		}
+	}
+	return rows.Err()
 }
 
 // queryWorkItemDependencies' natural key is (org, source, target,
