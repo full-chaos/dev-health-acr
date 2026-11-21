@@ -51,6 +51,7 @@ func TestDailySeriesStatementMemoryStaysUnderTheCeilingOnRealClickHouse(t *testi
 		}
 	}
 	providers := devhealthfacts.NewProviders(query)
+	// devhealthschema:not-a-production-replica these names only pick each measured statement out of query_log; no column, type or engine is declared here.
 	for _, tc := range []struct {
 		kind     contextfabric.FactKind
 		subjects []contextfabric.SubjectRef

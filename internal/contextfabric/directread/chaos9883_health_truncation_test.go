@@ -32,6 +32,8 @@ func (s *chaos9883Scanner) Scan(dest ...any) error {
 			*value = row[index].(uint8)
 		case *float64:
 			*value = row[index].(float64)
+		case *uint64:
+			*value = row[index].(uint64)
 		default:
 			return errors.New("chaos9883: unsupported scan destination")
 		}
@@ -55,7 +57,8 @@ func (c *chaos9883Client) Query(_ context.Context, statement string, _ []context
 		for team, n := range c.dailyRows {
 			for i := 0; i < n; i++ {
 				day := time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -i).Format("2006-01-02")
-				rows = append(rows, []any{team, day, "high", uint8(1), 0.61})
+				// The last column is the team's day count, which the statement reads beside every row.
+				rows = append(rows, []any{team, day, "high", uint8(1), 0.61, uint64(n)})
 			}
 		}
 		return &chaos9883Scanner{rows: rows}, nil
