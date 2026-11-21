@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-go/llm"
 )
 
 // The runtime says its attempt budget is used only when the last attempt ended
@@ -13,7 +14,7 @@ import (
 // cause.
 func TestWithRetryNamesAnExhaustedAttemptBudget(t *testing.T) {
 	t.Parallel()
-	retryable := newModelStatusError(statusUnavailable, "provider down")
+	retryable := clientError(llm.ClassServer)
 	cases := []struct {
 		name         string
 		maxAttempts  int
@@ -24,7 +25,7 @@ func TestWithRetryNamesAnExhaustedAttemptBudget(t *testing.T) {
 		{"every attempt retryable", 2, []error{retryable, retryable}, 2, true},
 		{"one attempt allowed, retryable", 1, []error{retryable}, 1, true},
 		{"retryable then cancelled on the last attempt", 2, []error{retryable, context.Canceled}, 2, true},
-		{"first of two attempts not retryable", 2, []error{newModelStatusError(statusInvalidArgument, "bad")}, 1, false},
+		{"first of two attempts not retryable", 2, []error{clientError(llm.ClassInvalidRequest)}, 1, false},
 		{"a later attempt serves", 2, []error{retryable, nil}, 2, false},
 	}
 	for _, testCase := range cases {
