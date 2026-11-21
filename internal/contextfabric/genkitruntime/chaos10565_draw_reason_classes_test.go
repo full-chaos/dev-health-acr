@@ -53,3 +53,22 @@ func TestRejectionReasonsStayAsTheTableNamesThem(t *testing.T) {
 		t.Fatalf("undeclared reason = %q, want unclassified", got)
 	}
 }
+
+// A draw Genkit's schema check refused keeps the schema reason when a rule of
+// this package refused the same parsed draft too; a draw only a rule refused
+// keeps its rule.
+func TestSchemaRefusedDrawIsNotLabelledWithTheRuleThatFollowedIt(t *testing.T) {
+	rule := contextfabric.NewSynthesisRejection(contextfabric.RejectionReasonClaimFieldUnobserved, errors.New("x"))
+	for _, stage := range []string{"schema", "decode"} {
+		local := &decodeSynthesisRejection{schemaStage: stage, parsed: true, cause: fmt.Errorf("%w: model output did not match the expected schema", contextfabric.ErrModelOutput)}
+		if got := synthesisDrawReason(rule, local); got != string(contextfabric.RejectionReasonOutputSchemaMismatch) {
+			t.Fatalf("stage %q with a rule refusal = %q, want output_schema_mismatch", stage, got)
+		}
+	}
+	if got := synthesisDrawReason(rule, &decodeSynthesisRejection{parsed: true, cause: errors.New("x")}); got != string(contextfabric.RejectionReasonClaimFieldUnobserved) {
+		t.Fatalf("local rejection with no schema stage = %q, want the rule", got)
+	}
+	if got := synthesisDrawReason(rule, nil); got != string(contextfabric.RejectionReasonClaimFieldUnobserved) {
+		t.Fatalf("rule-only draw = %q, want the rule", got)
+	}
+}
