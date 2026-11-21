@@ -120,16 +120,13 @@ func MCPHTTPResultClassVocabulary() []string {
 	}
 }
 
-// Tool-error categories: the closed category set of a tool error result, and
-// "unclassified" for an error result that carries no classified error.
-const MCPHTTPToolErrorUnclassified = "unclassified"
-
+// Tool-error categories: the closed category set of a tool error result.
 // MCPHTTPToolErrorCategoryVocabulary lists every tool-error category the
 // request line records.
 func MCPHTTPToolErrorCategoryVocabulary() []string {
 	return []string{
 		"auth", "entitlement", "repo_forbidden", "validation", "budget", "rate_limit", "no_data",
-		"version", "unavailable", "timeout", "cancelled", "internal", MCPHTTPToolErrorUnclassified,
+		"version", "unavailable", "timeout", "cancelled", "internal",
 	}
 }
 
@@ -240,7 +237,7 @@ var MCPHTTPRequest = Event{
 		{Key: "status", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "latency_ms", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "in_flight", Type: FieldInt, Presence: PresenceRequired},
-		{Key: "tool_error_category", Type: FieldString, Presence: PresenceConditional, ClosedVocabulary: MCPHTTPToolErrorCategoryVocabulary(), Applicability: "written when result_class=tool_error; the category of the tool error result, never its message"},
+		{Key: "tool_error_category", Type: FieldString, Presence: PresenceConditional, ClosedVocabulary: MCPHTTPToolErrorCategoryVocabulary(), Applicability: "written when result_class=tool_error and the result carries a classified error; the category of the tool error result, never its message"},
 	},
 }
 

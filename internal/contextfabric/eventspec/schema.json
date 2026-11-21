@@ -19568,10 +19568,9 @@
           "unavailable",
           "timeout",
           "cancelled",
-          "internal",
-          "unclassified"
+          "internal"
         ],
-        "applicability": "written when result_class=tool_error; the category of the tool error result, never its message"
+        "applicability": "written when result_class=tool_error and the result carries a classified error; the category of the tool error result, never its message"
       }
     ]
   },

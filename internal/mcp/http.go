@@ -440,8 +440,8 @@ func (rec *requestRecord) observe(method string, req mcpsdk.Request, result mcps
 	}
 }
 
-// toolErrorCategory is the closed category of a tool error result; a result
-// that carries no classified error, or an unknown category, is "unclassified".
+// toolErrorCategory is the closed category of a tool error result; empty
+// when the result carries no classified error or an unknown category.
 func toolErrorCategory(err error) string {
 	var classified *classifiedError
 	if errors.As(err, &classified) {
@@ -451,7 +451,7 @@ func toolErrorCategory(err error) string {
 			}
 		}
 	}
-	return eventspec.MCPHTTPToolErrorUnclassified
+	return ""
 }
 
 func isNilValue(value any) bool {
@@ -657,7 +657,7 @@ func (h *HTTPHandler) emitRequestLine(ctx context.Context, line requestLine, rec
 		"latency_ms", line.latency.Milliseconds(),
 		"in_flight", line.inFlight,
 	)
-	if result == HTTPResultToolError {
+	if result == HTTPResultToolError && toolErrorCategory != "" {
 		args = append(args, "tool_error_category", toolErrorCategory)
 	}
 	h.logger.InfoContext(ctx, HTTPRequestLogMessage, args...)
