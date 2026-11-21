@@ -134,3 +134,30 @@ func TestRefusalUsageAndInfoLineAcrossEveryStage(t *testing.T) {
 		}
 	}
 }
+
+// The OpenAI and compatible clients report a refusal as Result.Refused with an
+// ordinary stop reason; Anthropic reports only the "refusal" stop reason. Each
+// signal alone is a terminal refusal with the billed usage.
+func TestRefusalSignalPerProvider(t *testing.T) {
+	cases := map[string]llm.Result{
+		"refused flag, stop reason stop (openai, compatible)": {Refused: true, StopReason: "stop"},
+		"refused flag, empty stop reason":                    {Refused: true},
+		"stop reason refusal (anthropic)":                    {StopReason: "refusal"},
+	}
+	for name, base := range cases {
+		t.Run(name, func(t *testing.T) {
+			base.Model, base.Usage = refusalModel, llm.Usage{InputTokens: intp(900), OutputTokens: intp(0)}
+			client := &scriptedLLM{model: refusalModel, replies: []llmReply{{result: base}}}
+			fallbackClient := &scriptedLLM{model: refusalModel, replies: []llmReply{{result: llm.Result{Text: jsonOf(t, validInterpretationOutput())}}}}
+			runtime := refusalRuntime(t, client, refusalRuntime(t, fallbackClient, nil))
+			_, receipt, err := runtime.InterpretQuestion(context.Background(), storage.Principal{OrgID: "org_1"}, validRequest())
+			if !errors.Is(err, contextfabric.ErrModelOutput) {
+				t.Fatalf("err = %v, want ErrModelOutput", err)
+			}
+			if len(client.requests) != 1 || len(fallbackClient.requests) != 0 || receipt.Attempts != 1 || receipt.Usage.InputTokens != 900 {
+				t.Fatalf("calls = %d fallback calls = %d attempts = %d input tokens = %d, want 1, 0, 1, 900",
+					len(client.requests), len(fallbackClient.requests), receipt.Attempts, receipt.Usage.InputTokens)
+			}
+		})
+	}
+}
