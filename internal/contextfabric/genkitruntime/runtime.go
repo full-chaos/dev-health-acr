@@ -1299,7 +1299,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			// keeps the outcome vocabulary consistent with a direct call to
 			// that same fallback.
 			receipt.Outcome = fallbackReceipt.Outcome
-			addFallbackUsage(&receipt, fallbackReceipt)
+			receipt = describeReportedLeg(receipt, fallbackReceipt)
 			// The SECOND fallback-failure branch, and it needs the same
 			// derivation as the one further down for the same reason. The
 			// two differ only in why the PRIMARY failed -- here the primary
@@ -1361,7 +1361,7 @@ func (r *Runtime) interpretQuestionWithSample(ctx context.Context, principal sto
 			// comment: report the fallback's own outcome/classification,
 			// not the primary's stale invalid_output/ErrModelOutput.
 			receipt.Outcome = fallbackReceipt.Outcome
-			addFallbackUsage(&receipt, fallbackReceipt)
+			receipt = describeReportedLeg(receipt, fallbackReceipt)
 			// The FALLBACK's error is the one the caller receives here, so
 			// its reason is the one the receipt and the decision line must
 			// report. A fallback that fails semantically (its own
