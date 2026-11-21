@@ -60,23 +60,13 @@ func TestSynthesisDraftValidateAgainstRejectsFindingWithSubjectOutsideInvestigat
 	}
 }
 
-func TestSynthesisDraftValidateAgainstRequiresDirectJudgmentForAnswerCapableStatus(t *testing.T) {
+func TestSynthesisDraftValidateAgainstAcceptsEmptyAdvisoryProse(t *testing.T) {
 	t.Parallel()
 	input := validSynthesisInputFixture()
 	draft := validSynthesisDraftFixture(input)
-	draft.DirectJudgment = ""
-	if err := draft.ValidateAgainst(input); err == nil || !strings.Contains(err.Error(), "direct judgment") {
-		t.Fatalf("ValidateAgainst() error = %v, want missing direct judgment error", err)
-	}
-}
-
-func TestSynthesisDraftValidateAgainstRequiresDeterministicAnswer(t *testing.T) {
-	t.Parallel()
-	input := validSynthesisInputFixture()
-	draft := validSynthesisDraftFixture(input)
-	draft.DeterministicAnswer = ""
-	if err := draft.ValidateAgainst(input); err == nil || !strings.Contains(err.Error(), "deterministic answer") {
-		t.Fatalf("ValidateAgainst() error = %v, want missing deterministic answer error", err)
+	draft.DirectJudgment, draft.DeterministicAnswer = "", " "
+	if err := draft.ValidateAgainst(input); err != nil {
+		t.Fatalf("ValidateAgainst() error = %v, want empty advisory prose accepted (the server recomposes it)", err)
 	}
 }
 

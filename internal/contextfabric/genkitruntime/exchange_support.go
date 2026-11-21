@@ -124,7 +124,7 @@ func ParseSynthesisOutput(raw []byte) (contextfabric.SynthesisDraft, error) {
 	if err := json.Unmarshal(raw, &output); err != nil {
 		return contextfabric.SynthesisDraft{}, err
 	}
-	return output.toDomain()
+	return output.toDomain(), nil
 }
 
 // SynthesisOutputSchema reflects the exact Go type genkit's constrained

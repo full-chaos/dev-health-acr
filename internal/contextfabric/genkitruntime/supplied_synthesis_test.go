@@ -94,7 +94,7 @@ func TestSuppliedSynthesizerRefusesWhatTheSchemaOrTheTypedDecodeRefuses(t *testi
 		"a status outside the enum":      func(d map[string]any) { d["status"] = "excellent" },
 		"a missing required field":       func(d map[string]any) { delete(d, "warnings") },
 		"a null for an array":            func(d map[string]any) { d["limitations"] = nil },
-		"a missing deterministic answer": func(d map[string]any) { d["deterministic_answer"] = "   " },
+		"a missing deterministic answer": func(d map[string]any) { delete(d, "deterministic_answer") },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -103,11 +103,7 @@ func TestSuppliedSynthesizerRefusesWhatTheSchemaOrTheTypedDecodeRefuses(t *testi
 			mutate(document)
 			_, err := synthesizer.Parse(marshalFixture(t, document))
 			reason := requireClosedRejection(t, name, err)
-			if name == "a missing deterministic answer" {
-				if reason != contextfabric.RejectionReasonDeterministicAnswerMissing {
-					t.Fatalf("reason = %q, want deterministic_answer_missing", reason)
-				}
-			} else if reason != contextfabric.RejectionReasonOutputSchemaMismatch {
+			if reason != contextfabric.RejectionReasonOutputSchemaMismatch {
 				t.Fatalf("reason = %q, want output_schema_mismatch", reason)
 			}
 		})
