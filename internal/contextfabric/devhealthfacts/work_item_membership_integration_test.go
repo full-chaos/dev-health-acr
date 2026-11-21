@@ -43,7 +43,7 @@ func TestWorkItemMembershipS1AgainstActualDDL(t *testing.T) {
 		t.Fatalf("start ClickHouse: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := container.Terminate(context.Background()); err != nil {
+		if err := container.Terminate(context.Background(), testcontainers.StopTimeout(0)); err != nil {
 			t.Errorf("terminate ClickHouse: %v", err)
 		}
 	})
@@ -613,7 +613,7 @@ func TestWorkItemMembershipS1ReadLimitExceededIsCertifiedAgainstRealClickHouse(t
 		t.Fatalf("start ClickHouse: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := container.Terminate(context.Background()); err != nil {
+		if err := container.Terminate(context.Background(), testcontainers.StopTimeout(0)); err != nil {
 			t.Errorf("terminate ClickHouse: %v", err)
 		}
 	})

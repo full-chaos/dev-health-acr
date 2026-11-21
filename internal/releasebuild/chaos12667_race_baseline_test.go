@@ -9,7 +9,7 @@ import (
 )
 
 // TestRaceBaselineTokenReachesOnlyTheFetchStep pins CHAOS-12667 (Codex #1967
-// r1): the eight devhealthfacts and devhealthsource race jobs read main's last
+// r1): the nine devhealthfacts and devhealthsource race jobs read main's last
 // race-json artifact with a token that has actions read. The token must reach
 // the race-baseline step alone, never the step that runs repository scripts,
 // make and the tests, and that step must run gh and nothing of the repository.
@@ -22,7 +22,7 @@ func TestRaceBaselineTokenReachesOnlyTheFetchStep(t *testing.T) {
 	jobHeader := regexp.MustCompile(`(?m)^  [A-Za-z0-9_-]+:\s*$`)
 	stepStart := regexp.MustCompile(`(?m)^      - `)
 	for _, job := range []string{
-		"race-devhealthfacts", "race-devhealthfacts-heavy", "race-devhealthfacts-mid", "race-devhealthfacts-fourth",
+		"race-devhealthfacts", "race-devhealthfacts-heavy", "race-devhealthfacts-mid", "race-devhealthfacts-fourth", "race-devhealthfacts-fifth",
 		"race-devhealthsource", "race-devhealthsource-heavy", "race-devhealthsource-mid", "race-devhealthsource-fourth",
 		// CHAOS-12717: internal/api's two isolated race jobs.
 		"race-api", "race-api-heavy",
