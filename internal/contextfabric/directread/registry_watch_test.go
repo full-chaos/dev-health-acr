@@ -324,12 +324,12 @@ func TestRegistryWatch_older_prod_registry_golden_drifts_from_the_new_pin(t *tes
 	}
 }
 
-// Fixture: the GET /registry body of ops 2c115402 (the query-api prod serves), taken from the
+// Fixture: the GET /registry body of ops 4f6e369a (the query-api prod serves), taken from the
 // production handler constructor (newQueryHandler, as buildQueryRoute builds it, with the schema
 // digest digest.Schema(schemav1.SDL)): HTTP 200. The catalogue pinned from that commit must match
 // it with zero drift.
 func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T) {
-	body, err := os.ReadFile("testdata/query_registry_2c115402.json")
+	body, err := os.ReadFile("testdata/query_registry_4f6e369a.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +338,7 @@ func TestRegistryWatch_registry_of_the_vendored_commit_matches_pin(t *testing.T)
 	w, cat, buf := newWatch(t, f, nil)
 	w.Start()
 	w.Wait()
-	const want = "sha256:7f8167568a634f87d77d4c28e9fb34efa17078cbff1b5d950b5e0e334d4f26b3"
+	const want = "sha256:963a889d2e612b923be407d9191aed05ef5b9bc9d5d6dd758e5a238e20185667"
 	if got := cat.StampedSchemaDigest(); got != want || cat.SchemaDigest() != want {
 		t.Fatalf("stamp %s pinned %s, want %s", got, cat.SchemaDigest(), want)
 	}
