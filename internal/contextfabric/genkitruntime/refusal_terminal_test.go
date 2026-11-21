@@ -161,3 +161,32 @@ func TestRefusalSignalPerProvider(t *testing.T) {
 		})
 	}
 }
+
+// A refusal on the extra synthesis draw that follows a valid zero-claim draft
+// ends the stage as a refusal: the held draft is not served, and there is no
+// fallback call. A transport failure there still serves the held draft (see
+// TestFailedZeroClaimRedrawServesTheEarlierValidDraft).
+func TestRefusedZeroClaimRedrawIsTerminal(t *testing.T) {
+	cases := map[string]llm.Result{
+		"refused flag": {Refused: true, StopReason: "stop"},
+		"stop reason":  {StopReason: "refusal"},
+	}
+	for name, refusal := range cases {
+		t.Run(name, func(t *testing.T) {
+			refusal.Model, refusal.Usage = refusalModel, llm.Usage{InputTokens: intp(900), OutputTokens: intp(0)}
+			zeroOutput := validSynthesisOutput()
+			zeroOutput.ClaimedFacts = []contextfabric.ClaimedFact{}
+			zero := llm.Result{Text: jsonOf(t, zeroOutput), Model: refusalModel, StopReason: "stop", Usage: llm.Usage{InputTokens: intp(20), OutputTokens: intp(8)}}
+			client := &scriptedLLM{model: refusalModel, replies: []llmReply{{result: zero}, {result: refusal}}}
+			fallbackClient := &scriptedLLM{model: refusalModel, replies: []llmReply{{result: zero}}}
+			runtime := refusalRuntime(t, client, refusalRuntime(t, fallbackClient, nil))
+			_, receipt, err := runtime.SynthesizeAnswer(context.Background(), storage.Principal{OrgID: "org_1"}, validSynthesisInput())
+			if !errors.Is(err, contextfabric.ErrModelOutput) {
+				t.Fatalf("err = %v, want ErrModelOutput", err)
+			}
+			if len(client.requests) != 2 || len(fallbackClient.requests) != 0 || receipt.Outcome == "success" {
+				t.Fatalf("calls = %d fallback calls = %d outcome = %q, want 2, 0, not success", len(client.requests), len(fallbackClient.requests), receipt.Outcome)
+			}
+		})
+	}
+}
