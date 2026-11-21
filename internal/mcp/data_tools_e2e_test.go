@@ -147,6 +147,8 @@ type dtQueryService struct {
 	server *httptest.Server
 	mu     sync.Mutex
 	bodies []map[string]any
+	status int
+	answer string
 }
 
 func newDTQueryService(t *testing.T) *dtQueryService {
@@ -157,8 +159,14 @@ func newDTQueryService(t *testing.T) *dtQueryService {
 		_ = json.Unmarshal(raw, &body)
 		q.mu.Lock()
 		q.bodies = append(q.bodies, body)
+		status, answer := q.status, q.answer
 		q.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, answer)
+			return
+		}
 		vars, _ := body["variables"].(map[string]any)
 		filter, _ := vars["filter"].(map[string]any)
 		input, _ := vars["input"].(map[string]any)
@@ -452,4 +460,48 @@ func isInsufficientScope(err error) bool {
 func mustJSON(v any) string {
 	encoded, _ := json.Marshal(v)
 	return string(encoded)
+}
+
+// The upstream answers 404 (with and without the typed MCP_REFUSED body):
+// run_operation returns an ANSWER (IsError=false) with call=operation_unavailable
+// and one not_found error; upstream text never reaches the model.
+func TestRunOperationUpstream404IsAnAnswerNotAToolError(t *testing.T) {
+	cases := []struct{ name, body string }{
+		{"typed_mcp_refused", `{"errors":[{"message":"SECRET-UPSTREAM","extensions":{"code":"MCP_REFUSED","reason":"root_field_not_enabled"}}]}`},
+		{"untyped_body", `SECRET-UPSTREAM not registered`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stack := newDTStack(t)
+			stack.query.mu.Lock()
+			stack.query.status, stack.query.answer = http.StatusNotFound, tc.body
+			stack.query.mu.Unlock()
+			cs, _ := stack.session([]string{auth.ScopeContextRead, auth.ScopeDataRead}, []string{"*"})
+			result, err := cs.CallTool(context.Background(), &mcpsdk.CallToolParams{Name: "run_operation", Arguments: map[string]any{"operation": "compoundingRisk", "variables": map[string]any{"filter": map[string]any{"breakout": "REPO"}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.IsError {
+				t.Fatalf("an upstream 404 must be an answer, not a tool error: %+v", result.Content)
+			}
+			encoded, _ := json.Marshal(result.StructuredContent)
+			var out map[string]any
+			if err := json.Unmarshal(encoded, &out); err != nil {
+				t.Fatal(err)
+			}
+			errs, _ := out["errors"].([]any)
+			if out["call"] != "operation_unavailable" || len(errs) != 1 || errs[0].(map[string]any)["class"] != "not_found" {
+				t.Fatalf("upstream 404 answer %v", out)
+			}
+			var text string
+			for _, c := range result.Content {
+				if tc, ok := c.(*mcpsdk.TextContent); ok {
+					text += tc.Text
+				}
+			}
+			if strings.Contains(text+string(encoded), "SECRET-UPSTREAM") {
+				t.Fatalf("upstream text reached the model: %s", text)
+			}
+		})
+	}
 }

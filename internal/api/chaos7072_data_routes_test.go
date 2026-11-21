@@ -105,6 +105,7 @@ type c7072Upstream struct {
 	seen    []*http.Request
 	bodies  []map[string]any
 	respond func(body map[string]any) string
+	status  int
 }
 
 func newC7072Upstream(t *testing.T) *c7072Upstream {
@@ -117,8 +118,12 @@ func newC7072Upstream(t *testing.T) *c7072Upstream {
 		u.seen = append(u.seen, r.Clone(context.Background()))
 		u.bodies = append(u.bodies, body)
 		respond := u.respond
+		status := u.status
 		u.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if status != 0 {
+			w.WriteHeader(status)
+		}
 		if respond == nil {
 			_, _ = io.WriteString(w, `{"data":{}}`)
 			return
@@ -668,5 +673,37 @@ func TestCatalogAndEveryDataToolRefuseTheSameWayWhenTheStoreIsDown(t *testing.T)
 		if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "store_unavailable") {
 			t.Errorf("%s: store down answered %d %s, want 503 store_unavailable", name, response.Code, response.Body.String())
 		}
+	}
+}
+
+// The upstream answers 404 (with and without the typed MCP_REFUSED body):
+// the hosted route answers HTTP 200 with call=operation_unavailable and one
+// not_found error, never a 5xx, and never echoes upstream text.
+func TestChaos8048OperationUpstream404IsAnOperationUnavailableAnswer(t *testing.T) {
+	cases := []struct{ name, body string }{
+		{"typed_mcp_refused", `{"errors":[{"message":"SECRET-UPSTREAM","extensions":{"code":"MCP_REFUSED","reason":"root_field_not_enabled"}}]}`},
+		{"untyped_body", `SECRET-UPSTREAM not registered`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newC7072Harness(t, c7072Options{})
+			token := h.issueFor(t, c7072Data, c7072AllRepos, nil).Token
+			h.upstream.mu.Lock()
+			h.upstream.status = http.StatusNotFound
+			h.upstream.respond = func(map[string]any) string { return tc.body }
+			h.upstream.mu.Unlock()
+			response := h.post(ContextFabricDataOperationsPath, token, `{"operation":"compoundingRisk","variables":{"filter":{"breakout":"REPO"}}}`)
+			body := decodeC7072(t, response)
+			errs, _ := body["errors"].([]any)
+			if body["call"] != "operation_unavailable" || len(errs) != 1 || errs[0].(map[string]any)["class"] != "not_found" || body["refusal"] != nil {
+				t.Fatalf("upstream 404 answer %v", body)
+			}
+			if strings.Contains(response.Body.String(), "SECRET-UPSTREAM") {
+				t.Fatalf("upstream text reached the caller: %s", response.Body.String())
+			}
+			if h.upstream.count() != 1 {
+				t.Fatalf("upstream calls %d, want 1", h.upstream.count())
+			}
+		})
 	}
 }
