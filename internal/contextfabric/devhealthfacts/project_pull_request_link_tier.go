@@ -20,7 +20,9 @@ import (
 // Native cover: a pull request that has a native link from any issue gets no
 // lower-tier link, so a requested project keeps a link only when its tier equals
 // the strongest admitted tier of the pull request across every project. The read
-// is bounded to the target pull requests.
+// is bounded to the target pull requests. The same rule holds on the issue side:
+// an issue that has a native link to any pull request keeps no lower-tier link
+// to another, so a link counts only at its issue's strongest admitted tier.
 func (e *ScopeExpander) projectPullRequestLinkTiers(ctx context.Context, orgID string, projectKeys []string, targets []contextfabric.SubjectRef) (map[string]map[string]string, error) {
 	pullRequestKeys := make([]string, 0, len(targets))
 	for _, target := range targets {
@@ -37,8 +39,9 @@ FROM work_items AS w FINAL
 INNER JOIN ` + currentResolvedProjectsSQL + ` AS p ON p.join_key = w.project_id
 INNER JOIN ` + admittedIssueLinksAmongSQL(workItemIDs) + ` AS l ON l.work_item_id = w.work_item_id
 INNER JOIN ` + strongestLinkTierOfPullRequestsSQL + ` AS c ON c.cover_repo_id = toString(l.pr_repo_id) AND c.cover_number = l.pr_number
+INNER JOIN (SELECT work_item_id, max(link_rank) AS issue_cover_rank FROM ` + admittedIssueLinksAmongSQL(workItemIDs) + ` GROUP BY work_item_id) AS ic ON ic.work_item_id = l.work_item_id
 WHERE w.org_id = {org_id:String} AND w.work_item_id IN ` + workItemIDs + ` AND p.key_resolution_count = 1 AND ` + projectQualifiedKeySQL + ` IN {project_ids:Array(String)}
-  AND l.link_rank = c.cover_rank AND concat(toString(l.pr_repo_id), '` + projectOriginKeySeparator + `', toString(l.pr_number)) IN {pull_request_keys:Array(String)}
+  AND l.link_rank = c.cover_rank AND l.link_rank = ic.issue_cover_rank AND concat(toString(l.pr_repo_id), '` + projectOriginKeySeparator + `', toString(l.pr_number)) IN {pull_request_keys:Array(String)}
 GROUP BY ` + projectQualifiedKeySQL + `, toString(l.pr_repo_id), l.pr_number`
 	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
 		{Name: "org_id", Value: orgID},
