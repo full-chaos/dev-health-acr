@@ -8,17 +8,24 @@ import (
 )
 
 // applyBudget keeps candidates in rank order but spends the item and token
-// budgets on every first row of a subject before any later row of one.
-func applyBudget(packet *contractsv1.ContextPacket, candidates []contractsv1.ContextPacketItem, later map[string]bool) error {
+// budgets on every first row of a subject before any later row of one. Once a
+// tiered cause misses the budget, no cause of a weaker match tier is admitted.
+func applyBudget(packet *contractsv1.ContextPacket, candidates []contractsv1.ContextPacketItem, later map[string]bool, causeTiers map[string]int) error {
 	keep, tokens := make([]bool, len(candidates)), 0
-	used := 0
+	used, skippedTier := 0, 0
 	for _, pass := range []bool{false, true} {
 		for index, candidate := range candidates {
 			if later[candidate.PacketItemID] != pass {
 				continue
 			}
 			cost := estimateTokens(candidate)
+			tier := causeTiers[candidate.PacketItemID]
 			if used >= packet.Budget.MaxItems || tokens+cost > packet.Budget.MaxOutputTokens {
+				packet.Budget.Truncated = true
+				skippedTier = max(skippedTier, tier)
+				continue
+			}
+			if tier > 0 && tier < skippedTier {
 				packet.Budget.Truncated = true
 				continue
 			}

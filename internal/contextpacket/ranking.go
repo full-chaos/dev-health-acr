@@ -20,7 +20,7 @@ const (
 	minimumEvidenceConfidence = 0.5
 )
 
-func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.ResolvedScope, goal string, includeLowConfidence bool, requested []contractsv1.PacketCategory, maxItems int) ([]contractsv1.ContextPacketItem, bool, map[string]bool) {
+func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.ResolvedScope, goal string, includeLowConfidence bool, requested []contractsv1.PacketCategory, maxItems int) ([]contractsv1.ContextPacketItem, bool, map[string]bool, map[string]int) {
 	roles := newRoleResolver(evidence)
 	refs := make([]contractsv1.EvidenceRef, 0, len(evidence))
 	for _, ref := range evidence {
@@ -60,12 +60,15 @@ func rankEvidence(evidence []contractsv1.EvidenceRef, scope contractsv1.Resolved
 	for _, ref := range refs {
 		items = append(items, evidenceItemWithRoles(ref, scope, roles))
 	}
-	deferred := make(map[string]bool, len(laterRows))
+	deferred, tiers := make(map[string]bool, len(laterRows)), map[string]int{}
 	for i := range items {
 		items[i].Rank = i + 1
 		deferred[items[i].PacketItemID] = laterRows[refs[i].EvidenceRefID]
+		if tier := causeTier(roles.rule(refs[i])); tier > 0 {
+			tiers[items[i].PacketItemID] = tier
+		}
 	}
-	return items, truncated, deferred
+	return items, truncated, deferred, tiers
 }
 
 func requestedEvidenceCategories(refs []contractsv1.EvidenceRef, requested []contractsv1.PacketCategory, roles roleResolver) []contractsv1.EvidenceRef {
