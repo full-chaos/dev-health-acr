@@ -31,6 +31,13 @@ func TestCatalogQueriesExecutableAgainstDeclaredSchema(t *testing.T) {
 			t.Fatalf("create declared table: %v\n%s", err, statement)
 		}
 	}
+	for table := range devhealthschema.Projections {
+		for _, statement := range devhealthschema.ProjectionDDL(table) {
+			if err := direct.Exec(ctx, statement); err != nil {
+				t.Fatalf("declared projection: %v\n%s", err, statement)
+			}
+		}
+	}
 
 	plan := contextpacket.ReadPlan{
 		OrgID:          "10000000-0000-4000-8000-000000000001",
