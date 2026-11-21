@@ -11,7 +11,8 @@ import (
 func serveDaily(t *testing.T, days int, cell func(i int) map[string]contextfabric.FactValue) ServedTable {
 	t.Helper()
 	start := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	end := start.AddDate(0, 0, days)
+	// An explicit range keeps the day of its end: days days end on the last of them.
+	end := start.AddDate(0, 0, days-1)
 	var rows []contextfabric.FactValueRow
 	for i := 0; i < days; i++ {
 		fields := cell(i)
@@ -109,7 +110,7 @@ func TestServeTableOutOfRangeInstantCountsNeitherAndIsNotServed(t *testing.T) {
 		t.Fatalf("baseline returned=%d", *table.ReturnedPoints)
 	}
 	start := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	end := start.AddDate(0, 0, 2)
+	end := start.AddDate(0, 0, 1)
 	row := func(day string) contextfabric.FactValueRow {
 		return contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{"day": contextfabric.StringFactValue(day), "compounding_risk": contextfabric.NumberFactValue(1)}}
 	}
@@ -142,7 +143,7 @@ func TestInstantInWindowKeepsUnparsableKey(t *testing.T) {
 func serveKeys(t *testing.T, keys ...string) ServedTable {
 	t.Helper()
 	start := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
-	end := start.AddDate(0, 0, 2)
+	end := start.AddDate(0, 0, 1)
 	var rows []contextfabric.FactValueRow
 	for _, key := range keys {
 		rows = append(rows, contextfabric.FactValueRow{Fields: map[string]contextfabric.FactValue{
