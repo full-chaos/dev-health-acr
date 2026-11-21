@@ -303,6 +303,8 @@ func TestFallbackSuccessStillCarriesTheFallbacksDigest(t *testing.T) {
 func TestInterpretRejectionCarriesNoStaleDigest(t *testing.T) {
 	fallbackReceipt := validReceipt(contextfabric.ModelOperationInterpret)
 	fallbackReceipt.Outcome = "invalid_output"
+	// A failed interpret leg stamps no digest; the reported leg is the fallback.
+	fallbackReceipt.OutputDigest = ""
 	runtime := mustRuntime(t, &generatorStub{interpretErr: errors.New("primary transport failure")}, Config{
 		Fallback: erroringFallbackRuntime{
 			receipt: fallbackReceipt,
