@@ -79,3 +79,25 @@ func TestAStatedWindowLeavesOwnershipOnTheCurrentRule(t *testing.T) {
 		t.Fatalf("empty read = %s, %q", state, reason)
 	}
 }
+
+// A point-in-time bound names the day it is read at and no window: no start,
+// no day count, no totals, even when totals are present.
+func TestFlowAsOfBoundNamesOnlyItsEndDay(t *testing.T) {
+	end := time.Date(2026, 2, 22, 23, 30, 0, 0, time.FixedZone("west", -5*3600))
+	fields := map[string]contextfabric.FactValue{}
+	addFlowWindowFields(fields, factTimeBound{active: true, end: end}, flowWindowTotals{itemsStarted: 3, itemsCompleted: 2, daysWithData: 4, present: true})
+	if got := fields["window_mode"].String; got == nil || *got != "as_of" {
+		t.Errorf("window_mode = %v, want as_of", got)
+	}
+	if got := fields["window_end"].String; got == nil || *got != "2026-02-23" {
+		t.Errorf("window_end = %v, want 2026-02-23 (UTC day)", got)
+	}
+	for _, k := range []string{"window_start", "window_days", "items_started_window", "items_completed_window", "window_days_with_data"} {
+		if _, ok := fields[k]; ok {
+			t.Errorf("as_of bound emitted %s, want no window field", k)
+		}
+	}
+	if len(fields) != 2 {
+		t.Errorf("fields = %d, want window_mode and window_end only", len(fields))
+	}
+}
