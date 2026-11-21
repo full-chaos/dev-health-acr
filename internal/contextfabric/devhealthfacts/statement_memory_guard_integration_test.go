@@ -38,7 +38,7 @@ func statementMemorySince(t *testing.T, ctx context.Context, direct clickhousedr
 	if filter.Table == "" {
 		t.Fatal("statementFilter.Table is required")
 	}
-	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS`); err != nil {
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS query_log`); err != nil {
 		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
 	}
 	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), `+statementthreads.UnboundThreadsCount+` FROM system.query_log
