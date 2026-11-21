@@ -224,7 +224,12 @@ already-endpoint-resolved edges and owns only the pure admission decision.
   read on the socket. A cancel of a read is honoured before the call, while
   it waits for a pooled connection, and after a new connection's setup,
   before the command is written; a read whose context ended when the call
-  returns gets the context's error, not the reply. A cancel does not cut a
+  returns gets the context's error, not the reply. The result decoder's own
+  lookups (labels, relationship types, property keys) run with the caller's
+  context: none is sent after the context ended, and a read whose context
+  ended during the decode gets the context's error, not rows. A retry is
+  recorded as retried only when the next attempt reached the command write.
+  A cancel does not cut a
   socket wait already in progress. Known limit, not pinned by a test: a
   cancel between the pool get and the write on a reused idle connection still
   sends the read once. The write client's context only guards the call

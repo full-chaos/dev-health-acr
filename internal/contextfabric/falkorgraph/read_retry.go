@@ -106,14 +106,21 @@ func readRetryBackoff(attempt int) time.Duration {
 // the read once.
 //
 // Each failed attempt with a transient cause is recorded once: retried=true
-// only when the next send starts, retried=false when the attempts, the
-// deadline or the caller's end stop it. A timeout or pool timeout is recorded
+// only when the next attempt is written, retried=false when the attempts, the
+// deadline or the caller's end stop it. A retried attempt is recorded when the
+// next attempt returns (nextAttemptWritten), so a next attempt that the
+// caller's end stopped during its connection setup records retried=false. A timeout or pool timeout is recorded
 // only while the caller's context is live, so a read that ran into the
 // caller's own deadline is not counted as a dependency timeout.
 func retryRead[T any](ctx context.Context, s *sdkAPI, operation string, call func() (T, error)) (T, error) {
 	maxAttempts := int(s.config.MaxAttempts)
+	pendingCause := ""
 	for attempt := 1; ; attempt++ {
 		value, err := call()
+		if pendingCause != "" {
+			s.recordReadAttemptFailed(ctx, operation, attempt-1, maxAttempts, pendingCause, nextAttemptWritten(ctx, err))
+			pendingCause = ""
+		}
 		if err == nil {
 			if ctxErr := s.endedAfterReply(ctx, operation, nil); ctxErr != nil {
 				var zero T
@@ -152,8 +159,25 @@ func retryRead[T any](ctx context.Context, s *sdkAPI, operation string, call fun
 			s.recordReadAttemptFailed(ctx, operation, attempt, maxAttempts, cause, false)
 			return value, ctxErr
 		}
-		s.recordReadAttemptFailed(ctx, operation, attempt, maxAttempts, cause, true)
+		pendingCause = cause
 	}
+}
+
+// nextAttemptWritten reports whether the attempt after a retry reached the
+// command write. It did not when it came back with a context error (the pool
+// wait or refuseAnEndedRead) or with a timeout after the caller's context
+// ended (the setup or the read ran into the caller's deadline). Known limit: a
+// retry that was written and then ran into the caller's deadline with no reply
+// is recorded as not retried, since its error is the same as a setup timeout.
+func nextAttemptWritten(ctx context.Context, err error) bool {
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	cause, _ := readFailureCause(err)
+	return cause != ReadFailureTimeout || contextEnded(ctx) == nil
 }
 
 // refuseAnEndedRead is the read client's OnConnect step. go-redis runs it after

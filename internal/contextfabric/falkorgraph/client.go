@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 
 	falkordb "github.com/FalkorDB/falkordb-go/v2"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 )
@@ -27,7 +28,9 @@ import (
 // and after a new connection's setup, before the command is written
 // (refuseAnEndedRead, the go-redis OnConnect step). It does not interrupt a
 // socket wait already in progress, but a read whose ctx has ended when the
-// call returns returns the ctx error, not the reply (retryRead). Known limit,
+// call returns returns the ctx error, not the reply (retryRead). The result
+// decoder's lookups run with the caller's ctx (callerContextClient), and a read
+// whose ctx ended during the decode returns the ctx error, not rows. Known limit,
 // not pinned by a test: a cancel between the pool get and the write on a
 // REUSED idle connection still sends the read once. The
 // WRITE client (db) does not: its ctx only guards the call before it starts, and
@@ -131,7 +134,15 @@ func (s *sdkAPI) query(ctx context.Context, graphKey, cypher string, params map[
 	}
 	s.everConnected.Store(true)
 	g := client.SelectGraph(graphKey)
+	if readOnly {
+		g.Conn = callerContextClient{UniversalClient: g.Conn, ctx: ctx}
+	}
 	result, err := falkordb.QueryResultNew(g, raw)
+	if readOnly {
+		if ctxErr := contextEnded(ctx); ctxErr != nil {
+			return nil, ctxErr
+		}
+	}
 	if err != nil {
 		return nil, safeDependencyError("decode falkordb result", err)
 	}
@@ -149,6 +160,25 @@ func (s *sdkAPI) query(ctx context.Context, graphKey, cypher string, params map[
 		rows = append(rows, decoded)
 	}
 	return rows, nil
+}
+
+// callerContextClient runs the result decoder's own lookups (labels,
+// relationship types, property keys) of a read with the caller's context. The
+// decoder calls Conn.Do with a background context; this sends nothing once the
+// caller's context has ended, and a lookup it sends goes through the read
+// client's guards (refuseAnEndedRead, the context deadline on the socket).
+type callerContextClient struct {
+	redis.UniversalClient
+	ctx context.Context
+}
+
+func (c callerContextClient) Do(_ context.Context, args ...interface{}) *redis.Cmd {
+	if err := c.ctx.Err(); err != nil {
+		cmd := redis.NewCmd(c.ctx, args...)
+		cmd.SetErr(err)
+		return cmd
+	}
+	return c.UniversalClient.Do(c.ctx, args...)
 }
 
 func (s *sdkAPI) deleteGraph(ctx context.Context, graphKey string) error {
