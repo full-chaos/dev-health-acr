@@ -907,6 +907,7 @@ var OfferPoolSummary = Event{
 		{Key: "below_floor_excluded", Type: FieldInt, Presence: PresenceRequired},
 		{Key: "similarity_floor", Type: FieldFloat, Presence: PresenceRequired},
 		{Key: "emptied_by_exclusion", Type: FieldBool, Presence: PresenceRequired},
+		{Key: "offered_by_kind", Type: FieldCountMap, Presence: PresenceRequired, ClosedVocabulary: arrayTokens(storedResultSubjectKindArr[:])},
 	},
 }
 

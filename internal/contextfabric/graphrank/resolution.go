@@ -620,6 +620,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 				Pass:                        pass,
 				OfferPoolVectorOnlyExcluded: 0, OfferPoolVectorOnlyDemoted: 0,
 				OfferPoolEmptiedByExclusion: false,
+				OfferPoolOfferedByKind:      map[string]int{},
 			})
 			// CHAOS-4154 (codex review finding, Low, confirmed): PopulationBasis
 			// is explicit "none" here too -- an earlier version left this
@@ -1567,6 +1568,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 	// pick reaches the same honest "nothing to answer" terminal an
 	// embeddings-off run reaches.
 	offered := make([]contextfabric.SubjectCandidate, 0, len(ordered))
+	offerPoolOfferedByKind := map[string]int{}
 	offerPoolVectorOnlyExcluded := 0
 	// offerPoolFloorExcluded counts the candidates withheld for matching by
 	// similarity at or below OfferSimilarityFloor; the vector-only count above
@@ -1623,6 +1625,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			continue
 		}
 		offered = append(offered, candidate)
+		offerPoolOfferedByKind[string(candidate.Subject.Kind)]++
 	}
 	// THE POOL WAS EMPTIED BY THE EXCLUSION, and that is not the same fact
 	// as a graph with no candidates.
@@ -1683,6 +1686,7 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			OfferPoolBelowFloorExcluded: offerPoolFloorExcluded,
 			OfferPoolSimilarityFloor:    OfferSimilarityFloor,
 			OfferPoolEmptiedByExclusion: offerPoolEmptiedByExclusion,
+			OfferPoolOfferedByKind:      offerPoolOfferedByKind,
 		})
 	}
 	resolution.Candidates = offered
