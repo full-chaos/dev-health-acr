@@ -273,6 +273,7 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 	}
 
 	fillEveryRootOrganization(t, ctx, direct, fixture, "small", 100_000)
+	measured := serverNowMicros(t, ctx, direct)
 	t.Run("memory", func(t *testing.T) {
 		recorder := &recordingQueryClient{inner: query}
 		recordingExpander := devhealthfacts.NewScopeExpander(recorder)
@@ -360,6 +361,23 @@ func TestScopeExpanderKeepsEveryRequestedRootOnRealClickHouse(t *testing.T) {
 			if float64(largeDelta) > slopeTolerance {
 				t.Errorf("%s: the origin arrays' cost grew with the organization: %d bytes at the larger size, %d at the smaller (noise %d)", label, largeDelta, smallDelta, noise)
 			}
+		}
+	})
+	// The measurements read only system.query_log. Flushing every system log
+	// costs about 15 times more per measurement and was about a third of this
+	// test's wall time, so the measurements flush query_log alone.
+	t.Run("measurements flush only the query log", func(t *testing.T) {
+		done := serverNowMicros(t, ctx, direct)
+		if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS query_log`); err != nil {
+			t.Fatalf("flush query_log: %v", err)
+		}
+		var everyLog, queryLogOnly uint64
+		if err := direct.QueryRow(ctx, `SELECT countIf(query = 'SYSTEM FLUSH LOGS'), countIf(query = 'SYSTEM FLUSH LOGS query_log') FROM system.query_log
+WHERE `+queryLogSinceMark+` AND event_time_microseconds < fromUnixTimestamp64Micro(?) AND type = 'QueryFinish' AND query_kind = 'System'`, measured, done).Scan(&everyLog, &queryLogOnly); err != nil {
+			t.Fatalf("read query_log: %v", err)
+		}
+		if everyLog != 0 || queryLogOnly == 0 {
+			t.Errorf("the measurements sent %d flushes of every system log and %d of query_log alone, want 0 and more than 0", everyLog, queryLogOnly)
 		}
 	})
 }
