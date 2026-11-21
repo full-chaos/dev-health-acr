@@ -18,10 +18,18 @@ var fanOutStamp = time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
 type fanOutIncident struct {
 	id            string
 	active, ended int
+	title         string
 }
 
 func fanOutActiveRepo(n int) string { return fmt.Sprintf("6c2f9a10-4b7e-4d21-9f3a-%012d", n) }
 func fanOutEndedRepo(n int) string  { return fmt.Sprintf("7d2f9a10-4b7e-4d21-9f3a-%012d", n) }
+
+func incidentTitle(incident fanOutIncident) string {
+	if incident.title != "" {
+		return incident.title
+	}
+	return "incident " + incident.id
+}
 
 func fanOutIncidentID(n int) string { return fmt.Sprintf("8e4b1d70-2c9a-4f63-b815-%012d", n) }
 
@@ -52,7 +60,7 @@ func fanOutTable(incidents []fanOutIncident) entityTable {
 				ended = append(ended, fanOutEndedRepo(n))
 			}
 			out := incidentRowCandidates(incidentRow{
-				id: id, title: "incident " + id, activeRepos: parseIncidentRepos(active), endedRepos: ended,
+				id: id, title: incidentTitle(incident), activeRepos: parseIncidentRepos(active), endedRepos: ended,
 				observedAt: at, cursorAt: at,
 			}, &stats)
 			for i := range out {
@@ -70,16 +78,18 @@ type fanOutWalk struct {
 	relationships map[string]int
 	tombstones    map[string]int
 	quarantined   map[string]int
+	normalized    map[string]int
 }
 
 // walkFanOut runs the paged read from cursor zero, carrying each batch's
 // NextCursor into the next call, until a call publishes nothing.
 func walkFanOut(t *testing.T, incidents []fanOutIncident) fanOutWalk {
 	t.Helper()
-	walk := fanOutWalk{relationships: map[string]int{}, tombstones: map[string]int{}, quarantined: map[string]int{}}
+	walk := fanOutWalk{relationships: map[string]int{}, tombstones: map[string]int{}, quarantined: map[string]int{}, normalized: map[string]int{}}
 	plan := sourcePlan{
 		client: keysetRows{}, source: "page_item_bounds_test", version: "v1", tables: []entityTable{fanOutTable(incidents)},
-		observeQuarantine: func(o quarantineObservation) { walk.quarantined[o.Kind+"/"+o.Reason]++ },
+		observeQuarantine:    func(o quarantineObservation) { walk.quarantined[o.Kind+"/"+o.Reason]++ },
+		observeNormalization: func(o normalizationObservation) { walk.normalized[o.Kind+"/"+o.Reason]++ },
 	}
 	cursor, state := "", cursorState{}
 	for call := 1; ; call++ {
@@ -383,4 +393,29 @@ func withinBatchBoundsAll(all []candidate) bool {
 
 func itemIdentity(c candidate) string {
 	return fmt.Sprintf("%p|%p|%p|%p", c.entity, c.relationship, c.episode, c.tombstone)
+}
+
+// Measuring a page that passes a bound judges copies: the repairs the real
+// pass makes are still made and counted once per published item, and an item
+// that needs a repair is measured as the repaired item the batch carries.
+func TestPageCutCountsRepairsOnce(t *testing.T) {
+	incidents := incidentsOf(2, 2600, 0)
+	for i := range incidents {
+		incidents[i].title = " incident " + incidents[i].id
+	}
+	walk := walkFanOut(t, incidents)
+	if got, want := batchShape(walk), []string{"e1/r2600/t0", "e1/r2600/t0"}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("batches %v, want %v", got, want)
+	}
+	// Each incident's entity and each of its edges (which label the incident
+	// as their From endpoint) is repaired once.
+	if want := map[string]int{"entity/" + normalizationLabelTrimmed: 2, "relationship/" + normalizationLabelTrimmed: 5200}; fmt.Sprint(walk.normalized) != fmt.Sprint(want) {
+		t.Fatalf("normalized %v, want %v", walk.normalized, want)
+	}
+	if len(walk.quarantined) != 0 {
+		t.Fatalf("quarantined %v, want nothing", walk.quarantined)
+	}
+	relationships, tombstones := wantFanOut(incidents)
+	requireOnce(t, "relationship", walk.relationships, relationships)
+	requireOnce(t, "tombstone", walk.tombstones, tombstones)
 }

@@ -232,6 +232,12 @@ func oversizeScalarMap(properties map[string]contractsv1.ContextFabricScalarValu
 // quarantined, and those rows would be re-read, re-dropped and re-counted on
 // every subsequent tick.
 func partitionProjectableCandidates(all []candidate, observe func(quarantineObservation)) []candidate {
+	return judgeCandidates(all, observe, true)
+}
+
+// judgeCandidates is partitionProjectableCandidates; bounded false keeps valid
+// items past a batch item bound, to measure what a page would carry.
+func judgeCandidates(all []candidate, observe func(quarantineObservation), bounded bool) []candidate {
 	kept := make([]candidate, 0, len(all))
 	quarantinedRelationships := make(map[string]struct{})
 	quarantinedEntities := make(map[string]struct{})
@@ -244,7 +250,7 @@ func partitionProjectableCandidates(all []candidate, observe func(quarantineObse
 			continue
 		}
 		kind, err := validateCandidateItem(c)
-		if err == nil && !items.add(c) {
+		if err == nil && !items.add(c) && bounded {
 			// Only one row can bring this (truncateToCompleteRows cuts a page
 			// before any later row would): its items past the bound are dropped
 			// like any other item a batch cannot carry, dependents included.

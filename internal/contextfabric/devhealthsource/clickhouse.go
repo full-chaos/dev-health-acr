@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -719,39 +720,99 @@ func sortCandidates(all []candidate) {
 // returned. bounded reports that the bound, not the cap, ended the page.
 //
 // One row can carry many items (an incident has an edge per repository of its
-// service), so the page also ends before the row whose items would pass one of
-// the batch's item bounds: 200 rows can hold more than a batch may. The first
-// row is always kept, or the read could never move; items of that one row past
-// a bound are quarantined (partitionProjectableCandidates).
+// service), so 200 rows can hold more than one batch may. When the rows'
+// items pass a batch item bound, the page ends after the most rows whose items,
+// judged as the batch judges them (normalization, quarantine, deduplication),
+// fit (cutToBatchItemBounds). A page inside the bounds is never cut.
 func truncateToCompleteRows(all []candidate, maxRows int, bound pageBound) (kept []candidate, bounded bool) {
 	if maxRows <= 0 {
 		return nil, false
 	}
-	rows := 0
-	var page batchItems
-	for start := 0; start < len(all); {
-		end := start + 1
-		for end < len(all) && all[end].position().Equal(all[start].position()) && all[end].sortKey == all[start].sortKey {
-			end++
+	var starts []int
+	end := len(all)
+	for i, c := range all {
+		if i == 0 || !c.position().Equal(all[i-1].position()) || c.sortKey != all[i-1].sortKey {
+			if len(starts) == maxRows {
+				end = i
+				break
+			}
+			if bound.passedBy(c) {
+				end, bounded = i, true
+				break
+			}
+			starts = append(starts, i)
 		}
-		if rows == maxRows {
-			return all[:start], false
-		}
-		if bound.passedBy(all[start]) {
-			return all[:start], true
-		}
-		withRow := page
-		for _, c := range all[start:end] {
-			withRow.add(c)
-		}
-		if rows > 0 && !withRow.fit() {
-			return all[:start], false
-		}
-		page = withRow
-		rows++
-		start = end
 	}
-	return all, false
+	return cutToBatchItemBounds(all[:end], starts), bounded
+}
+
+// cutToBatchItemBounds keeps the most whole rows of page (each row starts at
+// its index in starts) whose items fit one batch as the batch judges them. The
+// first row is always kept, or the read could never move on; items of that one
+// row past a bound are quarantined (partitionProjectableCandidates).
+func cutToBatchItemBounds(page []candidate, starts []int) []candidate {
+	var raw batchItems
+	for _, c := range page {
+		raw.add(c)
+	}
+	if raw.fit() {
+		return page
+	}
+	rowsEnd := func(rows int) int {
+		if rows < len(starts) {
+			return starts[rows]
+		}
+		return len(page)
+	}
+	// Judging only removes items, so the most rows whose raw items fit is a
+	// floor; search above it for the most rows whose judged items fit.
+	low := 1
+	raw = batchItems{}
+	for rows := 1; rows <= len(starts); rows++ {
+		for _, c := range page[rowsEnd(rows-1):rowsEnd(rows)] {
+			raw.add(c)
+		}
+		if !raw.fit() {
+			break
+		}
+		low = rows
+	}
+	high := len(starts)
+	for low < high {
+		mid := (low + high + 1) / 2
+		if judgedItemsFit(page[:rowsEnd(mid)]) {
+			low = mid
+		} else {
+			high = mid - 1
+		}
+	}
+	return page[:rowsEnd(low)]
+}
+
+// judgedItemsFit reports whether the items a batch would carry for rows fit
+// its bounds. It judges copies: normalization repairs items in place, and the
+// real pass must still see and count those repairs.
+func judgedItemsFit(rows []candidate) bool {
+	probe := make([]candidate, len(rows))
+	for i, c := range rows {
+		if c.entity != nil {
+			entity := *c.entity
+			entity.Properties = maps.Clone(entity.Properties)
+			c.entity = &entity
+		}
+		if c.relationship != nil {
+			relationship := *c.relationship
+			relationship.Properties = maps.Clone(relationship.Properties)
+			c.relationship = &relationship
+		}
+		probe[i] = c
+	}
+	normalizeCandidates(probe, nil)
+	var items batchItems
+	for _, c := range judgeCandidates(probe, nil, false) {
+		items.add(c)
+	}
+	return items.fit()
 }
 
 // batchItems counts the items of each kind a batch bounds.
