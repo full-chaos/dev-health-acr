@@ -366,14 +366,15 @@ func writeProbe(w http.ResponseWriter, status int, body healthBody) {
 
 // requestRecord accumulates what one MCP request did, for its one line.
 type requestRecord struct {
-	mu          sync.Mutex
-	method      string
-	tool        string
-	protocol    string
-	protocolSet bool
-	toolError   bool
-	rpcError    bool
-	methodsRun  int
+	mu                sync.Mutex
+	method            string
+	tool              string
+	protocol          string
+	protocolSet       bool
+	toolError         bool
+	toolErrorCategory string
+	rpcError          bool
+	methodsRun        int
 }
 
 type requestServerKey struct{}
@@ -432,8 +433,25 @@ func (rec *requestRecord) observe(method string, req mcpsdk.Request, result mcps
 		return
 	}
 	if call, ok := result.(*mcpsdk.CallToolResult); ok && call != nil && call.IsError {
+		if !rec.toolError {
+			rec.toolErrorCategory = toolErrorCategory(call.GetError())
+		}
 		rec.toolError = true
 	}
+}
+
+// toolErrorCategory is the closed category of a tool error result; a result
+// that carries no classified error, or an unknown category, is "unclassified".
+func toolErrorCategory(err error) string {
+	var classified *classifiedError
+	if errors.As(err, &classified) {
+		for _, known := range eventspec.MCPHTTPToolErrorCategoryVocabulary() {
+			if classified.category == known {
+				return known
+			}
+		}
+	}
+	return eventspec.MCPHTTPToolErrorUnclassified
 }
 
 func isNilValue(value any) bool {
@@ -590,6 +608,7 @@ func (h *HTTPHandler) emitRequestLine(ctx context.Context, line requestLine, rec
 	record.mu.Lock()
 	method, tool, protocolSet, protocol := record.method, record.tool, record.protocolSet, record.protocol
 	toolError, rpcError, methodsRun := record.toolError, record.rpcError, record.methodsRun
+	toolErrorCategory := record.toolErrorCategory
 	record.mu.Unlock()
 	if methodsRun == 0 && methodHeader != "" {
 		method = bucket(methodHeader, HTTPMethodVocabulary())
@@ -638,6 +657,9 @@ func (h *HTTPHandler) emitRequestLine(ctx context.Context, line requestLine, rec
 		"latency_ms", line.latency.Milliseconds(),
 		"in_flight", line.inFlight,
 	)
+	if result == HTTPResultToolError {
+		args = append(args, "tool_error_category", toolErrorCategory)
+	}
 	h.logger.InfoContext(ctx, HTTPRequestLogMessage, args...)
 	h.recordRequest(ctx, line, method, tool, result)
 }

@@ -13852,23 +13852,24 @@ func (f MCPHTTPReadinessFields) SlogArgs() []any {
 // MCPHTTPRequestFields is mcp.http_request's generated typed construction interface
 // (CHAOS-5516): one Go field per Field MCPHTTPRequest.Fields declares in spec.go.
 type MCPHTTPRequestFields struct {
-	RequestID        string
-	Transport        string
-	ServerVersion    string
-	ServerCommit     string
-	ProtocolRevision string
-	Method           string
-	Tool             string
-	PrincipalClass   string
-	PrincipalRef     string
-	ClientIp         string
-	GateDecision     string
-	GateReason       string
-	AuthOutcome      string
-	ResultClass      string
-	Status           int
-	LatencyMs        int
-	InFlight         int
+	RequestID         string
+	Transport         string
+	ServerVersion     string
+	ServerCommit      string
+	ProtocolRevision  string
+	Method            string
+	Tool              string
+	PrincipalClass    string
+	PrincipalRef      string
+	ClientIp          string
+	GateDecision      string
+	GateReason        string
+	AuthOutcome       string
+	ResultClass       string
+	Status            int
+	LatencyMs         int
+	InFlight          int
+	ToolErrorCategory string
 	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
 	// every MCPHTTPRequestFields uniformly, set ONLY by NewMCPHTTPRequestFields below. A caller
 	// outside this package cannot set an unexported field via a composite
@@ -13882,26 +13883,27 @@ type MCPHTTPRequestFields struct {
 
 // NewMCPHTTPRequestFields is the generated constructor for MCPHTTPRequestFields -- every
 // field MCPHTTPRequest.Fields declares is a required parameter.
-func NewMCPHTTPRequestFields(requestID string, transport string, serverVersion string, serverCommit string, protocolRevision string, method string, tool string, principalClass string, principalRef string, clientIp string, gateDecision string, gateReason string, authOutcome string, resultClass string, status int, latencyMs int, inFlight int) MCPHTTPRequestFields {
+func NewMCPHTTPRequestFields(requestID string, transport string, serverVersion string, serverCommit string, protocolRevision string, method string, tool string, principalClass string, principalRef string, clientIp string, gateDecision string, gateReason string, authOutcome string, resultClass string, status int, latencyMs int, inFlight int, toolErrorCategory string) MCPHTTPRequestFields {
 	return MCPHTTPRequestFields{
-		RequestID:        requestID,
-		Transport:        transport,
-		ServerVersion:    serverVersion,
-		ServerCommit:     serverCommit,
-		ProtocolRevision: protocolRevision,
-		Method:           method,
-		Tool:             tool,
-		PrincipalClass:   principalClass,
-		PrincipalRef:     principalRef,
-		ClientIp:         clientIp,
-		GateDecision:     gateDecision,
-		GateReason:       gateReason,
-		AuthOutcome:      authOutcome,
-		ResultClass:      resultClass,
-		Status:           status,
-		LatencyMs:        latencyMs,
-		InFlight:         inFlight,
-		constructed:      true,
+		RequestID:         requestID,
+		Transport:         transport,
+		ServerVersion:     serverVersion,
+		ServerCommit:      serverCommit,
+		ProtocolRevision:  protocolRevision,
+		Method:            method,
+		Tool:              tool,
+		PrincipalClass:    principalClass,
+		PrincipalRef:      principalRef,
+		ClientIp:          clientIp,
+		GateDecision:      gateDecision,
+		GateReason:        gateReason,
+		AuthOutcome:       authOutcome,
+		ResultClass:       resultClass,
+		Status:            status,
+		LatencyMs:         latencyMs,
+		InFlight:          inFlight,
+		ToolErrorCategory: toolErrorCategory,
+		constructed:       true,
 	}
 }
 
@@ -13935,6 +13937,7 @@ func (f MCPHTTPRequestFields) SlogArgs() []any {
 		"status", f.Status,
 		"latency_ms", f.LatencyMs,
 		"in_flight", f.InFlight,
+		"tool_error_category", contextfabric.SanitizeLogAttr(f.ToolErrorCategory),
 	}
 }
 
