@@ -141,8 +141,8 @@ func TestRefusalUsageAndInfoLineAcrossEveryStage(t *testing.T) {
 func TestRefusalSignalPerProvider(t *testing.T) {
 	cases := map[string]llm.Result{
 		"refused flag, stop reason stop (openai, compatible)": {Refused: true, StopReason: "stop"},
-		"refused flag, empty stop reason":                    {Refused: true},
-		"stop reason refusal (anthropic)":                    {StopReason: "refusal"},
+		"refused flag, empty stop reason":                     {Refused: true},
+		"stop reason refusal (anthropic)":                     {StopReason: "refusal"},
 	}
 	for name, base := range cases {
 		t.Run(name, func(t *testing.T) {
