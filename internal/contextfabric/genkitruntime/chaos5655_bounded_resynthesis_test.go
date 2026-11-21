@@ -137,7 +137,7 @@ func TestSynthesizeAnswerResynthesizesOnRejectionUntilSuccess(t *testing.T) {
 	// rejected drafts -- the ADR 0008 invariant this whole feature exists to
 	// preserve ("one model sample is not the verdict", but a REJECTED sample
 	// is never served regardless of how many were drawn).
-	wantDraft, _ := valid.toDomain()
+	wantDraft := valid.toDomain()
 	if draft.DirectJudgment != wantDraft.DirectJudgment {
 		t.Fatalf("draft.DirectJudgment = %q, want the THIRD draw's own content %q -- a rejected earlier draft must never be served", draft.DirectJudgment, wantDraft.DirectJudgment)
 	}

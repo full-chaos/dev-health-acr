@@ -79,17 +79,13 @@ func TestParseCoverageDisclosures_NonArrayTopLevelIsUndecodable(t *testing.T) {
 }
 
 // TestSynthesisOutputToDomain_UndecodableCoverageDisclosuresNeverErrors pins
-// the same scenario one layer up: toDomain must still succeed (the
-// deterministic_answer bound is otherwise satisfied) and the draft must
-// report undecodable, not carry a stray disclosure.
+// the same scenario one layer up: the draft must report undecodable, not
+// carry a stray disclosure.
 func TestSynthesisOutputToDomain_UndecodableCoverageDisclosuresNeverErrors(t *testing.T) {
 	t.Parallel()
 	output := validSynthesisOutput()
 	output.CoverageDisclosures = json.RawMessage(`[{"detail_id":"cov-01","text":17}]`)
-	draft, err := output.toDomain()
-	if err != nil {
-		t.Fatalf("toDomain() error = %v, want nil -- an undecodable coverage_disclosures value must never fail the whole draft", err)
-	}
+	draft := output.toDomain()
 	if !draft.CoverageDisclosuresUndecodable {
 		t.Fatalf("draft.CoverageDisclosuresUndecodable = false, want true")
 	}
