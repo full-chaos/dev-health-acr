@@ -441,7 +441,7 @@ type CanonicalFactRequest struct {
 	Cohort       *Cohort             `json:"cohort,omitempty"`
 	Requirements []FactRequirement   `json:"requirements"`
 	// TimeEndExclusive says the range window in Question.TimeContext is [Start, End): its End is a UTC midnight that
-	// is not part of the window. Internal; set only by a trailing read_facts window.
+	// is not part of the window. Internal; set only by a trailing read_facts window. DailyWindowEnd is its day rule.
 	TimeEndExclusive bool `json:"-"`
 	// RequestedRepositoryScope is the caller-owned repository scope carried
 	// into fact providers. It is copied from InvestigationRequest's
@@ -1192,4 +1192,14 @@ type SynthesisInput struct {
 	// withheldScores are the declared scores taken out of Facts before the model or a client saw them (decision K7).
 	// Bookkeeping for the disclosure; it never reaches the model.
 	withheldScores []withheldScore
+}
+
+// DailyWindowEnd is the UTC midnight after the last day of a range window: an
+// end-exclusive window stops before end, and an explicit range keeps the day of
+// its end, as the providers' day predicate (day <= toDate(end)) does.
+func DailyWindowEnd(end time.Time, endExclusive bool) time.Time {
+	if endExclusive {
+		return end.UTC()
+	}
+	return end.UTC().Truncate(24 * time.Hour).Add(24 * time.Hour)
 }

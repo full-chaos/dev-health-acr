@@ -266,10 +266,11 @@ type riskRuleValue struct {
 // compounding_risk can be null on a day severity is still recorded for --
 // the same has/value split readScope's own "compounding_risk" scalar uses.
 type healthDailyRow struct {
-	day      string
-	severity string
-	hasRisk  bool
-	risk     float64
+	day       string
+	severity  string
+	hasRisk   bool
+	risk      float64
+	totalDays uint64
 }
 
 func (r healthDailyRow) toFactValueRow() contextfabric.FactValueRow {
@@ -297,7 +298,7 @@ func healthDailyTable(rows []healthDailyRow, grain contextfabric.TemporalGrain) 
 	for _, r := range rows {
 		valueRows = append(valueRows, r.toFactValueRow())
 	}
-	valueRows, omitted := capFactValueRows(valueRows)
+	valueRows, omitted := capDailySeriesRows(valueRows, rows[0].totalDays)
 	return contextfabric.TableFactValue(contextfabric.FactTable{
 		Shape: contextfabric.FactTableTimeSeries,
 		Key:   []string{"day"},
@@ -327,7 +328,8 @@ func healthDailyTable(rows []healthDailyRow, grain contextfabric.TemporalGrain) 
 // scope_id alone -- so every day survives instead of collapsing to the
 // single latest one.
 func (p *HealthProvider) queryTeamHealthDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]healthDailyRow, err error) {
-	seriesSQL := `SELECT scope_id, toString(day), toString(severity), toUInt8(isNotNull(compounding_risk)), toFloat64(ifNull(compounding_risk, 0))
+	seriesSQL := `SELECT scope_id, toString(day), toString(severity), toUInt8(isNotNull(compounding_risk)), toFloat64(ifNull(compounding_risk, 0)),
+	` + dailySeriesTotalDaysSQL("scope_id") + `
 FROM (
 	SELECT scope_id, day, severity, compounding_risk,
 		row_number() OVER (PARTITION BY scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
@@ -342,7 +344,7 @@ ORDER BY scope_id, day DESC`
 		var r healthDailyRow
 		var scopeID string
 		var hasRisk uint8
-		if err := row.Scan(&scopeID, &r.day, &r.severity, &hasRisk, &r.risk); err != nil {
+		if err := row.Scan(&scopeID, &r.day, &r.severity, &hasRisk, &r.risk, &r.totalDays); err != nil {
 			return err
 		}
 		r.hasRisk = hasRisk != 0
@@ -719,16 +721,8 @@ ORDER BY project_key, scope, scope_id`)
 	if seriesErr != nil {
 		return rowCount, rejected, false, seriesErr
 	}
-	// codex CHAOS-4645 round-1 P2 (EXECUTED): see readScope's identical note
-	// -- the daily-series query's own withRowLimit(200) cap, shared across
-	// every requested project in one query, must also surface as Truncated.
-	dailySeriesRowCount := 0
-	for _, rows := range dailyByProject {
-		dailySeriesRowCount += len(rows)
-	}
-	if dailySeriesRowCount > rowCount {
-		rowCount = dailySeriesRowCount
-	}
+	// The daily-series query caps each project's own rows; a project cut by
+	// the display cap names it on its own fact (daily_health_omitted_count).
 	// severityByProject/severityOrder are read from queryProjectHealthSeverityMax's
 	// OWN server-side aggregate, never derived from the row-level
 	// byProject/riskRows scan above: that scan's own withRowLimit cap is
@@ -740,8 +734,7 @@ ORDER BY project_key, scope, scope_id`)
 	// PROJECT APPEARS AT ALL -- is correct regardless of how many rows any
 	// OTHER requested project contributes to the shared budget; only ITS
 	// OWN project-count probe (not a row-count one) can truncate it,
-	// folded into rowCount/breakdownTruncated the same way
-	// dailySeriesRowCount is above.
+	// folded into rowCount/breakdownTruncated.
 	severityByProject, severityOrder, severityRowCount, severityErr := p.queryProjectHealthSeverityMax(ctx, orgID, ids, timeBound)
 	if severityErr != nil {
 		return rowCount, rejected, false, severityErr
@@ -967,7 +960,8 @@ ORDER BY project_key, scope, scope_id`)
 // duplicated join can never inflate a MAX aggregate the way it would a SUM.
 func (p *HealthProvider) queryProjectHealthDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string][]healthDailyRow, err error) {
 	ownershipPredicate := ownershipValidityPredicate(timeBound)
-	statement := withRowLimit(`SELECT project_key, toString(day), toUInt8(isNotNull(max(risk))), toFloat64(ifNull(max(risk), 0)), toString(argMax(severity, tuple(ifNull(risk, -1), cityHash64(tuple(severity, ifNull(risk, -1))))))
+	seriesSQL := `SELECT project_key, toString(day), toUInt8(isNotNull(max(risk))), toFloat64(ifNull(max(risk), 0)), toString(argMax(severity, tuple(ifNull(risk, -1), cityHash64(tuple(severity, ifNull(risk, -1)))))),
+	` + dailySeriesTotalDaysSQL("project_key") + `
 FROM (
 	SELECT concat(p.provider, ':', p.id) AS project_key, cr.day AS day, cr.severity AS severity, cr.compounding_risk AS risk
 	FROM ` + projectOwnershipJoinSQL(ownershipPredicate) + `
@@ -985,13 +979,14 @@ FROM (
 	INNER JOIN (` + compoundingRiskDailySubquery("repo", timeBound) + `) AS cr ON cr.scope_id = tro.repo_key AND cr.rn = 1
 )
 GROUP BY project_key, day
-ORDER BY project_key, day DESC`)
+ORDER BY project_key, day DESC`
+	statement := withRowLimitPerKey(seriesSQL, "project_key", len(ids))
 	byProject = make(map[string][]healthDailyRow)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r healthDailyRow
 		var projectKey string
 		var hasRisk uint8
-		if err := row.Scan(&projectKey, &r.day, &hasRisk, &r.risk, &r.severity); err != nil {
+		if err := row.Scan(&projectKey, &r.day, &hasRisk, &r.risk, &r.severity, &r.totalDays); err != nil {
 			return err
 		}
 		r.hasRisk = hasRisk != 0

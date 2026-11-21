@@ -176,6 +176,7 @@ type workloadDailyRow struct {
 	backlogSize              int64
 	throughputMeanSum        float64
 	throughputStddevCombined float64
+	totalDays                uint64
 }
 
 func (r workloadDailyRow) toFactValueRow() contextfabric.FactValueRow {
@@ -200,7 +201,7 @@ func workloadDailyTable(rows []workloadDailyRow, grain contextfabric.TemporalGra
 	for _, r := range rows {
 		valueRows = append(valueRows, r.toFactValueRow())
 	}
-	valueRows, omitted := capFactValueRows(valueRows)
+	valueRows, omitted := capDailySeriesRows(valueRows, rows[0].totalDays)
 	return contextfabric.TableFactValue(contextfabric.FactTable{
 		Shape:    contextfabric.FactTableTimeSeries,
 		Key:      []string{"day"},
@@ -234,7 +235,8 @@ func workloadDailyTable(rows []workloadDailyRow, grain contextfabric.TemporalGra
 // never distinct scopes or distinct days, which the row_number() partition
 // above is what actually resolves.
 func (p *WorkloadProvider) queryTeamWorkloadDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]workloadDailyRow, err error) {
-	seriesSQL := `SELECT toString(team_id), toString(toDate(computed_at)), toInt64(sum(backlog_size)), sum(throughput_mean), sqrt(sum(pow(throughput_stddev, 2)))
+	seriesSQL := `SELECT toString(team_id), toString(toDate(computed_at)), toInt64(sum(backlog_size)), sum(throughput_mean), sqrt(sum(pow(throughput_stddev, 2))),
+	` + dailySeriesTotalDaysSQL("team_id") + `
 FROM (
 	SELECT ifNull(team_id, '') AS team_id, work_scope_id, computed_at, backlog_size, throughput_mean, throughput_stddev,
 		row_number() OVER (PARTITION BY team_id, work_scope_id, toDate(computed_at) ORDER BY computed_at DESC, forecast_id DESC) AS rn
@@ -249,7 +251,7 @@ ORDER BY team_id, toDate(computed_at) DESC`
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r workloadDailyRow
 		var teamID string
-		if err := row.Scan(&teamID, &r.day, &r.backlogSize, &r.throughputMeanSum, &r.throughputStddevCombined); err != nil {
+		if err := row.Scan(&teamID, &r.day, &r.backlogSize, &r.throughputMeanSum, &r.throughputStddevCombined, &r.totalDays); err != nil {
 			return err
 		}
 		byTeam[teamID] = append(byTeam[teamID], r)
@@ -267,7 +269,8 @@ ORDER BY team_id, toDate(computed_at) DESC`
 // states -- backlog_size and throughput_mean summed, throughput_stddev
 // combined via sqrt(sum(stddev^2)), never averaged.
 func (p *WorkloadProvider) queryProjectWorkloadDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byProject map[string][]workloadDailyRow, err error) {
-	statement := withRowLimit(`SELECT concat(p.provider, ':', p.id), toString(toDate(cf.computed_at)), toInt64(sum(cf.backlog_size)), sum(cf.throughput_mean), sqrt(sum(pow(cf.throughput_stddev, 2)))
+	seriesSQL := `SELECT concat(p.provider, ':', p.id), toString(toDate(cf.computed_at)), toInt64(sum(cf.backlog_size)), sum(cf.throughput_mean), sqrt(sum(pow(cf.throughput_stddev, 2))),
+	` + dailySeriesTotalDaysSQL("p.provider, p.id") + `
 FROM ` + projectIdentityJoinSQL() + `
 INNER JOIN (
 	SELECT team_id, work_scope_id, computed_at, backlog_size, throughput_mean, throughput_stddev,
@@ -276,12 +279,13 @@ INNER JOIN (
 	WHERE org_id = {org_id:String}` + timeBound.timestampPredicate("computed_at") + `
 ) AS cf ON ` + projectIdentityMatchSQL("cf", "work_scope_id") + ` AND cf.rn = 1
 GROUP BY p.provider, p.id, toDate(cf.computed_at)
-ORDER BY p.id, toDate(cf.computed_at) DESC`)
+ORDER BY p.provider, p.id, toDate(cf.computed_at) DESC`
+	statement := withRowLimitPerKey(seriesSQL, "p.provider, p.id", len(ids))
 	byProject = make(map[string][]workloadDailyRow)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r workloadDailyRow
 		var projectKey string
-		if err := row.Scan(&projectKey, &r.day, &r.backlogSize, &r.throughputMeanSum, &r.throughputStddevCombined); err != nil {
+		if err := row.Scan(&projectKey, &r.day, &r.backlogSize, &r.throughputMeanSum, &r.throughputStddevCombined, &r.totalDays); err != nil {
 			return err
 		}
 		byProject[projectKey] = append(byProject[projectKey], r)
@@ -606,17 +610,8 @@ func (p *WorkloadProvider) readProjectWorkload(ctx context.Context, orgID string
 		return 0, rejected, false, seriesErr
 	}
 	rowCount = len(scanned)
-	// codex CHAOS-4645 round-1 P2 (EXECUTED): see readTeamWorkload's
-	// identical note -- the daily-series query's own withRowLimit(200) cap,
-	// shared across every requested project in one query, must also surface
-	// as Truncated.
-	dailySeriesRowCount := 0
-	for _, dailyRows := range dailyByProject {
-		dailySeriesRowCount += len(dailyRows)
-	}
-	if dailySeriesRowCount > rowCount {
-		rowCount = dailySeriesRowCount
-	}
+	// The daily-series query caps each project's own rows; a project cut by
+	// the display cap names it on its own fact (daily_workload_omitted_count).
 	// p50ByProject/p50Order are read from queryProjectWorkloadP50Max's OWN
 	// server-side aggregate, never derived from the row-level byProject scan
 	// below: that scan's own readers.DefaultRowLimit cap is shared across

@@ -51,8 +51,9 @@ SELECT toDate('2026-08-31') - number, 'linear', 'scope-x', '`+team+`', toUInt32(
 					t.Fatalf("team A row %d items_started = %v, want %d: the kept rows must be the newest days in order", i, got, i)
 				}
 			}
-			if got := fact.Fields["daily_flow_omitted_count"].Integer; got == nil || *got != 136 {
-				t.Fatalf("team A daily_flow_omitted_count = %v, want 136", got)
+			// 205 window days, 64 shown: the count is the team's days, not the rows a cap let through.
+			if got := fact.Fields["daily_flow_omitted_count"].Integer; got == nil || *got != 141 {
+				t.Fatalf("team A daily_flow_omitted_count = %v, want 141", got)
 			}
 			if fact.SourceState != contextfabric.SourceTruncated {
 				t.Fatalf("team A state = %q, want truncated", fact.SourceState)
