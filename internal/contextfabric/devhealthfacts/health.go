@@ -327,7 +327,7 @@ func healthDailyTable(rows []healthDailyRow, grain contextfabric.TemporalGrain) 
 // scope_id alone -- so every day survives instead of collapsing to the
 // single latest one.
 func (p *HealthProvider) queryTeamHealthDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]healthDailyRow, err error) {
-	statement := withRowLimit(`SELECT scope_id, toString(day), toString(severity), toUInt8(isNotNull(compounding_risk)), toFloat64(ifNull(compounding_risk, 0))
+	seriesSQL := `SELECT scope_id, toString(day), toString(severity), toUInt8(isNotNull(compounding_risk)), toFloat64(ifNull(compounding_risk, 0))
 FROM (
 	SELECT scope_id, day, severity, compounding_risk,
 		row_number() OVER (PARTITION BY scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(severity, ifNull(compounding_risk, -1))) DESC) AS rn
@@ -335,7 +335,8 @@ FROM (
 	WHERE org_id = {org_id:String} AND scope = 'team' AND scope_id IN {ids:Array(String)}` + timeBound.dayPredicate("day") + `
 )
 WHERE rn = 1
-ORDER BY scope_id, day DESC`)
+ORDER BY scope_id, day DESC`
+	statement := withRowLimitPerKey(seriesSQL, "scope_id", len(ids))
 	byTeam = make(map[string][]healthDailyRow)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r healthDailyRow
@@ -365,22 +366,15 @@ func (p *HealthProvider) readScope(ctx context.Context, orgID, scope string, ids
 	// RankCohort's healthRiskSignal (which reads ONLY fields["severity"])
 	// cannot observe a difference.
 	var dailyByTeam map[string][]healthDailyRow
-	dailySeriesRowCount := 0
 	if scope == "team" {
 		var seriesErr error
 		dailyByTeam, seriesErr = p.queryTeamHealthDailySeries(ctx, orgID, ids, timeBound)
 		if seriesErr != nil {
 			return 0, 0, seriesErr
 		}
-		// codex CHAOS-4645 round-1 P2 (EXECUTED): queryTeamHealthDailySeries
-		// carries its OWN withRowLimit(200) cap, shared across every
-		// requested team in one query -- distinct from the scalar read's own
-		// rowCount below. Folded into rowCount before return so the shared
-		// `rowCount >= maxFactRowsPerQuery` check in ReadFacts also catches
-		// this query hitting its own cap, not only the scalar one.
-		for _, rows := range dailyByTeam {
-			dailySeriesRowCount += len(rows)
-		}
+		// queryTeamHealthDailySeries caps each team's own rows; a team cut
+		// by the display cap names it on its own fact
+		// (daily_health_omitted_count).
 	}
 	// The hash tiebreak's ifNull(compounding_risk, -1) sentinel is only
 	// unambiguous while -1 is outside compounding_risk's real domain.
@@ -526,9 +520,6 @@ ORDER BY scope_id`)
 		})
 		return nil
 	}, timeBound.bindings()...)
-	if dailySeriesRowCount > rowCount {
-		rowCount = dailySeriesRowCount
-	}
 	return rowCount, dailyOmitted, scanErr
 }
 
@@ -1154,6 +1145,9 @@ func factsWithDailyHealthCut(facts []contextfabric.CanonicalFact) int {
 
 func markSubjectLocalTruncation(facts []contextfabric.CanonicalFact) {
 	for index := range facts {
+		if facts[index].SourceState != "" {
+			continue
+		}
 		if factHasDailyHealthCut(facts[index]) {
 			facts[index].SourceState = contextfabric.SourceTruncated
 		} else {

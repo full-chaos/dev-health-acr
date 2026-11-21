@@ -1537,6 +1537,64 @@ func withRowLimitOf(statement string, limit int) string {
 	return statement + "\nLIMIT " + strconv.Itoa(limit)
 }
 
+// withRowLimitPerKey bounds each key's own rows to maxFactRowsPerQuery, so one
+// subject that fills the cap cannot starve the next; the outer LIMIT only
+// bounds the whole read at that cap times the number of keys.
+func withRowLimitPerKey(statement, key string, keys int) string {
+	return statement + "\nLIMIT " + strconv.Itoa(maxFactRowsPerQuery) + " BY " + key + "\nLIMIT " + strconv.Itoa(maxFactRowsPerQuery*max(keys, 1))
+}
+
+// factOmittedRowCount sums the integer daily_*_omitted_count fields a fact carries: the rows a daily table lost.
+// Only a team's table counts here: a project's daily series keep their earlier
+// reading, so a project's own cut never makes a read subject-local.
+func factOmittedRowCount(fact contextfabric.CanonicalFact) int64 {
+	if fact.Subject.Kind != contextfabric.SubjectTeam {
+		return 0
+	}
+	return factDailyOmittedCount(fact)
+}
+
+// factDailyOmittedCount sums the daily_*_omitted_count fields of any fact.
+func factDailyOmittedCount(fact contextfabric.CanonicalFact) int64 {
+	var total int64
+	for name, value := range fact.Fields {
+		if strings.HasPrefix(name, "daily_") && strings.HasSuffix(name, "_omitted_count") && value.Integer != nil {
+			total += *value.Integer
+		}
+	}
+	return total
+}
+
+// markSubjectLocalCuts handles a read whose only truncation is rows the
+// provider dropped and named on the facts that lost them: those facts say
+// truncated, every other fact says available, and the result reports the
+// truncation as subject-local. It reports false, changing nothing, when the
+// daily tables do not account for every omitted row (a scope or team
+// breakdown cut is not a daily cut).
+func markSubjectLocalCuts(facts []contextfabric.CanonicalFact, omitted int) bool {
+	if omitted <= 0 {
+		return false
+	}
+	var named int64
+	for _, fact := range facts {
+		named += factOmittedRowCount(fact)
+	}
+	if named != int64(omitted) {
+		return false
+	}
+	for index := range facts {
+		if facts[index].SourceState != "" {
+			continue
+		}
+		if factDailyOmittedCount(facts[index]) > 0 {
+			facts[index].SourceState = contextfabric.SourceTruncated
+		} else {
+			facts[index].SourceState = contextfabric.SourceAvailable
+		}
+	}
+	return true
+}
+
 func withRowLimit(statement string) string {
 	return statement + "\nLIMIT " + strconv.Itoa(maxFactRowsPerQuery)
 }

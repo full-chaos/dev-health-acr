@@ -75,6 +75,7 @@ func (p *ReadinessProvider) ReadFacts(ctx context.Context, principal storage.Pri
 	}
 	facts := make([]contextfabric.CanonicalFact, 0, len(query.Subjects))
 	truncated := false
+	omittedRows := 0
 	rejectedCount := 0
 	// CHAOS-5026: deferred so every return path passes through the
 	// disclosure -- see ci.go's identical note.
@@ -89,7 +90,8 @@ func (p *ReadinessProvider) ReadFacts(ctx context.Context, principal storage.Pri
 		if scanErr != nil {
 			return contextfabric.FactProviderResult{}, readFailure("query team readiness", scanErr)
 		}
-		truncated = truncated || rowCount >= maxFactRowsPerQuery || rowsOmitted > 0
+		truncated = truncated || rowCount >= maxFactRowsPerQuery
+		omittedRows += rowsOmitted
 		rejectedCount += rejected
 	}
 
@@ -102,8 +104,13 @@ func (p *ReadinessProvider) ReadFacts(ctx context.Context, principal storage.Pri
 		rejectedCount += rejected
 	}
 
+	// A cut that is only a daily table losing rows is named on the fact that
+	// lost them: the kind is still truncated, the truncation is subject-local.
+	subjectLocal := !truncated && markSubjectLocalCuts(facts, omittedRows)
+	truncated = truncated || omittedRows > 0
+
 	state, retentionReason := timeBound.retentionState(len(facts))
-	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated}
+	result = contextfabric.FactProviderResult{Facts: facts, State: state, Reason: retentionReason, Version: QueryVersion, Grain: timeBound.effectiveGrain(grainDaily), Truncated: truncated, TruncationSubjectLocal: subjectLocal}
 	return result, nil
 }
 
@@ -180,7 +187,7 @@ func readinessDailyTable(rows []readinessDailyRow, grain contextfabric.TemporalG
 // matching (the exact bug flow.go's queryTeamFlowDailySeries was found and
 // fixed for).
 func (p *ReadinessProvider) queryTeamReadinessDailySeries(ctx context.Context, orgID string, ids []string, timeBound factTimeBound) (byTeam map[string][]readinessDailyRow, err error) {
-	statement := withRowLimit(`SELECT toString(team_id), toString(day), toInt64(sum(estimated_count)), toInt64(sum(unestimated_count)), toInt64(sum(backlog_size))
+	seriesSQL := `SELECT toString(team_id), toString(day), toInt64(sum(estimated_count)), toInt64(sum(unestimated_count)), toInt64(sum(backlog_size))
 FROM (
 	SELECT team_id, provider, work_scope_id, day, estimated_count, unestimated_count, backlog_size,
 		row_number() OVER (PARTITION BY team_id, provider, work_scope_id, day ORDER BY computed_at DESC, cityHash64(tuple(estimated_count, unestimated_count, backlog_size)) DESC) AS rn
@@ -189,7 +196,8 @@ FROM (
 )
 WHERE rn = 1
 GROUP BY team_id, day
-ORDER BY team_id, day DESC`)
+ORDER BY team_id, day DESC`
+	statement := withRowLimitPerKey(seriesSQL, "team_id", len(ids))
 	byTeam = make(map[string][]readinessDailyRow)
 	scanErr := p.facts.query(ctx, statement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		var r readinessDailyRow
@@ -228,14 +236,8 @@ func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string,
 	if seriesErr != nil {
 		return 0, 0, rejected, seriesErr
 	}
-	// codex CHAOS-4645 round-1 P2 (EXECUTED): see flow.go's readTeamFlow
-	// identical note -- the daily-series query's own withRowLimit(200) cap,
-	// shared across every requested team in one query, must also surface as
-	// Truncated.
-	dailySeriesRowCount := 0
-	for _, dailyRows := range dailyByTeam {
-		dailySeriesRowCount += len(dailyRows)
-	}
+	// The daily-series query caps each team's own rows; a team cut by the
+	// display cap names it on its own fact (daily_readiness_omitted_count).
 	// The reader returns its rows in no stated order, and the first row minted
 	// per team carries the daily table: fix one order before anything is minted.
 	sort.SliceStable(rows, func(i, j int) bool {
@@ -248,9 +250,6 @@ func (p *ReadinessProvider) readTeamReadiness(ctx context.Context, orgID string,
 		return rows[i].Provider < rows[j].Provider
 	})
 	rowCount = len(rows)
-	if dailySeriesRowCount > rowCount {
-		rowCount = dailySeriesRowCount
-	}
 	// readTeamReadiness mints ONE CanonicalFact per (team, work_scope,
 	// provider) row -- unlike flow.go's readTeamFlow, which pre-aggregates
 	// one fact per team. daily_readiness is already summed ACROSS a team's
