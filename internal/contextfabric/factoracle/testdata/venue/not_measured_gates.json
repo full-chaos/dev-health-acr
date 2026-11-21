@@ -1,6 +1,1 @@
-{
-  "AcceptanceGate/NullRepoID": "no team-owned repository with in-scope effort in the window: membership has no manual ops trigger",
-  "TeamRollupLossWithNoNullRowIsAFinding": "no team-owned repository with in-scope effort in the window: membership has no manual ops trigger",
-  "TestTheStoreReadingLeavesEvidenceGatedUnitsOutAsOpsDoes": "the fixture world's evidence-gated unit is in no work unit membership run: membership has no manual ops trigger",
-  "TestTheRunComparesTheUncategorizedCountWithTheStoreGate": "the fixture world's evidence-gated unit is in no work unit membership run: membership has no manual ops trigger"
-}
+{}

@@ -1430,15 +1430,30 @@ func TestASubjectOfTheStoreWithNoAnswerIsAFinding(t *testing.T) {
 	}
 
 	// Health: a fact that states a day for a subject the store has no row of.
-	stranger := ""
-	for _, id := range store.RepositoryIDs() {
-		if !store.RiskSubjects("repo")[id] {
-			stranger = id
-			break
-		}
+	// The store run on is the extract without the compounding risk rows of
+	// one repository, so the case holds on a capture where every repository
+	// has rows.
+	repos := store.RepositoryIDs()
+	if len(repos) == 0 {
+		t.Fatal("the extract has no repository")
 	}
-	if stranger == "" {
-		t.Fatal("every repository of the extract has a compounding risk row")
+	stranger := repos[0]
+	noRows := extract.Clone()
+	noRows.Tables[tableCompoundingRiskDaily] = nil
+	for _, row := range extract.Tables[tableCompoundingRiskDaily] {
+		scope, _ := rowString(row, "scope")
+		id, _ := rowString(row, "scope_id")
+		if strings.EqualFold(scope, "repo") && strings.EqualFold(id, stranger) {
+			continue
+		}
+		noRows.Tables[tableCompoundingRiskDaily] = append(noRows.Tables[tableCompoundingRiskDaily], row)
+	}
+	strangerStore, err := NewStore(noRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strangerStore.RiskSubjects("repo")[strings.ToLower(stranger)] {
+		t.Fatalf("the store run on still has compounding risk rows of %s", stranger)
 	}
 	invented := fakeRun(t, "compoundingRisk", fakePlanes{
 		facts: func(request FactsRequest) (json.RawMessage, error) {
@@ -1455,7 +1470,7 @@ func TestASubjectOfTheStoreWithNoAnswerIsAFinding(t *testing.T) {
 			return servedAnswer(t, shape.Root, shape.Operation, risk, len(risk), 32768), nil
 		},
 		operation: unavailable,
-	}, nil).Root("compoundingRisk")
+	}, func(o *Oracle) { o.Store = strangerStore }).Root("compoundingRisk")
 	if got := findings(invented, "health_rows", "no compounding risk row in the store"); got != 1 {
 		t.Fatalf("a health fact with a day for a subject with no store row: %d findings", got)
 	}
