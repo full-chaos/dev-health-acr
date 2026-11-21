@@ -1,6 +1,9 @@
 package devhealthschema
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // A declared projection must be told apart from a live one that differs in
 // its select list or its group by, or the freshness check against the ops
@@ -36,5 +39,23 @@ func TestProjectionDDLRendersTheComplexityRunProjection(t *testing.T) {
 	want := "ALTER TABLE file_complexity_snapshots ADD PROJECTION IF NOT EXISTS prj_acr_file_complexity_runs (SELECT org_id, repo_id, ref, as_of_day, computed_at GROUP BY org_id, repo_id, ref, as_of_day, computed_at)"
 	if len(statements) != 2 || statements[1] != want {
 		t.Fatalf("statements = %q", statements)
+	}
+}
+
+func TestDeclaredProjectionsUseOnlyDeclaredColumns(t *testing.T) {
+	for table, projections := range Projections {
+		declared := map[string]bool{}
+		for _, column := range ProductionColumns[table] {
+			declared[column.Name] = true
+		}
+		for _, projection := range projections {
+			for _, list := range []string{projection.Select, projection.GroupBy} {
+				for _, column := range strings.Split(list, ",") {
+					if name := strings.TrimSpace(column); !declared[name] {
+						t.Errorf("projection %s.%s uses column %q, which the table declaration lacks", table, projection.Name, name)
+					}
+				}
+			}
+		}
 	}
 }

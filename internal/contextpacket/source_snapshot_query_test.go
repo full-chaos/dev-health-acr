@@ -39,6 +39,13 @@ func TestSourceCatalog_bounds_code_metric_aggregation_to_latest_snapshot(t *test
 			if !strings.Contains(statement, "force_optimize_projection_name='"+tt.projection+"'") {
 				t.Fatalf("%s latest-run lookup does not require its bounded run projection: %s", tt.sourceID, statement)
 			}
+			owned := false
+			for _, projection := range devhealthschema.Projections[tt.table] {
+				owned = owned || projection.Name == tt.projection
+			}
+			if !owned {
+				t.Fatalf("%s forces %s, which devhealthschema.Projections does not declare on %s", tt.sourceID, tt.projection, tt.table)
+			}
 			if strings.Count(statement, "org_id = {org_id:String}") < 2 || strings.Count(statement, "repo_id = {repo_id:UUID}") < 2 {
 				t.Fatalf("%s latest-snapshot subquery is not independently scoped: %s", tt.sourceID, statement)
 			}
@@ -53,9 +60,10 @@ func TestSourceCatalog_bounds_code_metric_aggregation_to_latest_snapshot(t *test
 }
 
 // A statement that forces a projection fails on a server that lacks it, so
-// every forced name must be one devhealthschema declares; fixtures and the
-// live parity check read that declaration. Scope: the force_optimize_projection_name
-// setting of each catalog statement, not the rest of the SQL.
+// every forced name must be one devhealthschema declares. Scope: a plain-text
+// match of the compact force_optimize_projection_name='<name>' form in each
+// catalog statement, by name only. The table-bound check is the table-driven
+// test above. NOT pinned: a spaced, commented, or quoted spelling of the setting.
 func TestSourceCatalog_forced_projections_are_declared_in_devhealthschema(t *testing.T) {
 	forced := regexp.MustCompile(`force_optimize_projection_name='([^']+)'`)
 	declared := map[string]bool{}
