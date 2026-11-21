@@ -264,34 +264,40 @@ func runEdgePopulations(ctx context.Context, client contextpacket.ClickHouseQuer
 		for _, key := range population.keys() {
 			counts[key] = 0
 		}
-		rows, err := client.Query(ctx, population.sql, bindings)
-		if err != nil {
-			return nil, fmt.Errorf("devhealthsource: count %s edges: %w", population.name(), err)
-		}
-		for rows.Next() {
-			var arm string
-			var total uint64
-			if err := rows.Scan(&arm, &total); err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf("devhealthsource: scan %s edge count: %w", population.name(), err)
-			}
-			key, known := population.keyForArm(arm)
-			if _, present := counts[key]; !known || !present {
-				_ = rows.Close()
-				return nil, fmt.Errorf("devhealthsource: %s edge count returned unknown arm %q", population.name(), arm)
-			}
-			counts[key] = int64(total)
-		}
-		iterErr := rows.Err()
-		_ = rows.Close()
-		if iterErr != nil {
-			return nil, fmt.Errorf("devhealthsource: count %s edges: %w", population.name(), iterErr)
+		if err := readEdgePopulation(ctx, client, population, bindings, counts); err != nil {
+			return nil, err
 		}
 	}
 	if unmeasured != nil {
 		return counts, unmeasured
 	}
 	return counts, nil
+}
+
+// readEdgePopulation closes its rows (deferred, so a panic in Scan still
+// closes them) before the next population's statement opens.
+func readEdgePopulation(ctx context.Context, client contextpacket.ClickHouseQueryClient, population edgePopulation, bindings []contextpacket.ClickHouseBinding, counts map[contextfabric.EdgeCountKey]int64) error {
+	rows, err := client.Query(ctx, population.sql, bindings)
+	if err != nil {
+		return fmt.Errorf("devhealthsource: count %s edges: %w", population.name(), err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var arm string
+		var total uint64
+		if err := rows.Scan(&arm, &total); err != nil {
+			return fmt.Errorf("devhealthsource: scan %s edge count: %w", population.name(), err)
+		}
+		key, known := population.keyForArm(arm)
+		if _, present := counts[key]; !known || !present {
+			return fmt.Errorf("devhealthsource: %s edge count returned unknown arm %q", population.name(), arm)
+		}
+		counts[key] = int64(total)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("devhealthsource: count %s edges: %w", population.name(), err)
+	}
+	return nil
 }
 
 const removedLinkSetCutReason = "removed_link_set_cut"

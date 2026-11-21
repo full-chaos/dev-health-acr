@@ -349,36 +349,39 @@ INNER JOIN (SELECT id, name FROM teams FINAL WHERE org_id = {org_id:String} AND 
 GROUP BY p.team_id
 ORDER BY p.team_id
 LIMIT ` + strconv.Itoa(limitPlusOne)
-	rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
-		{Name: "org_id", Value: orgID},
-		{Name: "ids", Value: projectKeys},
-	})
-	if err != nil {
-		return nil, nil, contextfabric.FactScopeExpansionCounts{}, err
-	}
 	type owningTeam struct {
 		id, name, originKey string
 		originKeys          []string
 	}
 	var teams []owningTeam
-	seen := map[string]struct{}{}
-	for rows.Next() {
-		var team owningTeam
-		if err := rows.Scan(&team.id, &team.originKey, &team.name, &team.originKeys); err != nil {
-			rows.Close()
-			return nil, nil, contextfabric.FactScopeExpansionCounts{}, err
+	// The rows close (deferred, so a panic in Scan still closes them) before
+	// teamOwnedRepositorySlugs opens its own reads.
+	readTeams := func() error {
+		rows, err := e.client.Query(ctx, statement, []contextpacket.ClickHouseBinding{
+			{Name: "org_id", Value: orgID},
+			{Name: "ids", Value: projectKeys},
+		})
+		if err != nil {
+			return err
 		}
-		if _, dup := seen[team.id]; dup {
-			continue
+		defer rows.Close()
+		seen := map[string]struct{}{}
+		for rows.Next() {
+			var team owningTeam
+			if err := rows.Scan(&team.id, &team.originKey, &team.name, &team.originKeys); err != nil {
+				return err
+			}
+			if _, dup := seen[team.id]; dup {
+				continue
+			}
+			seen[team.id] = struct{}{}
+			teams = append(teams, team)
 		}
-		seen[team.id] = struct{}{}
-		teams = append(teams, team)
+		return rows.Err()
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
+	if err := readTeams(); err != nil {
 		return nil, nil, contextfabric.FactScopeExpansionCounts{}, err
 	}
-	rows.Close()
 
 	counts := contextfabric.FactScopeExpansionCounts{CandidateCount: len(teams)}
 	if len(teams) == 0 {

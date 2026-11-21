@@ -89,30 +89,38 @@ func countKinds(ctx context.Context, client contextpacket.ClickHouseQueryClient,
 	}
 	counts := make(map[contextfabric.SubjectKind]int64, len(statements))
 	for _, st := range statements {
-		rows, err := client.Query(ctx, st.sql, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
+		total, err := countKind(ctx, client, orgID, st)
 		if err != nil {
-			return nil, fmt.Errorf("devhealthsource: count %s: %w", st.kind, err)
-		}
-		var total uint64
-		found := false
-		for rows.Next() {
-			if err := rows.Scan(&total); err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf("devhealthsource: scan %s count: %w", st.kind, err)
-			}
-			found = true
-		}
-		iterErr := rows.Err()
-		_ = rows.Close()
-		if iterErr != nil {
-			return nil, fmt.Errorf("devhealthsource: count %s: %w", st.kind, iterErr)
-		}
-		if !found {
-			return nil, fmt.Errorf("devhealthsource: count %s returned no row", st.kind)
+			return nil, err
 		}
 		counts[st.kind] = int64(total)
 	}
 	return counts, nil
+}
+
+// countKind closes its rows (deferred, so a panic in Scan still closes them)
+// before the next statement opens on the same connection.
+func countKind(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, st kindCountStatement) (uint64, error) {
+	rows, err := client.Query(ctx, st.sql, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
+	if err != nil {
+		return 0, fmt.Errorf("devhealthsource: count %s: %w", st.kind, err)
+	}
+	defer func() { _ = rows.Close() }()
+	var total uint64
+	found := false
+	for rows.Next() {
+		if err := rows.Scan(&total); err != nil {
+			return 0, fmt.Errorf("devhealthsource: scan %s count: %w", st.kind, err)
+		}
+		found = true
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("devhealthsource: count %s: %w", st.kind, err)
+	}
+	if !found {
+		return 0, fmt.Errorf("devhealthsource: count %s returned no row", st.kind)
+	}
+	return total, nil
 }
 
 // ProjectionSourceCounts implements contextfabric.ProjectionSourceCounts.
