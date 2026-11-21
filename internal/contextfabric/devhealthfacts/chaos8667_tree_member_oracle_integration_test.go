@@ -165,7 +165,7 @@ func oracleClickHouse(t *testing.T, ctx context.Context) (*runtimeclickhouse.Cli
 	if err != nil {
 		t.Fatalf("start ClickHouse: %v", err)
 	}
-	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
+	t.Cleanup(func() { _ = container.Terminate(context.Background(), testcontainers.StopTimeout(0)) })
 	host, err := container.Host(ctx)
 	if err != nil {
 		t.Fatal(err)

@@ -992,8 +992,9 @@ func serveTable(name string, declaration contextfabric.FactFieldDeclaration, val
 	sourceRows := value.Rows
 	if table.Shape == string(contextfabric.FactTableTimeSeries) && len(table.Key) == 1 && plan.time.Axis == contextfabric.TemporalRange && plan.time.Start != nil && plan.time.End != nil && table.Grain != string(contextfabric.GrainInstant) {
 		sourceRows = nil
+		windowEnd := contextfabric.DailyWindowEnd(*plan.time.End, plan.timeEndExclusive)
 		for _, row := range value.Rows {
-			if instantInWindow(row, table.Key[0], *plan.time.Start, *plan.time.End) {
+			if instantInWindow(row, table.Key[0], *plan.time.Start, windowEnd) {
 				sourceRows = append(sourceRows, row)
 			}
 		}
@@ -1037,7 +1038,8 @@ func serveTable(name string, declaration contextfabric.FactFieldDeclaration, val
 		if plan.time.Axis == contextfabric.TemporalRange && plan.time.Start != nil && plan.time.End != nil && table.Grain != string(contextfabric.GrainInstant) {
 			expected := 0
 			var missing []string
-			for day := plan.time.Start.UTC().Truncate(24 * time.Hour); day.Before(*plan.time.End); day = day.Add(24 * time.Hour) {
+			windowEnd := contextfabric.DailyWindowEnd(*plan.time.End, plan.timeEndExclusive)
+			for day := plan.time.Start.UTC().Truncate(24 * time.Hour); day.Before(windowEnd); day = day.Add(24 * time.Hour) {
 				expected++
 				label := day.Format("2006-01-02")
 				if !measured[label] {
@@ -1066,8 +1068,8 @@ func seriesKeyDay(key string) (time.Time, bool) {
 }
 
 // instantInWindow reports whether a series row's key falls in the requested
-// range, on the same UTC day boundaries the expected-points walk uses. A key
-// that does not parse is kept.
+// range, on the same UTC day boundaries the expected-points walk uses; end is
+// the range's DailyWindowEnd. A key that does not parse is kept.
 func instantInWindow(row contextfabric.FactValueRow, key string, start, end time.Time) bool {
 	cell, ok := row.Fields[key]
 	if !ok || cell.String == nil {

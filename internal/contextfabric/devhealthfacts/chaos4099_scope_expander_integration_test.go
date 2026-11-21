@@ -69,7 +69,7 @@ func newChaos4099ScopeExpanderClient(t *testing.T, ctx context.Context) (query *
 		t.Fatalf("start ClickHouse container: %v", err)
 	}
 	t.Cleanup(func() {
-		if err := container.Terminate(context.Background()); err != nil {
+		if err := container.Terminate(context.Background(), testcontainers.StopTimeout(0)); err != nil {
 			t.Errorf("terminate ClickHouse container: %v", err)
 		}
 	})

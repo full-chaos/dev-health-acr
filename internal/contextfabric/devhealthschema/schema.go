@@ -494,6 +494,7 @@ var ProductionColumns = map[string][]Column{
 	"file_complexity_snapshots": {
 		{Name: "repo_id", Type: "UUID"},
 		{Name: "as_of_day", Type: "Date"},
+		{Name: "ref", Type: "String"},
 		{Name: "file_path", Type: "String"},
 		{Name: "computed_at", Type: "DateTime('UTC')", AlsoAccepts: []string{"DateTime"}},
 		{Name: "org_id", Type: "String"},

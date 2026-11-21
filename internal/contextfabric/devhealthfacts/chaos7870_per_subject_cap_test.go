@@ -158,8 +158,11 @@ func TestChaos7870TeamDailySeriesStatementsCapPerTeam(t *testing.T) {
 		for _, q := range client.queries {
 			if strings.Contains(q.statement, tc.match) {
 				found = true
-				if !strings.Contains(q.statement, "\nLIMIT 200 BY ") || !strings.HasSuffix(q.statement, "\nLIMIT 400") {
+				if !strings.Contains(q.statement, "\nLIMIT 64 BY ") || !strings.HasSuffix(q.statement, "\nLIMIT 128") {
 					t.Errorf("%s daily series is not capped per team: %q", tc.kind, q.statement[len(q.statement)-60:])
+				}
+				if !strings.Contains(q.statement, "count() OVER (PARTITION BY ") {
+					t.Errorf("%s daily series does not count each team's days before the cap: %q", tc.kind, q.statement)
 				}
 			}
 		}
@@ -327,14 +330,18 @@ func TestChaos7870TeamCutKeepsTheProjectStale(t *testing.T) {
 	}
 }
 
-// A project's own daily display cut keeps its earlier reading: the project
-// daily series are not part of the per-team cap change.
-func TestChaos7870ProjectDisplayCutKeepsItsReading(t *testing.T) {
+// A project's own daily display cut is read per project like a team's: the
+// project fact names every day it does not show and reads truncated, the cut
+// is subject-local, and a stale project keeps its stale state.
+func TestProjectDailyDisplayCutIsSubjectLocal(t *testing.T) {
 	t.Parallel()
 	for _, days := range []int{65, 199} {
 		fresh := chaos7870WorkloadProjectRead(t, 0, days, 0, false)
-		if fresh.Truncated || fresh.TruncationSubjectLocal || fresh.Facts[0].SourceState == contextfabric.SourceTruncated {
-			t.Errorf("%d fresh project days: Truncated=%v local=%v state=%q, want the reading before this change", days, fresh.Truncated, fresh.TruncationSubjectLocal, fresh.Facts[0].SourceState)
+		if !fresh.Truncated || !fresh.TruncationSubjectLocal || fresh.Facts[0].SourceState != contextfabric.SourceTruncated {
+			t.Errorf("%d fresh project days: Truncated=%v local=%v state=%q, want a subject-local cut on the project", days, fresh.Truncated, fresh.TruncationSubjectLocal, fresh.Facts[0].SourceState)
+		}
+		if got := fresh.Facts[0].Fields["daily_workload_omitted_count"].Integer; got == nil || *got != int64(days-contextfabric.MaxFactValueRows) {
+			t.Errorf("%d fresh project days: daily_workload_omitted_count = %v, want %d", days, got, days-contextfabric.MaxFactValueRows)
 		}
 		stale := chaos7870WorkloadProjectRead(t, 0, days, 1, false)
 		if stale.Facts[0].SourceState != contextfabric.SourceStale {

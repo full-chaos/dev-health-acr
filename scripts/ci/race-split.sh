@@ -20,6 +20,9 @@
 # devhealthfacts and devhealthsource split four ways (CHAOS-12667 added devhealthsource's fourth job; its plain unit legs still run three parts: unit-heavy, unit-mid, unit-rest, checked by `partition`): the race jobs split by these lists. race-mid-tests.txt and
 # race-fourth-tests.txt name tests moved out of the heavy and rest halves into
 # a third and a fourth job. Lines starting with # are comments in every list.
+# Optional <package>-race-fifth-tests.txt names tests moved out of the rest half
+# into a fifth job; a fifth name must be in no other race list (heavy, mid,
+# fourth), and unit legs ignore the fifth list (its tests stay in unit-rest).
 # <package>-race-rest-tests.txt (devhealthsource, CHAOS-12667) names every test
 # the rest job runs. The rest job still runs by -skip, so it selects nothing;
 # with the list present, verify and race-partition fail for a test that is in
@@ -27,7 +30,8 @@
 #   race-heavy  anchored regex of heavy-tests.txt minus the mid and fourth lists (-run)
 #   race-mid    anchored regex of race-mid-tests.txt (-run)
 #   race-fourth anchored regex of race-fourth-tests.txt (-run)
-#   race-rest   anchored regex of heavy, mid and fourth names (-skip); unlisted tests run there
+#   race-fifth  anchored regex of race-fifth-tests.txt (-run)
+#   race-rest   anchored regex of heavy, mid, fourth and fifth names (-skip); unlisted tests run there
 #   race-partition  checks ci.yml wires each race mode once, then lists each job's tests with `go test -list` (-run regexes; -skip is the complement) and
 #          fails unless every test lands in exactly one job; a name in both
 #          the mid and fourth lists fails by name before any run.
@@ -72,18 +76,32 @@ fourth_names() {
     grep -v '^[[:space:]]*\(#\|$\)' "$fourth_list" | LC_ALL=C sort -u
   fi
 }
+fifth_list="$root/scripts/ci/$name-race-fifth-tests.txt"
+fifth_names() {
+  if [ -f "$fifth_list" ]; then
+    grep -v '^[[:space:]]*\(#\|$\)' "$fifth_list" | LC_ALL=C sort -u
+  fi
+}
 join_regex() {
   local joined
   joined="$(paste -sd'|' -)"
   test -n "$joined" || { printf 'empty test list for %s\n' "$name" >&2; exit 1; }
   printf '^(%s)$' "$joined"
 }
-race_heavy() { LC_ALL=C comm -23 <(names) <({ mid_names; fourth_names; } | LC_ALL=C sort -u) | join_regex; }
+race_heavy() { LC_ALL=C comm -23 <(names) <({ mid_names; fourth_names; fifth_names; } | LC_ALL=C sort -u) | join_regex; }
 race_mid() { mid_names | join_regex; }
 race_fourth() { fourth_names | join_regex; }
+race_fifth() { fifth_names | join_regex; }
 race_mid_fourth() { { mid_names; fourth_names; } | LC_ALL=C sort -u | join_regex; }
-race_rest() { { names; mid_names; fourth_names; } | LC_ALL=C sort -u | join_regex; }
+race_rest() { { names; mid_names; fourth_names; fifth_names; } | LC_ALL=C sort -u | join_regex; }
 both_lists() { LC_ALL=C comm -12 <(mid_names) <(fourth_names); }
+# A fifth name also in the heavy, mid or fourth list would leave its unit leg
+# ambiguous; it fails by name before any listing.
+fifth_overlap() {
+  local dup
+  dup="$(LC_ALL=C comm -12 <(fifth_names) <({ names; mid_names; fourth_names; } | LC_ALL=C sort -u))"
+  [ -z "$dup" ] || printf 'named in %s and also in the heavy, mid or fourth list:\n%s\n' "${fifth_list##*/}" "$dup"
+}
 
 # CHAOS-12667: the optional rest list. With it, every test of the package is in
 # exactly one race list (heavy, mid, fourth or rest). rest_list_problems takes the
@@ -94,9 +112,9 @@ rest_names() { if [ -f "$rest_list" ]; then grep -v '^[[:space:]]*\(#\|$\)' "$re
 rest_list_problems() {
   local all="$1" dup unlisted stray
   [ -f "$rest_list" ] || return 0
-  dup="$(LC_ALL=C comm -12 <(rest_names) <({ names; mid_names; fourth_names; } | LC_ALL=C sort -u))"
+  dup="$(LC_ALL=C comm -12 <(rest_names) <({ names; mid_names; fourth_names; fifth_names; } | LC_ALL=C sort -u))"
   stray="$(LC_ALL=C comm -23 <(rest_names) <(printf '%s\n' "$all"))"
-  unlisted="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <({ names; mid_names; fourth_names; rest_names; } | LC_ALL=C sort -u))"
+  unlisted="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <({ names; mid_names; fourth_names; fifth_names; rest_names; } | LC_ALL=C sort -u))"
   [ -z "$dup" ] || printf 'named in %s and also in the heavy, mid or fourth list:\n%s\n' "${rest_list##*/}" "$dup"
   [ -z "$stray" ] || printf '%s names no such test:\n%s\n' "${rest_list##*/}" "$stray"
   if [ -n "$unlisted" ]; then
@@ -213,6 +231,8 @@ case "${2:-}" in
         printf 'named in both race-mid and race-fourth lists:\n%s\n' "$dup" >&2
         exit 1
       fi
+      dup="$(fifth_overlap)"
+      if [ -n "$dup" ]; then printf '%s\n' "$dup" >&2; exit 1; fi
       unit_partition_three_way
       exit $?
     fi
@@ -246,6 +266,7 @@ case "${2:-}" in
   race-heavy) race_heavy ;;
   race-mid) race_mid ;;
   race-fourth) race_fourth ;;
+  race-fifth) race_fifth ;;
   race-rest) race_rest ;;
   race-partition)
     cd "$root"
@@ -255,8 +276,11 @@ case "${2:-}" in
       printf 'named in both race-mid and race-fourth lists:\n%s\n' "$dup" >&2
       exit 1
     fi
+    dup="$(fifth_overlap)"
+    if [ -n "$dup" ]; then printf '%s\n' "$dup" >&2; exit 1; fi
     wants=("$name race-heavy)" "$name race-mid)" "$name race-rest)")
     [ -f "$fourth_list" ] && wants+=("$name race-fourth)")
+    [ -f "$fifth_list" ] && wants+=("$name race-fifth)")
     for want in "${wants[@]}"; do
       n="$(grep -cF -- "race-split.sh $want" "$wf" || true)"
       [ "$n" -eq 1 ] || { printf 'ci.yml must use "race-split.sh %s" exactly once, found %s\n' "$want" "$n" >&2; exit 1; }
@@ -264,6 +288,7 @@ case "${2:-}" in
     # The flag matters as much as the mode (Codex #1967 r1): -skip of race-mid would run every non-mid test there.
     flags=('run|race-heavy' 'run|race-mid' 'skip|race-rest')
     [ -f "$fourth_list" ] && flags+=('run|race-fourth')
+    [ -f "$fifth_list" ] && flags+=('run|race-fifth')
     for want in "${flags[@]}"; do
       flag="${want%%|*}"; mode="${want#*|}"
       grep -qE -- "GOFLAGS=\"-trimpath -$flag=\\\$\(scripts/ci/race-split\.sh $name $mode\)\"" "$wf" \
@@ -271,6 +296,10 @@ case "${2:-}" in
     done
     if [ ! -f "$fourth_list" ] && grep -qF -- "race-split.sh $name race-fourth)" "$wf"; then
       printf 'ci.yml uses race-fourth for %s but %s does not exist\n' "$name" "$fourth_list" >&2
+      exit 1
+    fi
+    if [ ! -f "$fifth_list" ] && grep -qF -- "race-split.sh $name race-fifth)" "$wf"; then
+      printf 'ci.yml uses race-fifth for %s but %s does not exist\n' "$name" "$fifth_list" >&2
       exit 1
     fi
     all="$(go test -list '.' "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
@@ -282,18 +311,23 @@ case "${2:-}" in
     if [ -f "$fourth_list" ]; then
       d="$(go test -list "$(race_fourth)" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
     fi
+    e=""
+    if [ -f "$fifth_list" ]; then
+      e="$(go test -list "$(race_fifth)" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
+    fi
     skipped="$(go test -list "$(race_rest)" "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
     c="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$skipped"))"
-    counted="$(printf '%s\n%s\n%s\n%s\n' "$a" "$b" "$d" "$c" | grep -v '^$' | LC_ALL=C sort | uniq -c)"
+    counted="$(printf '%s\n%s\n%s\n%s\n%s\n' "$a" "$b" "$d" "$e" "$c" | grep -v '^$' | LC_ALL=C sort | uniq -c)"
     bad="$(printf '%s\n' "$counted" | awk '$1 != 1 {print $1, $2}')"
     lost="$(LC_ALL=C comm -23 <(printf '%s\n' "$all") <(printf '%s\n' "$counted" | awk '{print $2}' | LC_ALL=C sort -u))"
     if [ -n "$bad" ] || [ -n "$lost" ]; then
       printf 'race split is not a partition.\nrun more or less than once (count name):\n%s\nrun in no job:\n%s\n' "$bad" "$lost" >&2
       exit 1
     fi
-    printf 'race split ok: %s tests = %s heavy + %s mid + %s fourth + %s rest\n' \
+    printf 'race split ok: %s tests = %s heavy + %s mid + %s fourth + %s fifth + %s rest\n' \
       "$(printf '%s\n' "$all" | wc -l | tr -d ' ')" "$(printf '%s\n' "$a" | wc -l | tr -d ' ')" \
       "$(printf '%s\n' "$b" | wc -l | tr -d ' ')" "$(printf '%s\n' "$d" | grep -c . || true)" \
+      "$(printf '%s\n' "$e" | grep -c . || true)" \
       "$(printf '%s\n' "$c" | wc -l | tr -d ' ')"
     ;;
   verify)
@@ -304,12 +338,12 @@ case "${2:-}" in
       exit 1
     fi
     existing="$(go test -list '.' "$pkg" | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u)"
-    missing="$(LC_ALL=C comm -23 <({ names; [ -f "$mid_list" ] && mid_names; fourth_names; } | LC_ALL=C sort -u) <(printf '%s\n' "$existing"))"
+    missing="$(LC_ALL=C comm -23 <({ names; [ -f "$mid_list" ] && mid_names; fourth_names; fifth_names; } | LC_ALL=C sort -u) <(printf '%s\n' "$existing"))"
     if [ -n "$missing" ]; then
       printf 'heavy list names no such test:\n%s\n' "$missing" >&2
       exit 1
     fi
-    problems="$(extra_problems; rest_extra_problems)"
+    problems="$(extra_problems; rest_extra_problems; fifth_overlap)"
     if [ -n "$problems" ]; then printf '%s\n' "$problems" >&2; exit 1; fi
     problems="$(rest_list_problems "$existing")"
     if [ -n "$problems" ]; then printf '%s\n' "$problems" >&2; exit 1; fi
