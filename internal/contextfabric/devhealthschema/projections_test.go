@@ -30,3 +30,11 @@ func TestProjectionDDLRendersTheSettingThenEachProjection(t *testing.T) {
 		t.Fatal("a table with no declared projection renders nothing")
 	}
 }
+
+func TestProjectionDDLRendersTheComplexityRunProjection(t *testing.T) {
+	statements := ProjectionDDL("file_complexity_snapshots")
+	want := "ALTER TABLE file_complexity_snapshots ADD PROJECTION IF NOT EXISTS prj_acr_file_complexity_runs (SELECT org_id, repo_id, ref, as_of_day, computed_at GROUP BY org_id, repo_id, ref, as_of_day, computed_at)"
+	if len(statements) != 2 || statements[1] != want {
+		t.Fatalf("statements = %q", statements)
+	}
+}

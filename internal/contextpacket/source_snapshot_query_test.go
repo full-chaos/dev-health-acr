@@ -1,8 +1,12 @@
 package contextpacket_test
 
 import (
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
 func TestSourceCatalog_bounds_code_metric_aggregation_to_latest_snapshot(t *testing.T) {
@@ -45,5 +49,31 @@ func TestSourceCatalog_bounds_code_metric_aggregation_to_latest_snapshot(t *test
 				t.Fatalf("%s still scans historical rows after selecting an exact replacement run: %s", tt.sourceID, statement)
 			}
 		})
+	}
+}
+
+// A statement that forces a projection fails on a server that lacks it, so
+// every forced name must be one devhealthschema declares; fixtures and the
+// live parity check read that declaration. Scope: the force_optimize_projection_name
+// setting of each catalog statement, not the rest of the SQL.
+func TestSourceCatalog_forced_projections_are_declared_in_devhealthschema(t *testing.T) {
+	forced := regexp.MustCompile(`force_optimize_projection_name='([^']+)'`)
+	declared := map[string]bool{}
+	for _, projections := range devhealthschema.Projections {
+		for _, projection := range projections {
+			declared[projection.Name] = true
+		}
+	}
+	seen := map[string]bool{}
+	for _, query := range contextpacket.SourceQueryCatalogV1 {
+		for _, match := range forced.FindAllStringSubmatch(query.Statement, -1) {
+			seen[match[1]] = true
+			if !declared[match[1]] {
+				t.Errorf("%s forces projection %s, which devhealthschema.Projections does not declare", query.ID, match[1])
+			}
+		}
+	}
+	if !seen["prj_acr_file_hotspot_runs"] || !seen["prj_acr_file_complexity_runs"] {
+		t.Fatalf("catalog forced projections = %v, want the hotspot and complexity run projections", seen)
 	}
 }

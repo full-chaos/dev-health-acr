@@ -22,12 +22,19 @@ type Projection struct {
 // file_hotspot_daily's run projection keeps the latest-run lookup bounded
 // (ops migration 069_acr_code_metric_access_paths.sql, kept across the
 // ReplacingMergeTree conversion by 087 and 096 under
-// deduplicate_merge_projection_mode = 'rebuild').
+// deduplicate_merge_projection_mode = 'rebuild'). file_complexity_snapshots
+// carries the same kind of run projection from the same migration.
 var Projections = map[string][]Projection{
 	"file_hotspot_daily": {{
 		Name:    "prj_acr_file_hotspot_runs",
 		Select:  "org_id, repo_id, day, computed_at",
 		GroupBy: "org_id, repo_id, day, computed_at",
+		Source:  "ops migrations/clickhouse/069_acr_code_metric_access_paths.sql",
+	}},
+	"file_complexity_snapshots": {{
+		Name:    "prj_acr_file_complexity_runs",
+		Select:  "org_id, repo_id, ref, as_of_day, computed_at",
+		GroupBy: "org_id, repo_id, ref, as_of_day, computed_at",
 		Source:  "ops migrations/clickhouse/069_acr_code_metric_access_paths.sql",
 	}},
 }
