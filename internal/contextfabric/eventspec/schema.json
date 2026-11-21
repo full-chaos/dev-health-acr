@@ -19551,6 +19551,26 @@
         "key": "in_flight",
         "type": "int",
         "presence": "required"
+      },
+      {
+        "key": "tool_error_category",
+        "type": "string",
+        "presence": "conditional",
+        "closed_vocabulary": [
+          "auth",
+          "entitlement",
+          "repo_forbidden",
+          "validation",
+          "budget",
+          "rate_limit",
+          "no_data",
+          "version",
+          "unavailable",
+          "timeout",
+          "cancelled",
+          "internal"
+        ],
+        "applicability": "written when result_class=tool_error and the result carries a classified error; the category of the tool error result, never its message"
       }
     ]
   },

@@ -48,7 +48,7 @@ func TestHTTPRequestLineCertifiesEveryAuthOutcomeAndResultClass(t *testing.T) {
 		{id: "req-tool-ok", body: rawToolsCall("source_evidence", map[string]any{"evidence_ref_id": "evidence_0001"}), header: bearerHeader(valid.token), bearer: true, wantHTTP: 200,
 			want: map[string]any{"auth_outcome": "admitted", "result_class": "ok", "method": "tools/call", "tool": "source_evidence", "protocol_revision": "2026-07-28"}},
 		{id: "req-tool-error", body: rawToolsCall("source_evidence", map[string]any{"evidence_ref_id": evidenceMissing}), header: bearerHeader(valid.token), bearer: true, wantHTTP: 200,
-			want: map[string]any{"auth_outcome": "admitted", "result_class": "tool_error", "method": "tools/call", "tool": "source_evidence"}},
+			want: map[string]any{"auth_outcome": "admitted", "result_class": "tool_error", "method": "tools/call", "tool": "source_evidence", "tool_error_category": "no_data"}},
 		{id: "req-protocol-error", body: rawToolsCall("no_such_tool", map[string]any{}), header: bearerHeader(valid.token), bearer: true,
 			want: map[string]any{"auth_outcome": "admitted", "result_class": "protocol_error", "method": "tools/call", "tool": "other"}},
 		{id: "req-protocol-error-legacy", body: []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"no_such_tool","arguments":{}}}`),
@@ -124,6 +124,9 @@ func TestHTTPRequestLineCertifiesEveryAuthOutcomeAndResultClass(t *testing.T) {
 			t.Fatalf("%s: %v", d.id, err)
 		}
 		line := result.Line
+		if _, has := line["tool_error_category"]; has != (d.want["result_class"] == "tool_error") {
+			t.Fatalf("%s: tool_error_category present=%v on result_class %v", d.id, has, d.want["result_class"])
+		}
 		ref, hasRef := line["principal_ref"].(string)
 		if d.bearer != hasRef || (hasRef && !regexp.MustCompile(`^[0-9a-f]{16}$`).MatchString(ref)) {
 			t.Fatalf("%s: principal_ref %q present=%v, want present=%v", d.id, ref, hasRef, d.bearer)
