@@ -129,12 +129,12 @@ func (a *Assembler) Assemble(ctx context.Context, principal storage.Principal, r
 	a.observeEvidenceQuarantines(ctx, validation)
 	rankingStarted := a.options.Now()
 	rankingContext, completeRankingTrace := a.startTrace(ctx, TraceObservation{Stage: TraceStageRanking})
-	ranked, quotaTruncated, laterRows := rankEvidence(bundle.Evidence, scope, request.Goal, request.Options.IncludeLowConfidence, request.Options.RequestedCategories, request.Options.MaxItems)
+	ranked, quotaTruncated, laterRows, causeTiers := rankEvidence(bundle.Evidence, scope, request.Goal, request.Options.IncludeLowConfidence, request.Options.RequestedCategories, request.Options.MaxItems)
 	items := requestedCategories(ranked, request.Options.RequestedCategories)
 	completeRankingTrace(OperationSuccess)
 	a.observeRanking(rankingContext, packet.QueryVersion, packet.RankingVersion, a.options.Now().Sub(rankingStarted))
 	packet.Budget.Truncated = quotaTruncated
-	if err := applyBudget(&packet, items, laterRows); err != nil {
+	if err := applyBudget(&packet, items, laterRows, causeTiers); err != nil {
 		return contractsv1.ContextPacket{}, err
 	}
 	if err := finalizePacket(&packet, laterRows, actionCriteria); err != nil {
