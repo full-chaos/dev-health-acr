@@ -108,3 +108,54 @@ func TestChaos9883EngineBundleStaysTruncatedForADailyHealthCut(t *testing.T) {
 		}
 	}
 }
+
+// The project rollup reads its daily series on its own path
+// (readProjectHealth), so the per-subject disclosure is pinned there too: only
+// the project whose daily rows exceeded the display cap is cut and truncated.
+func TestChaos9883ProjectDailyHealthCutIsDisclosedOnlyOnTheCutProject(t *testing.T) {
+	t.Parallel()
+	var series [][]any
+	for i := 0; i < contextfabric.MaxFactValueRows+10; i++ {
+		day := time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -i).Format("2006-01-02")
+		series = append(series, healthProjectDailySeriesRow("linear:proj-wide", day, uint8(1), 0.61, "high"))
+	}
+	series = append(series, healthProjectDailySeriesRow("linear:proj-narrow", "2026-09-27", uint8(1), 0.61, "high"))
+	client := &fakeClient{tables: []fakeTable{
+		{match: healthDailySeriesMatch, rows: series},
+		{match: healthSeverityMaxMatch, rows: [][]any{
+			healthSeverityMaxRow("linear", "proj-wide", 1, 1, "team", "team-1", "high"),
+			healthSeverityMaxRow("linear", "proj-narrow", 1, 1, "team", "team-1", "high"),
+		}},
+	}}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactHealth)
+	result, err := provider.ReadFacts(context.Background(), storage.Principal{OrgID: "org-1"}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent},
+		Kind: contextfabric.FactHealth, Subjects: []contextfabric.SubjectRef{projectSubject("linear", "proj-wide"), projectSubject("linear", "proj-narrow")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts() error = %v", err)
+	}
+	if !result.Truncated || !result.TruncationSubjectLocal {
+		t.Fatalf("Truncated=%v TruncationSubjectLocal=%v, want both true: only a display cap cut one project's daily table", result.Truncated, result.TruncationSubjectLocal)
+	}
+	if len(result.Facts) != 2 {
+		t.Fatalf("facts = %d, want 2", len(result.Facts))
+	}
+	for _, fact := range result.Facts {
+		omitted, cut := fact.Fields["daily_health_omitted_count"]
+		wantCut := fact.Subject.CanonicalID == "project.v2:linear:proj-wide"
+		if cut != wantCut {
+			t.Errorf("%s daily_health_omitted_count present = %v, want %v", fact.Subject.CanonicalID, cut, wantCut)
+		}
+		wantState := contextfabric.SourceAvailable
+		if wantCut {
+			wantState = contextfabric.SourceTruncated
+		}
+		if fact.SourceState != wantState {
+			t.Errorf("%s source state = %q, want %q", fact.Subject.CanonicalID, fact.SourceState, wantState)
+		}
+		if cut && (omitted.Integer == nil || *omitted.Integer != 10) {
+			t.Errorf("%s daily_health_omitted_count = %v, want 10", fact.Subject.CanonicalID, omitted)
+		}
+	}
+}
