@@ -528,6 +528,10 @@ func runDecodeCancel(t *testing.T, protocol, shape, stopAt, ending string) {
 	var mu sync.Mutex
 	var metadata, afterEnd []string
 	var primary atomic.Int64
+	// ended is set once the chosen lookup has seen the context end. A lookup
+	// that arrives after it was sent after the end, whether or not the
+	// context's own timer has run yet.
+	var ended, reached atomic.Bool
 	go func() {
 		for {
 			c, err := listener.Accept()
@@ -572,16 +576,18 @@ func runDecodeCancel(t *testing.T, protocol, shape, stopAt, ending string) {
 						mu.Lock()
 						name := cmd + "/" + procedure
 						metadata = append(metadata, name)
-						if ctx.Err() != nil {
+						if ended.Load() || ctx.Err() != nil {
 							afterEnd = append(afterEnd, name)
 						}
 						mu.Unlock()
 						if procedure == stopAt {
+							reached.Store(true)
 							if ending == "deadline" {
 								<-ctx.Done()
 							} else {
 								cancel()
 							}
+							ended.Store(true)
 						}
 					}
 					if _, err := io.WriteString(c, reply); err != nil {
@@ -628,6 +634,16 @@ func runDecodeCancel(t *testing.T, protocol, shape, stopAt, ending string) {
 			t.Fatalf("a live read returned %q, %v; want a result", result, err)
 		}
 		return
+	}
+	if !reached.Load() {
+		t.Fatalf("the read never reached the %s lookup, so this measured nothing", stopAt)
+	}
+	// The read can return at its socket deadline before the context's timer
+	// marks it done, so wait for the end before asking which end it was.
+	select {
+	case <-ctx.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the context never ended")
 	}
 	if !errors.Is(ctx.Err(), wantErr) {
 		t.Fatalf("the context ended with %v, want %v during the lookup", ctx.Err(), wantErr)
