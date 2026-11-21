@@ -133,7 +133,7 @@ func TestInvestigateAttachesNarrowingSnapshotOnSynthesisRejection(t *testing.T) 
 			}, nil
 		}),
 		Synthesizer: synthesizerFunc(func(context.Context, storage.Principal, SynthesisInput) (InvestigationResult, error) {
-			return InvestigationResult{}, rejectSynthesis(RejectionReasonDirectJudgmentMissing, "no direct judgment")
+			return InvestigationResult{}, rejectSynthesis(RejectionReasonStatusInvalid, "synthesis draft status is invalid")
 		}),
 	}, budgetStageOptions(2, 0))
 	if err != nil {

@@ -114,8 +114,8 @@ expect_fail 'an extra name that is in the mid list but is no real test' "$dir" d
 # race list, so a new test is placed by its author and never lands in the rest
 # job unseen. verify and race-partition both enforce it.
 expect_fail_mode() {
-  local label="$1" dir="$2" mode="$3"
-  if "$dir/scripts/ci/race-split.sh" devhealthsource "$mode" >"$tmp/out" 2>&1; then
+  local label="$1" dir="$2" mode="$3" pkg="${4:-devhealthsource}"
+  if "$dir/scripts/ci/race-split.sh" "$pkg" "$mode" >"$tmp/out" 2>&1; then
     bad "NEGATIVE CONTROL: $mode accepted: $label"
     return 0
   fi
@@ -145,6 +145,41 @@ sed 's/-run=\(.*devhealthsource race-mid)\)/-skip=\1/' "$dir/.github/workflows/c
 cmp -s "$dir/ci.new" "$dir/.github/workflows/ci.yml" && { echo "CONTROL SETUP FAILED: source-race-mid-skip" >&2; exit 1; }
 mv "$dir/ci.new" "$dir/.github/workflows/ci.yml"
 expect_fail_mode 'a race-mid selector passed to -skip' "$dir" race-partition
+
+# The unit-only rest-extra list moves named heavy/mid/fourth tests from leg 7 or
+# 10 to leg 5 (race jobs unchanged). Each name must run in leg 5 and in neither
+# -run leg; a name in no race list, named twice, or also in the
+# unit-heavy extra list fails verify and partition.
+echo "positive: real tree, rest-extra list"
+rest_extra="scripts/ci/devhealthfacts-unit-rest-extra-tests.txt"
+facts_pkg=./internal/contextfabric/devhealthfacts
+facts_list() { (cd "$root" && go test -list "$1" "$facts_pkg") | grep -E '^(Test|Fuzz|Example)' | LC_ALL=C sort -u; }
+rest_extra_names="$(grep -v '^[[:space:]]*\(#\|$\)' "$root/$rest_extra" 2>/dev/null || true)"
+[ -n "$rest_extra_names" ] || bad "$rest_extra is missing or names no test"
+leg5_skipped="$(facts_list "$("$root/scripts/ci/race-split.sh" devhealthfacts unit-rest)")"
+leg7="$(facts_list "$("$root/scripts/ci/race-split.sh" devhealthfacts unit-heavy)")"
+leg10="$(facts_list "$("$root/scripts/ci/race-split.sh" devhealthfacts unit-mid)")"
+while IFS= read -r t; do
+  [ -n "$t" ] || continue
+  if grep -qxF -- "$t" <<<"$leg5_skipped"; then bad "rest-extra $t does not run in leg 5"; fi
+  if grep -qxF -- "$t" <<<"$leg7"; then bad "rest-extra $t still runs in leg 7"; fi
+  if grep -qxF -- "$t" <<<"$leg10"; then bad "rest-extra $t still runs in leg 10"; fi
+done <<<"$rest_extra_names"
+listed_facts="$(cat "$root"/scripts/ci/devhealthfacts-heavy-tests.txt "$root"/scripts/ci/devhealthfacts-race-mid-tests.txt "$root"/scripts/ci/devhealthfacts-race-fourth-tests.txt | grep -v '^[[:space:]]*\(#\|$\)' | LC_ALL=C sort -u)"
+rest_only="$(LC_ALL=C comm -23 <(facts_list '.') <(printf '%s\n' "$listed_facts") | awk 'NR == 1')"
+[ -n "$rest_only" ] || bad "CONTROL SETUP: no unlisted devhealthfacts test to use"
+dir="$(fixture facts-rest-extra-in-no-list)"
+printf '%s\n' "$rest_only" >>"$dir/$rest_extra"
+expect_fail 'a rest-extra name in no heavy, mid or fourth list' "$dir" devhealthfacts
+expect_fail_mode 'a rest-extra name in no heavy, mid or fourth list' "$dir" verify devhealthfacts
+dir="$(fixture facts-rest-extra-twice)"
+printf '%s\n' "$(head -n1 <<<"$rest_extra_names")" >>"$dir/$rest_extra"
+expect_fail 'a rest-extra name listed twice' "$dir" devhealthfacts
+expect_fail_mode 'a rest-extra name listed twice' "$dir" verify devhealthfacts
+dir="$(fixture facts-rest-extra-and-heavy-extra)"
+awk '!/^[[:space:]]*(#|$)/ { print; exit }' "$dir/scripts/ci/devhealthfacts-unit-heavy-extra-tests.txt" >>"$dir/$rest_extra"
+expect_fail 'a rest-extra name that is also in the unit-heavy extra list' "$dir" devhealthfacts
+expect_fail_mode 'a rest-extra name that is also in the unit-heavy extra list' "$dir" verify devhealthfacts
 # Codex #1967 r3: a test function in a file built only under -race is invisible
 # to `go test -list`. verify refuses one; a file with only constants (the
 # raceDetectorEnabled pair) and a !race file stay allowed.
