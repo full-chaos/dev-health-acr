@@ -9,12 +9,16 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/directread"
+	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
 // cancelEndpoint is one read path of the read client, called through the
@@ -379,4 +383,285 @@ func TestAReplyAfterTheEndStillProvesTheConnection(t *testing.T) {
 	if !s.everConnected.Load() {
 		t.Fatal("a reply after the end did not mark the connection as proven")
 	}
+}
+
+// TestARetryIsRecordedOnlyWhenTheNextAttemptReachesTheWrite: the first attempt
+// drops its connection; the retry sets up a new one, and the caller's cancel or
+// deadline lands during that setup. The retry is then stopped before its
+// command is written, so the first attempt's record says retried=false. With a
+// live context the retry is sent and the record says retried=true.
+func TestARetryIsRecordedOnlyWhenTheNextAttemptReachesTheWrite(t *testing.T) {
+	for _, endpoint := range cancelEndpoints {
+		for _, protocol := range []string{"resp2", "resp3"} {
+			for _, end := range []string{"cancel", "deadline", "live"} {
+				t.Run(endpoint.name+"/"+protocol+"/"+end, func(t *testing.T) {
+					var logs bytes.Buffer
+					var setup atomic.Bool
+					var ctx context.Context
+					var stop context.CancelFunc
+					if end == "deadline" {
+						ctx, stop = context.WithTimeout(context.Background(), 250*time.Millisecond)
+					} else {
+						ctx, stop = context.WithCancel(context.Background())
+					}
+					defer stop()
+					hello := ""
+					if protocol == "resp3" {
+						hello = cancelHelloRESP3
+					}
+					a, sends := cancelServer(t, endpoint.command, hello, &logs, func(raw string, sent int64) {
+						if sent != 1 || !isLastSetupCommand(raw) {
+							return
+						}
+						setup.Store(true)
+						switch end {
+						case "cancel":
+							stop()
+						case "deadline":
+							<-ctx.Done()
+						}
+					}, func(c net.Conn, sent int64) {
+						if sent == 1 {
+							_ = c.Close()
+							return
+						}
+						_, _ = io.WriteString(c, cancelReplyOK(endpoint.command))
+					})
+					logs.Reset()
+					err := endpoint.call(a, ctx)
+					if !setup.Load() {
+						t.Fatal("the retry never reached a new connection's setup, so this measured nothing")
+					}
+					count := sends.Load()
+					log := logs.String()
+					retried := strings.Contains(log, `"retried":true`)
+					switch end {
+					case "cancel":
+						if count != 1 || !errors.Is(err, context.Canceled) {
+							t.Fatalf("sends=%d err=%v, want 1 send and context.Canceled", count, err)
+						}
+					case "deadline":
+						if count != 1 || !errors.Is(err, context.DeadlineExceeded) {
+							t.Fatalf("sends=%d err=%v, want 1 send and context.DeadlineExceeded", count, err)
+						}
+					case "live":
+						if count != 2 || (err != nil && !errors.Is(err, contextfabric.ErrProjectionWatermarkNotFound)) {
+							t.Fatalf("sends=%d err=%v, want 2 sends and the reply (no rows)", count, err)
+						}
+					}
+					if retried != (count == 2) {
+						t.Fatalf("retried=%t with %d sends: the record must say retried only when the retry was written:\n%s", retried, count, log)
+					}
+					if got := strings.Count(log, "graph read attempt failed"); got != 1 {
+						t.Fatalf("read attempt records = %d, want 1 (the dropped first attempt):\n%s", got, log)
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestACancelDuringResultDecodingReturnsTheCancel: a compact reply names
+// labels, relationship types and property keys by number, and the decoder
+// looks them up with more graph calls. A cancel or deadline that lands during
+// one lookup sends no later lookup and returns the context's error, never rows
+// with no error. A live read is the control.
+func TestACancelDuringResultDecodingReturnsTheCancel(t *testing.T) {
+	cases := []struct {
+		shape  string
+		stopAt string
+	}{
+		{"watermark", "labels"},
+		{"watermark", "properties"},
+		{"edge-page", "labels"},
+		{"edge-page", "types"},
+		{"edge-page", "properties"},
+		{"watermark", "never"},
+		{"edge-page", "never"},
+	}
+	for _, protocol := range []string{"resp2", "resp3"} {
+		for _, tc := range cases {
+			endings := []string{"cancel", "deadline"}
+			if tc.stopAt == "never" {
+				endings = []string{"live"}
+			}
+			for _, ending := range endings {
+				t.Run(protocol+"/"+tc.shape+"/"+tc.stopAt+"/"+ending, func(t *testing.T) {
+					runDecodeCancel(t, protocol, tc.shape, tc.stopAt, ending)
+				})
+			}
+		}
+	}
+}
+
+func runDecodeCancel(t *testing.T, protocol, shape, stopAt, ending string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	var ctx context.Context
+	var cancel context.CancelFunc
+	var wantErr error
+	if ending == "deadline" {
+		ctx, cancel = context.WithTimeout(context.Background(), 250*time.Millisecond)
+		wantErr = context.DeadlineExceeded
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
+		wantErr = context.Canceled
+	}
+	defer cancel()
+
+	keys := []string{propRelationshipID, propRelationType, propKind, propCanonicalID, "projected_at", "cursor"}
+	node := func(id, label int, props ...string) string {
+		return respArray(":8\r\n", respArray(respInt(id), respArray(respInt(label)), respArray(props...)))
+	}
+	prop := func(id int, value string) string {
+		return respArray(respInt(id), respInt(2), respString(value))
+	}
+	nodeReply := respCompact([]string{"w"}, node(0, 0, prop(4, "2026-11-21T00:00:00Z"), prop(5, "cursor-1")))
+	edge := respArray(respInt(7), respArray(respInt(0), respInt(0), respInt(1), respInt(2),
+		respArray(prop(0, "edge-1"), prop(1, "links_pull_request"))))
+	edgeReply := respCompact([]string{"r", "a", "b"}, edge, node(1, 1, prop(2, "work_item"), prop(3, "issue-1")), node(2, 1, prop(2, "pull_request"), prop(3, "pull-1")))
+
+	var mu sync.Mutex
+	var metadata, afterEnd []string
+	var primary atomic.Int64
+	go func() {
+		for {
+			c, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				r := bufio.NewReader(c)
+				for {
+					raw, cmd, err := readRawRESPCommand(r)
+					if err != nil {
+						return
+					}
+					reply := "+OK\r\n"
+					if cmd == "HELLO" {
+						reply = "-ERR unknown command 'HELLO'\r\n"
+						if protocol == "resp3" {
+							reply = cancelHelloRESP3
+						}
+					}
+					query := string(raw)
+					procedure := ""
+					switch {
+					case strings.Contains(query, "RETURN w"):
+						primary.Add(1)
+						reply = nodeReply
+					case strings.Contains(query, "RETURN r, a, b"):
+						primary.Add(1)
+						reply = edgeReply
+					case strings.Contains(query, "db.labels"):
+						procedure = "labels"
+						reply = respSchema("label", labelWatermark, labelSubject)
+					case strings.Contains(query, "db.relationshipTypes"):
+						procedure = "types"
+						reply = respSchema("relationshipType", labelRelation)
+					case strings.Contains(query, "db.propertyKeys"):
+						procedure = "properties"
+						reply = respSchema("propertyKey", keys...)
+					}
+					if procedure != "" {
+						mu.Lock()
+						name := cmd + "/" + procedure
+						metadata = append(metadata, name)
+						if ctx.Err() != nil {
+							afterEnd = append(afterEnd, name)
+						}
+						mu.Unlock()
+						if procedure == stopAt {
+							if ending == "deadline" {
+								<-ctx.Done()
+							} else {
+								cancel()
+							}
+						}
+					}
+					if _, err := io.WriteString(c, reply); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	var logs bytes.Buffer
+	a, err := New(Config{Addr: listener.Addr().String(), GraphPrefix: "cancel-falkor", AllowInsecure: true, RequestTimeout: time.Second, MaxAttempts: 3, MaxResults: 25, PoolSize: 2,
+		Telemetry: SlogTelemetry{Logger: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs.Reset()
+	sdk := a.api.(projectReachConn).conn.(*sdkAPI)
+	defer sdk.read.Conn.Close()
+	defer sdk.db.Conn.Close()
+
+	result := ""
+	if shape == "watermark" {
+		var watermark contextfabric.ProjectionWatermark
+		watermark, err = a.ProjectionWatermark(ctx, "cancel-org", "cancel-source")
+		result = watermark.Cursor
+	} else {
+		var page directread.EdgePage
+		page, err = a.DirectEdgePage(ctx, storage.Principal{OrgID: "cancel-org"}, contextfabric.ResolvedGraphBinding{},
+			directread.EdgePageQuery{Origins: []contextfabric.SubjectRef{{Kind: "work_item", CanonicalID: "issue-1"}},
+				Direction: directread.EdgeDirectionOut, Limit: 1, ValidAt: time.Now()})
+		if len(page.Edges) > 0 {
+			result = page.Edges[0].Key.RelationshipID
+		}
+	}
+	mu.Lock()
+	looked, later := slices.Clone(metadata), slices.Clone(afterEnd)
+	mu.Unlock()
+	t.Logf("%s/%s/%s/%s: primary=%d lookups=%v after_end=%v result=%q err=%v", protocol, shape, stopAt, ending, primary.Load(), looked, later, result, err)
+	if primary.Load() != 1 {
+		t.Fatal("the primary read was not sent once")
+	}
+	if stopAt == "never" {
+		if err != nil || result == "" {
+			t.Fatalf("a live read returned %q, %v; want a result", result, err)
+		}
+		return
+	}
+	if !errors.Is(ctx.Err(), wantErr) {
+		t.Fatalf("the context ended with %v, want %v during the lookup", ctx.Err(), wantErr)
+	}
+	if len(later) != 0 {
+		t.Fatalf("lookups sent after the end: %v", later)
+	}
+	if !errors.Is(err, wantErr) || result != "" {
+		t.Fatalf("result=%q err=%v, want no result and %v", result, err, wantErr)
+	}
+	if errors.Is(err, contextfabric.ErrUnavailable) {
+		t.Fatalf("err = %v reads as a graph dependency failure", err)
+	}
+	if strings.Contains(logs.String(), `"level":"ERROR"`) {
+		t.Fatalf("a read ended during decoding wrote an error line:\n%s", logs.String())
+	}
+}
+
+func respInt(n int) string         { return fmt.Sprintf(":%d\r\n", n) }
+func respString(s string) string   { return fmt.Sprintf("$%d\r\n%s\r\n", len(s), s) }
+func respArray(v ...string) string { return fmt.Sprintf("*%d\r\n%s", len(v), strings.Join(v, "")) }
+
+func respSchema(column string, values ...string) string {
+	rows := make([]string, 0, len(values))
+	for _, value := range values {
+		rows = append(rows, respArray(respArray(respInt(2), respString(value))))
+	}
+	return respArray(respArray(respArray(respInt(1), respString(column))), respArray(rows...), respArray(respString("Query internal execution time: 0.01 milliseconds")))
+}
+
+func respCompact(columns []string, row ...string) string {
+	header := make([]string, 0, len(columns))
+	for _, column := range columns {
+		header = append(header, respArray(respInt(1), respString(column)))
+	}
+	return respArray(respArray(header...), respArray(respArray(row...)), respArray(respString("Query internal execution time: 0.01 milliseconds")))
 }
