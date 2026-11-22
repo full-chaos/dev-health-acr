@@ -814,11 +814,7 @@ func (r *FactsReader) window(requested *RequestWindow, maxDays int) (contextfabr
 		if !start.Before(end) {
 			return contextfabric.TimeContext{}, EffectiveWindow{}, invalid("start must be before end")
 		}
-		span := end.Sub(start)
-		if requested.Mode == WindowRange && end.Equal(end.Truncate(24*time.Hour)) {
-			span += 24 * time.Hour
-		}
-		if span > time.Duration(maxDays)*24*time.Hour {
+		if end.Sub(start) > time.Duration(maxDays)*24*time.Hour {
 			return contextfabric.TimeContext{}, EffectiveWindow{}, windowBeyondMax(maxDays)
 		}
 		return contextfabric.TimeContext{Axis: contextfabric.TemporalRange, Start: &start, End: &end},
