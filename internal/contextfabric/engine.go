@@ -4330,12 +4330,6 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		// the guarantee is asserted rather than assumed by the shape of this
 		// if/else chain.
 	}
-	// stage2GroupedBasis is which grouped order (if any) THIS stage actually
-	// ran, hoisted above the block below so it survives to assemblyParams:
-	// stage 3's "fits" event (codex round 3, EXECUTED) measures the cohort
-	// AFTER this stage shaped it, and reported a stale default basis when it
-	// had no way to know what this stage had already done.
-	var stage2GroupedBasis contractsv1.ContextFabricNarrowingBasis
 	// THE ALLOWANCE, REPORTED WHETHER OR NOT IT NARROWS ANYTHING.
 	//
 	// The clamp happens while COMPUTING the allowance, not while applying it,
@@ -4360,27 +4354,20 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 			e.recordCohortMemberAllowance(ctx, principal, allowanceEvent)
 		}()
 	}
-	if graphContext.Cohort != nil && plan.Budget.MaxMembers > 0 && len(graphContext.Cohort.Members) > plan.Budget.MaxMembers {
+	// Only a work-item walk can reach this stage over the member budget. On
+	// every other path stage 1 clamped discovery's cap to plan.Budget.MaxMembers
+	// and discovery never returns more members than its cap, so that cap is the
+	// only narrowing before synthesis; a grouped cohort is narrowed only by
+	// stage 3's retry. A walk's families are never grouped, so its cohort
+	// carries no group axis here.
+	if graphContext.Cohort != nil && workItemTuple && tupleCensus != nil && tupleCensus.walkList != nil &&
+		plan.Budget.MaxMembers > 0 && len(graphContext.Cohort.Members) > plan.Budget.MaxMembers {
 		before := len(graphContext.Cohort.Members)
 		cohort := *graphContext.Cohort
-		var kept []CohortMember
-		var narrowed bool
-		var basis contractsv1.ContextFabricNarrowingBasis
-		var stepBasis contractsv1.ContextFabricNarrowingBasis
-		if len(cohort.Groups) > 0 {
-			var narrowedGroups []contractsv1.ContextFabricCohortGroup
-			kept, narrowedGroups, narrowed, basis = NarrowGroupedCohort(&cohort, plan.Budget.MaxMembers)
-			if narrowed {
-				cohort.Groups = narrowedGroups
-			}
-		} else if workItemTuple && tupleCensus != nil && tupleCensus.walkList != nil {
-			// What the model reads is chosen the way the walk chose the list:
-			// strongest link first (a repository's walk), then canonical id.
-			kept, narrowed = tupleCensus.synthesisMembers(&cohort, plan.Budget.MaxMembers)
-			stepBasis = tupleCensus.walkBasis()
-		} else {
-			kept, narrowed = NarrowFlatCohort(&cohort, plan.Budget.MaxMembers)
-		}
+		// What the model reads is chosen the way the walk chose the list:
+		// strongest link first (a repository's walk), then canonical id.
+		kept, narrowed := tupleCensus.synthesisMembers(&cohort, plan.Budget.MaxMembers)
+		stepBasis := tupleCensus.walkBasis()
 		if narrowed {
 			removed := RemovedCohortMembers(cohort.Members, kept)
 			cohort.Members = kept
@@ -4396,32 +4383,20 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 				Stage:    contractsv1.ContextFabricPlanNarrowingSynthesisInput,
 				Decision: retention,
 			})
-			if len(cohort.Groups) > 0 {
-				ApplyGroupedCohortCompleteness(&cohort)
-			} else {
-				cohort.Complete = false
-				cohort.Truncated = true
-			}
+			cohort.Complete = false
+			cohort.Truncated = true
 			graphContext.Cohort = &cohort
-			// groupAxis is what the selection ACTUALLY ran over -- this
-			// branch calls NarrowGroupedCohort exactly when the cohort has
-			// groups. groupsNarrowed stays FALSE: decision D2 is member-first
-			// and every group survives, so the D2 counter must not tick.
-			narrowedGroupAxis := len(cohort.Groups) > 0
 			e.recordPlanNarrowingStep(&plan, PlanNarrowing{
 				Stage:  contractsv1.ContextFabricPlanNarrowingSynthesisInput,
-				Basis:  stepBasisOr(stepBasis, planStageBasis(contractsv1.ContextFabricPlanNarrowingSynthesisInput, narrowedGroupAxis, basis)),
+				Basis:  stepBasisOr(stepBasis, planStageBasis(contractsv1.ContextFabricPlanNarrowingSynthesisInput, false, "")),
 				Before: before,
 				After:  len(kept),
 			})
-			synthesisEvent := PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingSynthesisInput, before, len(kept), narrowedGroupAxis, false, "", stepBasisOr(stepBasis, basis))
+			synthesisEvent := PlanNarrowingEventFrom(plan, contractsv1.ContextFabricPlanNarrowingSynthesisInput, before, len(kept), false, false, "", stepBasis)
 			if stepBasis != "" {
 				synthesisEvent.Basis = stepBasis
 			}
 			e.recordPlanNarrowing(ctx, principal, synthesisEvent)
-			if narrowedGroupAxis {
-				stage2GroupedBasis = basis
-			}
 		}
 	}
 	var cohortSignalCitations cohortMemberSignalCitations
@@ -4463,10 +4438,9 @@ func (e *Engine) Investigate(ctx context.Context, principal storage.Principal, r
 		FactsReadAt:    factsReadAt,
 		StructureCanon: structureCanon, CarriedStructureEntries: carriedStructureEntriesForServed,
 		CommitBases: commitBases, CommitDigests: commitDigests,
-		GroupedNarrowingBasis: stage2GroupedBasis,
-		GroupingRefusal:       groupingRefusalForDisclosure,
-		GroupReadDisclosure:   groupReadForDisclosure,
-		GroupReadKind:         groupReadKindForDisclosure,
+		GroupingRefusal:     groupingRefusalForDisclosure,
+		GroupReadDisclosure: groupReadForDisclosure,
+		GroupReadKind:       groupReadKindForDisclosure,
 	}
 	// The retry's base is snapshotted BEFORE the first pass runs. Taking it
 	// afterwards copied state pass one had already dirtied in place -- see

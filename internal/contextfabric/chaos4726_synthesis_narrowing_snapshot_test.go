@@ -100,11 +100,9 @@ func TestSynthesisNarrowingSnapshotOfAbsentReportsFalse(t *testing.T) {
 // end-to-end wiring proof: Engine.Investigate itself, with a synthesizer
 // that rejects, must return an error SynthesisNarrowingSnapshotOf can read
 // -- not just the standalone withSynthesisNarrowingSnapshot helper in
-// isolation. A cohort of 3 against a 2-item budget forces BOTH stage 1 (the
-// requested-cardinality clamp) and stage 2 (the post-read synthesis-input
-// clamp, since the fixture graph reader ignores the clamped request and
-// always returns all 3) to narrow before synthesis is ever invoked -- so
-// the snapshot's LastStage must name stage 2, the one that ran LAST, not
+// isolation. A 2-item budget makes stage 1 (the requested-cardinality clamp)
+// narrow before synthesis is ever invoked, and on this non-work-item path no
+// later pre-synthesis stage narrows, so the snapshot's LastStage must name
 // stage 1.
 func TestInvestigateAttachesNarrowingSnapshotOnSynthesisRejection(t *testing.T) {
 	t.Parallel()
@@ -149,8 +147,8 @@ func TestInvestigateAttachesNarrowingSnapshotOnSynthesisRejection(t *testing.T) 
 	if !ok {
 		t.Fatalf("SynthesisNarrowingSnapshotOf(Investigate error) ok = false -- engine.go's synthesizeAndAssemble error path must attach the pre-synthesis narrowing state; got %v", investigateErr)
 	}
-	if snapshot.LastStage != contractsv1.ContextFabricPlanNarrowingSynthesisInput {
-		t.Fatalf("LastStage = %q, want synthesis_input -- stage 2 runs after stage 1 and must be the LAST recorded step", snapshot.LastStage)
+	if snapshot.LastStage != contractsv1.ContextFabricPlanNarrowingCardinality {
+		t.Fatalf("LastStage = %q, want cardinality -- the only pre-synthesis narrowing on this path", snapshot.LastStage)
 	}
 	if snapshot.LastBasis != contractsv1.ContextFabricNarrowingBasisCanonicalIDLexical {
 		t.Fatalf("LastBasis = %q, want canonical_id_lexical", snapshot.LastBasis)
