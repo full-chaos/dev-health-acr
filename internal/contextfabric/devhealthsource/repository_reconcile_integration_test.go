@@ -57,6 +57,9 @@ func TestRepositoryLandedBehindTheWindowIsReconciled(t *testing.T) {
 	if got.Subject.Label != "acme/landed-late" || got.ProviderIDs["github"] != repoB {
 		t.Fatalf("repository B was reconciled as %+v, want the entity the paged read builds", got)
 	}
+	if synced := got.Properties[contextfabric.ProjectionSyncedAtProperty].Integer; synced == nil || *synced != now.Add(-5*time.Hour).UnixNano() {
+		t.Fatalf("repository B was reconciled without its sync stamp property: %+v", got.Properties)
+	}
 	if keysetPosition(t, reconciled.cursor) != keysetPosition(t, first.cursor) {
 		t.Fatalf("the reconcile pass moved the cursor position (%q -> %q)", first.cursor, reconciled.cursor)
 	}

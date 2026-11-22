@@ -56,6 +56,9 @@ func TestCaughtUpTicksReconcileRepositoriesOncePerPeriod(t *testing.T) {
 				if e.Subject.Kind != contextfabric.SubjectRepository {
 					t.Fatalf("a reconcile batch emitted a %s entity", e.Subject.Kind)
 				}
+				if e.Properties[contextfabric.ProjectionSyncedAtProperty].Integer == nil {
+					t.Fatalf("a reconciled repository lacks the sync stamp the paged read writes: %+v", e.Properties)
+				}
 				emitted[e.Subject.CanonicalID] = true
 			}
 			cursor = batch.NextCursor

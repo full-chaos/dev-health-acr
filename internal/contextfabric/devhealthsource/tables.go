@@ -283,12 +283,19 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + 
 
 // repositoriesReconcileQuery is queryRepositories' reconcile-pass read
 // (reconcile.go): the organization's current repos in id order after `after`,
-// without the cursor predicate, through the same row scan and first-seen rule.
+// without the cursor predicate, through the same row scan, first-seen rule and
+// row labels as readTable gives the paged read.
 func repositoriesReconcileQuery(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, after string, limit int) ([]candidate, bool, error) {
 	statement := repositoryColumns + `
 WHERE org_id = {org_id:String} AND toString(id) > {after:String}
 ORDER BY toString(id) ASC LIMIT {row_limit:UInt32}`
-	return fetchRepositories(ctx, client, orgID, statement, rowLimitBindings(orgID, cursorState{After: after}, limit), limit, false)
+	rows, truncated, err := fetchRepositories(ctx, client, orgID, statement, rowLimitBindings(orgID, cursorState{After: after}, limit), limit, false)
+	for _, table := range entityTables {
+		if table.name == "repos" {
+			labelRows(table, rows)
+		}
+	}
+	return rows, truncated, err
 }
 
 // repositoryColumns is the SELECT the repository row scan reads.

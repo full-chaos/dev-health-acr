@@ -214,11 +214,17 @@ func rowMemoKey(c candidate) string {
 // came from (rowMemoKey).
 func readTable(ctx context.Context, table entityTable, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
 	rows, truncated, err := table.query(ctx, client, orgID, cursor, limit)
+	labelRows(table, rows)
+	return rows, truncated, err
+}
+
+// labelRows is what readTable adds to a producer's rows: the table name and
+// the sync stamp. A reconcile read of a registry table adds the same.
+func labelRows(table entityTable, rows []candidate) {
 	for i := range rows {
 		rows[i].table = table.name
 	}
 	stampSyncedAt(table, rows)
-	return rows, truncated, err
 }
 
 // stampSyncedAt (CHAOS-12649) writes each row's sync stamp, its walk position,
