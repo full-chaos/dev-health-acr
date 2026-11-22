@@ -3,6 +3,7 @@ package falkorgraph
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -208,5 +209,31 @@ func TestCountEdgesNamesTheServerTimeoutAQueryBudget(t *testing.T) {
 	_, err = newFakeAdapter(t, timedOut).CountEdges(ended, "org-1", key)
 	if errors.Is(err, contextfabric.ErrQueryBudgetExceeded) || projectionrun.ClassifyFailure(err) != "canceled" {
 		t.Fatalf("an ended caller context: err %v, class %q; want canceled", err, projectionrun.ClassifyFailure(err))
+	}
+}
+
+// Only a read whose context carries withServerTimeout sends the TIMEOUT
+// argument: every other command is byte-identical to the one sent before, so
+// other reads keep the server's default bound.
+func TestQueryArgsAddATimeoutOnlyToAReadThatCarriesOne(t *testing.T) {
+	t.Parallel()
+	plain := context.Background()
+	timed := withServerTimeout(plain, 1500*time.Millisecond)
+	for name, tc := range map[string]struct {
+		ctx      context.Context
+		command  string
+		readOnly bool
+		want     []interface{}
+	}{
+		"a read with no value":       {plain, "GRAPH.RO_QUERY", true, []interface{}{"GRAPH.RO_QUERY", "g", "MATCH (n) RETURN n", "--compact"}},
+		"a write with no value":      {plain, "GRAPH.QUERY", false, []interface{}{"GRAPH.QUERY", "g", "MATCH (n) RETURN n", "--compact"}},
+		"a write never gets a value": {timed, "GRAPH.QUERY", false, []interface{}{"GRAPH.QUERY", "g", "MATCH (n) RETURN n", "--compact"}},
+		"a read with a value":        {timed, "GRAPH.RO_QUERY", true, []interface{}{"GRAPH.RO_QUERY", "g", "MATCH (n) RETURN n", "--compact", "TIMEOUT", int64(1500)}},
+		"a value under 1 ms sends 1": {withServerTimeout(plain, time.Microsecond), "GRAPH.RO_QUERY", true, []interface{}{"GRAPH.RO_QUERY", "g", "MATCH (n) RETURN n", "--compact", "TIMEOUT", int64(1)}},
+	} {
+		got := queryArgs(tc.ctx, tc.command, "g", "MATCH (n) RETURN n", tc.readOnly)
+		if fmt.Sprintf("%#v", got) != fmt.Sprintf("%#v", tc.want) {
+			t.Errorf("%s: queryArgs = %#v, want %#v", name, got, tc.want)
+		}
 	}
 }

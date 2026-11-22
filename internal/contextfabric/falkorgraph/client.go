@@ -123,10 +123,7 @@ func (s *sdkAPI) query(ctx context.Context, graphKey, cypher string, params map[
 	if readOnly {
 		client = s.read
 	}
-	args := []interface{}{command, graphKey, text, "--compact"}
-	if ms, ok := serverTimeoutMs(ctx); ok && readOnly {
-		args = append(args, "TIMEOUT", ms)
-	}
+	args := queryArgs(ctx, command, graphKey, text, readOnly)
 	send := func() (interface{}, error) { return client.Conn.Do(ctx, args...).Result() }
 	var raw interface{}
 	if readOnly {
@@ -173,6 +170,17 @@ type serverTimeoutKey struct{}
 // TIMEOUT argument, which replaces the server's default bound for that read.
 func withServerTimeout(ctx context.Context, timeout time.Duration) context.Context {
 	return context.WithValue(ctx, serverTimeoutKey{}, timeout)
+}
+
+// queryArgs is the command query sends. Only a read whose ctx carries
+// withServerTimeout gets the TIMEOUT argument; every other command keeps the
+// server's default bound.
+func queryArgs(ctx context.Context, command, graphKey, text string, readOnly bool) []interface{} {
+	args := []interface{}{command, graphKey, text, "--compact"}
+	if ms, ok := serverTimeoutMs(ctx); ok && readOnly {
+		args = append(args, "TIMEOUT", ms)
+	}
+	return args
 }
 
 func serverTimeoutMs(ctx context.Context) (int64, bool) {
