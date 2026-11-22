@@ -85,7 +85,7 @@ func TestCaughtUpTicksReconcileRepositoriesOncePerPeriod(t *testing.T) {
 		t.Fatal("the pass after the period issued no repository reconcile read")
 	}
 	if len(second) != 1 || !second[contextfabric.RepositoryCanonicalID(rows[7][0].(string))] {
-		t.Fatalf("the second pass emitted %d repositories, want only the changed one: %v", len(second), second)
+		t.Fatalf("the second pass emitted %d repositories, want only the changed one", len(second))
 	}
 }
 

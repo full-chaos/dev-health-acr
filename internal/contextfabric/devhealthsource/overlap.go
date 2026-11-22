@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"slices"
 	"strconv"
@@ -113,6 +114,12 @@ type windowScope struct {
 	catchUp catchUpPass
 	// recon is the scope's reconcile passes by name (reconcile.go).
 	recon map[string]reconcilePass
+	// applied holds, by canonical id, a digest of the repository entity this
+	// scope last emitted from a paged read or saw applied from a window or
+	// reconcile page. The repository reconcile pass skips a row that matches:
+	// the graph already holds it as it stands. Never pruned; a repository
+	// deleted from the source leaves its entry until the scope resets.
+	applied map[string][sha256.Size]byte
 	// ahead says the scope's last paged read stopped with rows beyond it.
 	ahead bool
 	// boundedWarned holds the identities of the passes that wrote their
@@ -265,6 +272,12 @@ func (sc *windowScope) recordLocked(all []candidate, overlap time.Duration) {
 	newest := time.Time{}
 	for _, c := range all {
 		sc.seen[rowMemoKey(c)] = c.position()
+		if id, sum, ok := appliedDigest(c); ok {
+			if sc.applied == nil {
+				sc.applied = map[string][sha256.Size]byte{}
+			}
+			sc.applied[id] = sum
+		}
 		if c.position().After(newest) {
 			newest = c.position()
 		}
@@ -411,7 +424,7 @@ func (m *windowMemo) snapshot() *windowMemo {
 	defer m.mu.Unlock()
 	out := newWindowMemo()
 	for scope, sc := range m.scopes {
-		copied := &windowScope{seen: make(map[string]time.Time, len(sc.seen)), windowPass: sc.windowPass, boundedWarned: slices.Clone(sc.boundedWarned)}
+		copied := &windowScope{seen: make(map[string]time.Time, len(sc.seen)), windowPass: sc.windowPass, boundedWarned: slices.Clone(sc.boundedWarned), applied: maps.Clone(sc.applied)}
 		if sc.recon != nil {
 			copied.recon = make(map[string]reconcilePass, len(sc.recon))
 			for name, rs := range sc.recon {

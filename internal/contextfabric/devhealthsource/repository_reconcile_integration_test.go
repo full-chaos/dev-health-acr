@@ -17,9 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 )
 
-// repositoryReconcilePeriod is the cadence of the repository reconcile pass
-// (the same hour as the teams pass).
-const repositoryReconcilePeriod = time.Hour
+const repositoryReconcilePeriod = devhealthsource.RepositoryReconcilePeriodForTest
 
 func TestRepositoryLandedBehindTheWindowIsReconciled(t *testing.T) {
 	ctx := context.Background()
@@ -61,6 +59,9 @@ func TestRepositoryLandedBehindTheWindowIsReconciled(t *testing.T) {
 	}
 	if keysetPosition(t, reconciled.cursor) != keysetPosition(t, first.cursor) {
 		t.Fatalf("the reconcile pass moved the cursor position (%q -> %q)", first.cursor, reconciled.cursor)
+	}
+	if _, ok := reconciled.all[contextfabric.RepositoryCanonicalID(repoA)]; ok {
+		t.Fatalf("the reconcile pass wrote repository A again, which the paged read had already emitted unchanged")
 	}
 
 	clock = now.Add(repositoryReconcilePeriod + time.Minute)
