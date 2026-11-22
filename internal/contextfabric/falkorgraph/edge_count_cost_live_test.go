@@ -4,6 +4,7 @@ package falkorgraph
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -25,8 +27,10 @@ import (
 // counted relations are written through the real ApplyProjectionBatch; the
 // other-relation population is planted with raw Cypher in the same graph key,
 // in chunks, until a read that walks every edge of the organization stops at
-// the server timeout, and then by half as many again so the walk is well past
-// it. Needs Docker; run by CI.
+// the server timeout, and then by as many again so the walk is well past it.
+// Every failed count must be that server timeout: the read ends near 1 s with
+// its own context still live, the server answers "Query timed out" to the same
+// statement, and the run's failure class is canceled. Needs Docker; run by CI.
 const (
 	edgeCountCostChunk     = 100000
 	edgeCountCostPlant     = 20000
@@ -131,7 +135,7 @@ func TestCountEdgesStaysWithinTheServerTimeoutOnALargeGraph(t *testing.T) {
 	if firstTimeout == 0 {
 		t.Fatalf("the venue is too small: a whole-organization walk over %d edges finished within the server timeout", noise)
 	}
-	plantTo(firstTimeout + firstTimeout/2)
+	plantTo(2 * firstTimeout)
 	if !walk() {
 		t.Fatalf("the venue is too small: a whole-organization walk over %d edges finished within the server timeout", noise)
 	}
@@ -170,14 +174,45 @@ func TestCountEdgesStaysWithinTheServerTimeoutOnALargeGraph(t *testing.T) {
 			}
 			t.Logf("PROFILE %+v\n%s", c.key, strings.Join(lines, "\n"))
 		}
-		countBegan := time.Now()
-		got, err := adapter.CountEdges(ctx, orgID, c.key)
-		t.Logf("CountEdges(%+v) = %d, %v in %s over %d other-relation edges", c.key, got, err, time.Since(countBegan), noise)
+		got, err := countEdgesCause(t, ctx, adapter, raw, key, orgID, c.key, text(cypher, params))
 		if err != nil || got != c.want {
 			t.Errorf("CountEdges(%+v) = %d, %v; want %d within the server timeout", c.key, got, err, c.want)
 		}
 	}
-	armBegan := time.Now()
-	got, err := adapter.CountEdges(ctx, orgID, contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToRepository, Arm: ciRun})
-	t.Logf("not asserted: CountEdges(BELONGS_TO_REPOSITORY, %s) = %d, %v in %s (the counted population is the %d planted edges)", ciRun, got, err, time.Since(armBegan), noise)
+	// The counted population of this key is the planted edges: it is the
+	// server timeout, whatever the plan of the other keys.
+	ciKey := contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToRepository, Arm: ciRun}
+	cypher, err := edgeCountCypher(ciKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := countEdgesCause(t, ctx, adapter, raw, key, orgID, ciKey, text(cypher, map[string]interface{}{"org": orgID, "rel": "BELONGS_TO_REPOSITORY", "arm": ciRun})); err == nil {
+		t.Errorf("CountEdges(%+v) over %d edges of its own finished within the server timeout: the cause cell observed no failure", ciKey, noise)
+	}
+}
+
+// countEdgesCause runs CountEdges under the count check's own 30 s edge
+// context and, when it fails, requires the failure to be the server TIMEOUT:
+// the context is still live, the read ended within 2 s, it unwraps to
+// context.DeadlineExceeded, the projection run classes it canceled, and the
+// server answers the same statement with "Query timed out".
+func countEdgesCause(t *testing.T, parent context.Context, adapter *Adapter, raw *redis.Client, graphKey, orgID string, key contextfabric.EdgeCountKey, statement string) (int64, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+	began := time.Now()
+	got, err := adapter.CountEdges(ctx, orgID, key)
+	elapsed := time.Since(began)
+	class := projectionrun.ClassifyFailure(err)
+	t.Logf("CountEdges(%+v) = %d, %v in %s (failure_class %q, context err %v)", key, got, err, elapsed, class, ctx.Err())
+	if err == nil {
+		return got, nil
+	}
+	_, rawErr := raw.Do(parent, "GRAPH.RO_QUERY", graphKey, statement).Result()
+	t.Logf("the same statement sent raw: %v", rawErr)
+	if ctx.Err() != nil || elapsed > 2*time.Second || !errors.Is(err, context.DeadlineExceeded) || class != "canceled" ||
+		rawErr == nil || !strings.Contains(rawErr.Error(), "Query timed out") {
+		t.Errorf("CountEdges(%+v) failed but not by the server timeout: err %v, elapsed %s, context err %v, class %q, raw %v", key, err, elapsed, ctx.Err(), class, rawErr)
+	}
+	return got, err
 }
