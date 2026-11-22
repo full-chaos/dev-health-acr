@@ -115,7 +115,7 @@ func TestInvestigateAttachesNarrowingSnapshotOnSynthesisRejection(t *testing.T) 
 				FactRequirements: []FactRequirement{{Kind: FactStatus}},
 			}, nil
 		}),
-		Graph: &capturingGraphReader{
+		Graph: &capHonouringGraphReader{capturingGraphReader: capturingGraphReader{
 			resolution: SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{}},
 			context: GraphContext{
 				Cohort: cohort,
@@ -123,7 +123,7 @@ func TestInvestigateAttachesNarrowingSnapshotOnSynthesisRejection(t *testing.T) 
 				FactRequirements: []FactRequirement{}, EvidenceRefIDs: []string{},
 				Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
 			},
-		},
+		}},
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 			return CanonicalFactBundle{
 				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
