@@ -276,9 +276,36 @@ func fetchIngest(ctx context.Context, client contextpacket.ClickHouseQueryClient
 }
 
 func queryRepositories(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, limit int) ([]candidate, bool, error) {
-	statement := `SELECT toString(id), repo, ifNull(provider, ''), last_synced, created_at, ifNull(tags, '') FROM repos FINAL
+	statement := repositoryColumns + `
 WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + orderBy("last_synced", "id")
-	items, truncated, err := fetch(ctx, client, statement, rowLimitBindings(orgID, cursor, limit), limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
+	return fetchRepositories(ctx, client, orgID, statement, rowLimitBindings(orgID, cursor, limit), limit, cursor.Since.IsZero())
+}
+
+// repositoriesReconcileQuery is queryRepositories' reconcile-pass read
+// (reconcile.go): the organization's current repos in id order after `after`,
+// without the cursor predicate, through the same row scan, first-seen rule and
+// row labels as readTable gives the paged read.
+func repositoriesReconcileQuery(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, after string, limit int) ([]candidate, bool, error) {
+	statement := repositoryColumns + `
+WHERE org_id = {org_id:String} AND toString(id) > {after:String}
+ORDER BY toString(id) ASC LIMIT {row_limit:UInt32}`
+	rows, truncated, err := fetchRepositories(ctx, client, orgID, statement, rowLimitBindings(orgID, cursorState{After: after}, limit), limit, false)
+	for _, table := range entityTables {
+		if table.name == "repos" {
+			labelRows(table, rows)
+		}
+	}
+	return rows, truncated, err
+}
+
+// repositoryColumns is the SELECT the repository row scan reads.
+const repositoryColumns = `SELECT toString(id), repo, ifNull(provider, ''), last_synced, created_at, ifNull(tags, '') FROM repos FINAL`
+
+// fetchRepositories is the one builder of the repository entity: the paged
+// read and the reconcile pass both run it. fromZero is only the start
+// decision line's level (applyRepositoryFirstSeen).
+func fetchRepositories(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, statement string, bindings []contextpacket.ClickHouseBinding, limit int, fromZero bool) ([]candidate, bool, error) {
+	items, truncated, err := fetch(ctx, client, statement, bindings, limit, func(r contextpacket.ClickHouseRowScanner) ([]candidate, error) {
 		var id, slug, provider, rawTags string
 		var observedAt, createdAt time.Time
 		if err := r.Scan(&id, &slug, &provider, &observedAt, &createdAt, &rawTags); err != nil {
@@ -327,7 +354,7 @@ WHERE org_id = {org_id:String}` + sincePredicate(cursor, "last_synced", "id") + 
 	if err != nil {
 		return nil, false, err
 	}
-	applyRepositoryFirstSeen(ctx, client, orgID, cursor, items)
+	applyRepositoryFirstSeen(ctx, client, orgID, fromZero, items)
 	return items, truncated, nil
 }
 

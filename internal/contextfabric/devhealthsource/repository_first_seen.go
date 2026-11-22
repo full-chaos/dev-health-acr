@@ -76,7 +76,7 @@ func startLogger(ctx context.Context) *slog.Logger {
 // on a page of a from-zero build where evidence decided a start, DEBUG on every
 // other page (a re-stamped repository is read again on every sync, so a steady
 // tick would log one INFO line per page forever).
-func applyRepositoryFirstSeen(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, cursor cursorState, items []candidate) {
+func applyRepositoryFirstSeen(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, fromZero bool, items []candidate) {
 	ids := make([]string, 0, len(items))
 	for _, item := range items {
 		ids = append(ids, item.sortKey)
@@ -104,12 +104,12 @@ func applyRepositoryFirstSeen(ctx context.Context, client contextpacket.ClickHou
 		basis[decided]++
 	}
 	level := slog.LevelDebug
-	if cursor.Since.IsZero() && basis[startBasisPullRequest]+basis[startBasisWorkItem] > 0 {
+	if fromZero && basis[startBasisPullRequest]+basis[startBasisWorkItem] > 0 {
 		level = slog.LevelInfo
 	}
 	logger.Log(ctx, level, "devhealthsource repository start decided",
 		"source", contextfabric.SanitizeLogAttr("clickhouse"), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
-		"from_zero", cursor.Since.IsZero(), "repositories", len(items), "evidence_read", evidenceRead,
+		"from_zero", fromZero, "repositories", len(items), "evidence_read", evidenceRead,
 		"basis_created_at", basis[startBasisCreatedAt], "basis_pull_request", basis[startBasisPullRequest],
 		"basis_work_item", basis[startBasisWorkItem], "basis_none", basis[startBasisNone])
 }

@@ -304,6 +304,7 @@ func precedenceFamily(sample FamilySample) (QuestionFamily, FamilyPrecedenceRow)
 	// that is a grouped cohort, not a two-sided comparison, so counting
 	// raw slice length would fire this row on duplicates and near-
 	// duplicates of one term.
+	// A question naming a subject and its alias routes as a comparison of the two names.
 	if len(nonEmptyTerms(sample.ComparisonTerms)) > 0 || len(distinctTerms(sample.SubjectTerms)) >= 2 {
 		return QuestionFamilyExplicitComparison, FamilyPrecedenceRowComparison
 	}

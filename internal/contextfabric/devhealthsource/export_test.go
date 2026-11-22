@@ -245,6 +245,9 @@ func (s *TeamsProjectsSource) SetClockForTest(now func() time.Time) { s.now = no
 // TeamOwnershipReconcilePeriodForTest exposes the reconcile cadence.
 const TeamOwnershipReconcilePeriodForTest = teamOwnershipReconcilePeriod
 
+// RepositoryReconcilePeriodForTest exposes the repository reconcile cadence.
+const RepositoryReconcilePeriodForTest = repositoryReconcilePeriod
+
 // SetWindowPagesPerCallForTest lowers how many window pages one call walks,
 // so a pass that spans several calls needs a window of a few pages instead
 // of more than overlapWindowPagesPerCall (1,000+ rows). The walk logic is the

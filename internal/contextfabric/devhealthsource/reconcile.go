@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
 // A max-watermark cannot see a hard delete: when the newest row a derived
@@ -29,9 +31,16 @@ const teamOwnershipReconcilePeriod = time.Hour
 // edge the backend lost is written again without a log change.
 const projectTeamOwnershipReconcilePeriod = time.Hour
 
-// reconcilePlan is one named reconcile pass of a source. The first pass of a
-// plan is the teams pass, whose batch ids, acks and log line predate named
-// passes and stay as they were.
+// repositoryReconcilePeriod is the cadence of the repository reconcile pass on
+// the ClickHouse source. The shared cursor and its overlap window re-read a
+// repos row only when it lands within about overlap + slack of its stamp; a
+// sync attempt stamps at its start and a retry keeps the stamp, so a new
+// repository can land later than that. The pass re-reads the current repos in
+// id order and emits the ones this scope has not applied as they stand.
+const repositoryReconcilePeriod = time.Hour
+
+// reconcilePlan is one named reconcile pass of a source. The teams pass's
+// batch ids, acks and log line predate named passes and stay as they were.
 type reconcilePlan struct {
 	name   string
 	query  func(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID, after string, limit int) ([]candidate, bool, error)
@@ -39,11 +48,16 @@ type reconcilePlan struct {
 	// table names the read in table-read errors; logMsg is the pass's Info line.
 	table  string
 	logMsg string
+	// skipApplied drops a row whose entity this scope already recorded as
+	// applied unchanged (windowScope.applied), so a pass does not write and
+	// re-embed every unchanged row each period.
+	skipApplied bool
 }
 
 const (
 	reconcilePassTeams        = "teams"
 	reconcilePassProjectTeams = "project_team_ownership"
+	reconcilePassRepositories = "repositories"
 )
 
 // reconcilePass is one scope's reconcile state.
@@ -51,14 +65,19 @@ type reconcilePass struct {
 	lastDone time.Time // end of the last completed pass; zero = never ran in this process
 	after    string    // the pass resumes AFTER this row key; empty = not walking
 	teams    int       // rows emitted by the pass so far
+	skipped  int       // rows the pass dropped as applied unchanged (skipApplied)
 	pending  *pendingReconcile
 }
 
 // pendingReconcile is an emitted reconcile page not yet known to be applied.
 type pendingReconcile struct {
-	ack   string
-	after string
-	rows  int
+	ack     string
+	after   string
+	rows    int
+	skipped int
+	// applied is what the page writes, recorded in windowScope.applied once
+	// the page is known to be applied (skipApplied passes only).
+	applied map[string][sha256.Size]byte
 }
 
 func (m *windowMemo) reconcileState(scope, pass string) reconcilePass {
@@ -109,6 +128,8 @@ func (m *windowMemo) settleReconcile(scope, ack string, now time.Time) {
 		if ack != "" && ack == pending.ack {
 			rs.after = pending.after
 			rs.teams += pending.rows
+			rs.skipped += pending.skipped
+			sc.noteApplied(pending.applied)
 		}
 		sc.recon[name] = rs
 	}
@@ -134,11 +155,11 @@ func (p sourcePlan) reconcileBatch(ctx context.Context, orgID, cursor string) (c
 	if p.window == nil {
 		return contextfabric.ProjectionBatch{}, false, nil
 	}
-	for i, pass := range p.reconciles {
+	for _, pass := range p.reconciles {
 		if pass.query == nil || pass.period <= 0 {
 			continue
 		}
-		batch, published, ended, err := p.reconcilePage(ctx, orgID, cursor, pass, i == 0)
+		batch, published, ended, err := p.reconcilePage(ctx, orgID, cursor, pass, pass.name == reconcilePassTeams)
 		if err != nil || published || !ended {
 			return batch, published, err
 		}
@@ -163,15 +184,20 @@ func (p sourcePlan) reconcilePage(ctx context.Context, orgID, cursor string, pas
 	// short is followed by one more cheap read rather than a second code path.
 	if len(rows) == 0 {
 		p.window.setReconcileState(p.windowScope, pass.name, reconcilePass{lastDone: now})
-		p.logReconcile(ctx, orgID, pass, rs.teams, true)
+		p.logReconcile(ctx, orgID, pass, rs.teams, rs.skipped, true)
 		return contextfabric.ProjectionBatch{}, false, true, nil
 	}
 	last := rows[len(rows)-1].sortKey
 	normalizeCandidates(rows, p.observeNormalization)
+	skipped := 0
+	if pass.skipApplied {
+		rows, skipped = p.window.unapplied(p.windowScope, rows)
+	}
 	items := partitionProjectableCandidates(rows, p.quarantineObserver(orgID))
 	if !carriesPayload(items) {
 		// Nothing to apply on this page: the pass moves on in memory.
 		rs.after = last
+		rs.skipped += skipped
 		p.window.setReconcileState(p.windowScope, pass.name, rs)
 		p.noteYield()
 		return contextfabric.ProjectionBatch{}, false, false, nil
@@ -210,11 +236,14 @@ func (p sourcePlan) reconcilePage(ctx context.Context, orgID, cursor string, pas
 	if err := batch.Validate(); err != nil {
 		return contextfabric.ProjectionBatch{}, false, false, fmt.Errorf("%w: devhealthsource: built an invalid reconcile batch: %w", contextfabric.ErrInvalidResult, err)
 	}
-	rs.pending = &pendingReconcile{ack: frontier.Ack, after: last, rows: len(rows)}
+	rs.pending = &pendingReconcile{ack: frontier.Ack, after: last, rows: len(rows), skipped: skipped}
+	if pass.skipApplied {
+		rs.pending.applied = appliedDigests(rows)
+	}
 	p.window.setReconcileState(p.windowScope, pass.name, rs)
 	p.forgetConsumed(orgID)
 	p.observeBatch(ctx, batch, rows)
-	p.logReconcile(ctx, orgID, pass, rs.teams+len(rows), false)
+	p.logReconcile(ctx, orgID, pass, rs.teams+len(rows), rs.skipped+skipped, false)
 	return batch, true, false, nil
 }
 
@@ -223,6 +252,9 @@ const reconcileTable = "teams_reconcile"
 
 // projectTeamReconcileTable names the ownership reconcile read.
 const projectTeamReconcileTable = "project_team_ownership_reconcile"
+
+// repositoryReconcileTable names the repository reconcile read.
+const repositoryReconcileTable = "repos_reconcile"
 
 // teamsReconcilePlan is the teams pass.
 func teamsReconcilePlan(ledger *teamAuthorizationLedger) reconcilePlan {
@@ -234,8 +266,19 @@ func projectTeamsReconcilePlan(omissions *ambiguityLedger) reconcilePlan {
 	return reconcilePlan{name: reconcilePassProjectTeams, query: ownershipGroupsReconcileQuery(omissions), period: projectTeamOwnershipReconcilePeriod, table: projectTeamReconcileTable, logMsg: "project team ownership reconcile"}
 }
 
-func (p sourcePlan) logReconcile(ctx context.Context, orgID string, pass reconcilePlan, rows int, final bool) {
+// repositoriesReconcilePlan is the ClickHouse source's repos pass.
+func repositoriesReconcilePlan() reconcilePlan {
+	return reconcilePlan{name: reconcilePassRepositories, query: repositoriesReconcileQuery, period: repositoryReconcilePeriod, table: repositoryReconcileTable, logMsg: "repository reconcile", skipApplied: true}
+}
+
+func (p sourcePlan) logReconcile(ctx context.Context, orgID string, pass reconcilePlan, rows, skipped int, final bool) {
 	if p.logger == nil {
+		return
+	}
+	if pass.name == reconcilePassRepositories {
+		p.logger.InfoContext(ctx, pass.logMsg,
+			"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
+			"repositories_re_derived", rows, "repositories_unchanged", skipped, "pass_complete", final, "period", contextfabric.SanitizeLogAttr(pass.period.String()))
 		return
 	}
 	if pass.name == reconcilePassTeams {
@@ -247,4 +290,64 @@ func (p sourcePlan) logReconcile(ctx context.Context, orgID string, pass reconci
 	p.logger.InfoContext(ctx, pass.logMsg,
 		"source", contextfabric.SanitizeLogAttr(p.source), "org_id", contextfabric.SanitizeLogAttr(redactOrg(orgID)),
 		"groups_re_derived", rows, "pass_complete", final, "period", contextfabric.SanitizeLogAttr(pass.period.String()))
+}
+
+// appliedDigest names what a repository entity candidate writes: its
+// canonical id and a digest of the entity. ok is false for any other
+// candidate, and for an entity that does not encode; such a row is never
+// skipped.
+func appliedDigest(c candidate) (string, [sha256.Size]byte, bool) {
+	if c.entity == nil || c.entity.Subject.Kind != contractsv1.ContextFabricSubjectRepository {
+		return "", [sha256.Size]byte{}, false
+	}
+	raw, err := json.Marshal(c.entity)
+	if err != nil {
+		return "", [sha256.Size]byte{}, false
+	}
+	return c.entity.Subject.CanonicalID, sha256.Sum256(raw), true
+}
+
+func appliedDigests(rows []candidate) map[string][sha256.Size]byte {
+	out := map[string][sha256.Size]byte{}
+	for _, c := range rows {
+		if id, sum, ok := appliedDigest(c); ok {
+			out[id] = sum
+		}
+	}
+	return out
+}
+
+// noteApplied records entities as applied. The caller holds the memo lock.
+func (sc *windowScope) noteApplied(digests map[string][sha256.Size]byte) {
+	if len(digests) == 0 {
+		return
+	}
+	if sc.applied == nil {
+		sc.applied = map[string][sha256.Size]byte{}
+	}
+	for id, sum := range digests {
+		sc.applied[id] = sum
+	}
+}
+
+// unapplied drops the rows whose repository entity is the one this scope
+// recorded as applied, and counts them.
+func (m *windowMemo) unapplied(scope string, rows []candidate) ([]candidate, int) {
+	if m == nil {
+		return rows, 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	sc := m.scopes[scope]
+	if sc == nil || len(sc.applied) == 0 {
+		return rows, 0
+	}
+	out := make([]candidate, 0, len(rows))
+	for _, c := range rows {
+		if id, sum, ok := appliedDigest(c); ok && sc.applied[id] == sum {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out, len(rows) - len(out)
 }
