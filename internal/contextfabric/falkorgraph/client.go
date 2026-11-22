@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	falkordb "github.com/FalkorDB/falkordb-go/v2"
 	"github.com/redis/go-redis/v9"
@@ -122,7 +123,11 @@ func (s *sdkAPI) query(ctx context.Context, graphKey, cypher string, params map[
 	if readOnly {
 		client = s.read
 	}
-	send := func() (interface{}, error) { return client.Conn.Do(ctx, command, graphKey, text, "--compact").Result() }
+	args := []interface{}{command, graphKey, text, "--compact"}
+	if ms, ok := serverTimeoutMs(ctx); ok && readOnly {
+		args = append(args, "TIMEOUT", ms)
+	}
+	send := func() (interface{}, error) { return client.Conn.Do(ctx, args...).Result() }
 	var raw interface{}
 	if readOnly {
 		raw, err = retryRead(ctx, s, "query context graph", send)
@@ -160,6 +165,22 @@ func (s *sdkAPI) query(ctx context.Context, graphKey, cypher string, params map[
 		rows = append(rows, decoded)
 	}
 	return rows, nil
+}
+
+type serverTimeoutKey struct{}
+
+// withServerTimeout makes a READ sent with ctx carry FalkorDB's per-query
+// TIMEOUT argument, which replaces the server's default bound for that read.
+func withServerTimeout(ctx context.Context, timeout time.Duration) context.Context {
+	return context.WithValue(ctx, serverTimeoutKey{}, timeout)
+}
+
+func serverTimeoutMs(ctx context.Context) (int64, bool) {
+	timeout, ok := ctx.Value(serverTimeoutKey{}).(time.Duration)
+	if !ok {
+		return 0, false
+	}
+	return max(int64(timeout/time.Millisecond), 1), true
 }
 
 // callerContextClient runs the result decoder's own lookups (labels,

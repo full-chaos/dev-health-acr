@@ -97,7 +97,11 @@ func TestLiveCountEdgesCountsDistinctEdgesPerRelationAndArm(t *testing.T) {
 		{Relation: contractsv1.ContextFabricRelationshipLinksPullRequest, Arm: contextfabric.EdgeArmLinkHeuristic}:    2,
 		{Relation: contractsv1.ContextFabricRelationshipLinksPullRequest, Arm: contextfabric.EdgeArmLinkExplicitText}: 0,
 	} {
-		got, err := adapter.CountEdges(ctx, orgID, key)
+		// Under a deadline, as the count check calls it: every read carries a
+		// per-query server TIMEOUT the real server must accept.
+		countCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		got, err := adapter.CountEdges(countCtx, orgID, key)
+		cancel()
 		if err != nil || got != want {
 			t.Fatalf("CountEdges(%+v) = %d, %v; want %d", key, got, err, want)
 		}

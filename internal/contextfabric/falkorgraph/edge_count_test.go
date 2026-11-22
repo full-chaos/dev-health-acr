@@ -2,10 +2,13 @@ package falkorgraph
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
 )
 
@@ -126,5 +129,84 @@ func TestCountEdgesFailsLoudlyOnAnUnreadableAnswer(t *testing.T) {
 	}
 	if _, err := newFakeAdapter(t, &fakeConn{}).CountEdges(context.Background(), " ", contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToProject}); err == nil {
 		t.Fatal("a blank organization is refused")
+	}
+}
+
+func TestCountEdgesSendsAServerTimeoutInsideTheCallersBudget(t *testing.T) {
+	t.Parallel()
+	key := contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipRelatedTo}
+	for name, tc := range map[string]struct {
+		deadline time.Duration
+		min, max int64
+	}{
+		"no deadline sends the cap":           {0, edgeCountTimeoutCap.Milliseconds(), edgeCountTimeoutCap.Milliseconds()},
+		"a long deadline sends the cap":       {time.Minute, edgeCountTimeoutCap.Milliseconds(), edgeCountTimeoutCap.Milliseconds()},
+		"a short deadline sends what is left": {2 * time.Second, 1000, (2*time.Second - edgeCountTimeoutMargin).Milliseconds()},
+	} {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var sent int64 = -1
+			fake := &fakeConn{queryFunc: func(ctx context.Context, _, q string, _ map[string]interface{}, _ bool) ([]row, error) {
+				if strings.Contains(q, "relation_type") {
+					if ms, ok := serverTimeoutMs(ctx); ok {
+						sent = ms
+					}
+				}
+				return []row{{"total": int64(3)}}, nil
+			}}
+			ctx := context.Background()
+			if tc.deadline > 0 {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, tc.deadline)
+				defer cancel()
+			}
+			got, err := newFakeAdapter(t, fake).CountEdges(ctx, "org-1", key)
+			if err != nil || got != 3 || sent < tc.min || sent > tc.max {
+				t.Fatalf("CountEdges = %d, %v; sent TIMEOUT %d ms, want %d..%d", got, err, sent, tc.min, tc.max)
+			}
+		})
+	}
+	t.Run("a spent budget sends nothing and fails as over budget", func(t *testing.T) {
+		t.Parallel()
+		sent := false
+		fake := &fakeConn{queryFunc: func(_ context.Context, _, q string, _ map[string]interface{}, _ bool) ([]row, error) {
+			if strings.Contains(q, "relation_type") {
+				sent = true
+			}
+			return []row{{"total": int64(3)}}, nil
+		}}
+		ctx, cancel := context.WithTimeout(context.Background(), edgeCountTimeoutMargin/2)
+		defer cancel()
+		_, err := newFakeAdapter(t, fake).CountEdges(ctx, "org-1", key)
+		if sent || !errors.Is(err, contextfabric.ErrQueryBudgetExceeded) || projectionrun.ClassifyFailure(err) != "query_budget_exceeded" {
+			t.Fatalf("sent %v, err %v (class %q); want no read and query_budget_exceeded", sent, err, projectionrun.ClassifyFailure(err))
+		}
+	})
+}
+
+// The server's own TIMEOUT inside a live caller budget is a count that did not
+// fit: the check fails loud as query_budget_exceeded, never as a cancellation.
+// A caller whose own context ended stays canceled.
+func TestCountEdgesNamesTheServerTimeoutAQueryBudget(t *testing.T) {
+	t.Parallel()
+	key := contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipRelatedTo}
+	timedOut := &fakeConn{queryFunc: func(_ context.Context, _, q string, _ map[string]interface{}, _ bool) ([]row, error) {
+		if strings.Contains(q, "relation_type") {
+			return nil, classifyFalkorError("query context graph", errors.New("Query timed out"))
+		}
+		return []row{{"total": int64(0)}}, nil
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := newFakeAdapter(t, timedOut).CountEdges(ctx, "org-1", key)
+	if !errors.Is(err, contextfabric.ErrQueryBudgetExceeded) || errors.Is(err, context.DeadlineExceeded) || projectionrun.ClassifyFailure(err) != "query_budget_exceeded" {
+		t.Fatalf("server timeout under a live budget: err %v, class %q; want query_budget_exceeded", err, projectionrun.ClassifyFailure(err))
+	}
+	ended, endCancel := context.WithCancel(context.Background())
+	endCancel()
+	_, err = newFakeAdapter(t, timedOut).CountEdges(ended, "org-1", key)
+	if errors.Is(err, contextfabric.ErrQueryBudgetExceeded) || projectionrun.ClassifyFailure(err) != "canceled" {
+		t.Fatalf("an ended caller context: err %v, class %q; want canceled", err, projectionrun.ClassifyFailure(err))
 	}
 }

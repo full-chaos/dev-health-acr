@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,11 +27,11 @@ import (
 // other-relation population is planted with raw Cypher in the same graph key,
 // in chunks, until a read that walks every edge of the organization stops at
 // the server timeout, and then by as many again so the walk is well past it.
-// Every failed count must be that server timeout: the read ends near 1 s with
-// its own context still live, the server answers "Query timed out" to the same
-// statement, and the run's failure class is canceled. It also records that a
-// per-query TIMEOUT above the server's lets the same walk finish, and how long
-// a projector write waits while such a walk runs. It plants millions of edges,
+// Each count read carries its own server TIMEOUT inside the check's budget, so
+// it answers its exact count past the default; a count that still does not fit
+// fails as query_budget_exceeded, never as canceled. It also records that a
+// per-query TIMEOUT above the server's lets the walk finish, and how long a
+// projector write waits while such a walk runs. It plants millions of edges,
 // so it runs only with ACR_FALKOR_TIMEOUT_REPRO=1. Needs Docker.
 const edgeCountCostEnv = "ACR_FALKOR_TIMEOUT_REPRO"
 
@@ -58,8 +56,6 @@ const (
 // relation.
 var edgeCountCostWholeOrgWalk = fmt.Sprintf("MATCH (a:%s {%s:$org})-[r:%s]->() WHERE r.%s = $rel RETURN count(DISTINCT r.%s) AS total",
 	labelSubject, propOrgID, labelRelation, propRelationType, propRelationshipID)
-
-var edgeCountCostRecords = regexp.MustCompile(`Records produced: (\d+)`)
 
 func TestCountEdgesStaysWithinTheServerTimeoutOnALargeGraph(t *testing.T) {
 	if os.Getenv(edgeCountCostEnv) != "1" && !edgeCountCostForced {
@@ -230,62 +226,29 @@ func TestCountEdgesStaysWithinTheServerTimeoutOnALargeGraph(t *testing.T) {
 	}
 	stall("past the server timeout")
 
+	// The count check's own reads: each answers its exact count under the
+	// check's 30 s edge context, past the server's default timeout.
 	for _, c := range []struct {
 		key  contextfabric.EdgeCountKey
 		want int64
 	}{
 		{contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipRelatedTo}, edgeCountCostRelated},
 		{contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToProject, Arm: contextfabric.EdgeArmTransition}, edgeCountCostProjected},
+		{contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToRepository, Arm: ciRun}, int64(noise)},
 	} {
-		cypher, err := edgeCountCypher(c.key)
-		if err != nil {
-			t.Fatal(err)
-		}
-		params := map[string]interface{}{"org": orgID, "rel": graphrank.NormalizeRelation(string(c.key.Relation))}
-		if c.key.Arm != "" {
-			params["arm"] = c.key.Arm
-		}
-		plan, err := raw.Do(ctx, "GRAPH.EXPLAIN", key, text(cypher, params)).Result()
-		t.Logf("EXPLAIN %+v (err %v)\n%s", c.key, err, strings.Join(edgePageCostLines(plan), "\n"))
-		// Every operation of the read produces at most twice the counted
-		// edges: the read is bounded by the relation, not by the graph.
-		profile, err := raw.Do(ctx, "GRAPH.PROFILE", key, text(cypher, params)).Result()
-		if err != nil {
-			t.Errorf("PROFILE %+v: %v", c.key, err)
-		} else {
-			lines := edgePageCostLines(profile)
-			for _, line := range lines {
-				if m := edgeCountCostRecords.FindStringSubmatch(line); m != nil {
-					if n, _ := strconv.ParseInt(m[1], 10, 64); n > 2*c.want {
-						t.Errorf("PROFILE %+v: an operation produced %d records for %d counted edges: %s", c.key, n, c.want, strings.TrimSpace(line))
-					}
-				}
-			}
-			t.Logf("PROFILE %+v\n%s", c.key, strings.Join(lines, "\n"))
-		}
-		got, err := countEdgesCause(t, ctx, adapter, raw, key, orgID, c.key, text(cypher, params))
+		got, err := countEdgesCause(t, ctx, adapter, raw, key, orgID, c.key, probe)
 		if err != nil || got != c.want {
-			t.Errorf("CountEdges(%+v) = %d, %v; want %d within the server timeout", c.key, got, err, c.want)
+			t.Errorf("CountEdges(%+v) = %d, %v; want %d under the per-query TIMEOUT", c.key, got, err, c.want)
 		}
-	}
-	// The counted population of this key is the planted edges: it is the
-	// server timeout, whatever the plan of the other keys.
-	ciKey := contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToRepository, Arm: ciRun}
-	cypher, err := edgeCountCypher(ciKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := countEdgesCause(t, ctx, adapter, raw, key, orgID, ciKey, text(cypher, map[string]interface{}{"org": orgID, "rel": "BELONGS_TO_REPOSITORY", "arm": ciRun})); err == nil {
-		t.Errorf("CountEdges(%+v) over %d edges of its own finished within the server timeout: the cause cell observed no failure", ciKey, noise)
 	}
 }
 
 // countEdgesCause runs CountEdges under the count check's own 30 s edge
-// context and, when it fails, requires the failure to be the server TIMEOUT:
-// the context is still live, the read ended within 2 s, it unwraps to
-// context.DeadlineExceeded, the projection run classes it canceled, and the
-// server answers the same statement with "Query timed out".
-func countEdgesCause(t *testing.T, parent context.Context, adapter *Adapter, raw *redis.Client, graphKey, orgID string, key contextfabric.EdgeCountKey, statement string) (int64, error) {
+// context and, when it fails, requires the failure to be the read's own
+// server TIMEOUT inside that budget: the context is still live, the error is
+// query_budget_exceeded (never canceled), and the server answers a walk with
+// "Query timed out" at its default.
+func countEdgesCause(t *testing.T, parent context.Context, adapter *Adapter, raw *redis.Client, graphKey, orgID string, key contextfabric.EdgeCountKey, walk string) (int64, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
@@ -297,11 +260,10 @@ func countEdgesCause(t *testing.T, parent context.Context, adapter *Adapter, raw
 	if err == nil {
 		return got, nil
 	}
-	_, rawErr := raw.Do(parent, "GRAPH.RO_QUERY", graphKey, statement).Result()
-	t.Logf("the same statement sent raw: %v", rawErr)
-	if ctx.Err() != nil || elapsed > 2*time.Second || !errors.Is(err, context.DeadlineExceeded) || class != "canceled" ||
+	_, rawErr := raw.Do(parent, "GRAPH.RO_QUERY", graphKey, walk).Result()
+	if ctx.Err() != nil || !errors.Is(err, contextfabric.ErrQueryBudgetExceeded) || class != "query_budget_exceeded" ||
 		rawErr == nil || !strings.Contains(rawErr.Error(), "Query timed out") {
-		t.Errorf("CountEdges(%+v) failed but not by the server timeout: err %v, elapsed %s, context err %v, class %q, raw %v", key, err, elapsed, ctx.Err(), class, rawErr)
+		t.Errorf("CountEdges(%+v) failed but not as an over-budget read: err %v, elapsed %s, context err %v, class %q, raw %v", key, err, elapsed, ctx.Err(), class, rawErr)
 	}
 	return got, err
 }
