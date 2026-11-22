@@ -917,6 +917,23 @@ scope, so an edge the backend lost is written again without a change in the
 groups log. Each page logs `project team ownership reconcile` at Info
 (`groups_re_derived`, `pass_complete`, `period`).
 
+**Repository reconcile pass.** The ClickHouse source's cursor and overlap window
+re-read a `repos` row only when it lands within about overlap + slack of its
+`last_synced` stamp. A sync attempt stamps at its start and a retry keeps that
+stamp, so a new repository can land later and is never read by the paged walk.
+Once caught up, at most once per hour per scope (`repositoryReconcilePeriod` in
+`devhealthsource/reconcile.go`), the source reads the current `repos` rows in id
+order through the same row scan and first-seen rule as the paged read, and emits
+them without moving the cursor position, with the same acknowledgment as the
+team pass. A row whose repository entity is the one this process already
+emitted from a paged read or saw applied from a window or reconcile page is
+skipped: the graph backend writes and re-embeds every entity of a batch, so an
+unchanged repository is not written again each hour. A process that starts with
+a saved cursor runs the pass at once and writes every repository once. Each
+emitted page and the end of the pass log `repository reconcile` at Info
+(`repositories_re_derived`, `repositories_unchanged`, `pass_complete`, `period`).
+The other tables of the source keep the overlap bound.
+
 **Team change freshness bound.** The window pass of the teams and projects source (`windowTables` in `devhealthsource/teams_projects.go`, built by `teamsProjectsTablesFor`) re-reads `teams`, `projects`, `project_membership_presence`, `work_item_team_attributions`, `team_project_ownership` and `team_repo_ownership`. The cursor is shared by all tables and compares strictly after (`sincePredicate` in `devhealthsource/tables.go`), so a row of these tables stamped at or below the cursor is not read by the next incremental page. The next window pass (`overlapBatch` in `devhealthsource/overlap.go`) reads it only if its stamp is at most `defaultReprojectOverlap` (15 minutes) behind the frontier. A pass STARTS at most `DefaultWindowPassInterval` (5 minutes) after the last one ended, so the interval is no longer than the overlap. The row is visible after that start plus the time the pass takes to walk, which can span several ticks. An older stamp is not read by the window pass. For team rows and project -> team groups the hourly reconcile (`teamOwnershipReconcilePeriod` and `projectTeamOwnershipReconcilePeriod` in `devhealthsource/reconcile.go`) is the backstop. `TestTeamChangeBoundIsOneWindowPass` pins the start bound and the interval <= overlap relation only. A team-only window pass on every tick is a named option, not built.
 
 **Column-arm project edge retraction.** A work item has at most one open
