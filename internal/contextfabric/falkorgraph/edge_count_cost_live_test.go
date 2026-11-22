@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -30,7 +31,20 @@ import (
 // the server timeout, and then by as many again so the walk is well past it.
 // Every failed count must be that server timeout: the read ends near 1 s with
 // its own context still live, the server answers "Query timed out" to the same
-// statement, and the run's failure class is canceled. Needs Docker; run by CI.
+// statement, and the run's failure class is canceled. It also records that a
+// per-query TIMEOUT above the server's lets the same walk finish, and how long
+// a projector write waits while such a walk runs. It plants millions of edges,
+// so it runs only with ACR_FALKOR_TIMEOUT_REPRO=1. Needs Docker.
+const edgeCountCostEnv = "ACR_FALKOR_TIMEOUT_REPRO"
+
+const edgeCountCostForced = false
+
+// edgeCountCostProdScale is the production graph's edge count in the sizing
+// table of docs/operations.md ("Sizing FalkorDB": 346k edges), rounded up.
+const edgeCountCostProdScale = 400000
+
+const edgeCountCostQueryTimeoutMs = 60000
+
 const (
 	edgeCountCostChunk     = 100000
 	edgeCountCostPlant     = 20000
@@ -48,6 +62,9 @@ var edgeCountCostWholeOrgWalk = fmt.Sprintf("MATCH (a:%s {%s:$org})-[r:%s]->() W
 var edgeCountCostRecords = regexp.MustCompile(`Records produced: (\d+)`)
 
 func TestCountEdgesStaysWithinTheServerTimeoutOnALargeGraph(t *testing.T) {
+	if os.Getenv(edgeCountCostEnv) != "1" && !edgeCountCostForced {
+		t.Skipf("set %s=1 to run the large-graph timeout record", edgeCountCostEnv)
+	}
 	ctx := context.Background()
 	adapter, addr := newLiveFalkorAdapter(t, ctx)
 	raw := redis.NewClient(&redis.Options{Addr: addr, ReadTimeout: 60 * time.Second})
@@ -126,8 +143,69 @@ func TestCountEdgesStaysWithinTheServerTimeoutOnALargeGraph(t *testing.T) {
 		}
 		return timedOut
 	}
+	// stall times projector writes (a 50-edge batch through the real
+	// ApplyProjectionBatch) and a served-style one-edge read before, during and
+	// after a whole-organization walk that runs under a per-query TIMEOUT above
+	// the server's. The walk must answer, not time out.
+	batchSeq := 0
+	write := func() time.Duration {
+		batchSeq++
+		var batchRels []contextfabric.RelationshipProjection
+		for i := 0; i < 50; i++ {
+			batchRels = append(batchRels, relation(fmt.Sprintf("relationship_stall_%03d_%02d", batchSeq, i), contractsv1.ContextFabricRelationshipBlocks,
+				workItem(10000+batchSeq*100+i), workItem(10000+batchSeq*100+i+1), nil))
+		}
+		writeBegan := time.Now()
+		if _, err := adapter.ApplyProjectionBatch(ctx, contextfabric.ProjectionBatch{
+			SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: fmt.Sprintf("batch_edge_count_stall_%03d", batchSeq), OrgID: orgID, Source: "live-test", SourceVersion: "v1",
+			Cursor: "c1", NextCursor: "c2", GeneratedAt: now, Relationships: batchRels, Entities: []contextfabric.EntityProjection{},
+			Contents: []contextfabric.ContentProjection{}, Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+		}); err != nil {
+			t.Fatalf("stall write %d: %v", batchSeq, err)
+		}
+		return time.Since(writeBegan)
+	}
+	lookup := text(fmt.Sprintf("MATCH ()-[r:%s {%s:$id}]->() RETURN count(r) AS total", labelRelation, propRelationshipID), map[string]interface{}{"id": "relationship_rel_00001"})
+	served := func() time.Duration {
+		readBegan := time.Now()
+		if _, err := raw.Do(ctx, "GRAPH.RO_QUERY", key, lookup).Result(); err != nil {
+			t.Fatalf("served read: %v", err)
+		}
+		return time.Since(readBegan)
+	}
+	stall := func(label string) {
+		before := []time.Duration{write(), write(), write()}
+		servedBefore := served()
+		type walkResult struct {
+			took  time.Duration
+			total int64
+			err   error
+		}
+		done := make(chan walkResult, 1)
+		go func() {
+			walkBegan := time.Now()
+			reply, err := raw.Do(ctx, "GRAPH.RO_QUERY", key, probe, "TIMEOUT", edgeCountCostQueryTimeoutMs).Result()
+			done <- walkResult{took: time.Since(walkBegan), total: edgeCountCostTotal(reply), err: err}
+		}()
+		time.Sleep(100 * time.Millisecond)
+		during := write()
+		servedDuring := served()
+		w := <-done
+		after := []time.Duration{write(), write()}
+		servedAfter := served()
+		t.Logf("STALL %s noise %d: walk under TIMEOUT %d ms took %s, total %d, err %v; write before %v during %s after %v; served read before %s during %s after %s",
+			label, noise, edgeCountCostQueryTimeoutMs, w.took, w.total, w.err, before, during, after, servedBefore, servedDuring, servedAfter)
+		if w.err != nil || w.total != edgeCountCostRelated {
+			t.Errorf("STALL %s: the walk under a per-query TIMEOUT of %d ms = %d, %v; want %d", label, edgeCountCostQueryTimeoutMs, w.total, w.err, edgeCountCostRelated)
+		}
+	}
+	prodScaleDone := false
 	for firstTimeout == 0 && noise < edgeCountCostMaxNoise {
 		plantTo(noise + edgeCountCostChunk)
+		if !prodScaleDone && noise >= edgeCountCostProdScale {
+			stall("prod scale")
+			prodScaleDone = true
+		}
 		if walk() {
 			firstTimeout = noise
 		}
@@ -140,6 +218,17 @@ func TestCountEdgesStaysWithinTheServerTimeoutOnALargeGraph(t *testing.T) {
 		t.Fatalf("the venue is too small: a whole-organization walk over %d edges finished within the server timeout", noise)
 	}
 	t.Logf("planted %d other-relation edges in %s (first walk timeout at %d)", noise, time.Since(began), firstTimeout)
+	// The proof that the per-query TIMEOUT wins over the server's 1,000 ms: the
+	// walk the server stops at its own timeout answers under the per-query one,
+	// past one second.
+	proofBegan := time.Now()
+	proof, proofErr := raw.Do(ctx, "GRAPH.RO_QUERY", key, probe, "TIMEOUT", edgeCountCostQueryTimeoutMs).Result()
+	proofTook := time.Since(proofBegan)
+	t.Logf("PROOF noise %d: the walk under a per-query TIMEOUT of %d ms took %s, total %d, err %v", noise, edgeCountCostQueryTimeoutMs, proofTook, edgeCountCostTotal(proof), proofErr)
+	if proofErr != nil || edgeCountCostTotal(proof) != edgeCountCostRelated || proofTook <= time.Second {
+		t.Errorf("PROOF: the per-query TIMEOUT did not let the walk run past 1 s and answer %d: took %s, %v", edgeCountCostRelated, proofTook, proofErr)
+	}
+	stall("past the server timeout")
 
 	for _, c := range []struct {
 		key  contextfabric.EdgeCountKey
@@ -215,4 +304,26 @@ func countEdgesCause(t *testing.T, parent context.Context, adapter *Adapter, raw
 		t.Errorf("CountEdges(%+v) failed but not by the server timeout: err %v, elapsed %s, context err %v, class %q, raw %v", key, err, elapsed, ctx.Err(), class, rawErr)
 	}
 	return got, err
+}
+
+// edgeCountCostTotal reads the single count of a non-compact GRAPH.RO_QUERY
+// reply: [header, [[total]], stats]. -1 when the reply has another shape.
+func edgeCountCostTotal(reply interface{}) int64 {
+	parts, ok := reply.([]interface{})
+	if !ok || len(parts) < 2 {
+		return -1
+	}
+	rows, ok := parts[1].([]interface{})
+	if !ok || len(rows) != 1 {
+		return -1
+	}
+	cells, ok := rows[0].([]interface{})
+	if !ok || len(cells) != 1 {
+		return -1
+	}
+	total, ok := cells[0].(int64)
+	if !ok {
+		return -1
+	}
+	return total
 }
