@@ -1,6 +1,7 @@
 package directread
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -12,8 +13,17 @@ import (
 // through the read_facts reader under window and returns the served table.
 func rangeEndDayRead(t *testing.T, window *RequestWindow) ServedTable {
 	t.Helper()
+	table, err := rangeEndDayReadRows(t, window, 60)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	return table
+}
+
+func rangeEndDayReadRows(t *testing.T, window *RequestWindow, rows int) (ServedTable, error) {
+	t.Helper()
 	team := subject("team", "team:IDENTITY")
-	client := &chaos9883Client{dailyRows: map[string]int{"IDENTITY": 60}}
+	client := &chaos9883Client{dailyRows: map[string]int{"IDENTITY": rows}}
 	var health contextfabric.FactProvider
 	for _, candidate := range devhealthfacts.NewProviders(client) {
 		if candidate.Capability().Kind == contextfabric.FactHealth {
@@ -26,15 +36,15 @@ func rangeEndDayRead(t *testing.T, window *RequestWindow) ServedTable {
 		Subjects: []RequestSubject{{Kind: "team", CanonicalID: team.CanonicalID}},
 	})
 	if err != nil {
-		t.Fatalf("read: %v", err)
+		return ServedTable{}, err
 	}
 	for _, fact := range response.Facts {
 		if table, ok := fact.Tables["daily_health"]; ok {
-			return table
+			return table, nil
 		}
 	}
 	t.Fatalf("no daily_health table served: %+v", response.Coverage)
-	return ServedTable{}
+	return ServedTable{}, nil
 }
 
 // An explicit range keeps its end day, as the providers' day predicate does:
@@ -73,5 +83,47 @@ func TestRangeEndingAtMidnightServesItsEndDay(t *testing.T) {
 				t.Fatalf("expected=%v returned=%v missing=%v, want %d, %d, none", table.ExpectedPoints, table.ReturnedPoints, table.MissingInstants, tc.expected, tc.expected)
 			}
 		})
+	}
+}
+
+// The maximum check counts duration, so a maximum-length explicit range can
+// serve one daily point more than the kind's maximum: every UTC day the range
+// touches is served. These cells pin the served day count through the real
+// read path; health's maximum is 60 days.
+func TestMaximumLengthRangeServesEveryUTCDayItTouches(t *testing.T) {
+	const max = 60
+	for _, tc := range []struct {
+		name       string
+		start, end time.Time
+	}{
+		{"max days, both ends at midnight", time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 27, 0, 0, 0, 0, time.UTC)},
+		{"max days, both ends at noon", time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC), time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.end.Sub(tc.start); got != max*24*time.Hour {
+				t.Fatalf("fixture span %v, want exactly %d days", got, max)
+			}
+			start, end := tc.start, tc.end
+			table, err := rangeEndDayReadRows(t, &RequestWindow{Mode: WindowRange, Start: &start, End: &end}, max+5)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if table.RowsReturned != max+1 || table.OldestReturned != "2026-07-29" || table.NewestReturned != "2026-09-27" {
+				t.Fatalf("rows=%d oldest=%q newest=%q, want %d, 2026-07-29, 2026-09-27", table.RowsReturned, table.OldestReturned, table.NewestReturned, max+1)
+			}
+			if table.ExpectedPoints == nil || *table.ExpectedPoints != max+1 || *table.ReturnedPoints != max+1 || len(table.MissingInstants) != 0 {
+				t.Fatalf("expected=%v returned=%v missing=%v, want %d, %d, none", table.ExpectedPoints, table.ReturnedPoints, table.MissingInstants, max+1, max+1)
+			}
+		})
+	}
+}
+
+func TestRangeOneSecondOverTheMaximumIsRefused(t *testing.T) {
+	start := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
+	end := start.Add(60*24*time.Hour + time.Second)
+	_, err := rangeEndDayReadRows(t, &RequestWindow{Mode: WindowRange, Start: &start, End: &end}, 65)
+	var refusal *RequestError
+	if !errors.As(err, &refusal) || refusal.Reason != "window_beyond_kind_max" || refusal.MaxDays != 60 {
+		t.Fatalf("err %v, want window_beyond_kind_max with max_days 60", err)
 	}
 }
