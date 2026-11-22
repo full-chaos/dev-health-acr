@@ -79,11 +79,16 @@ func countOutcomeRows(result InvestigationResult, stage contractsv1.ContextFabri
 func countingCohort(kind SubjectKind, size int) *Cohort {
 	members := make([]CohortMember, 0, size)
 	for index := 0; index < size; index++ {
+		// Letters while they last, so the small fixtures keep their ids.
+		suffix := string(rune('A' + index))
+		if index >= 26 {
+			suffix = fmt.Sprintf("%03d", index)
+		}
 		members = append(members, CohortMember{
 			Subject: SubjectRef{
 				Kind:        kind,
-				CanonicalID: "team:COUNTED_" + string(rune('A'+index)),
-				Label:       "Counted " + string(rune('A'+index)),
+				CanonicalID: "team:COUNTED_" + suffix,
+				Label:       "Counted " + suffix,
 			},
 			Rank:             index + 1,
 			InclusionReasons: []string{"matched"},
@@ -100,10 +105,22 @@ func countingCohort(kind SubjectKind, size int) *Cohort {
 // own narrowing to run; zero means "wide enough that nothing narrows".
 func runCountingInvestigation(t *testing.T, cohortSize int, maxMembers int) (InvestigationResult, *recordingTelemetry) {
 	t.Helper()
+	return runCountingInvestigationWithMaxItems(t, cohortSize, maxMembers, 0)
+}
+
+// countingServiceMaxItems is the service's default item ceiling (ACR_MAX_ITEMS).
+// With it set, stage 1 clamps a requested cap over the flat listing cap and
+// records the step; with the ceiling unbounded it never does.
+const countingServiceMaxItems = 30
+
+// runCountingInvestigationWithMaxItems is runCountingInvestigation with the
+// service's item ceiling set.
+func runCountingInvestigationWithMaxItems(t *testing.T, cohortSize, maxMembers, maxItems int) (InvestigationResult, *recordingTelemetry) {
+	t.Helper()
 	telemetry := &recordingTelemetry{}
 	frame := countingFrame(SubjectTeam)
 	cohort := countingCohort(SubjectTeam, cohortSize)
-	engine := newCountingEngine(t, cohort, frame, telemetry)
+	engine := newCountingEngineWithMaxItems(t, cohort, 0, Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, frame, telemetry, maxItems)
 	return runCountingRequest(t, engine, maxMembers), telemetry
 }
 
@@ -127,6 +144,13 @@ func newCountingEngineWithPopulation(t *testing.T, cohort *Cohort, population in
 // the coverage the GRAPH read reports, so a test can plant a graph detail
 // (an authorization cut, a census bound) beside the cohort it describes.
 func newCountingEngineWithGraphCoverage(t *testing.T, cohort *Cohort, population int, graphCoverage Coverage, frame *QuestionFrame, telemetry *recordingTelemetry) *Engine {
+	t.Helper()
+	return newCountingEngineWithMaxItems(t, cohort, population, graphCoverage, frame, telemetry, 0)
+}
+
+// newCountingEngineWithMaxItems is the same fixture with the service's item
+// ceiling set. Zero leaves it unbounded, which is what every other caller wants.
+func newCountingEngineWithMaxItems(t *testing.T, cohort *Cohort, population int, graphCoverage Coverage, frame *QuestionFrame, telemetry *recordingTelemetry, maxItems int) *Engine {
 	t.Helper()
 	anchor := SubjectRef{Kind: SubjectOrganization, CanonicalID: "org_1", Label: "Org"}
 
@@ -159,7 +183,7 @@ func newCountingEngineWithGraphCoverage(t *testing.T, cohort *Cohort, population
 				Source:           QuestionFamilySourceModel,
 			},
 		},
-		Graph: graph,
+		Graph: discoveryCappedGraphStub{graph},
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 			return CanonicalFactBundle{
 				Facts:    []CanonicalFact{},
@@ -187,6 +211,7 @@ func newCountingEngineWithGraphCoverage(t *testing.T, cohort *Cohort, population
 		Requirements: registryDeriver{},
 	}, EngineOptions{
 		ServiceVersion: "acr-test",
+		MaxItems:       maxItems,
 		Now:            func() time.Time { return time.Unix(500, 0).UTC() },
 		NewResultID:    func() string { return "result_50210001" },
 	})
@@ -436,9 +461,14 @@ func TestTheCountReachesTelemetryFromTheServedDocument(t *testing.T) {
 	// The discriminating power is asserted below BEFORE the agreement is,
 	// so a future change that makes this fixture stop narrowing fails here
 	// rather than silently going vacuous again.
-	const discovered = 8
-	const ceiling = 3
-	result, telemetry := runCountingInvestigation(t, discovered, ceiling)
+	//
+	// The requested cap is over the flat listing cap, so stage 1 clamps it and
+	// records the step whose basis this test asserts; discovery stops at the
+	// clamped cap.
+	const discovered = flatCohortListingMemberCap + 20
+	const requested = flatCohortListingMemberCap + 10
+	const ceiling = flatCohortListingMemberCap
+	result, telemetry := runCountingInvestigationWithMaxItems(t, discovered, requested, countingServiceMaxItems)
 
 	if len(telemetry.membershipCardinalities) != 1 {
 		t.Fatalf("membership cardinality events = %d, want exactly 1 for one served answer -- "+

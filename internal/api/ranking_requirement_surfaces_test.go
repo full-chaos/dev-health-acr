@@ -51,8 +51,9 @@ type rankingSurfaceGraph struct {
 	cohort *cf.Cohort
 }
 
-func (g rankingSurfaceGraph) DiscoverContext(context.Context, storage.Principal, cf.GraphDiscoveryRequest) (cf.GraphContext, error) {
-	return cf.GraphContext{Cohort: g.cohort, Coverage: cf.Coverage{Sources: []cf.SourceObservation{}, DegradedReasons: []string{}}}, nil
+func (g rankingSurfaceGraph) DiscoverContext(_ context.Context, _ storage.Principal, request cf.GraphDiscoveryRequest) (cf.GraphContext, error) {
+	cohort, population := cappedDiscoveredCohort(g.cohort, request.Request.Options.MaxCohortMembers)
+	return cf.GraphContext{Cohort: cohort, CohortPopulation: population, Coverage: cf.Coverage{Sources: []cf.SourceObservation{}, DegradedReasons: []string{}}}, nil
 }
 
 type rankingSurfaceSynthesizer struct{}

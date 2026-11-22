@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -87,12 +88,25 @@ func (g servedSentencesGraph) ResolveSubjects(context.Context, storage.Principal
 	return g.resolution, contextfabric.StructureOfferMaterial{}, g.bases, nil, nil
 }
 
-func (g servedSentencesGraph) DiscoverContext(context.Context, storage.Principal, contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
+func (g servedSentencesGraph) DiscoverContext(_ context.Context, _ storage.Principal, request contextfabric.GraphDiscoveryRequest) (contextfabric.GraphContext, error) {
+	cohort, population := cappedDiscoveredCohort(g.cohort, request.Request.Options.MaxCohortMembers)
 	return contextfabric.GraphContext{
-		Cohort: g.cohort, Paths: []contextfabric.RelationshipPath{}, DriverCandidates: []contextfabric.DriverJudgment{},
+		Cohort: cohort, CohortPopulation: population, Paths: []contextfabric.RelationshipPath{}, DriverCandidates: []contextfabric.DriverJudgment{},
 		FactRequirements: []contextfabric.FactRequirement{}, EvidenceRefIDs: []string{},
 		Coverage: contextfabric.Coverage{Sources: []contextfabric.SourceObservation{}, DegradedReasons: []string{}},
 	}, nil
+}
+
+// cappedDiscoveredCohort stops at the request's member cap and still counts
+// the members past it, as the production discovery reader does.
+func cappedDiscoveredCohort(cohort *contextfabric.Cohort, limit int) (*contextfabric.Cohort, int) {
+	if cohort == nil || limit <= 0 || len(cohort.Members) <= limit {
+		return cohort, 0
+	}
+	cut := *cohort
+	cut.Members = slices.Clone(cohort.Members[:limit])
+	cut.Complete, cut.Truncated = false, true
+	return &cut, len(cohort.Members)
 }
 
 func (g servedSentencesGraph) AuthorizeStoredSubjects(_ context.Context, _ storage.Principal, _ contextfabric.ResolvedGraphBinding, subjects []contextfabric.SubjectRef) ([]contextfabric.StoredSubjectOutcome, error) {

@@ -11,22 +11,16 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 )
 
-// capHonouringGraphReader cuts the discovered cohort at the request's
-// MaxCohortMembers, as graphrank.DiscoveredCohort does for the production
-// reader, and records the cap it was given.
-type capHonouringGraphReader struct {
-	capturingGraphReader
-	caps []int
-}
-
-func (g *capHonouringGraphReader) DiscoverContext(ctx context.Context, principal storage.Principal, request GraphDiscoveryRequest) (GraphContext, error) {
-	discovered, err := g.capturingGraphReader.DiscoverContext(ctx, principal, request)
-	limit := request.Request.Options.MaxCohortMembers
-	g.caps = append(g.caps, limit)
+// withDiscoveryCap applies the request's member cap to a discovered graph
+// context the way graphrank.DiscoveredCohort does for the production reader:
+// members past the cap are not carried, the population still counts them, and
+// the cohort says it is truncated.
+func withDiscoveryCap(discovered GraphContext, limit int) GraphContext {
 	if discovered.Cohort == nil || limit <= 0 || len(discovered.Cohort.Members) <= limit {
-		return discovered, err
+		return discovered
 	}
 	cohort := *discovered.Cohort
+	discovered.CohortPopulation = max(discovered.CohortPopulation, len(cohort.Members))
 	cohort.Members = slices.Clone(cohort.Members[:limit])
 	cohort.Complete, cohort.Truncated = false, true
 	kept := map[string]bool{}
@@ -50,7 +44,30 @@ func (g *capHonouringGraphReader) DiscoverContext(ctx context.Context, principal
 		cohort.Groups = groups
 	}
 	discovered.Cohort = &cohort
-	return discovered, err
+	return discovered
+}
+
+// discoveryCappedGraphStub is graphReaderStub with the production discovery cap.
+type discoveryCappedGraphStub struct {
+	graphReaderStub
+}
+
+func (g discoveryCappedGraphStub) DiscoverContext(ctx context.Context, principal storage.Principal, request GraphDiscoveryRequest) (GraphContext, error) {
+	discovered, err := g.graphReaderStub.DiscoverContext(ctx, principal, request)
+	return withDiscoveryCap(discovered, request.Request.Options.MaxCohortMembers), err
+}
+
+// capHonouringGraphReader is capturingGraphReader with the production
+// discovery cap, recording the cap it was given.
+type capHonouringGraphReader struct {
+	capturingGraphReader
+	caps []int
+}
+
+func (g *capHonouringGraphReader) DiscoverContext(ctx context.Context, principal storage.Principal, request GraphDiscoveryRequest) (GraphContext, error) {
+	discovered, err := g.capturingGraphReader.DiscoverContext(ctx, principal, request)
+	g.caps = append(g.caps, request.Request.Options.MaxCohortMembers)
+	return withDiscoveryCap(discovered, request.Request.Options.MaxCohortMembers), err
 }
 
 // On the normal (non work-item) path, stage 1 clamps the discovery cap to the

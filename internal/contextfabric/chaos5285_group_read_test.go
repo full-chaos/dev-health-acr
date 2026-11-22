@@ -298,6 +298,7 @@ func TestTheContractBoundIsMeasuredAtItsEdge(t *testing.T) {
 		return bundle
 	}}
 	engine, request := groupReadEngineFixtureWith(t, &recordingTelemetry{}, recorder, groupReadCohortMembers(250), nil)
+	request.Options.MaxCohortMembers = 250
 
 	result, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request)
 	if err != nil {

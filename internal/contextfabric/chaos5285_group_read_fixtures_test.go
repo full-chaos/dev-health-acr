@@ -157,11 +157,26 @@ func groupReadMemberFacts() []CanonicalFact {
 	}
 }
 
-// groupReadOverBoundMemberFacts places every member under its OWN team, so the
-// discovered group list exceeds the contract's 250-group bound. 251 is
-// deliberately one over rather than comfortably over: a bound tested far from
-// its edge cannot tell `>` from `>=`.
-func groupReadOverBoundMemberFacts() []CanonicalFact { return groupReadBoundedMemberFacts(251) }
+// groupReadOverBoundMembers is how many members the over-bound fixture
+// discovers. Discovery never returns more members than the request's cap (at
+// most 250), so a group list over the 250-group bound is reached the way it is
+// in production: members that each belong to more than one team.
+const groupReadOverBoundMembers = 126
+
+// groupReadOverBoundMemberFacts places the over-bound fixture's members under
+// 251 teams -- two per member, one for the last -- so the discovered group
+// list exceeds the contract's 250-group bound. 251 is deliberately one over
+// rather than comfortably over: a bound tested far from its edge cannot tell
+// `>` from `>=`.
+func groupReadOverBoundMemberFacts() []CanonicalFact {
+	facts := make([]CanonicalFact, 0, 251)
+	for index := 0; index < 251; index++ {
+		member := fmt.Sprintf("project_%03d", index/2)
+		team := fmt.Sprintf("team_%03d", index)
+		facts = append(facts, teamScopedFact(member, team, team))
+	}
+	return facts
+}
 
 // groupReadBoundedMemberFacts places each of count members under its own team,
 // so the discovered group list has exactly count entries.
@@ -224,7 +239,9 @@ func groupReadEngineFixtureSelfGroup(t *testing.T, telemetry EngineTelemetry, fa
 
 func groupReadEngineFixtureOverBound(t *testing.T, telemetry EngineTelemetry, facts CanonicalFactReader) (*Engine, InvestigationRequest) {
 	t.Helper()
-	return groupReadEngineFixtureWith(t, telemetry, facts, groupReadCohortMembers(251), nil)
+	engine, request := groupReadEngineFixtureWith(t, telemetry, facts, groupReadCohortMembers(groupReadOverBoundMembers), nil)
+	request.Options.MaxCohortMembers = groupReadOverBoundMembers
+	return engine, request
 }
 
 func groupReadEngineFixtureWith(t *testing.T, telemetry EngineTelemetry, facts CanonicalFactReader, members []CohortMember, denied map[string]struct{}) (*Engine, InvestigationRequest) {

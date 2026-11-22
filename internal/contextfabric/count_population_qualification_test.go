@@ -65,10 +65,17 @@ func censusCohort(kind SubjectKind, size int, complete, truncated bool) *Cohort 
 // arms from the member-narrowing arm.
 func runCensusInvestigation(t *testing.T, size, maxMembers int, complete, truncated bool) (InvestigationResult, *recordingTelemetry) {
 	t.Helper()
+	return runCensusInvestigationWithMaxItems(t, size, maxMembers, complete, truncated, 0)
+}
+
+// runCensusInvestigationWithMaxItems is runCensusInvestigation with the
+// service's item ceiling set.
+func runCensusInvestigationWithMaxItems(t *testing.T, size, maxMembers int, complete, truncated bool, maxItems int) (InvestigationResult, *recordingTelemetry) {
+	t.Helper()
 	telemetry := &recordingTelemetry{}
 	frame := countingFrame(SubjectTeam)
 	cohort := censusCohort(SubjectTeam, size, complete, truncated)
-	engine := newCountingEngine(t, cohort, frame, telemetry)
+	engine := newCountingEngineWithMaxItems(t, cohort, 0, Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}}, frame, telemetry, maxItems)
 	return runCountingRequest(t, engine, maxMembers), telemetry
 }
 
@@ -282,11 +289,15 @@ func TestACountOverACompleteCensusStaysSatisfied(t *testing.T) {
 //
 // The cohort here is ALSO incomplete, which is the point -- this is the
 // overlap case, and the recorded narrowing wins it.
+//
+// The step is recorded by stage 1: a requested cap over the flat listing cap
+// is clamped to it, and discovery stops at the clamped cap. A caller's own cap
+// below the listing cap records no step, so it cannot drive this arm.
 func TestACountNarrowedByMembersKeepsItsRecordedCause(t *testing.T) {
 	t.Parallel()
-	const discovered = 8
-	const ceiling = 3
-	result, _ := runCensusInvestigation(t, discovered, ceiling, false, true)
+	const discovered = flatCohortListingMemberCap + 20
+	const requested = flatCohortListingMemberCap + 10
+	result, _ := runCensusInvestigationWithMaxItems(t, discovered, requested, false, true, countingServiceMaxItems)
 	row := theCountRow(t, result)
 
 	if row.Outcome != contractsv1.ContextFabricRequirementNarrowed {
