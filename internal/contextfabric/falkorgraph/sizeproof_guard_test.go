@@ -29,6 +29,7 @@ var sizeproofTests = []string{
 	"TestOneRepositoryWalkStaysSmallOnAWideLinkPopulation",
 	"TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores",
 	"TestEmbedproviderEnvVarsListMatchesPackageSource",
+	"TestCountEdgesStaysWithinTheServerTimeoutOnALargeGraph",
 }
 
 type sizeproofSource struct {
@@ -167,7 +168,7 @@ func TestSizeproofGuardFlagsAnUntaggedProductionSizeTest(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("a_test.go", "//go:build sizeproof\n\npackage falkorgraph\n\nfunc TestTheScopedCensusCostAtProductionSize() {}\nfunc TestEdgePageReadsOnlyTheOriginsEdges() {}\nfunc TestOneRepositoryWalkStaysSmallOnAWideLinkPopulation() {}\nfunc TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores() {}\nfunc TestEmbedproviderEnvVarsListMatchesPackageSource() {}\nconst walkMemoryLinks = 1\nconst edgePageCostItems = 2\nconst edgePageCostRepos = 3\nconst walkMemoryDimension = 4\n")
+	write("a_test.go", "//go:build sizeproof\n\npackage falkorgraph\n\nfunc TestTheScopedCensusCostAtProductionSize() {}\nfunc TestEdgePageReadsOnlyTheOriginsEdges() {}\nfunc TestOneRepositoryWalkStaysSmallOnAWideLinkPopulation() {}\nfunc TestTheScopedCensusAndTheDeploymentWalkFollowTheLinkOnRealStores() {}\nfunc TestEmbedproviderEnvVarsListMatchesPackageSource() {}\nfunc TestCountEdgesStaysWithinTheServerTimeoutOnALargeGraph() {}\nconst walkMemoryLinks = 1\nconst edgePageCostItems = 2\nconst edgePageCostRepos = 3\nconst walkMemoryDimension = 4\n")
 	if v := sizeproofViolations(readSizeproofSources(t, dir)); len(v) != 0 {
 		t.Fatalf("a fully tagged fixture must pass, got %v", v)
 	}

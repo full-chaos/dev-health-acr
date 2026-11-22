@@ -1,0 +1,146 @@
+//go:build sizeproof
+
+package falkorgraph
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/FalkorDB/falkordb-go/v2"
+	"github.com/redis/go-redis/v9"
+
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/graphrank"
+	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+)
+
+// The edge count of the projection run's count check on an organization whose
+// graph holds many edges of OTHER relations. The image's server TIMEOUT
+// (1,000 ms, not overridden in production) bounds every read. Edges of the
+// counted relations are written through the real ApplyProjectionBatch; the
+// other-relation population is planted with raw Cypher in the same graph key,
+// in chunks, until a read that walks every edge of the organization stops at
+// the server timeout. Needs Docker; run by CI.
+const (
+	edgeCountCostChunk     = 100000
+	edgeCountCostPlant     = 20000
+	edgeCountCostMaxNoise  = 2000000
+	edgeCountCostRelated   = 400
+	edgeCountCostProjected = 200
+)
+
+// edgeCountCostWholeOrgWalk reads every edge of the organization: the
+// statement shape whose cost grows with the whole graph, not with one
+// relation.
+var edgeCountCostWholeOrgWalk = fmt.Sprintf("MATCH (a:%s {%s:$org})-[r:%s]->() WHERE r.%s = $rel RETURN count(DISTINCT r.%s) AS total",
+	labelSubject, propOrgID, labelRelation, propRelationType, propRelationshipID)
+
+func TestCountEdgesStaysWithinTheServerTimeoutOnALargeGraph(t *testing.T) {
+	ctx := context.Background()
+	adapter, addr := newLiveFalkorAdapter(t, ctx)
+	raw := redis.NewClient(&redis.Options{Addr: addr, ReadTimeout: 60 * time.Second})
+	t.Cleanup(func() { _ = raw.Close() })
+	orgID := "live-edge-count-cost-" + time.Now().UTC().Format("20060102T150405.000000000")
+	t.Cleanup(func() { _ = adapter.PurgeOrganization(context.Background(), orgID) })
+	for _, name := range []string{"TIMEOUT", "TIMEOUT_DEFAULT", "TIMEOUT_MAX"} {
+		reply, err := raw.Do(ctx, "GRAPH.CONFIG", "GET", name).Result()
+		t.Logf("server config %s = %v (err %v)", name, reply, err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	scope := contextfabric.AuthorizationScope{RepositorySlugs: []string{"acme/api"}}
+	workItem := func(i int) contextfabric.SubjectRef {
+		return contextfabric.SubjectRef{Kind: contextfabric.SubjectWorkItem, CanonicalID: fmt.Sprintf("work_item:w%05d", i), Label: fmt.Sprintf("w%d", i)}
+	}
+	project := contextfabric.SubjectRef{Kind: contextfabric.SubjectProject, CanonicalID: "project:p1", Label: "p1"}
+	relation := func(id string, rel contractsv1.ContextFabricRelationshipType, from, to contextfabric.SubjectRef, validFrom *time.Time) contextfabric.RelationshipProjection {
+		return contextfabric.RelationshipProjection{
+			RelationshipID: id, Type: rel, From: from, To: to,
+			Derivation: contextfabric.DerivationCanonicalStructured, EpistemicStatus: contextfabric.EpistemicObserved,
+			Authorization: scope, EvidenceRefIDs: []string{"evidence_" + id}, ObservedAt: now, ValidFrom: validFrom, SourceVersion: "v1",
+		}
+	}
+	var rels []contextfabric.RelationshipProjection
+	for i := 0; i < edgeCountCostRelated; i++ {
+		rels = append(rels, relation(fmt.Sprintf("relationship_rel_%05d", i), contractsv1.ContextFabricRelationshipRelatedTo, workItem(i), workItem(i+1), nil))
+	}
+	for i := 0; i < edgeCountCostProjected; i++ {
+		rels = append(rels, relation(fmt.Sprintf("relationship_prj_%05d", i), contractsv1.ContextFabricRelationshipBelongsToProject, workItem(i), project, &now))
+	}
+	if _, err := adapter.ApplyProjectionBatch(ctx, contextfabric.ProjectionBatch{
+		SchemaVersion: contextfabric.ProjectionBatchSchemaV1, BatchID: "batch_edge_count_cost_01", OrgID: orgID, Source: "live-test", SourceVersion: "v1",
+		Cursor: "", NextCursor: "c1", GeneratedAt: now, Relationships: rels, Entities: []contextfabric.EntityProjection{},
+		Contents: []contextfabric.ContentProjection{}, Episodes: []contextfabric.EpisodeProjection{}, Tombstones: []contextfabric.ProjectionTombstone{},
+	}); err != nil {
+		t.Fatalf("ApplyProjectionBatch: %v", err)
+	}
+	key, err := adapter.resolveReadKey(ctx, orgID, contextfabric.GraphKeyRoleProjectionWrite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := func(cypher string, params map[string]interface{}) string {
+		safe, err := safeParams(params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return falkordb.BuildParamsHeader(safe) + cypher
+	}
+	ciRun := string(contractsv1.ContextFabricSubjectCIRun)
+	if _, err := raw.Do(ctx, "GRAPH.QUERY", key, text(fmt.Sprintf("CREATE (:%s {%s:$org, %s:'repository', %s:'repository:noise'})",
+		labelSubject, propOrgID, propKind, propCanonicalID), map[string]interface{}{"org": orgID})).Result(); err != nil {
+		t.Fatalf("plant repository: %v", err)
+	}
+	plant := fmt.Sprintf("MATCH (repo:%s {%s:$org, %s:'repository', %s:'repository:noise'}) UNWIND range($lo, $hi) AS i "+
+		"CREATE (:%s {%s:$org, %s:$kind, %s:'ci_pipeline_run:' + toString(i)})-[:%s {%s:'BELONGS_TO_REPOSITORY', %s:'relationship_noise_' + toString(i)}]->(repo)",
+		labelSubject, propOrgID, propKind, propCanonicalID,
+		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, propRelationType, propRelationshipID)
+	probe := text(edgeCountCostWholeOrgWalk, map[string]interface{}{"org": orgID, "rel": graphrank.NormalizeRelation(string(contractsv1.ContextFabricRelationshipRelatedTo))})
+	noise, timedOut := 0, false
+	began := time.Now()
+	for noise < edgeCountCostMaxNoise && !timedOut {
+		for end := noise + edgeCountCostChunk; noise < end; noise += edgeCountCostPlant {
+			if _, err := raw.Do(ctx, "GRAPH.QUERY", key, text(plant, map[string]interface{}{"org": orgID, "kind": ciRun, "lo": noise, "hi": noise + edgeCountCostPlant - 1})).Result(); err != nil {
+				t.Fatalf("plant noise at %d: %v", noise, err)
+			}
+		}
+		probeBegan := time.Now()
+		_, err := raw.Do(ctx, "GRAPH.RO_QUERY", key, probe).Result()
+		timedOut = err != nil && strings.Contains(err.Error(), "Query timed out")
+		t.Logf("noise %d edges: whole-organization walk took %s (err %v)", noise, time.Since(probeBegan), err)
+		if err != nil && !timedOut {
+			t.Fatalf("whole-organization walk: %v", err)
+		}
+	}
+	t.Logf("planted %d other-relation edges in %s", noise, time.Since(began))
+	if !timedOut {
+		t.Fatalf("the venue is too small: a whole-organization walk over %d edges finished within the server timeout", noise)
+	}
+
+	for _, c := range []struct {
+		key  contextfabric.EdgeCountKey
+		want int64
+	}{
+		{contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipRelatedTo}, edgeCountCostRelated},
+		{contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToProject, Arm: contextfabric.EdgeArmTransition}, edgeCountCostProjected},
+	} {
+		cypher, err := edgeCountCypher(c.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		params := map[string]interface{}{"org": orgID, "rel": graphrank.NormalizeRelation(string(c.key.Relation))}
+		plan, err := raw.Do(ctx, "GRAPH.EXPLAIN", key, text(cypher, params)).Result()
+		t.Logf("EXPLAIN %+v (err %v)\n%s", c.key, err, strings.Join(edgePageCostLines(plan), "\n"))
+		countBegan := time.Now()
+		got, err := adapter.CountEdges(ctx, orgID, c.key)
+		t.Logf("CountEdges(%+v) = %d, %v in %s over %d other-relation edges", c.key, got, err, time.Since(countBegan), noise)
+		if err != nil || got != c.want {
+			t.Errorf("CountEdges(%+v) = %d, %v; want %d within the server timeout", c.key, got, err, c.want)
+		}
+	}
+	armBegan := time.Now()
+	got, err := adapter.CountEdges(ctx, orgID, contextfabric.EdgeCountKey{Relation: contractsv1.ContextFabricRelationshipBelongsToRepository, Arm: ciRun})
+	t.Logf("not asserted: CountEdges(BELONGS_TO_REPOSITORY, %s) = %d, %v in %s (the counted population is the %d planted edges)", ciRun, got, err, time.Since(armBegan), noise)
+}
