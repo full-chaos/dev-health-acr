@@ -5,6 +5,8 @@ package falkorgraph
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +25,8 @@ import (
 // counted relations are written through the real ApplyProjectionBatch; the
 // other-relation population is planted with raw Cypher in the same graph key,
 // in chunks, until a read that walks every edge of the organization stops at
-// the server timeout. Needs Docker; run by CI.
+// the server timeout, and then by half as many again so the walk is well past
+// it. Needs Docker; run by CI.
 const (
 	edgeCountCostChunk     = 100000
 	edgeCountCostPlant     = 20000
@@ -37,6 +40,8 @@ const (
 // relation.
 var edgeCountCostWholeOrgWalk = fmt.Sprintf("MATCH (a:%s {%s:$org})-[r:%s]->() WHERE r.%s = $rel RETURN count(DISTINCT r.%s) AS total",
 	labelSubject, propOrgID, labelRelation, propRelationType, propRelationshipID)
+
+var edgeCountCostRecords = regexp.MustCompile(`Records produced: (\d+)`)
 
 func TestCountEdgesStaysWithinTheServerTimeoutOnALargeGraph(t *testing.T) {
 	ctx := context.Background()
@@ -98,26 +103,39 @@ func TestCountEdgesStaysWithinTheServerTimeoutOnALargeGraph(t *testing.T) {
 		labelSubject, propOrgID, propKind, propCanonicalID,
 		labelSubject, propOrgID, propKind, propCanonicalID, labelRelation, propRelationType, propRelationshipID)
 	probe := text(edgeCountCostWholeOrgWalk, map[string]interface{}{"org": orgID, "rel": graphrank.NormalizeRelation(string(contractsv1.ContextFabricRelationshipRelatedTo))})
-	noise, timedOut := 0, false
+	noise, firstTimeout := 0, 0
 	began := time.Now()
-	for noise < edgeCountCostMaxNoise && !timedOut {
-		for end := noise + edgeCountCostChunk; noise < end; noise += edgeCountCostPlant {
+	plantTo := func(end int) {
+		for ; noise < end; noise += edgeCountCostPlant {
 			if _, err := raw.Do(ctx, "GRAPH.QUERY", key, text(plant, map[string]interface{}{"org": orgID, "kind": ciRun, "lo": noise, "hi": noise + edgeCountCostPlant - 1})).Result(); err != nil {
 				t.Fatalf("plant noise at %d: %v", noise, err)
 			}
 		}
+	}
+	walk := func() bool {
 		probeBegan := time.Now()
 		_, err := raw.Do(ctx, "GRAPH.RO_QUERY", key, probe).Result()
-		timedOut = err != nil && strings.Contains(err.Error(), "Query timed out")
+		timedOut := err != nil && strings.Contains(err.Error(), "Query timed out")
 		t.Logf("noise %d edges: whole-organization walk took %s (err %v)", noise, time.Since(probeBegan), err)
 		if err != nil && !timedOut {
 			t.Fatalf("whole-organization walk: %v", err)
 		}
+		return timedOut
 	}
-	t.Logf("planted %d other-relation edges in %s", noise, time.Since(began))
-	if !timedOut {
+	for firstTimeout == 0 && noise < edgeCountCostMaxNoise {
+		plantTo(noise + edgeCountCostChunk)
+		if walk() {
+			firstTimeout = noise
+		}
+	}
+	if firstTimeout == 0 {
 		t.Fatalf("the venue is too small: a whole-organization walk over %d edges finished within the server timeout", noise)
 	}
+	plantTo(firstTimeout + firstTimeout/2)
+	if !walk() {
+		t.Fatalf("the venue is too small: a whole-organization walk over %d edges finished within the server timeout", noise)
+	}
+	t.Logf("planted %d other-relation edges in %s (first walk timeout at %d)", noise, time.Since(began), firstTimeout)
 
 	for _, c := range []struct {
 		key  contextfabric.EdgeCountKey
@@ -131,8 +149,27 @@ func TestCountEdgesStaysWithinTheServerTimeoutOnALargeGraph(t *testing.T) {
 			t.Fatal(err)
 		}
 		params := map[string]interface{}{"org": orgID, "rel": graphrank.NormalizeRelation(string(c.key.Relation))}
+		if c.key.Arm != "" {
+			params["arm"] = c.key.Arm
+		}
 		plan, err := raw.Do(ctx, "GRAPH.EXPLAIN", key, text(cypher, params)).Result()
 		t.Logf("EXPLAIN %+v (err %v)\n%s", c.key, err, strings.Join(edgePageCostLines(plan), "\n"))
+		// Every operation of the read produces at most twice the counted
+		// edges: the read is bounded by the relation, not by the graph.
+		profile, err := raw.Do(ctx, "GRAPH.PROFILE", key, text(cypher, params)).Result()
+		if err != nil {
+			t.Errorf("PROFILE %+v: %v", c.key, err)
+		} else {
+			lines := edgePageCostLines(profile)
+			for _, line := range lines {
+				if m := edgeCountCostRecords.FindStringSubmatch(line); m != nil {
+					if n, _ := strconv.ParseInt(m[1], 10, 64); n > 2*c.want {
+						t.Errorf("PROFILE %+v: an operation produced %d records for %d counted edges: %s", c.key, n, c.want, strings.TrimSpace(line))
+					}
+				}
+			}
+			t.Logf("PROFILE %+v\n%s", c.key, strings.Join(lines, "\n"))
+		}
 		countBegan := time.Now()
 		got, err := adapter.CountEdges(ctx, orgID, c.key)
 		t.Logf("CountEdges(%+v) = %d, %v in %s over %d other-relation edges", c.key, got, err, time.Since(countBegan), noise)
