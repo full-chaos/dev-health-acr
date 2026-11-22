@@ -576,6 +576,7 @@ func (s *ClickHouseProjectionSource) plan(fromCursor string) sourcePlan {
 		readByteLimit:        s.readByteLimit,
 		endedLinksBound:      s.endedLinksBound,
 		followProjectCatalog: s.workItemProjectMembership,
+		reconciles:           []reconcilePlan{repositoriesReconcilePlan()},
 	}
 }
 
