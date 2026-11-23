@@ -9,6 +9,7 @@ import (
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	runtimeclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
@@ -79,7 +80,28 @@ func edgeThreadsMeasure(t *testing.T, ctx context.Context, client contextpacket.
 // same statement at four threads.
 func TestLiveMembershipEdgeCountPeakAndThreads(t *testing.T) {
 	ctx := context.Background()
-	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
+	addr, admin := sharedDevHealthClickHouse(t)
+	database := fmt.Sprintf("t%d", perTestDatabaseSeq.Add(1))
+	if err := admin.Exec(ctx, "CREATE DATABASE "+database); err != nil {
+		t.Fatalf("create per-test database %s: %v", database, err)
+	}
+	t.Cleanup(func() { _ = admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+database+" SYNC") })
+	direct, err := clickhousedriver.Open(&clickhousedriver.Options{
+		Addr: []string{addr}, Auth: clickhousedriver.Auth{Database: database, Username: "acr", Password: "acr"}, DialTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("open native ClickHouse connection: %v", err)
+	}
+	t.Cleanup(func() { _ = direct.Close() })
+	var unlimitedRows uint
+	var unlimitedBytes uint64
+	query, err := runtimeclickhouse.NewClickHouseQueryClientWithOptions(runtimeclickhouse.Options{
+		DSN: "clickhouse://acr:acr@" + addr + "/" + database, DialTimeout: 10 * time.Second, MaxResultRows: &unlimitedRows, MaxBytesToRead: &unlimitedBytes,
+	})
+	if err != nil {
+		t.Fatalf("open the query client: %v", err)
+	}
+	t.Cleanup(func() { _ = query.Close() })
 	for _, statement := range productionSchemaDDL() {
 		if err := direct.Exec(ctx, statement); err != nil {
 			t.Fatalf("create schema: %v", err)
@@ -94,7 +116,7 @@ func TestLiveMembershipEdgeCountPeakAndThreads(t *testing.T) {
 	}
 	for _, table := range []string{"work_items", "project_membership_transitions"} {
 		if err := direct.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
-			t.Logf("stop merges on %s: %v", table, err)
+			t.Fatalf("stop merges on %s: %v", table, err)
 		}
 	}
 	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
