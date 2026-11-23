@@ -40,3 +40,10 @@ func highestRunOver(runs []uint64, ceiling uint64) (highest uint64, over bool) {
 	}
 	return highest, highest >= ceiling
 }
+
+// statementOver is the verdict on the work_graph.v1 statement's per-run peaks
+// against its own ceiling.
+func statementOver(runs []uint64) (over bool, highest uint64) {
+	highest, over = highestRunOver(runs, 12<<20)
+	return over, highest
+}
