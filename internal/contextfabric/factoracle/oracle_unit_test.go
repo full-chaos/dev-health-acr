@@ -1935,7 +1935,7 @@ func TestTheReplayedRequestIsBoundToItsCase(t *testing.T) {
 		t.Fatal("shape is not generated")
 	}
 	client := map[string]any{"input": map[string]any{"teamIds": []any{"team:t1"}, "historyWeeks": 12}}
-	selection := []string{"throughputForecast.staleWip.p50AgeHours", "throughputForecast.staleWip.p90AgeHours", "throughputForecast.staleWip.__typename"}
+	selection := []string{"throughputForecast.staleWip.p50AgeHours", "throughputForecast.staleWip.p90AgeHours", "throughputForecast.staleWip.state", "throughputForecast.staleWip.asOfDay", "throughputForecast.staleWip.grainCount", "throughputForecast.staleWip.__typename"}
 	upstream := func(raw string) map[string]any {
 		t.Helper()
 		value, err := decodeJSON([]byte(raw))
@@ -1961,7 +1961,7 @@ func TestTheReplayedRequestIsBoundToItsCase(t *testing.T) {
 		"another organization":                   {`{"orgId":"another","input":{"teamIds":["t1"],"historyWeeks":12}}`, selection, "orgId is not the caller's organization"},
 		"an argument the document does not have": {`{"orgId":"` + FixtureOrgID + `","input":{"teamIds":["t1"],"historyWeeks":12},"debug":true}`, selection, "the argument debug, which the registered document does not have"},
 		"a variable with no rule":                {`{"orgId":"` + FixtureOrgID + `","input":{"teamIds":["t1"],"historyWeeks":12,"debug":true}}`, selection, "input.debug, which has no rule"},
-		"a field that is not selected":           {good, selection[:2], "does not select throughputForecast.staleWip.__typename"},
+		"a field that is not selected":           {good, selection[:len(selection)-1], "does not select throughputForecast.staleWip.__typename"},
 		"a field outside the shape":              {good, append(append([]string{}, selection...), "throughputForecast.backlogSize"), "selects throughputForecast.backlogSize, which is not in the selection of the case"},
 	} {
 		problems := boundRequest(shape, false, client, FixtureOrgID, upstream(c.variables), c.selection)
