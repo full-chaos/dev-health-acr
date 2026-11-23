@@ -173,7 +173,7 @@ func nextAttemptWritten(ctx context.Context, err error) bool {
 	if err == nil {
 		return true
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, errServerBudgetSpent) {
 		return false
 	}
 	cause, _ := readFailureCause(err)
