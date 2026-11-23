@@ -193,9 +193,13 @@ func withServerTimeout(ctx context.Context, limit, margin time.Duration) context
 var errServerBudgetSpent = errors.New("falkordb read: no budget left for the per-query timeout")
 
 // queryArgs is the command one attempt of query sends. Only a read whose ctx
-// carries withServerTimeout gets the TIMEOUT argument, computed at now from
-// the caller's remaining deadline; every other command keeps the server's
-// default bound and is sent as it was before.
+// carries withServerTimeout gets the TIMEOUT argument, computed when the
+// attempt starts from the caller's remaining deadline; every other command
+// keeps the server's default bound and is sent as it was before. The
+// connection setup that follows (a new connection's dial and handshake) is not
+// counted: a slow setup can use up the margin, and then the caller's context
+// may end before the reply, which the caller sees as its own end, never as a
+// count.
 func queryArgs(ctx context.Context, now time.Time, command, graphKey, text string, readOnly bool) ([]interface{}, error) {
 	args := []interface{}{command, graphKey, text, "--compact"}
 	policy, ok := ctx.Value(serverTimeoutKey{}).(serverTimeout)

@@ -67,11 +67,13 @@ func (a *Adapter) CountEdges(ctx context.Context, orgID string, key contextfabri
 
 // An edge count walks every edge of the organization for a relation without a
 // subject kind arm, past the image's 1 s server TIMEOUT on a production graph.
-// Each attempt of a count read gets its own server TIMEOUT: what is left of the
-// caller's deadline less edgeCountTimeoutMargin, so the server answers before
-// the context ends, and at most edgeCountTimeoutCap, about 2.5 times the
-// estimated production walk, which also bounds how long a projector write
-// waits behind it.
+// Each attempt of a count read gets its own server TIMEOUT, fixed when the
+// attempt starts: what is left of the caller's deadline less
+// edgeCountTimeoutMargin, so the server answers before the context ends, and
+// at most edgeCountTimeoutCap, about 2.5 times the estimated production walk,
+// which also bounds how long a projector write waits behind it. Connection
+// setup after that point is not counted; when it uses up the margin the worst
+// case is the canceled class, never a wrong count.
 const (
 	edgeCountTimeoutCap    = 5 * time.Second
 	edgeCountTimeoutMargin = 250 * time.Millisecond
