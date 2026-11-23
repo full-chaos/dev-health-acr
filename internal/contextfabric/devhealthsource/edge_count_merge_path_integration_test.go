@@ -80,6 +80,7 @@ func edgeMergePathSeed(t *testing.T, ctx context.Context, direct clickhousedrive
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
+	// devhealthschema:not-a-production-replica these are table NAMES for STOP MERGES and a seed label; the schema comes from productionSchemaDDL, no column or engine is declared here.
 	for _, table := range []string{"work_items", "project_membership_transitions"} {
 		if err := direct.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
 			t.Fatalf("stop merges on %s: %v", table, err)
@@ -231,6 +232,7 @@ GROUP BY plan_step_name, plan_step_description, name HAVING sum(input_rows) > 0 
 				t.Logf("PROFILE %s explain %s merge path=%v:\n%s", fixture.name, table, found, text.String())
 				return found
 			}
+			// devhealthschema:not-a-production-replica these are table NAMES passed to EXPLAIN PIPELINE; the schema comes from productionSchemaDDL, no column or engine is declared here.
 			transitionsMerge, workMerge := mergePath("project_membership_transitions"), mergePath("work_items")
 			if transitionsMerge != fixture.transitionsOnMergePath || workMerge == fixture.transitionsOnMergePath {
 				t.Errorf("%s: FINAL merges transitions=%v work_items=%v, want transitions=%v work_items=%v", fixture.name, transitionsMerge, workMerge, fixture.transitionsOnMergePath, !fixture.transitionsOnMergePath)
