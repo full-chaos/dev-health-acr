@@ -156,9 +156,9 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 		t.Log("PROFILE the shipped statement carries no SETTINGS max_threads = 1")
 	}
 	runs := map[string][]string{}
-	var firstCounts, otherCounts map[string]uint64
+	var firstCounts, otherCounts, oneCounts map[string]uint64
 	for i := 0; i < edgeThreadsRuns; i++ {
-		for _, c := range []struct{ label, statement string }{{"shipped", shipped}, {"four", fourThreads}} {
+		for _, c := range []struct{ label, statement string }{{"shipped", shipped}, {"four", fourThreads}, {"one", fourThreads + "\nSETTINGS max_threads = 1"}} {
 			label := fmt.Sprintf("edge-threads-%s-%d", c.label, i)
 			counts := edgeThreadsMeasure(t, ctx, capped, c.statement, label)
 			runs[c.label] = append(runs[c.label], label)
@@ -167,6 +167,9 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 			}
 			if c.label == "four" && otherCounts == nil {
 				otherCounts = counts
+			}
+			if c.label == "one" && oneCounts == nil {
+				oneCounts = counts
 			}
 		}
 	}
@@ -189,6 +192,8 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 	shippedPeak, shippedMillis, shippedRows, shippedThreads := read("shipped")
 	fourPeak, fourMillis, fourRows, fourLogged := read("four")
 	t.Logf("PROFILE shipped: peak=%d median_ms=%d read_rows=%d max_threads=%q", shippedPeak, shippedMillis, shippedRows, shippedThreads)
+	onePeak, oneMillis, oneRows, oneLogged := read("one")
+	t.Logf("PROFILE one thread: peak=%d median_ms=%d read_rows=%d max_threads=%q", onePeak, oneMillis, oneRows, oneLogged)
 	t.Logf("PROFILE four threads: peak=%d median_ms=%d read_rows=%d max_threads=%q", fourPeak, fourMillis, fourRows, fourLogged)
 
 	if len(firstCounts) != 2 || firstCounts["transition"] == 0 || firstCounts["work_item_column"] == 0 {
@@ -196,6 +201,9 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 	}
 	if fmt.Sprint(firstCounts) != fmt.Sprint(otherCounts) {
 		t.Errorf("the edge count differs between the shipped statement and four threads: %v vs %v", firstCounts, otherCounts)
+	}
+	if fmt.Sprint(oneCounts) != fmt.Sprint(otherCounts) {
+		t.Errorf("the edge count differs between one thread and four threads: %v vs %v", oneCounts, otherCounts)
 	}
 	if fourPeak <= edgeThreadsPeakBound {
 		t.Fatalf("the bound is vacuous: four threads peak at %d, not over %d", fourPeak, edgeThreadsPeakBound)
