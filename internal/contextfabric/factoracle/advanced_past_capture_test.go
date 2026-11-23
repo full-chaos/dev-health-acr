@@ -91,8 +91,9 @@ func TestAdvancedPastCaptureEntriesAreRecordedAndAdvanced(t *testing.T) {
 // stops the run.
 func TestARootIsSkippedOnlyWhenEveryOperationIsAdvanced(t *testing.T) {
 	policy := mustPolicy(t)
-	// The capture is current: no root is skipped.
-	if roots := advancedRoots(policy, advancedPastCapture); len(roots) != 0 {
+	// The roots of the operations advanced past the capture are skipped: capacityForecast too, since its
+	// window probe runs on an advanced operation.
+	if roots := advancedRoots(policy, advancedPastCapture); !slices.Equal(roots, []string{"capacityForecast", "capacityForecasts", "throughputForecast"}) {
 		t.Fatalf("the current capture skips roots %v", roots)
 	}
 	// A root whose only operation is advanced is skipped by name.
@@ -247,4 +248,31 @@ func casesWithout(cases []ShapeCase, operation string) []ShapeCase {
 		parts := strings.SplitN(c.ShapeID, "/", 3)
 		return len(parts) >= 2 && parts[1] == operation
 	})
+}
+
+// The recorded run skips exactly one operation that is not advanced: the
+// replies of capacityCompletionDistribution stay unreplayed until the capture
+// is taken again. The set is pinned: a skip removed or widened to another
+// operation fails here.
+func TestTheSkippedUnadvancedOperationSetIsPinned(t *testing.T) {
+	policy := mustPolicy(t)
+	if got := skippedUnadvancedOperations(policy, advancedPastCapture); !slices.Equal(got, []string{"capacityCompletionDistribution"}) {
+		t.Fatalf("operations skipped with a skipped root although not advanced: %v, want [capacityCompletionDistribution]", got)
+	}
+	manifest, _, _, err := LoadCapture(captureDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := 0
+	for _, c := range manifest.ShapeCases {
+		if parts := strings.SplitN(c.ShapeID, "/", 3); len(parts) >= 2 && parts[1] == "capacityCompletionDistribution" {
+			recorded++
+		}
+	}
+	if recorded == 0 {
+		t.Fatal("the capture holds no case of capacityCompletionDistribution: the not-measured statement names nothing")
+	}
+	if got := skippedUnadvancedOperations(policy, map[string]string{}); len(got) != 0 {
+		t.Fatalf("with no advanced operation the skip set is %v, want none", got)
+	}
 }

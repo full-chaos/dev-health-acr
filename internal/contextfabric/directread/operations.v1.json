@@ -3,10 +3,10 @@
   "generator": "cmd/operationpolicy",
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "2c115402dbbb3b11f28a0029cdbe3b9da5c3e891",
+    "commit": "d37727251ee50c48b2833d20ec71abd356f24ddb",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
-    "schema_digest": "sha256:963a889d2e612b923be407d9191aed05ef5b9bc9d5d6dd758e5a238e20185667",
-    "registry_sha256": "a5b10041070294faf37a75253ff2a024af2656442b341562b8202c65f6ca26c0",
+    "schema_digest": "sha256:89d6994d1bc637fabfa6ea56a499d3bf6b896584a686856851e25a7b73d8753c",
+    "registry_sha256": "84e2adf2e845b18f3608c7a4fb76087936664ea6f87d2b313953296270420ece",
     "registry_rows": 67
   },
   "person_name_tokens": [
@@ -265,8 +265,8 @@
       "name": "capacityForecast",
       "document_operation_name": "CapacityForecast",
       "kind": "query",
-      "digest": "d95197012e32056fcece1f8975d953e7465bb112354cf4201e87b39375f933ef",
-      "document_text": "query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {\n  capacityForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    targetItems\n    targetDate\n    p50Date\n    p85Date\n    p95Date\n    p50Days\n    p85Days\n    p95Days\n    p50Items\n    p85Items\n    p95Items\n    throughputMean\n    throughputStddev\n    historyDays\n    insufficientHistory\n    highVariance\n    completionDistribution {\n      runs\n      unfinishedRuns\n      horizonDays\n      days {\n        value\n        count\n        cumulativeShare\n        __typename\n      }\n      items {\n        value\n        count\n        cumulativeShare\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
+      "digest": "61534928326d9e7c1ad83451056cec1d73b66e89a5eca9c6170d60ecf8bbdeb6",
+      "document_text": "query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {\n  capacityForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    backlogState\n    backlogAsOfDay\n    targetItems\n    targetDate\n    p50Date\n    p85Date\n    p95Date\n    p50Days\n    p85Days\n    p95Days\n    p50Items\n    p85Items\n    p95Items\n    throughputMean\n    throughputStddev\n    historyDays\n    insufficientHistory\n    highVariance\n    completionDistribution {\n      runs\n      unfinishedRuns\n      horizonDays\n      days {\n        value\n        count\n        cumulativeShare\n        __typename\n      }\n      items {\n        value\n        count\n        cumulativeShare\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
       "cost_class": "compute",
       "deadline_seconds": 30,
       "max_in_flight_per_org": 1,
@@ -413,6 +413,16 @@
         {
           "path": "capacityForecast.backlogSize",
           "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.backlogState",
+          "type": "NewestDayState",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecast.backlogAsOfDay",
+          "type": "Date",
           "leaf": "scalar"
         },
         {
@@ -572,8 +582,8 @@
       "name": "capacityForecasts",
       "document_operation_name": "CapacityForecasts",
       "kind": "query",
-      "digest": "43890adbbf75ac3ad71c29f728a82e35d035c3f2c701f0ced116559fa28b6c20",
-      "document_text": "query CapacityForecasts($orgId: String!, $filters: CapacityForecastFilterInput) {\n  capacityForecasts(orgId: $orgId, filters: $filters) {\n    edges {\n      node {\n        forecastId\n        computedAt\n        teamId\n        workScopeId\n        backlogSize\n        targetItems\n        targetDate\n        p50Date\n        p85Date\n        p95Date\n        p50Days\n        p85Days\n        p95Days\n        p50Items\n        p85Items\n        p95Items\n        throughputMean\n        throughputStddev\n        historyDays\n        insufficientHistory\n        highVariance\n        __typename\n      }\n      cursor\n      __typename\n    }\n    pageInfo {\n      hasNextPage\n      hasPreviousPage\n      startCursor\n      endCursor\n      __typename\n    }\n    totalCount\n    __typename\n  }\n}",
+      "digest": "976b1a117d82f699eef98bcee1a1fc5cec44086026706fd501eddc4f2ba6fd77",
+      "document_text": "query CapacityForecasts($orgId: String!, $filters: CapacityForecastFilterInput) {\n  capacityForecasts(orgId: $orgId, filters: $filters) {\n    edges {\n      node {\n        forecastId\n        computedAt\n        teamId\n        workScopeId\n        backlogSize\n        backlogState\n        backlogAsOfDay\n        targetItems\n        targetDate\n        p50Date\n        p85Date\n        p95Date\n        p50Days\n        p85Days\n        p95Days\n        p50Items\n        p85Items\n        p95Items\n        throughputMean\n        throughputStddev\n        historyDays\n        insufficientHistory\n        highVariance\n        __typename\n      }\n      cursor\n      __typename\n    }\n    pageInfo {\n      hasNextPage\n      hasPreviousPage\n      startCursor\n      endCursor\n      __typename\n    }\n    totalCount\n    __typename\n  }\n}",
       "cost_class": "list",
       "deadline_seconds": 30,
       "variables": [
@@ -694,6 +704,16 @@
         {
           "path": "capacityForecasts.edges[*].node.backlogSize",
           "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.backlogState",
+          "type": "NewestDayState",
+          "leaf": "scalar"
+        },
+        {
+          "path": "capacityForecasts.edges[*].node.backlogAsOfDay",
+          "type": "Date",
           "leaf": "scalar"
         },
         {
@@ -8169,8 +8189,8 @@
       "name": "throughputForecast",
       "document_operation_name": "ThroughputForecast",
       "kind": "query",
-      "digest": "a265a9550e4cdab2bc77395257777ec366ac554b19c617af094de47c7a9e2b03",
-      "document_text": "query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {\n  throughputForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    backlogState\n    backlogAsOfDay\n    degradedReason\n    historyWeeks\n    p50Weeks\n    p75Weeks\n    p90Weeks\n    insufficientHistory\n    rollingWindows {\n      windowWeeks\n      meanWeeklyThroughput\n      sampleCount\n      insufficientHistory\n      __typename\n    }\n    primaryRisk {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestion {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    staleWip {\n      p50AgeHours\n      p90AgeHours\n      __typename\n    }\n    estimateCoverage {\n      ratio\n      estimatedCount\n      unestimatedCount\n      backlogSize\n      grainCount\n      __typename\n    }\n    reviewBottleneck {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    incidentLoad {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    __typename\n  }\n}",
+      "digest": "9ace3bd179910a7c79ec8dade33c8f93c7244fc45fe455d4f844a5838eb6a18f",
+      "document_text": "query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {\n  throughputForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    backlogState\n    backlogAsOfDay\n    degradedReason\n    historyWeeks\n    p50Weeks\n    p75Weeks\n    p90Weeks\n    insufficientHistory\n    rollingWindows {\n      windowWeeks\n      meanWeeklyThroughput\n      sampleCount\n      insufficientHistory\n      __typename\n    }\n    primaryRisk {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestion {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestionState\n    wipCongestionAsOfDay\n    wipCongestionGrainCount\n    staleWip {\n      p50AgeHours\n      p90AgeHours\n      state\n      asOfDay\n      grainCount\n      __typename\n    }\n    estimateCoverage {\n      ratio\n      estimatedCount\n      unestimatedCount\n      backlogSize\n      grainCount\n      state\n      asOfDay\n      __typename\n    }\n    reviewBottleneck {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    incidentLoad {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    __typename\n  }\n}",
       "cost_class": "series",
       "deadline_seconds": 30,
       "variables": [
@@ -8415,6 +8435,21 @@
           "leaf": "typename"
         },
         {
+          "path": "throughputForecast.wipCongestionState",
+          "type": "NewestDayState!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.wipCongestionAsOfDay",
+          "type": "Date",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.wipCongestionGrainCount",
+          "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
           "path": "throughputForecast.staleWip.p50AgeHours",
           "type": "Float",
           "leaf": "scalar"
@@ -8422,6 +8457,21 @@
         {
           "path": "throughputForecast.staleWip.p90AgeHours",
           "type": "Float",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.staleWip.state",
+          "type": "NewestDayState!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.staleWip.asOfDay",
+          "type": "Date!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.staleWip.grainCount",
+          "type": "Int!",
           "leaf": "scalar"
         },
         {
@@ -8452,6 +8502,16 @@
         {
           "path": "throughputForecast.estimateCoverage.grainCount",
           "type": "Int!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.estimateCoverage.state",
+          "type": "NewestDayState!",
+          "leaf": "scalar"
+        },
+        {
+          "path": "throughputForecast.estimateCoverage.asOfDay",
+          "type": "Date",
           "leaf": "scalar"
         },
         {

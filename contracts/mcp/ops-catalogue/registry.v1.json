@@ -1,7 +1,7 @@
 {
   "source": {
     "repository": "full-chaos/dev-health-ops",
-    "commit": "2c115402dbbb3b11f28a0029cdbe3b9da5c3e891",
+    "commit": "d37727251ee50c48b2833d20ec71abd356f24ddb",
     "tool": "go run ./cmd/registrydump -file internal/queryapi/server/query_route.go",
     "schema_path": "contracts/graphql/v1/schema.graphql"
   },
@@ -140,9 +140,9 @@
     },
     {
       "operation": "capacityForecast",
-      "document": "query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {\n  capacityForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    targetItems\n    targetDate\n    p50Date\n    p85Date\n    p95Date\n    p50Days\n    p85Days\n    p95Days\n    p50Items\n    p85Items\n    p95Items\n    throughputMean\n    throughputStddev\n    historyDays\n    insufficientHistory\n    highVariance\n    completionDistribution {\n      runs\n      unfinishedRuns\n      horizonDays\n      days {\n        value\n        count\n        cumulativeShare\n        __typename\n      }\n      items {\n        value\n        count\n        cumulativeShare\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {\n  capacityForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    backlogState\n    backlogAsOfDay\n    targetItems\n    targetDate\n    p50Date\n    p85Date\n    p95Date\n    p50Days\n    p85Days\n    p95Days\n    p50Items\n    p85Items\n    p95Items\n    throughputMean\n    throughputStddev\n    historyDays\n    insufficientHistory\n    highVariance\n    completionDistribution {\n      runs\n      unfinishedRuns\n      horizonDays\n      days {\n        value\n        count\n        cumulativeShare\n        __typename\n      }\n      items {\n        value\n        count\n        cumulativeShare\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredCapacityForecastDocument",
-      "digest": "d95197012e32056fcece1f8975d953e7465bb112354cf4201e87b39375f933ef",
+      "digest": "61534928326d9e7c1ad83451056cec1d73b66e89a5eca9c6170d60ecf8bbdeb6",
       "kind": "query"
     },
     {
@@ -162,11 +162,27 @@
       "legacy": true
     },
     {
+      "operation": "capacityForecast",
+      "document": "query CapacityForecast($orgId: String!, $input: CapacityForecastInput) {\n  capacityForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    targetItems\n    targetDate\n    p50Date\n    p85Date\n    p95Date\n    p50Days\n    p85Days\n    p95Days\n    p50Items\n    p85Items\n    p95Items\n    throughputMean\n    throughputStddev\n    historyDays\n    insufficientHistory\n    highVariance\n    completionDistribution {\n      runs\n      unfinishedRuns\n      horizonDays\n      days {\n        value\n        count\n        cumulativeShare\n        __typename\n      }\n      items {\n        value\n        count\n        cumulativeShare\n        __typename\n      }\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredCapacityForecastV3Document",
+      "digest": "d95197012e32056fcece1f8975d953e7465bb112354cf4201e87b39375f933ef",
+      "kind": "query",
+      "legacy": true
+    },
+    {
+      "operation": "capacityForecasts",
+      "document": "query CapacityForecasts($orgId: String!, $filters: CapacityForecastFilterInput) {\n  capacityForecasts(orgId: $orgId, filters: $filters) {\n    edges {\n      node {\n        forecastId\n        computedAt\n        teamId\n        workScopeId\n        backlogSize\n        backlogState\n        backlogAsOfDay\n        targetItems\n        targetDate\n        p50Date\n        p85Date\n        p95Date\n        p50Days\n        p85Days\n        p95Days\n        p50Items\n        p85Items\n        p95Items\n        throughputMean\n        throughputStddev\n        historyDays\n        insufficientHistory\n        highVariance\n        __typename\n      }\n      cursor\n      __typename\n    }\n    pageInfo {\n      hasNextPage\n      hasPreviousPage\n      startCursor\n      endCursor\n      __typename\n    }\n    totalCount\n    __typename\n  }\n}",
+      "const_name": "registeredCapacityForecastsDocument",
+      "digest": "976b1a117d82f699eef98bcee1a1fc5cec44086026706fd501eddc4f2ba6fd77",
+      "kind": "query"
+    },
+    {
       "operation": "capacityForecasts",
       "document": "query CapacityForecasts($orgId: String!, $filters: CapacityForecastFilterInput) {\n  capacityForecasts(orgId: $orgId, filters: $filters) {\n    edges {\n      node {\n        forecastId\n        computedAt\n        teamId\n        workScopeId\n        backlogSize\n        targetItems\n        targetDate\n        p50Date\n        p85Date\n        p95Date\n        p50Days\n        p85Days\n        p95Days\n        p50Items\n        p85Items\n        p95Items\n        throughputMean\n        throughputStddev\n        historyDays\n        insufficientHistory\n        highVariance\n        __typename\n      }\n      cursor\n      __typename\n    }\n    pageInfo {\n      hasNextPage\n      hasPreviousPage\n      startCursor\n      endCursor\n      __typename\n    }\n    totalCount\n    __typename\n  }\n}",
-      "const_name": "registeredCapacityForecastsDocument",
+      "const_name": "registeredCapacityForecastsV1Document",
       "digest": "43890adbbf75ac3ad71c29f728a82e35d035c3f2c701f0ced116559fa28b6c20",
-      "kind": "query"
+      "kind": "query",
+      "legacy": true
     },
     {
       "operation": "catalogValues",
@@ -476,27 +492,11 @@
       "kind": "query"
     },
     {
-      "operation": "investmentBreakdownRepository",
-      "document": "query InvestmentBreakdownRepository($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
-      "const_name": "registeredInvestmentBreakdownRepositoryV1Document",
-      "digest": "d896c57f2425e5eb54262cbb01fdd7d0bf6c17249b8c0d4c140d4d33b492a3e6",
-      "kind": "query",
-      "legacy": true
-    },
-    {
       "operation": "investmentBreakdownTeam",
       "document": "query InvestmentBreakdownTeam($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      sizedUnitCount\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredInvestmentBreakdownTeamDocument",
       "digest": "be9f839cc9628f6a3d9599975673177224a17600942ddb5817101e0a68e7afe2",
       "kind": "query"
-    },
-    {
-      "operation": "investmentBreakdownTeam",
-      "document": "query InvestmentBreakdownTeam($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
-      "const_name": "registeredInvestmentBreakdownTeamV1Document",
-      "digest": "41128827a7bb7324a6fe3b4f771830ab39b236b237ab182406c30c5151aaf722",
-      "kind": "query",
-      "legacy": true
     },
     {
       "operation": "investmentEvidenceQuality",
@@ -689,14 +689,6 @@
       "kind": "query"
     },
     {
-      "operation": "teamWorkItemBreakdown",
-      "document": "query TeamWorkItemBreakdown($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        __typename\n      }\n      __typename\n    }\n    evidenceQualityDistribution\n    evidenceQualityStats {\n      mean\n      stddev\n      total\n      bandCounts\n      uncategorizedCount\n      __typename\n    }\n    __typename\n  }\n}",
-      "const_name": "registeredTeamWorkItemBreakdownV1Document",
-      "digest": "875c9197af4bf566516a679569a59ed30a2763117d6d5c61ba9a362c94be2fd8",
-      "kind": "query",
-      "legacy": true
-    },
-    {
       "operation": "testOpsCoverage",
       "document": "query TestOpsCoverage($orgId: String!, $batch: AnalyticsRequestInput!) {\n  analytics(orgId: $orgId, batch: $batch) {\n    timeseries {\n      dimension\n      dimensionValue\n      scope\n      measure\n      buckets {\n        date\n        value\n        __typename\n      }\n      __typename\n    }\n    breakdowns {\n      dimension\n      measure\n      items {\n        key\n        value\n        label\n        __typename\n      }\n      __typename\n    }\n    filterEmptyReason\n    __typename\n  }\n}",
       "const_name": "registeredTestOpsCoverageDocument",
@@ -805,9 +797,9 @@
     },
     {
       "operation": "throughputForecast",
-      "document": "query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {\n  throughputForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    backlogState\n    backlogAsOfDay\n    degradedReason\n    historyWeeks\n    p50Weeks\n    p75Weeks\n    p90Weeks\n    insufficientHistory\n    rollingWindows {\n      windowWeeks\n      meanWeeklyThroughput\n      sampleCount\n      insufficientHistory\n      __typename\n    }\n    primaryRisk {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestion {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    staleWip {\n      p50AgeHours\n      p90AgeHours\n      __typename\n    }\n    estimateCoverage {\n      ratio\n      estimatedCount\n      unestimatedCount\n      backlogSize\n      grainCount\n      __typename\n    }\n    reviewBottleneck {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    incidentLoad {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    __typename\n  }\n}",
+      "document": "query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {\n  throughputForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    backlogState\n    backlogAsOfDay\n    degradedReason\n    historyWeeks\n    p50Weeks\n    p75Weeks\n    p90Weeks\n    insufficientHistory\n    rollingWindows {\n      windowWeeks\n      meanWeeklyThroughput\n      sampleCount\n      insufficientHistory\n      __typename\n    }\n    primaryRisk {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestion {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestionState\n    wipCongestionAsOfDay\n    wipCongestionGrainCount\n    staleWip {\n      p50AgeHours\n      p90AgeHours\n      state\n      asOfDay\n      grainCount\n      __typename\n    }\n    estimateCoverage {\n      ratio\n      estimatedCount\n      unestimatedCount\n      backlogSize\n      grainCount\n      state\n      asOfDay\n      __typename\n    }\n    reviewBottleneck {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    incidentLoad {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredThroughputForecastDocument",
-      "digest": "a265a9550e4cdab2bc77395257777ec366ac554b19c617af094de47c7a9e2b03",
+      "digest": "9ace3bd179910a7c79ec8dade33c8f93c7244fc45fe455d4f844a5838eb6a18f",
       "kind": "query"
     },
     {
@@ -823,6 +815,14 @@
       "document": "query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {\n  throughputForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    backlogState\n    backlogAsOfDay\n    historyWeeks\n    p50Weeks\n    p75Weeks\n    p90Weeks\n    insufficientHistory\n    rollingWindows {\n      windowWeeks\n      meanWeeklyThroughput\n      sampleCount\n      insufficientHistory\n      __typename\n    }\n    primaryRisk {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestion {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    staleWip {\n      p50AgeHours\n      p90AgeHours\n      __typename\n    }\n    estimateCoverage {\n      ratio\n      estimatedCount\n      unestimatedCount\n      backlogSize\n      grainCount\n      __typename\n    }\n    reviewBottleneck {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    incidentLoad {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    __typename\n  }\n}",
       "const_name": "registeredThroughputForecastV2Document",
       "digest": "933efa3840bb7afb600135bc4470d6523842a908f0ffb949a35439e15a76e09d",
+      "kind": "query",
+      "legacy": true
+    },
+    {
+      "operation": "throughputForecast",
+      "document": "query ThroughputForecast($orgId: String!, $input: ThroughputForecastInput!) {\n  throughputForecast(orgId: $orgId, input: $input) {\n    forecastId\n    computedAt\n    teamId\n    workScopeId\n    backlogSize\n    backlogState\n    backlogAsOfDay\n    degradedReason\n    historyWeeks\n    p50Weeks\n    p75Weeks\n    p90Weeks\n    insufficientHistory\n    rollingWindows {\n      windowWeeks\n      meanWeeklyThroughput\n      sampleCount\n      insufficientHistory\n      __typename\n    }\n    primaryRisk {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    wipCongestion {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    staleWip {\n      p50AgeHours\n      p90AgeHours\n      __typename\n    }\n    estimateCoverage {\n      ratio\n      estimatedCount\n      unestimatedCount\n      backlogSize\n      grainCount\n      __typename\n    }\n    reviewBottleneck {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    incidentLoad {\n      kind\n      score\n      label\n      value\n      threshold\n      active\n      __typename\n    }\n    __typename\n  }\n}",
+      "const_name": "registeredThroughputForecastV3Document",
+      "digest": "a265a9550e4cdab2bc77395257777ec366ac554b19c617af094de47c7a9e2b03",
       "kind": "query",
       "legacy": true
     },
