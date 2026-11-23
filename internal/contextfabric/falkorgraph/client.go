@@ -123,13 +123,22 @@ func (s *sdkAPI) query(ctx context.Context, graphKey, cypher string, params map[
 	if readOnly {
 		client = s.read
 	}
-	args := queryArgs(ctx, command, graphKey, text, readOnly)
-	send := func() (interface{}, error) { return client.Conn.Do(ctx, args...).Result() }
+	// Built per attempt: a retry sends what is left of the caller's budget.
+	send := func() (interface{}, error) {
+		args, err := queryArgs(ctx, time.Now(), command, graphKey, text, readOnly)
+		if err != nil {
+			return nil, err
+		}
+		return client.Conn.Do(ctx, args...).Result()
+	}
 	var raw interface{}
 	if readOnly {
 		raw, err = retryRead(ctx, s, "query context graph", send)
 	} else {
 		raw, err = send()
+	}
+	if errors.Is(err, errServerBudgetSpent) {
+		return nil, err
 	}
 	if err != nil {
 		return nil, s.classifyConnError("query context graph", err)
@@ -166,30 +175,51 @@ func (s *sdkAPI) query(ctx context.Context, graphKey, cypher string, params map[
 
 type serverTimeoutKey struct{}
 
+// serverTimeout is the per-query TIMEOUT policy a read carries: the most it
+// may run, and the part of the caller's remaining deadline it leaves unused so
+// the server answers before the caller's context ends.
+type serverTimeout struct {
+	limit, margin time.Duration
+}
+
 // withServerTimeout makes a READ sent with ctx carry FalkorDB's per-query
 // TIMEOUT argument, which replaces the server's default bound for that read.
-func withServerTimeout(ctx context.Context, timeout time.Duration) context.Context {
-	return context.WithValue(ctx, serverTimeoutKey{}, timeout)
+func withServerTimeout(ctx context.Context, limit, margin time.Duration) context.Context {
+	return context.WithValue(ctx, serverTimeoutKey{}, serverTimeout{limit: limit, margin: margin})
 }
 
-// queryArgs is the command query sends. Only a read whose ctx carries
-// withServerTimeout gets the TIMEOUT argument; every other command keeps the
-// server's default bound.
-func queryArgs(ctx context.Context, command, graphKey, text string, readOnly bool) []interface{} {
+// errServerBudgetSpent refuses an attempt that has no time left inside the
+// caller's deadline after the margin. The attempt is not sent.
+var errServerBudgetSpent = errors.New("falkordb read: no budget left for the per-query timeout")
+
+// queryArgs is the command one attempt of query sends. Only a read whose ctx
+// carries withServerTimeout gets the TIMEOUT argument, computed at now from
+// the caller's remaining deadline; every other command keeps the server's
+// default bound and is sent as it was before.
+func queryArgs(ctx context.Context, now time.Time, command, graphKey, text string, readOnly bool) ([]interface{}, error) {
 	args := []interface{}{command, graphKey, text, "--compact"}
-	if ms, ok := serverTimeoutMs(ctx); ok && readOnly {
-		args = append(args, "TIMEOUT", ms)
+	policy, ok := ctx.Value(serverTimeoutKey{}).(serverTimeout)
+	if !ok || !readOnly {
+		return args, nil
 	}
-	return args
+	timeout := policy.limit
+	if deadline, has := ctx.Deadline(); has {
+		left := deadline.Sub(now) - policy.margin
+		if left <= 0 {
+			return nil, errServerBudgetSpent
+		}
+		timeout = min(timeout, left)
+	}
+	return append(args, "TIMEOUT", max(int64(timeout/time.Millisecond), 1)), nil
 }
 
-func serverTimeoutMs(ctx context.Context) (int64, bool) {
-	timeout, ok := ctx.Value(serverTimeoutKey{}).(time.Duration)
-	if !ok {
-		return 0, false
-	}
-	return max(int64(timeout/time.Millisecond), 1), true
-}
+// serverQueryTimeout is FalkorDB's own "Query timed out" reply. It reads and
+// unwraps exactly as context.DeadlineExceeded, so every caller sees what it saw
+// before; a caller that asks for this type learns the server stopped the query.
+type serverQueryTimeout struct{}
+
+func (serverQueryTimeout) Error() string { return context.DeadlineExceeded.Error() }
+func (serverQueryTimeout) Unwrap() error { return context.DeadlineExceeded }
 
 // callerContextClient runs the result decoder's own lookups (labels,
 // relationship types, property keys) of a read with the caller's context. The
@@ -587,7 +617,7 @@ func classifyFalkorError(operation string, err error) error {
 	message := err.Error()
 	switch {
 	case strings.Contains(message, "Query timed out"):
-		return fmt.Errorf("%s: %w", operation, context.DeadlineExceeded)
+		return fmt.Errorf("%s: %w", operation, serverQueryTimeout{})
 	case strings.Contains(message, "unique constraint violation"):
 		return fmt.Errorf("%s: %w", operation, ErrConstraintViolation)
 	case strings.Contains(message, "already indexed") || strings.Contains(message, "already exists"):

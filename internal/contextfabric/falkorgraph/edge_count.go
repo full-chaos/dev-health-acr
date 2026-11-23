@@ -38,17 +38,21 @@ func (a *Adapter) CountEdges(ctx context.Context, orgID string, key contextfabri
 	if strings.Contains(cypher, "$arm") {
 		params["arm"] = key.Arm
 	}
-	timeout, ok := edgeCountServerTimeout(ctx, a.now())
-	if !ok {
-		return 0, fmt.Errorf("count edges by relation: %w", contextfabric.ErrQueryBudgetExceeded)
+	if err := edgeCountAdmit(ctx, a.now()); err != nil {
+		return 0, err
 	}
-	rows, err := a.api.query(withServerTimeout(ctx, timeout), graphKey, cypher, params, true)
-	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-		// The server's own TIMEOUT stopped the read inside the caller's budget:
-		// the count did not fit, which is not a cancellation.
-		return 0, fmt.Errorf("count edges by relation: %w", contextfabric.ErrQueryBudgetExceeded)
-	}
+	rows, err := a.api.query(withServerTimeout(ctx, edgeCountTimeoutCap, edgeCountTimeoutMargin), graphKey, cypher, params, true)
 	if err != nil {
+		if ended := callerEnded(ctx, a.now()); ended != nil {
+			return 0, fmt.Errorf("count edges by relation: %w", ended)
+		}
+		// The server's own TIMEOUT stopped the read, or no time was left for an
+		// attempt, inside a live caller budget: the count did not fit, which is
+		// not a cancellation. Any other deadline keeps its own class.
+		var server serverQueryTimeout
+		if errors.Is(err, errServerBudgetSpent) || errors.As(err, &server) {
+			return 0, fmt.Errorf("count edges by relation: %w", contextfabric.ErrQueryBudgetExceeded)
+		}
 		return 0, safeDependencyError("count edges by relation", err)
 	}
 	if len(rows) != 1 {
@@ -63,25 +67,41 @@ func (a *Adapter) CountEdges(ctx context.Context, orgID string, key contextfabri
 
 // An edge count walks every edge of the organization for a relation without a
 // subject kind arm, past the image's 1 s server TIMEOUT on a production graph.
-// Each count read gets its own server TIMEOUT: what is left of the caller's
-// deadline less edgeCountTimeoutMargin, so the server answers before the
-// context ends, and at most edgeCountTimeoutCap, about 2.5 times the estimated
-// production walk, which also bounds how long a projector write waits behind it.
+// Each attempt of a count read gets its own server TIMEOUT: what is left of the
+// caller's deadline less edgeCountTimeoutMargin, so the server answers before
+// the context ends, and at most edgeCountTimeoutCap, about 2.5 times the
+// estimated production walk, which also bounds how long a projector write
+// waits behind it.
 const (
 	edgeCountTimeoutCap    = 5 * time.Second
 	edgeCountTimeoutMargin = 250 * time.Millisecond
 )
 
-func edgeCountServerTimeout(ctx context.Context, now time.Time) (time.Duration, bool) {
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		return edgeCountTimeoutCap, true
+// edgeCountAdmit decides whether a count read is sent at now. A caller that has
+// ended, its context cancelled or its deadline passed, is refused with that end
+// (canceled), before any budget question; a live caller with no time left
+// beyond the margin is refused as over budget.
+func edgeCountAdmit(ctx context.Context, now time.Time) error {
+	if err := callerEnded(ctx, now); err != nil {
+		return fmt.Errorf("count edges by relation: %w", err)
 	}
-	remaining := deadline.Sub(now) - edgeCountTimeoutMargin
-	if remaining <= 0 {
-		return 0, false
+	if deadline, ok := ctx.Deadline(); ok && deadline.Sub(now) <= edgeCountTimeoutMargin {
+		return fmt.Errorf("count edges by relation: %w", contextfabric.ErrQueryBudgetExceeded)
 	}
-	return min(remaining, edgeCountTimeoutCap), true
+	return nil
+}
+
+// callerEnded is the caller's end at now: its context's error, or
+// context.DeadlineExceeded once its deadline has passed, even before the
+// context's own timer marks it done.
+func callerEnded(ctx context.Context, now time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok && !now.Before(deadline) {
+		return context.DeadlineExceeded
+	}
+	return nil
 }
 
 var repositoryEdgeArms = map[string]bool{
