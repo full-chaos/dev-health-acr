@@ -550,6 +550,26 @@ func advancedRoots(policy *directread.GraphQLPolicy, advanced map[string]string)
 	return out
 }
 
+// skippedUnadvancedOperations are the operations that are not advanced past the
+// capture but sit on a root the recorded run skips (the root's window probe runs
+// on an advanced operation). Their recorded replies are not replayed.
+func skippedUnadvancedOperations(policy *directread.GraphQLPolicy, advanced map[string]string) []string {
+	skipped := advancedRoots(policy, advanced)
+	var out []string
+	for _, root := range policy.Roots() {
+		if !slices.Contains(skipped, root.Field) {
+			continue
+		}
+		for _, op := range root.Operations() {
+			if _, ok := advanced[op]; !ok {
+				out = append(out, op)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // notMeasuredLine is how a recorded run states a root it skips because every
 // operation of it is advanced past the capture.
 func notMeasuredLine(root string) string {
@@ -566,6 +586,9 @@ func withoutAdvancedRoots(t *testing.T, manifest Manifest) (Manifest, []string) 
 	roots := advancedRoots(mustPolicy(t), advancedPastCapture)
 	for _, root := range roots {
 		t.Log(notMeasuredLine(root))
+	}
+	for _, op := range skippedUnadvancedOperations(mustPolicy(t), advancedPastCapture) {
+		t.Logf("%s: NOT MEASURED (its root is skipped with the advanced window-probe operation; re-capture %s)", op, recaptureTicket)
 	}
 	cases := make([]ShapeCase, 0, len(manifest.ShapeCases))
 	for _, c := range manifest.ShapeCases {

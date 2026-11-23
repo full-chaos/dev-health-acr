@@ -185,3 +185,57 @@ func TestTestopsRiskTeamIdsIsCarriedBySchemaTextOnly(t *testing.T) {
 		t.Error("testopsRisk is not a refused graphql_query root")
 	}
 }
+
+// Repro of today's behavior, not a statement that it is right: a STALE newest day of the backlog is served
+// declared_complete for capacityForecast and capacityForecasts (the policy has no disclosure rule for the
+// field), while throughputForecast declares the same STALE backlog partial through degradedReason.
+func TestAStaleBacklogDayIsServedDeclaredCompleteForCapacityForecasts(t *testing.T) {
+	for _, tc := range []struct {
+		operation string
+		set       map[string]any
+		want      directread.Completeness
+	}{
+		{"capacityForecast", map[string]any{"capacityForecast.backlogState": "STALE"}, directread.CompletenessDeclaredComplete},
+		{"capacityForecasts", map[string]any{"capacityForecasts.edges[*].node.backlogState": "STALE"}, directread.CompletenessDeclaredComplete},
+		{"throughputForecast", map[string]any{"throughputForecast.backlogState": "STALE", "throughputForecast.degradedReason": "STALE", "throughputForecast.insufficientHistory": false}, directread.CompletenessDeclaredPartial},
+	} {
+		t.Run(tc.operation, func(t *testing.T) {
+			cat, err := directread.DefaultCatalogue()
+			if err != nil {
+				t.Fatal(err)
+			}
+			op, refusal := cat.Lookup(tc.operation)
+			if refusal != nil {
+				t.Fatalf("%s is not served: %+v", tc.operation, refusal)
+			}
+			answer := opAnswerForDocument(t, op.DocumentText)
+			for path, value := range tc.set {
+				opSetLeaf(answer, path, value)
+			}
+			body, _ := json.Marshal(map[string]any{"data": answer})
+			h := newOpHarness(t, func(opRecorded) (int, string) { return 200, string(body) }, opHarnessOptions{})
+			resp := h.run(t, opUnrestricted(opOrgA), tc.operation, opMinimalVariables(t, op))
+			if resp.Call != directread.CallServed || resp.Completeness != tc.want {
+				t.Fatalf("%s with a STALE backlog: call %s, completeness %s (reason %s), want served and %s", tc.operation, resp.Call, resp.Completeness, resp.CompletenessReason, tc.want)
+			}
+		})
+	}
+}
+
+func opSetLeaf(root map[string]any, path string, value any) {
+	cur := any(root)
+	segs := strings.Split(path, ".")
+	for i, seg := range segs {
+		name, array := strings.CutSuffix(seg, "[*]")
+		obj := cur.(map[string]any)
+		if i == len(segs)-1 {
+			obj[name] = value
+			return
+		}
+		next := obj[name]
+		if array {
+			next = next.([]any)[0]
+		}
+		cur = next
+	}
+}
