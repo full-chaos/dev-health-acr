@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthsource"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
@@ -26,6 +28,19 @@ const (
 	edgeThreadsPeakBound = 1 << 40
 )
 
+// edgeThreadsLogged reads one finished statement of the query log and fails
+// when it did not run at or under the statement thread count.
+func edgeThreadsLogged(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, label string) edgeThreadsRun {
+	t.Helper()
+	var run edgeThreadsRun
+	var unbound uint64
+	if err := direct.QueryRow(ctx, `SELECT memory_usage, read_rows, query_duration_ms, Settings['max_threads'], `+statementthreads.UnboundThreads+` FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = ? AND current_database = currentDatabase() ORDER BY event_time_microseconds DESC LIMIT 1`, label).Scan(&run.peak, &run.readRows, &run.millis, &run.threads, &unbound); err != nil {
+		t.Fatalf("%s: the query log holds no finished statement: %v", label, err)
+	}
+	statementthreads.RequireThreadBound(t, ctx, direct, label, unbound)
+	return run
+}
+
 type edgeThreadsRun struct {
 	counts   map[string]uint64
 	peak     uint64
@@ -34,9 +49,7 @@ type edgeThreadsRun struct {
 	threads  string
 }
 
-func edgeThreadsMeasure(t *testing.T, ctx context.Context, client contextpacket.ClickHouseQueryClient, direct interface {
-	Exec(ctx context.Context, query string, args ...any) error
-}, statement, label string) map[string]uint64 {
+func edgeThreadsMeasure(t *testing.T, ctx context.Context, client contextpacket.ClickHouseQueryClient, statement, label string) map[string]uint64 {
 	t.Helper()
 	rows, err := client.Query(contextpacket.WithStatementReader(ctx, label), statement, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: edgeThreadsOrg}})
 	if err != nil {
@@ -127,7 +140,7 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 	for i := 0; i < edgeThreadsRuns; i++ {
 		for _, c := range []struct{ label, statement string }{{"shipped", shipped}, {"four", fourThreads}} {
 			label := fmt.Sprintf("edge-threads-%s-%d", c.label, i)
-			counts := edgeThreadsMeasure(t, ctx, capped, direct, c.statement, label)
+			counts := edgeThreadsMeasure(t, ctx, capped, c.statement, label)
 			runs[c.label] = append(runs[c.label], label)
 			if c.label == "shipped" && firstCounts == nil {
 				firstCounts = counts
@@ -143,10 +156,7 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 	read := func(kind string) (peak uint64, medianMillis uint64, readRows uint64, threads string) {
 		var millis []uint64
 		for _, label := range runs[kind] {
-			var run edgeThreadsRun
-			if err := direct.QueryRow(ctx, `SELECT memory_usage, read_rows, query_duration_ms, Settings['max_threads'] FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = ? AND current_database = currentDatabase() ORDER BY event_time_microseconds DESC LIMIT 1`, label).Scan(&run.peak, &run.readRows, &run.millis, &run.threads); err != nil {
-				t.Fatalf("%s: the query log holds no finished statement: %v", label, err)
-			}
+			run := edgeThreadsLogged(t, ctx, direct, label)
 			if run.peak > peak {
 				peak = run.peak
 			}
