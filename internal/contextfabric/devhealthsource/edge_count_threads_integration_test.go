@@ -22,9 +22,11 @@ const (
 
 	edgeThreadsSubjects = 30000
 	edgeThreadsRuns     = 5
-	// edgeThreadsPeakBound is the work bound of the shipped statement: the
-	// peak memory the server measures for it. See the PROFILE line of a run.
-	edgeThreadsPeakBound = 1 << 40
+	// The work bounds of the shipped statement, from the PROFILE lines of a
+	// run on a hosted 4-core runner: four threads peak at 172 MB and read
+	// 379063 rows, one thread peaks at 124 MB and reads 270135 rows.
+	edgeThreadsPeakBound = 150_000_000
+	edgeThreadsReadBound = 325_000
 )
 
 // edgeThreadsLogged reads one finished statement of the query log and fails
@@ -205,11 +207,17 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 	if fmt.Sprint(oneCounts) != fmt.Sprint(otherCounts) {
 		t.Errorf("the edge count differs between one thread and four threads: %v vs %v", oneCounts, otherCounts)
 	}
-	if fourPeak <= edgeThreadsPeakBound {
-		t.Fatalf("the bound is vacuous: four threads peak at %d, not over %d", fourPeak, edgeThreadsPeakBound)
+	if fourPeak <= edgeThreadsPeakBound || fourRows <= edgeThreadsReadBound {
+		t.Fatalf("the bounds are vacuous: four threads peak at %d (bound %d) and read %d rows (bound %d)", fourPeak, edgeThreadsPeakBound, fourRows, edgeThreadsReadBound)
+	}
+	if onePeak > edgeThreadsPeakBound || oneRows > edgeThreadsReadBound {
+		t.Fatalf("one thread peaks at %d (bound %d) and reads %d rows (bound %d)", onePeak, edgeThreadsPeakBound, oneRows, edgeThreadsReadBound)
 	}
 	if shippedPeak > edgeThreadsPeakBound {
 		t.Errorf("the shipped edge count peaked at %d bytes, want at most %d", shippedPeak, edgeThreadsPeakBound)
+	}
+	if shippedRows > edgeThreadsReadBound {
+		t.Errorf("the shipped edge count read %d rows, want at most %d", shippedRows, edgeThreadsReadBound)
 	}
 	if shippedThreads != "1" {
 		t.Errorf("the shipped edge count ran with max_threads %q in the query log, want 1", shippedThreads)
