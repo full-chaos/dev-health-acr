@@ -1,7 +1,7 @@
 {
   "contract": "acr.mcp.graphql_roots.v1",
   "generator": "cmd/operationpolicy",
-  "schema_digest": "sha256:963a889d2e612b923be407d9191aed05ef5b9bc9d5d6dd758e5a238e20185667",
+  "schema_digest": "sha256:89d6994d1bc637fabfa6ea56a499d3bf6b896584a686856851e25a7b73d8753c",
   "operations_source": "contracts/mcp/operations.v1.json",
   "limits": {
     "max_query_bytes": 8192,
