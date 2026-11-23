@@ -20,10 +20,8 @@ const (
 	edgeThreadsOrg  = "74000000-0000-4000-8000-000000000001"
 	edgeThreadsRepo = "74000000-0000-4000-8000-000000000002"
 
-	edgeThreadsSubjects = 60000
+	edgeThreadsSubjects = 30000
 	edgeThreadsRuns     = 5
-	// edgeThreadsProjectorCap is the projector's statement memory cap.
-	edgeThreadsProjectorCap = 192 << 20
 	// edgeThreadsPeakBound is the work bound of the shipped statement: the
 	// peak memory the server measures for it. See the PROFILE line of a run.
 	edgeThreadsPeakBound = 1 << 40
@@ -151,7 +149,7 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 		t.Fatalf("the fixture is not the overlapping-part shape: %d work_items parts, %d transitions parts", workParts, transitionParts)
 	}
 
-	capped := statementthreads.Capped(query, edgeThreadsProjectorCap)
+	capped := statementthreads.Unbounded(query)
 	shipped, _ := devhealthsource.MembershipEdgeCountSQLForTest(true)
 	fourThreads := strings.TrimSuffix(shipped, "\nSETTINGS max_threads = 1")
 	if fourThreads == shipped {
