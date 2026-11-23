@@ -19,13 +19,13 @@ import (
 // deleted every anchor fact on every narrowed grouped answer while the served
 // document still declared the anchor committed. The flat path kept them.
 //
-// These pins drive BOTH production callers of the rule through
-// Engine.Investigate -- stage 2's budget narrowing (engine.go) and stage 3's
-// retry narrowing (chaos4636_budget_stage3.go) -- plus the rule itself over
-// every subject kind, and the Info line that must name what was dropped.
+// These pins drive the grouped caller of the rule through Engine.Investigate
+// -- stage 3's retry narrowing (chaos4636_budget_stage3.go) -- plus the rule
+// itself over every subject kind, and the Info line that must name what was
+// dropped.
 
-// anchorRetentionMembers is four projects across two teams, so stage 2's
-// clamped allowance narrows to one member per group.
+// anchorRetentionMembers is four projects across two teams, so stage 3's
+// retry narrows to one member per group.
 func anchorRetentionMembers() []CohortMember {
 	members := make([]CohortMember, 0, 4)
 	for index, id := range []string{"project_a", "project_b", "project_c", "project_d"} {
@@ -82,15 +82,15 @@ func lastSynthesisSubjects(t *testing.T) []string {
 	return ids
 }
 
-// runAnchorRetentionTurn drives stage 2 (a member cap of one narrows the grouped cohort)
-// with one committed repository anchor, and returns the subjects the FINAL
-// synthesis pass received.
+// runAnchorRetentionTurn drives stage 3's retry (a small item budget narrows the
+// grouped cohort) with one committed repository anchor, and returns the
+// subjects the FINAL synthesis pass received.
 func runAnchorRetentionTurn(t *testing.T, maxItems, maxMembers int) []string {
 	t.Helper()
 	anchor := SubjectRef{Kind: SubjectRepository, CanonicalID: "repo_anchor", Label: "anchor"}
 	groupReadSynthesisPasses = nil
 	t.Cleanup(func() { groupReadSynthesisPasses = nil })
-	options := EngineOptions{MaxItems: maxItems}
+	options := EngineOptions{MaxItems: maxItems, SynthesisDeadlineReserve: time.Hour}
 	engine, request := groupReadEngineFixtureConfigured(t, &recordingTelemetry{}, anchorRetentionRecorder(anchorFact(anchor, "anchor_metric")),
 		anchorRetentionMembers(), nil, SubjectProject, &options, nil, func(config *groupReadFixtureConfig) {
 			config.graph.resolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{anchor}}
@@ -104,7 +104,7 @@ func runAnchorRetentionTurn(t *testing.T, maxItems, maxMembers int) []string {
 }
 
 // TestACommittedAnchorSurvivesGroupedNarrowing is the executed reproduction:
-// stage 2 narrows a grouped cohort and the committed anchor's evidence must
+// the retry narrows a grouped cohort and the committed anchor's evidence must
 // still reach synthesis.
 //
 // NOT t.Parallel(): it reads the package-level synthesis capture.
@@ -114,7 +114,7 @@ func TestACommittedAnchorSurvivesGroupedNarrowing(t *testing.T) {
 	// The narrowing must be REAL, or the anchor survives for the wrong reason.
 	if containsString(subjects, "project/project_b") && containsString(subjects, "project/project_d") &&
 		containsString(subjects, "project/project_a") && containsString(subjects, "project/project_c") {
-		t.Fatalf("every member reached synthesis -- stage 2 did not narrow, so this run cannot say anything about retention: %v", subjects)
+		t.Fatalf("every member reached synthesis -- nothing narrowed, so this run cannot say anything about retention: %v", subjects)
 	}
 	if !containsString(subjects, "repository/repo_anchor") {
 		t.Fatalf("committed anchor was dropped from final synthesis input; final fact subjects=%v", subjects)
@@ -137,10 +137,9 @@ func TestACommittedAnchorSurvivesWithoutNarrowing(t *testing.T) {
 	}
 }
 
-// TestTheRetryNarrowingKeepsCommittedAnchors drives the OTHER production
-// caller: stage 3's retry. The budget leaves every member in place at stage 2
-// (so stage 2's retention never runs), the first answer goes over on claims,
-// and the retry narrows the grouped cohort.
+// TestTheRetryNarrowingKeepsCommittedAnchors drives stage 3's retry with an
+// organization anchor: the first answer goes over on claims, and the retry
+// narrows the grouped cohort.
 //
 // NOT t.Parallel(): it changes the fixture's claims-per-member and reads the
 // package-level synthesis capture.
@@ -339,19 +338,18 @@ func TestTheRetentionLineNamesTheCommittedAnchors(t *testing.T) {
 		anchorFact(doc, "d1"),
 		anchorFact(projectD, "x1"), anchorFact(projectD, "x2"),
 	}
-	options := EngineOptions{MaxItems: 6}
+	options := EngineOptions{MaxItems: 6, SynthesisDeadlineReserve: time.Hour}
 	engine, request := groupReadEngineFixtureConfigured(t, logs.telemetry, anchorRetentionRecorder(extra...),
 		anchorRetentionMembers(), nil, SubjectProject, &options, nil, func(config *groupReadFixtureConfig) {
 			config.graph.resolution = SubjectResolution{Candidates: []SubjectCandidate{}, Committed: []SubjectRef{repo, doc, named}}
 			config.graph.bases = provenCommitBases(repo, doc, named)
 		})
-	request.Options.MaxCohortMembers = 1
 	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
 		t.Fatalf("Investigate() error = %v", err)
 	}
 	lines := linesWithMessage(t, logs.configured.String(), "context fabric fact retention")
 	if len(lines) != 1 {
-		t.Fatalf("retention lines = %d, want exactly one (stage 2)", len(lines))
+		t.Fatalf("retention lines = %d, want exactly one (stage 3's retry)", len(lines))
 	}
 	if stray := linesWithMessage(t, logs.fallback.String(), "context fabric fact retention"); len(stray) != 0 {
 		t.Fatalf("%d retention line(s) reached the process default logger", len(stray))

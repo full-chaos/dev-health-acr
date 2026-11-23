@@ -120,8 +120,10 @@ func TestACountServedEndToEndEmitsNoTransition(t *testing.T) {
 func TestANarrowedCountIsATransitionWithNoSplitCause(t *testing.T) {
 	t.Parallel()
 	telemetry := &recordingTelemetry{}
-	engine := newReconciliationEngine(t, countingCohort(SubjectTeam, 5), InvestigationComplete, nil, telemetry, nil)
-	result := runReconciliation(t, engine, 2)
+	// A requested cap over the flat listing cap: stage 1 clamps it to the
+	// listing cap and records the step that names the mechanism.
+	engine := newReconciliationEngineWithMaxItems(t, countingCohort(SubjectTeam, flatCohortListingMemberCap+20), InvestigationComplete, nil, telemetry, nil, countingServiceMaxItems)
+	result := runReconciliation(t, engine, flatCohortListingMemberCap+10)
 
 	if len(telemetry.requirementOutcomeTransitions) != 1 {
 		t.Fatalf("recorded %d transition line(s), want 1: %+v", len(telemetry.requirementOutcomeTransitions), telemetry.requirementOutcomeTransitions)
@@ -137,8 +139,8 @@ func TestANarrowedCountIsATransitionWithNoSplitCause(t *testing.T) {
 	if got.CauseNarrowing == "" || got.CauseNarrowing != assembled.CauseNarrowing {
 		t.Fatalf("cause_narrowing = %q, want the row's own %q", got.CauseNarrowing, assembled.CauseNarrowing)
 	}
-	if got.Served != 2 || got.Declared != 5 {
-		t.Fatalf("served/declared = %d/%d, want 2/5", got.Served, got.Declared)
+	if got.Served != flatCohortListingMemberCap || got.Declared != flatCohortListingMemberCap+20 {
+		t.Fatalf("served/declared = %d/%d, want %d/%d", got.Served, got.Declared, flatCohortListingMemberCap, flatCohortListingMemberCap+20)
 	}
 	if got.ServedFactCount != 1 || !got.MemberSetResolved {
 		t.Fatalf("served_fact_count=%d member_set_resolved=%v, want 1/true", got.ServedFactCount, got.MemberSetResolved)

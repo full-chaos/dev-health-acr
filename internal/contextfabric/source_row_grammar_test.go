@@ -172,7 +172,7 @@ func producerGrammars() []producerGrammar {
 			facts+"ci.go|readRepositoryAggregate", facts+"deployments.go|readRepositoryAggregate", facts+"flow.go|readRepositoryFlow",
 			facts+"health.go|ReadFacts", facts+"health.go|readProjectHealth*2", facts+"identity.go|ReadFacts*2", facts+"file_hotspots.go|ReadFacts", facts+"security_alerts.go|ReadFacts",
 			facts+"investment_repo_mix.go|readRepositoryThemeMix", facts+"investment_repo_ops.go|mixFactFromOps", facts+"investment_units.go|readInvestmentUnits", facts+"investment_units.go|unitFact", facts+"metrics.go|readRepositoryMetrics*2",
-			source+"tables.go|queryRepositories", source+"teams_projects_edges.go|queryRepositoryTeams")},
+			source+"tables.go|fetchRepositories", source+"teams_projects_edges.go|queryRepositoryTeams")},
 		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "sql/1", rowQuery: "repository_freshness.v1", keyColumns: []string{"id"}, columns: []string{"id"}, sites: sites(catalog)},
 		{kind: contractsv1.ContextFabricEvidenceEntityRepository, shape: "literal", fixture: true, sites: sites("internal/contextfabric/pginvestigation/paritytest/paritytest.go|RunCitedEvidenceSuite*2")},
 		// work item, pull request, CI run, deployment: <repo>:<one id>; the

@@ -73,6 +73,9 @@ type fakeClient struct {
 
 	// workItemMembershipQueries counts the CHAOS-12226 page membership reads.
 	workItemMembershipQueries int
+
+	// repositoryReconcileReads counts the repository reconcile reads.
+	repositoryReconcileReads int
 }
 
 // workItemMembershipMarker and workItemMembershipRefreshMarker identify the
@@ -128,6 +131,11 @@ func storedGroupCursor(row []any) (time.Time, string) {
 
 // endedLinksMarker identifies the removed-link set read (relationcurrent.EndedLinksSQL).
 const endedLinksMarker = "AS ended_links"
+
+// repositoryReconcileMarker identifies the repository reconcile read: the
+// repos read in id order with no keyset predicate. It keeps its own dispatch
+// because the substring loop would serve it every row of the repos table.
+const repositoryReconcileMarker = "ORDER BY toString(id) ASC"
 
 func (c *fakeClient) Query(_ context.Context, statement string, bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
 	requireOrgIDBinding(statement, bindings)
@@ -198,6 +206,10 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 		}
 		return &fakeScanner{}, nil
 	}
+	if strings.Contains(statement, "FROM repos") && strings.Contains(statement, repositoryReconcileMarker) {
+		c.repositoryReconcileReads++
+		return c.repositoryReconcile(bindings)
+	}
 	if strings.Contains(statement, "AS description_incident_id") {
 		return &fakeScanner{rows: c.incidentDescriptions(bindings)}, nil
 	}
@@ -218,6 +230,44 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 			}
 			return &fakeScanner{rows: rows}, nil
 		}
+	}
+	return &fakeScanner{}, nil
+}
+
+// repositoryReconcile serves the repository reconcile read from the repos
+// table's canned rows (id first): the rows whose id sorts after the after
+// binding, in id order, at most row_limit of them, as the real statement does.
+func (c *fakeClient) repositoryReconcile(bindings []contextpacket.ClickHouseBinding) (contextpacket.ClickHouseRowScanner, error) {
+	var after string
+	limit := -1
+	for _, binding := range bindings {
+		switch binding.Name {
+		case "after":
+			after, _ = binding.Value.(string)
+		case "row_limit":
+			if value, ok := binding.Value.(uint32); ok {
+				limit = int(value)
+			}
+		}
+	}
+	for _, table := range c.tables {
+		if !strings.HasPrefix(table.match, "FROM repos") {
+			continue
+		}
+		if table.err != nil {
+			return nil, table.err
+		}
+		var out [][]any
+		for _, row := range table.rows {
+			if row[0].(string) > after {
+				out = append(out, row)
+			}
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i][0].(string) < out[j][0].(string) })
+		if limit >= 0 && len(out) > limit {
+			out = out[:limit]
+		}
+		return &fakeScanner{rows: out}, nil
 	}
 	return &fakeScanner{}, nil
 }

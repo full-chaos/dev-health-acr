@@ -181,7 +181,7 @@ func TestCaptureBoundary_TheTwoLateMutationsThroughTheEngine(t *testing.T) {
 	}{
 		{
 			name: "an over-bound group read drops the axis", cohortKind: SubjectProject,
-			members: groupReadCohortMembers(251),
+			members: groupReadCohortMembers(groupReadOverBoundMembers),
 			why:     "251 proposed groups are refused, not sliced, and the plan's axis is cleared AFTER planning finished",
 		},
 		{
@@ -195,6 +195,9 @@ func TestCaptureBoundary_TheTwoLateMutationsThroughTheEngine(t *testing.T) {
 			store := &staticResultStore{results: map[string]InvestigationResult{}}
 			engine, request := groupReadEngineFixtureConfigured(t, logs.telemetry, facts, tc.members, nil, tc.cohortKind, nil, nil,
 				func(c *groupReadFixtureConfig) { c.results = store })
+			// Discovery returns at most the request's cap, so the cap must admit
+			// every member this case discovers.
+			request.Options.MaxCohortMembers = max(request.Options.MaxCohortMembers, len(tc.members))
 			turnOne, err := engine.Investigate(canonicalRequestContext(), storage.Principal{OrgID: "org_1"}, request)
 			if err != nil {
 				t.Fatalf("turn one: %v", err)

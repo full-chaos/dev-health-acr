@@ -122,7 +122,9 @@ func factsInInput(t *testing.T, bundle *contractsv1.ContextFabricSynthesisInput)
 // caller's byte budget, and says how many facts the cut left out.
 func TestClientSynthesisInputIsCutToTheCallerBudget(t *testing.T) {
 	t.Parallel()
-	const teams, budget = 400, 60000
+	// The request's default member cap: discovery returns no more members than
+	// that, and their facts alone are over the budget.
+	const teams, budget = 50, 60000
 	uncut := runBudgetTurn(t, teams, 1500, 1<<20)
 	if uncut.err != nil || uncut.collected == nil || uncut.collected.Bounded || uncut.totalBytes <= budget {
 		t.Fatalf("unbudgeted turn: err = %v total = %d, want a body over %d", uncut.err, uncut.totalBytes, budget)
