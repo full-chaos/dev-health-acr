@@ -21,6 +21,12 @@ type linkRowsForm struct {
 	build func(rows string) string
 }
 
+// checksum folds the rows into count and two independent 64-bit hash sums: the
+// client caps result rows, and equal sums of both hashes make a row-multiset difference negligible.
+func checksum(inner string) string {
+	return `SELECT toString(count()), toString(sum(cityHash64(c1, c2, c3, c4, c5))), toString(sum(sipHash64(c1, c2, c3, c4, c5))), '', '' FROM (` + inner + `)`
+}
+
 func linkRowsForms() []linkRowsForm {
 	const distinct = "SELECT DISTINCT o.team_id AS team_id"
 	noDistinct := func(rows string) string {
@@ -37,11 +43,11 @@ func linkRowsForms() []linkRowsForm {
 		return strings.TrimSuffix(rows, "\n)") + "\n  GROUP BY team_id, work_item_id, pr_repo_id, pr_number, link_rank\n)"
 	}
 	full := func(rows string) string {
-		return `SELECT team_id, work_item_id, toString(pr_repo_id), toString(pr_number), toString(link_rank) FROM ` + rows + ` AS lr`
+		return checksum(`SELECT team_id AS c1, work_item_id AS c2, toString(pr_repo_id) AS c3, toString(pr_number) AS c4, toString(link_rank) AS c5 FROM ` + rows + ` AS lr`)
 	}
 	pr := func(rows string) string {
-		return `SELECT lr.team_id, toString(lr.pr_repo_id), toString(lr.pr_number), pr.state, '' FROM (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM ` + rows + `) AS lr
-INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = {org_id:String} AND pr.repo_id = lr.pr_repo_id AND pr.number = lr.pr_number`
+		return checksum(`SELECT lr.team_id AS c1, toString(lr.pr_repo_id) AS c2, toString(lr.pr_number) AS c3, pr.state AS c4, '' AS c5 FROM (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM ` + rows + `) AS lr
+INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = {org_id:String} AND pr.repo_id = lr.pr_repo_id AND pr.number = lr.pr_number`)
 	}
 	id := func(rows string) string { return rows }
 	raw := func(settings string) func(string) string {
