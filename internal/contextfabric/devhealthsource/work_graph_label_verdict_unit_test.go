@@ -155,3 +155,21 @@ func TestTheCeilingIsReachedByTheHighestRunAtTheCeiling(t *testing.T) {
 		t.Fatal("one run over the ceiling among low ones must be flagged: the ceiling reads the highest run")
 	}
 }
+
+func TestStatementVerdictToleratesOneOutlierButCatchesAMovedPlateau(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		runs []uint64
+		over bool
+	}{
+		{"the plateau with one 12.9 MB outlier", concat(repeat(11633036, 7), []uint64{12900000}), false},
+		{"the incident outlier of run 45118451445", concat(repeat(11633036, 7), []uint64{12290871}), false},
+		{"a moved plateau of 12.7 MB", repeat(12700000, 8), true},
+		{"the plateau alone", repeat(11633036, 8), false},
+		{"an outlier over 16 MiB", concat(repeat(11633036, 7), []uint64{17 << 20}), true},
+	} {
+		if over, _, _ := statementOver(c.runs); over != c.over {
+			t.Errorf("%s: over=%v, want %v", c.name, over, c.over)
+		}
+	}
+}
