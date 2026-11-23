@@ -440,7 +440,7 @@ WHERE pr.repo_id IN (SELECT toUUIDOrZero(id) FROM (SELECT arrayJoin({reach_repo_
 GROUP BY lr.team_id, lr.pr_repo_id
 ` + having + `
 ORDER BY lr.team_id, lr.pr_repo_id
-LIMIT ` + fmt.Sprint(limit) + teamLinkRowsJoinSettings
+LIMIT ` + fmt.Sprint(limit)
 		},
 		func(row contextpacket.ClickHouseRowScanner) (string, string, error) {
 			var teamID, repoID string

@@ -62,10 +62,3 @@ func TestTeamLinkCandidatesReadTheLinkedIdsOfTheOwnedProjectsOnce(t *testing.T) 
 		}
 	}
 }
-
-func TestLinkedPullRequestSetStatementEndsInOnePartialMergeSettingsClause(t *testing.T) {
-	statement := linkedPullRequestSetStatement(factTimeBound{})
-	if !strings.HasSuffix(statement, ")\nSETTINGS join_algorithm = 'partial_merge'") || strings.Count(statement, "SETTINGS") != 1 {
-		t.Fatalf("the link set statement does not end in one partial-merge SETTINGS clause:\n%s", statement)
-	}
-}
