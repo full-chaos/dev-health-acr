@@ -30,7 +30,7 @@ func TestEmbeddedOpsSchemaWrapperIsGeneratedAndFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const pinned = "sha256:963a889d2e612b923be407d9191aed05ef5b9bc9d5d6dd758e5a238e20185667"
+	const pinned = "sha256:89d6994d1bc637fabfa6ea56a499d3bf6b896584a686856851e25a7b73d8753c"
 	if SchemaDigestOf(EmbeddedOpsSchema()) != pinned || cat.SchemaDigest() != pinned || SchemaDigestOf(vendored) != pinned {
 		t.Fatalf("digests differ: embedded %s, catalogue %s, vendored %s", SchemaDigestOf(EmbeddedOpsSchema()), cat.SchemaDigest(), SchemaDigestOf(vendored))
 	}
