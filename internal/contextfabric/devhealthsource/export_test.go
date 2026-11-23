@@ -636,6 +636,3 @@ func AgeProjectCatalogField(field string, by time.Duration) string {
 	catalog.refreshAt = catalog.refreshAt.Add(-by)
 	return catalog.encode()
 }
-
-// MembershipEdgeCountSQLForTest is the BELONGS_TO_PROJECT edge count statement.
-func MembershipEdgeCountSQLForTest(ingest bool) string { return membershipEdgeCountSQL(ingest) }
