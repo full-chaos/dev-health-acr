@@ -172,6 +172,15 @@ func teamProjectLinkRowsSQL(teamParam string, bound factTimeBound) string {
 )`
 }
 
+// teamLinkRowsJoinSettings is the trailing SETTINGS clause of every statement
+// that reads teamProjectLinkRowsSQL. The two join sides (issues, link rows) at
+// 96k all-inside links are held in memory by the default hash join; the
+// partial-merge join holds the sorted blocks instead: peak 184 to 142 MB on the
+// pull request shape, 169 to 136 MB on the link-set shape, 160 to 131 MB on the
+// reached-repository shape, with equal results (acr #2193 draft rows), for at
+// most 22% more time. A statement carries it as its only SETTINGS clause.
+const teamLinkRowsJoinSettings = "\nSETTINGS join_algorithm = 'partial_merge'"
+
 // teamOwnedResolvedProjectsSQL is (team_id, provider, join_key) of every
 // uniquely keyed project the named teams own under the bound's ownership rule.
 // The team restriction rides on the ownership rows themselves, so only the
@@ -247,7 +256,7 @@ LEFT JOIN repos AS r FINAL ON r.id = lr.pr_repo_id AND r.org_id = {org_id:String
 GROUP BY lr.team_id, lr.pr_repo_id
 ` + having + `
 ORDER BY lr.team_id, lr.pr_repo_id
-LIMIT ` + fmt.Sprint(limit)
+LIMIT ` + fmt.Sprint(limit) + teamLinkRowsJoinSettings
 		},
 		func(row contextpacket.ClickHouseRowScanner) (string, string, error) {
 			var teamID string

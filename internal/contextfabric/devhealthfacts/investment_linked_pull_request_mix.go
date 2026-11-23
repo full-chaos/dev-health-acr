@@ -63,7 +63,7 @@ ORDER BY lr.team_id`, limit)
 func linkedPullRequestSetStatement(bound factTimeBound) string {
 	return `SELECT groupArray(r), groupArray(n), groupArray(t), groupArray(i), groupArray(k) FROM (
 	SELECT DISTINCT toString(pr_repo_id) AS r, toString(pr_number) AS n, team_id AS t, if(link_rank < 3, work_item_id, '') AS i, toUInt8(link_rank) AS k FROM ` + teamProjectLinkRowsSQL("ids", bound) + `
-)`
+)` + teamLinkRowsJoinSettings
 }
 
 const (

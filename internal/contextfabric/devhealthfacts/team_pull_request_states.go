@@ -127,7 +127,7 @@ FROM (
 GROUP BY team_id, repo
 ` + having + `
 ORDER BY team_id, repo
-LIMIT ` + fmt.Sprint(limit)
+LIMIT ` + fmt.Sprint(limit) + teamLinkRowsJoinSettings
 		},
 		func(row contextpacket.ClickHouseRowScanner) (string, string, error) {
 			var teamID, repoID, pairs string
