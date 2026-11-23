@@ -168,7 +168,7 @@ func TestStatementVerdictToleratesOneOutlierButCatchesAMovedPlateau(t *testing.T
 		{"the plateau alone", repeat(11633036, 8), false},
 		{"an outlier over 16 MiB", concat(repeat(11633036, 7), []uint64{17 << 20}), true},
 	} {
-		if over, _ := statementOver(c.runs); over != c.over {
+		if over, _, _ := statementOver(c.runs); over != c.over {
 			t.Errorf("%s: over=%v, want %v", c.name, over, c.over)
 		}
 	}

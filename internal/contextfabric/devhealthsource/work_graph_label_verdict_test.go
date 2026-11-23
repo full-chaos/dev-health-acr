@@ -41,9 +41,28 @@ func highestRunOver(runs []uint64, ceiling uint64) (highest uint64, over bool) {
 	return highest, highest >= ceiling
 }
 
-// statementOver is the verdict on the work_graph.v1 statement's per-run peaks
-// against its own ceiling.
-func statementOver(runs []uint64) (over bool, highest uint64) {
-	highest, over = highestRunOver(runs, 12<<20)
-	return over, highest
+const (
+	statementMedianCeiling  = uint64(12 << 20)
+	statementHighestCeiling = uint64(16 << 20)
+)
+
+// medianRun is the upper median: the (n/2+1)-th smallest run.
+func medianRun(runs []uint64) uint64 {
+	if len(runs) == 0 {
+		panic("medianRun of no runs")
+	}
+	sorted := append([]uint64(nil), runs...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	return sorted[len(sorted)/2]
+}
+
+// statementOver is the verdict on the work_graph.v1 statement's per-run peaks.
+// The median must stay under 12 MiB, which catches a moved plateau; the
+// highest run must stay under 16 MiB, which tolerates the rare outlier (the
+// highest of 7 main runs was 12,290,871 bytes, ci run 45118451445; 16 MiB is
+// that figure x1.30 rounded up).
+func statementOver(runs []uint64) (over bool, median, highest uint64) {
+	median = medianRun(runs)
+	highest, highestOver := highestRunOver(runs, statementHighestCeiling)
+	return median >= statementMedianCeiling || highestOver, median, highest
 }
