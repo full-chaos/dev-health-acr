@@ -57,10 +57,15 @@ FROM (SELECT number, %s AS n FROM numbers(15))`,
 		c14548tBase, c14548tBase, c14548tBase, subject)
 }
 
+// c14548tLayout: insideOneGranule = a small part whose keys all fall inside ONE
+// granule of the big part. layered / readRows = the values measured on CH 26.7
+// (run 45191320448, job 137750393680), pinned so the cell fails if they move.
 type c14548tLayout struct {
-	name      string
-	smalls    []string
-	intersect bool
+	name             string
+	smalls           []string
+	insideOneGranule bool
+	layered          int
+	readRows         uint64
 }
 
 type c14548tStep struct {
@@ -73,7 +78,7 @@ func TestCHAOS14548TransitionsLayoutPicksTheFinalPath(t *testing.T) {
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
 	for _, statement := range productionSchemaDDL() {
 		if err := direct.Exec(ctx, statement); err != nil {
-			t.Fatalf("create table: %v", err)
+			t.Fatalf("schema: %v", err)
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
@@ -103,15 +108,15 @@ SELECT concat('linear:W-', leftPad(toString(number), 6, '0')), %s, '%s', 'w', 'o
 
 	// Subject n of the big part sits at rows 3n..3n+2; granule 1 = subjects 0..2730, granule 2 = 2731..4657.
 	layouts := []c14548tLayout{
-		{"L0-big-only", nil, false},
-		{"L1-after-max-new-subjects", []string{c14548tSmall("W", "900000 + number")}, false},
-		{"L2-before-min-new-subjects", []string{c14548tSmall("A", "number")}, false},
-		{"L3-inside-granule-1", []string{c14548tSmall("W", "100 + number")}, true},
-		{"L4-inside-granule-2", []string{c14548tSmall("W", "4000 + number")}, true},
-		{"L5-across-the-granule-border", []string{c14548tSmall("W", "2724 + number")}, true},
-		{"L6-spread-over-both-granules", []string{c14548tSmall("W", "number * 300")}, true},
-		{"L7-after-max-plus-inside-granule-2", []string{c14548tSmall("W", "900000 + number"), c14548tSmall("W", "4000 + number")}, true},
-		{"L8-two-after-max", []string{c14548tSmall("W", "900000 + number"), c14548tSmall("W", "910000 + number")}, false},
+		{"L0-big-only", nil, false, 1, 63721},
+		{"L1-after-max-new-subjects", []string{c14548tSmall("W", "900000 + number")}, false, 1, 63781},
+		{"L2-before-min-new-subjects", []string{c14548tSmall("A", "number")}, false, 1, 66191},
+		{"L3-inside-granule-1", []string{c14548tSmall("W", "100 + number")}, true, 4, 81127},
+		{"L4-inside-granule-2", []string{c14548tSmall("W", "4000 + number")}, true, 4, 81127},
+		{"L5-across-the-granule-border", []string{c14548tSmall("W", "2724 + number")}, false, 0, 57999},
+		{"L6-spread-over-both-granules", []string{c14548tSmall("W", "number * 300")}, false, 0, 57999},
+		{"L7-after-max-plus-inside-granule-2", []string{c14548tSmall("W", "900000 + number"), c14548tSmall("W", "4000 + number")}, true, 4, 81187},
+		{"L8-two-after-max", []string{c14548tSmall("W", "900000 + number"), c14548tSmall("W", "910000 + number")}, false, 1, 63841},
 	}
 	token := fmt.Sprintf("c14548t-%d", time.Now().UnixNano())
 	var report []string
@@ -134,7 +139,6 @@ SELECT concat('linear:W-', leftPad(toString(number), 6, '0')), %s, '%s', 'w', 'o
 		}
 		var id string
 		var readRows uint64
-		var memory int64
 		for r := 1; r <= 2; r++ {
 			comment := fmt.Sprintf("%s|%s|r%d", token, layout.name, r)
 			rows, err := query.Query(ctx, statement+" SETTINGS max_threads = 4, log_comment = '"+comment+"', log_processors_profiles = 1", []contextpacket.ClickHouseBinding{{Name: "org_id", Value: c14548tOrg}})
@@ -154,8 +158,8 @@ SELECT concat('linear:W-', leftPad(toString(number), 6, '0')), %s, '%s', 'w', 'o
 			rows.Close()
 		}
 		exec("flush logs", "SYSTEM FLUSH LOGS")
-		if err := direct.QueryRow(ctx, `SELECT query_id, read_rows, toInt64(memory_usage) FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = ?`,
-			fmt.Sprintf("%s|%s|r2", token, layout.name)).Scan(&id, &readRows, &memory); err != nil {
+		if err := direct.QueryRow(ctx, `SELECT query_id, read_rows FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = ?`,
+			fmt.Sprintf("%s|%s|r2", token, layout.name)).Scan(&id, &readRows); err != nil {
 			t.Fatalf("%s: query_log: %v", layout.name, err)
 		}
 		steps := c14548tSteps(t, ctx, direct, id)
@@ -175,18 +179,21 @@ SELECT concat('linear:W-', leftPad(toString(number), 6, '0')), %s, '%s', 'w', 'o
 				over++
 			}
 		}
-		line := fmt.Sprintf("%s: parts=%d rows=%d big_marks=%d read_rows=%d memory=%d transitions_steps=%d layered=%d plain=%d over_total=%d step_rows=[%s]",
-			layout.name, parts, total, bigMarks, readRows, memory, len(steps), layered, plain, over, strings.Join(rowsPerStep, " "))
+		line := fmt.Sprintf("%s: parts=%d rows=%d big_marks=%d read_rows=%d transitions_steps=%d layered=%d plain=%d over_total=%d step_rows=[%s]",
+			layout.name, parts, total, bigMarks, readRows, len(steps), layered, plain, over, strings.Join(rowsPerStep, " "))
 		report = append(report, line)
 		t.Logf("LAYOUT %s", line)
 		if len(steps) == 0 || len(steps) != stepCount {
 			t.Errorf("%s: %d transitions read steps, want %d (> 0)", layout.name, len(steps), stepCount)
 		}
-		if layout.intersect && (layered != len(steps) || over != len(steps)) {
-			t.Errorf("WANT %s (small part inside the big part's key range): every transitions step layered and reading more than the %d rows; got layered=%d over=%d", layout.name, total, layered, over)
+		// The flip: a small part inside ONE granule of the big part layers more transitions
+		// reads (each re-reads a granule of the big part); any other layout does not.
+		if layout.insideOneGranule != (layered > 1) || layered != over {
+			t.Errorf("WANT %s: inside one granule = %v, so layered > 1 must be %v and every layered step must read more than the %d rows; got layered=%d over=%d",
+				layout.name, layout.insideOneGranule, layout.insideOneGranule, total, layered, over)
 		}
-		if !layout.intersect && (layered != 0 || over != 0) {
-			t.Errorf("WANT %s (no small part inside the big part's key range): no transitions step layered or reading more than the %d rows; got layered=%d over=%d", layout.name, total, layered, over)
+		if layered != layout.layered || readRows != layout.readRows {
+			t.Errorf("WANT %s: layered=%d read_rows=%d (measured, pinned); got layered=%d read_rows=%d", layout.name, layout.layered, layout.readRows, layered, readRows)
 		}
 	}
 	t.Logf("server %s, statement_sha %s\n%s", version, c14548tStatementSHA, strings.Join(report, "\n"))
