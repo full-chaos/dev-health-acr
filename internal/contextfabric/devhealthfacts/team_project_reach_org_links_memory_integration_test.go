@@ -222,11 +222,18 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery
 		grown = size
 		merged()
 	}
+	probe := strings.HasPrefix(axis, "links inside")
 	growTo(smallSize)
 	read("warm-up", provider)
 	small := minPeaks(read("smaller", provider), read("smaller again", provider), read("smaller third", provider))
+	if probe {
+		probeLinkRowsForms(t, ctx, ceilingQuery, direct, org, axis, fmt.Sprint(smallSize))
+	}
 	growTo(largeSize)
 	large := minPeaks(read("larger", provider), read("larger again", provider), read("larger third", provider))
+	if probe {
+		probeLinkRowsForms(t, ctx, ceilingQuery, direct, org, axis, fmt.Sprint(largeSize))
+	}
 	for i := range filters {
 		for hash, peak := range small[i] {
 			t.Logf("SLOPE %s: statement %d (%s) peak memory %d bytes at %d, %d at %d", axis, hash, filters[i].Table, peak, smallSize, large[i][hash], largeSize)
