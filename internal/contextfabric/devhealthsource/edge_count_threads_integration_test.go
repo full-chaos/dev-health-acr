@@ -82,7 +82,7 @@ func TestLiveMembershipEdgeCountPeakAndThreads(t *testing.T) {
 	query, direct := newDevHealthClickHouseIntegrationClient(t, ctx)
 	for _, statement := range productionSchemaDDL() {
 		if err := direct.Exec(ctx, statement); err != nil {
-			t.Fatalf("create table: %v", err)
+			t.Fatalf("create schema: %v", err)
 		}
 	}
 	createProjectMembershipPresenceView(t, ctx, direct)
