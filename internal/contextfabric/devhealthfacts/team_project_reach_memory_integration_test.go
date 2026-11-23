@@ -171,11 +171,17 @@ SELECT `+id+`, ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM number
 	smallBytes := projectReachedReadBytes(t, ctx, direct, lastMark)
 	smallAmbiguousBytes := teamAmbiguousCandidatesReadBytes(t, ctx, direct, lastMark)
 	smallCandidates := takeTeamLinkCandidatesPeak(t, ctx, direct, lastMark, small)
+	if interleaved {
+		probeLinkRowsForms(t, ctx, query, direct, org, "org-size", fmt.Sprint(blockerMemoryFillerItems))
+	}
 	addFiller("more-", blockerMemoryMoreFillerItems)
 	large, largeResult, largeErr := read()
 	largeBytes := projectReachedReadBytes(t, ctx, direct, lastMark)
 	largeAmbiguousBytes := teamAmbiguousCandidatesReadBytes(t, ctx, direct, lastMark)
 	largeCandidates := takeTeamLinkCandidatesPeak(t, ctx, direct, lastMark, large)
+	if interleaved {
+		probeLinkRowsForms(t, ctx, query, direct, org, "org-size", fmt.Sprint(blockerMemoryFillerItems+blockerMemoryMoreFillerItems))
+	}
 	t.Logf("read_bytes of the project-reached statements: %d at %d filler work items, %d at %d", smallBytes, blockerMemoryFillerItems, largeBytes, blockerMemoryFillerItems+blockerMemoryMoreFillerItems)
 	// The reach read and the linked pull request read run on every read.
 	assertStatementMemoryFollowsEvidence(t, ctx, direct, "team project-reached repository statements", small, large, 2)

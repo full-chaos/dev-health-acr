@@ -59,7 +59,16 @@ LEFT JOIN repos AS r FINAL ON r.id = lr.pr_repo_id AND r.org_id = {org_id:String
 GROUP BY lr.team_id, lr.pr_repo_id`)
 	}
 	id := func(rows string) string { return rows }
-	partialMerge := func(s string) string { return s + " SETTINGS join_algorithm = 'partial_merge'" }
+	setting := func(clause string) func(string) string {
+		return func(s string) string { return s + " SETTINGS " + clause }
+	}
+	const sent = "cw.work_item_id IN (SELECT work_item_id FROM " + devhealthfacts.TeamLinkCandidatesTableName + ")"
+	prefilter := func(rows string) string {
+		if strings.Count(rows, sent) != 1 {
+			panic("candidate prune not found")
+		}
+		return strings.Replace(rows, sent, sent+" AND cw.work_item_id IN (SELECT work_item_id FROM work_graph_issue_pr WHERE org_id = {org_id:String} AND cityHash64(work_item_id) IN (SELECT cityHash64(work_item_id) FROM "+devhealthfacts.TeamLinkCandidatesTableName+"))", 1)
+	}
 	var out []linkRowsForm
 	for _, shape := range []struct {
 		name string
@@ -70,13 +79,15 @@ GROUP BY lr.team_id, lr.pr_repo_id`)
 			out = append(out, linkRowsForm{name: name, shape: shape.name, build: func(r string) string { return tail(wrap(rows(r))) }})
 		}
 		add("base", id, id)
-		add("4-join_partial_merge", id, partialMerge)
-		if shape.name == "pr" {
-			add("3-no_inner_distinct", noDistinct, id)
-			add("3+4-no_inner_distinct+partial_merge", noDistinct, partialMerge)
-		}
+		add("pm", id, setting("join_algorithm = 'partial_merge'"))
+		add("auto", id, setting("join_algorithm = 'auto'"))
+		add("full_sorting_merge", id, setting("join_algorithm = 'full_sorting_merge'"))
+		add("pm+max_rows_in_join=100000", id, setting("join_algorithm = 'partial_merge', max_rows_in_join = 100000"))
+		add("pm+right_blocks=8192", id, setting("join_algorithm = 'partial_merge', partial_merge_join_rows_in_right_blocks = 8192"))
+		add("prefilter", prefilter, id)
+		add("prefilter+pm", prefilter, setting("join_algorithm = 'partial_merge'"))
 	}
-	_ = groupBy
+	_, _ = groupBy, noDistinct
 	return out
 }
 
