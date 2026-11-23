@@ -49,29 +49,34 @@ func linkRowsForms() []linkRowsForm {
 		return checksum(`SELECT lr.team_id AS c1, toString(lr.pr_repo_id) AS c2, toString(lr.pr_number) AS c3, pr.state AS c4, '' AS c5 FROM (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM ` + rows + `) AS lr
 INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = {org_id:String} AND pr.repo_id = lr.pr_repo_id AND pr.number = lr.pr_number`)
 	}
-	id := func(rows string) string { return rows }
-	raw := func(settings string) func(string) string {
-		return func(s string) string { return s + " SETTINGS " + settings }
+	mix := func(rows string) string {
+		return checksum(`SELECT DISTINCT toString(pr_repo_id) AS c1, toString(pr_number) AS c2, team_id AS c3, if(link_rank < 3, work_item_id, '') AS c4, toString(toUInt8(link_rank)) AS c5 FROM ` + rows)
 	}
+	rollup := func(rows string) string {
+		return checksum(`SELECT lr.team_id AS c1, toString(lr.pr_repo_id) AS c2, ifNull(any(r.repo), '') AS c3, toString(min(lr.link_rank)) AS c4, toString(uniqExact(lr.pr_number)) AS c5
+FROM ` + rows + ` AS lr
+LEFT JOIN repos AS r FINAL ON r.id = lr.pr_repo_id AND r.org_id = {org_id:String}
+GROUP BY lr.team_id, lr.pr_repo_id`)
+	}
+	id := func(rows string) string { return rows }
+	partialMerge := func(s string) string { return s + " SETTINGS join_algorithm = 'partial_merge'" }
 	var out []linkRowsForm
 	for _, shape := range []struct {
 		name string
 		wrap func(string) string
-	}{{"full", full}, {"pr", pr}} {
+	}{{"full", full}, {"pr", pr}, {"mix", mix}, {"rollup", rollup}} {
 		wrap := shape.wrap
 		add := func(name string, rows func(string) string, tail func(string) string) {
 			out = append(out, linkRowsForm{name: name, shape: shape.name, build: func(r string) string { return tail(wrap(rows(r))) }})
 		}
 		add("base", id, id)
-		add("1-max_threads=1", id, func(s string) string { return readers.WithSettings(s, readers.Settings{MaxThreads: 1}) })
-		add("2-group_by", groupBy, id)
+		add("4-join_partial_merge", id, partialMerge)
 		if shape.name == "pr" {
 			add("3-no_inner_distinct", noDistinct, id)
+			add("3+4-no_inner_distinct+partial_merge", noDistinct, partialMerge)
 		}
-		add("4-join_partial_merge", id, raw("join_algorithm = 'partial_merge'"))
-		add("4-join_grace_hash", id, raw("join_algorithm = 'grace_hash'"))
-		add("5-group_by+max_threads=1", groupBy, func(s string) string { return readers.WithSettings(s, readers.Settings{MaxThreads: 1}) })
 	}
+	_ = groupBy
 	return out
 }
 
@@ -106,7 +111,7 @@ func probeLinkRowsForms(t *testing.T, ctx context.Context, query contextpacket.C
 		var peaks, millis []uint64
 		var got []string
 		var runErr error
-		for run := 0; run < 4 && runErr == nil; run++ {
+		for run := 0; run < 6 && runErr == nil; run++ {
 			mark := serverNowMicros(t, ctx, direct)
 			got, runErr = canonicalRows(t, ctx, query, statement, org)
 			if runErr != nil {
