@@ -46,13 +46,17 @@ func derivedIDFitsSQL(kind string, segments ...string) string {
 // turns into an edge: not malformed, not a duplicate add, a project that
 // resolves to exactly one row, not a column-superseded retraction, and canonical
 // ids (work item, project) the producer does not omit for their length.
+//
+// It runs one thread: the peak under the projector's statement cap follows the
+// per-thread buffers, and the count is exact at any thread count.
 func membershipEdgeCountSQL(ingest bool) string {
 	return `SELECT source, uniqExact(subject_kind, repo_id_str, subject_id, provider, resolved_project_id, event_id) AS edge_count
 FROM (` + membershipRows(cursorState{}, ingest, false) + `)
 WHERE is_malformed = 0 AND is_duplicate_add = 0 AND key_resolution_count = 1 AND source != '` + columnSupersededSource + `'
   AND (subject_kind != 'work_item' OR ` + derivedIDFitsSQL(identity.KindWorkItem, "repo_id_str", "subject_id") + `)
   AND ` + derivedIDFitsSQL(identity.KindProject, "provider", "resolved_project_id") + `
-GROUP BY source`
+GROUP BY source
+SETTINGS max_threads = 1`
 }
 
 // ProjectionSourceEdgeCounts implements contextfabric.ProjectionSourceEdgeCounts.
