@@ -518,10 +518,11 @@ func withoutNotRecordedRoots(t *testing.T, manifest Manifest) (Manifest, []strin
 // capture are measured again.
 const recaptureTicket = "14023"
 
-// advancedRoots are the roots every operation of which is in advanced: a
-// recorded run has no case for any of them. A root that keeps one operation
-// not in advanced is not one: it runs, and a missing case of it still stops
-// the run.
+// advancedRoots are the roots every operation of which is in advanced, and the
+// roots whose window probe (temporaryAllowances) runs on an advanced operation:
+// a recorded run has no case for any of them. A root that keeps one operation
+// not in advanced and probes no advanced one is not one: it runs, and a missing
+// case of it still stops the run.
 func advancedRoots(policy *directread.GraphQLPolicy, advanced map[string]string) []string {
 	var out []string
 	for _, root := range policy.Roots() {
@@ -534,6 +535,11 @@ func advancedRoots(policy *directread.GraphQLPolicy, advanced map[string]string)
 			if _, ok := advanced[op]; !ok {
 				all = false
 				break
+			}
+		}
+		if allowance, ok := temporaryAllowances[root.Field]; ok && allowance.Window != "" {
+			if _, probed := advanced[allowance.Operation]; probed {
+				all = true
 			}
 		}
 		if all {
