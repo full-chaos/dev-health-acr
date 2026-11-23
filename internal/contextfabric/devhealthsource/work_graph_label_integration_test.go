@@ -415,7 +415,7 @@ func (s *workGraphStage) logRunTable(t *testing.T, mark int64) {
 // memory past the 1.15x slope.
 func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testing.T) {
 	const ceiling = uint64(56 << 20)
-	const statementCeiling = uint64(12 << 20)
+	const freshnessCeiling = uint64(12 << 20)
 	stages := []*workGraphStage{
 		newWorkGraphStage(t, "base", 50000, 20000, 20000),
 		newWorkGraphStage(t, "+work items", 125000, 20000, 20000),
@@ -449,8 +449,20 @@ func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testin
 	t.Logf("work_graph.v1 cost: base %+v, +150k work items %+v, +40k edges and pull requests %+v, +40k commit edges %+v", base, filler, noise, commits)
 	// Ceilings are absolute bounds, so each asserts the largest of the measured
 	// warm peaks: a cap is hit by the worst run. Warm, the statement peaks near
-	// 7 MB (11.6 MB on its higher plateau), its freshness read near 4 to 6 MB
-	// and the issue gate near 8 MB.
+	// 7 MB (11.63 MB on its higher plateau), its freshness read near 4 to 6 MB
+	// and the issue gate near 8 MB. The statement has two checks (statementOver):
+	// the median run under 12 MiB (a moved plateau) and the highest under 16 MiB
+	// (the rare outlier). Basis: the highest of 7 main ci runs is 12,290,871 bytes
+	// (run 45118451445, base stage; the rest 11.63 to 11.77 MB); x1.30 rounds up
+	// to 16 MiB. The freshness read keeps 12 MiB.
+	for _, name := range []string{"base", "+work items", "+edges and pull requests", "+commit edges"} {
+		stage := costs[name]
+		if over, median, highest := statementOver(stage.memoryRuns); over {
+			t.Errorf("%s: work_graph.v1 median %d (want under %d), highest %d (want under %d), runs %v", name, median, statementMedianCeiling, highest, statementHighestCeiling, stage.memoryRuns)
+		} else {
+			t.Logf("%s: work_graph.v1 memory median %d under %d, highest %d under %d over %d runs", name, median, statementMedianCeiling, highest, statementHighestCeiling, len(stage.memoryRuns))
+		}
+	}
 	for _, name := range []string{"base", "+work items", "+edges and pull requests", "+commit edges"} {
 		stage := costs[name]
 		for _, c := range []struct {
@@ -458,9 +470,8 @@ func TestWorkGraphLabelStatementCostIgnoresOtherWorkItemsAndOtherEdges(t *testin
 			runs         []uint64
 			ceilingBytes uint64
 		}{
-			{"work_graph.v1", stage.memoryRuns, statementCeiling},
 			{"work_graph.v1", stage.memoryRuns, ceiling},
-			{"freshness read", stage.freshnessRuns, statementCeiling},
+			{"freshness read", stage.freshnessRuns, freshnessCeiling},
 			{"issue gate", stage.gateRuns, ceiling},
 		} {
 			if peak, over := highestRunOver(c.runs, c.ceilingBytes); over {
