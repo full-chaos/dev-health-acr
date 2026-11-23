@@ -130,7 +130,7 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 	}
 
 	capped := statementthreads.Capped(query, edgeThreadsProjectorCap)
-	shipped := devhealthsource.MembershipEdgeCountSQLForTest(true)
+	shipped, _ := devhealthsource.MembershipEdgeCountSQLForTest(true)
 	fourThreads := strings.TrimSuffix(shipped, "\nSETTINGS max_threads = 1")
 	if fourThreads == shipped {
 		t.Log("PROFILE the shipped statement carries no SETTINGS max_threads = 1")
