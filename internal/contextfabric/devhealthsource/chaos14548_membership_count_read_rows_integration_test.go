@@ -108,7 +108,7 @@ SELECT %s, if(number < 40, '%s', '%s'), concat('P', toString(number)), '', 'line
 		exec("transitions", statement)
 	}
 
-	statement := devhealthsource.MembershipEdgeCountSQLForTest(true)
+	statement, _ := devhealthsource.MembershipEdgeCountSQLForTest(true)
 	bindings := []contextpacket.ClickHouseBinding{{Name: "org_id", Value: c14548OrgA}}
 	token := fmt.Sprintf("c14548-%d", time.Now().UnixNano())
 	var runs []c14548Run
