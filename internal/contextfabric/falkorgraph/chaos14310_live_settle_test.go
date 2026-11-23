@@ -17,6 +17,9 @@ import (
 const (
 	liveSettleTries = 5
 	liveSettlePause = 200 * time.Millisecond
+
+	liveSettleMaxFirstRuns = 2000
+	liveSettleFirstBound   = 30 * time.Second
 )
 
 // settleLiveFalkor runs the schema bootstrap on a throwaway graph through the adapter's own client before a live
@@ -121,10 +124,19 @@ func TestLiveSettleAbsorbsConnectionsDroppedDuringTheFirstBootstrap(t *testing.T
 		calls++
 		err := adapter.bootstrapSchema(ctx, key)
 		if calls == 1 {
+			// bootstrapSchema is idempotent (create index/constraint treat "already exists" as success), so
+			// re-run it under the kills until one run errors: the first try fails by count, not by timing.
+			runs := 1
+			began := time.Now()
+			for err == nil && runs < liveSettleMaxFirstRuns && time.Since(began) < liveSettleFirstBound {
+				err = adapter.bootstrapSchema(ctx, key)
+				runs++
+			}
+			t.Logf("first bootstrap error after %d runs", runs)
 			close(firstFailed)
 			<-stopped
 			if err == nil {
-				t.Errorf("premise: the first bootstrap try passed under the connection kills")
+				t.Fatalf("premise: no bootstrap run failed under the connection kills within %d runs / %s", liveSettleMaxFirstRuns, liveSettleFirstBound)
 			}
 		}
 		return err
