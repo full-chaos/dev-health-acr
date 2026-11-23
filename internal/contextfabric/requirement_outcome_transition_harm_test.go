@@ -58,6 +58,13 @@ func reconciliationAnchorMembershipClaim() ClaimedFact {
 // through the shipped derivation (countingFrame).
 func newReconciliationEngine(t *testing.T, cohort *Cohort, status InvestigationStatus, claims []ClaimedFact, telemetry EngineTelemetry, results InvestigationResultStore) *Engine {
 	t.Helper()
+	return newReconciliationEngineWithMaxItems(t, cohort, status, claims, telemetry, results, 0)
+}
+
+// newReconciliationEngineWithMaxItems is the same fixture with the service's
+// item ceiling set. Zero leaves it unbounded.
+func newReconciliationEngineWithMaxItems(t *testing.T, cohort *Cohort, status InvestigationStatus, claims []ClaimedFact, telemetry EngineTelemetry, results InvestigationResultStore, maxItems int) *Engine {
+	t.Helper()
 	frame := countingFrame(SubjectTeam)
 	anchor := reconciliationAnchor()
 	graph := graphReaderStub{
@@ -83,7 +90,7 @@ func newReconciliationEngine(t *testing.T, cohort *Cohort, status InvestigationS
 				Family: QuestionFamilyScopedCohortStatus, Source: QuestionFamilySourceModel,
 			},
 		},
-		Graph: graph,
+		Graph: discoveryCappedGraphStub{graph},
 		Facts: factReaderFunc(func(context.Context, storage.Principal, CanonicalFactRequest) (CanonicalFactBundle, error) {
 			return CanonicalFactBundle{
 				Facts: []CanonicalFact{}, Coverage: Coverage{Sources: []SourceObservation{}, DegradedReasons: []string{}},
@@ -112,6 +119,7 @@ func newReconciliationEngine(t *testing.T, cohort *Cohort, status InvestigationS
 		Requirements: registryDeriver{},
 	}, EngineOptions{
 		ServiceVersion: "acr-test",
+		MaxItems:       maxItems,
 		Now:            func() time.Time { return time.Unix(500, 0).UTC() },
 		NewResultID:    func() string { return "result_57370001" },
 	})

@@ -18,9 +18,8 @@ import (
 // way. Counting the CALLS is the only way to tell.
 //
 // SCOPE, STATED HONESTLY. This pin covers the SINGLE-SYNTHESIS path. The
-// synthesizer's call count is logged, and in this fixture it is 1: every
-// budget that leaves the first answer over the cap also leaves the narrowed
-// one over it, so the turn takes the planned refusal instead of retrying. The
+// synthesizer's call count is logged, and in this fixture it is 1: the
+// budget fits the first answer, so no retry runs. The
 // retry arm of row 7 is NOT covered by this test; it is covered by
 // TestTheGroupedRetryDoesNotReReadItsProviders, whose fixture sits above the
 // grouped headroom so a real second synthesis runs. This name used to
@@ -54,10 +53,9 @@ func TestTheAdmittedGroupedSingleSynthesisPathMakesExactlyTwoFactServiceCalls(t 
 			InclusionReasons: []string{"matched"},
 		})
 	}
-	// A budget too small for the first answer forces the one bounded retry.
-	options := EngineOptions{MaxItems: 6, SynthesisDeadlineReserve: time.Second}
+	// A budget the first answer fits, so exactly one synthesis runs.
+	options := EngineOptions{MaxItems: 10, SynthesisDeadlineReserve: time.Second}
 	engine, request := groupReadEngineFixtureFull(t, &recordingTelemetry{}, recorder, members, nil, SubjectProject, &options, &synthesisCalls)
-	request.Options.MaxCohortMembers = 1
 
 	if _, err := engine.Investigate(context.Background(), storage.Principal{OrgID: "org_1"}, request); err != nil {
 		t.Fatalf("Investigate() error = %v", err)
@@ -189,12 +187,11 @@ func TestAnUngroupedTurnMakesExactlyOneFactServiceCall(t *testing.T) {
 // because it is not obvious and it constrains any future fixture. A grouped
 // plan reserves a synthesis headroom of 20 items, and the cohort's member
 // allowance is `MaxItems - headroom`. For every budget at or below 20 that
-// allowance clamps to one, stage 2's overlap-aware set cover reduces the
-// cohort to ONE MEMBER PER GROUP, and stage 3 can then narrow nothing without
-// dropping a group -- which the design forbids -- so the retry declines
-// `nothing_to_narrow` at every such budget. The retry is reachable only above
-// the headroom: the budget here leaves room for every member, and the answer
-// goes over on CLAIMS instead, which narrowing does reduce.
+// allowance clamps to one, so discovery returns ONE MEMBER, and stage 3 can
+// then narrow nothing -- so the retry declines `nothing_to_narrow` at every
+// such budget. The retry is reachable only above the headroom: the budget
+// here leaves room for every member, and the answer goes over on CLAIMS
+// instead, which narrowing does reduce.
 //
 // NOT t.Parallel(): it changes the fixture's claims-per-member.
 func TestTheGroupedRetryDoesNotReReadItsProviders(t *testing.T) {
@@ -226,8 +223,8 @@ func TestTheGroupedRetryDoesNotReReadItsProviders(t *testing.T) {
 			InclusionReasons: []string{"matched"},
 		})
 	}
-	// Above the grouped headroom, so stage 2 leaves every member in place and
-	// the first answer goes over on claims rather than on members.
+	// Above the grouped headroom, so the member allowance leaves every member in
+	// place and the first answer goes over on claims rather than on members.
 	options := EngineOptions{MaxItems: 26, SynthesisDeadlineReserve: time.Hour}
 	engine, request := groupReadEngineFixtureFull(t, &recordingTelemetry{}, recorder, members, nil, SubjectProject, &options, &synthesisCalls)
 

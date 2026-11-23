@@ -147,7 +147,7 @@ func (e *Engine) serveFactsOnly(ctx context.Context, principal storage.Principal
 	if measured.Overrun != contractsv1.ContextFabricBudgetFits {
 		return InvestigationResult{}, assemblyTelemetry{}, FactsOnlyOverBudget
 	}
-	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, members, grouped, false, measured.Overrun, params.GroupedNarrowingBasis)
+	event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult, members, members, grouped, false, measured.Overrun, "")
 	event.recordMeasurement(measured)
 	event.PredictedItems = PredictedItemsForPlan(*plan, members)
 	event.DeadlineReserved = e.synthesisDeadlineReserve > 0

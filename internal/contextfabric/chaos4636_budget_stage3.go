@@ -217,7 +217,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		fit := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
 			cohortMemberCount(params.Graph.Cohort), cohortMemberCount(params.Graph.Cohort),
 			params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0, false,
-			contractsv1.ContextFabricBudgetFits, params.GroupedNarrowingBasis)
+			contractsv1.ContextFabricBudgetFits, "")
 		// The FIT arm measures its quota too, and that is the whole of
 		// class B's fix. Exposure used to be computed only inside the
 		// narrowing path, so on every fitting answer -- the majority path
@@ -269,7 +269,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		}
 		members := cohortMemberCount(params.Graph.Cohort)
 		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
-			members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
+			members, members, grouped, false, overrun, "")
 		event.recordMeasurement(measured)
 		event.PredictedItems = PredictedItemsForPlan(*plan, members)
 		event.DeadlineReserved = e.synthesisDeadlineReserve > 0
@@ -295,7 +295,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		}
 		members := cohortMemberCount(params.Graph.Cohort)
 		event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
-			members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
+			members, members, grouped, false, overrun, "")
 		event.recordMeasurement(measured)
 		event.PredictedItems = PredictedItemsForPlan(*plan, members)
 		event.DeadlineReserved = e.synthesisDeadlineReserve > 0
@@ -349,7 +349,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 			// cut); the measurement stamps belong to the arms that fit a result by
 			// cutting what the model wrote, and this lever cuts only the list.
 			event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
-				cohortMemberCount(result.Cohort), cohortMemberCount(fitted.Cohort), grouped, false, overrun, params.GroupedNarrowingBasis)
+				cohortMemberCount(result.Cohort), cohortMemberCount(fitted.Cohort), grouped, false, overrun, "")
 			event.PredictedItems = PredictedItemsForPlan(*plan, cohortMemberCount(params.Graph.Cohort))
 			event.DeadlineReserved = e.synthesisDeadlineReserve > 0
 			event.OutcomeCompletenessState = fitted.Completeness.State
@@ -377,7 +377,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		if claimLever.Served {
 			members := cohortMemberCount(params.Graph.Cohort)
 			event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
-				members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
+				members, members, grouped, false, overrun, "")
 			event.recordMeasurement(measured)
 			event.PredictedItems = PredictedItemsForPlan(*plan, members)
 			event.DeadlineReserved = e.synthesisDeadlineReserve > 0
@@ -464,7 +464,7 @@ func (e *Engine) fitAssembledResult(ctx context.Context, principal storage.Princ
 		if trim.Served {
 			members := cohortMemberCount(params.Graph.Cohort)
 			event := PlanNarrowingEventFrom(*plan, contractsv1.ContextFabricPlanNarrowingAssembledResult,
-				members, members, grouped, false, overrun, params.GroupedNarrowingBasis)
+				members, members, grouped, false, overrun, "")
 			event.recordMeasurement(measured)
 			event.PredictedItems = PredictedItemsForPlan(*plan, members)
 			event.DeadlineReserved = e.synthesisDeadlineReserve > 0
@@ -1436,7 +1436,7 @@ func (e *Engine) serveAtServiceCeiling(ctx context.Context, principal storage.Pr
 		pending.CeilingFitted = true
 		members := cohortMemberCount(params.Graph.Cohort)
 		grouped := params.Graph.Cohort != nil && len(params.Graph.Cohort.Groups) > 0
-		e.recordCeilingFit(ctx, principal, plan, members, grouped, params.GroupedNarrowingBasis, measured, served, overrun, step)
+		e.recordCeilingFit(ctx, principal, plan, members, grouped, "", measured, served, overrun, step)
 	}
 	return served, ok, nil
 }
