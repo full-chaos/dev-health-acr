@@ -62,7 +62,11 @@ var contractsAtCapture = map[string]string{
 // have a case in the capture and a contract that is not the one in
 // contractsAtCapture (TestAdvancedPastCaptureEntriesAreRecordedAndAdvanced), so
 // the list cannot outlive a capture taken again.
-var advancedPastCapture = map[string]string{}
+var advancedPastCapture = map[string]string{
+	"capacityForecast":   "the capture predates the backlogState and backlogAsOfDay selection of the document: its recorded replies answer the older document",
+	"capacityForecasts":  "the capture predates the backlogState and backlogAsOfDay selection of the document: its recorded replies answer the older document",
+	"throughputForecast": "the capture predates the wipCongestion, estimateCoverage and staleWip read-state selection of the document: its recorded replies answer the older document",
+}
 
 // recordedNotRecorded is Oracle.NotRecorded of a recorded run: the operations
 // the capture has no case for and the operations advanced past it.
