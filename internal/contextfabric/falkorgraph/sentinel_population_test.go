@@ -41,6 +41,7 @@ var declaredSentinels = map[string]error{
 	"errVectorIndexNotReady":         errVectorIndexNotReady,
 	"errAdapterRequiresConn":         errAdapterRequiresConn,
 	"errNodeEdgesCut":                errNodeEdgesCut,
+	"errServerBudgetSpent":           errServerBudgetSpent,
 }
 
 // notAProjectionSentinel names every declared error that cannot reach a
@@ -50,6 +51,7 @@ var declaredSentinels = map[string]error{
 var notAProjectionSentinel = map[string]string{
 	"errAdapterRequiresConn": "construction-time programming error: New() rejects a config with no conn, before any port method exists to return it",
 	"errNodeEdgesCut":        "stays inside the reader: TraverseObservationToSubject turns any edge error into ObservationTraversalErrored, so no port method returns it",
+	"errServerBudgetSpent":   "stays inside CountEdges: only a read carrying withServerTimeout (CountEdges alone) can get it, and CountEdges returns contextfabric.ErrQueryBudgetExceeded or the caller's end instead",
 	// Offline calibration and sweep tooling. These are returned by the
 	// exported Calibrate*/Recall*/oracle helpers, which no ProjectionBackend
 	// or GraphReader method calls.
