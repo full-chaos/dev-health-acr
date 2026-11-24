@@ -546,6 +546,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -835,6 +839,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1036,6 +1044,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1144,6 +1156,10 @@ jobs:
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthschema')
     runs-on: ubuntu-latest
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1235,6 +1251,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1312,6 +1332,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1387,6 +1411,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1462,6 +1490,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1537,6 +1569,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1630,6 +1666,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1705,6 +1745,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1782,6 +1826,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1862,6 +1910,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1942,6 +1994,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -2006,6 +2062,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -2068,6 +2128,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -2137,6 +2201,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -2212,6 +2280,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -2283,6 +2355,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
