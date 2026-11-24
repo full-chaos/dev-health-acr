@@ -89,60 +89,34 @@ var newestDayStatePaths = map[string]string{
 	"capacityForecasts": "capacityForecasts.edges[*].node.backlogState",
 }
 
-// newestDayStateVerdict reads a NewestDayState path. A null parent (no
-// forecast, no list) and a null or MEASURED state are not a missing day.
-func newestDayStateVerdict(root any, path string) (partial, absent bool) {
+// newestDayStatePartial reads a NewestDayState path. Only a STALE or NO_ROWS value is a
+// missing day: a null parent (no forecast, no list), a null or MEASURED state and a state the
+// answer does not select all leave the verdict as it was.
+func newestDayStatePartial(root any, path string) bool {
 	listPath, elemPath, isList := strings.Cut(path, "[*].")
 	if !isList {
 		return readNewestDayState(root, path)
 	}
-	list, ok := lookupScalarPath(root, listPath)
-	if !ok {
-		return false, true
-	}
-	if list == nil {
-		return false, false
-	}
-	elems, ok := list.([]any)
-	if !ok {
-		return false, true
-	}
+	list, _ := lookupScalarPath(root, listPath)
+	elems, _ := list.([]any)
 	for _, el := range elems {
-		p, a := readNewestDayState(el, elemPath)
-		if p {
-			return true, false
+		if readNewestDayState(el, elemPath) {
+			return true
 		}
-		absent = absent || a
 	}
-	return false, absent
+	return false
 }
 
-func readNewestDayState(root any, path string) (partial, absent bool) {
-	parent, field := "", path
-	if i := strings.LastIndex(path, "."); i >= 0 {
-		parent, field = path[:i], path[i+1:]
-	}
+func readNewestDayState(root any, path string) bool {
 	holder := root
-	if parent != "" {
-		v, ok := lookupScalarPath(root, parent)
-		if !ok {
-			return false, true
-		}
-		if v == nil {
-			return false, false
-		}
-		holder = v
+	field := path
+	if i := strings.LastIndex(path, "."); i >= 0 {
+		holder, _ = lookupScalarPath(root, path[:i])
+		field = path[i+1:]
 	}
-	obj, ok := holder.(map[string]any)
-	if !ok {
-		return false, true
-	}
-	state, ok := obj[field]
-	if !ok {
-		return false, true
-	}
-	s, _ := state.(string)
-	return s == "STALE" || s == "NO_ROWS", false
+	obj, _ := holder.(map[string]any)
+	state, _ := obj[field].(string)
+	return state == "STALE" || state == "NO_ROWS"
 }
 
 // Verdict is the one producer of completeness for every served operation.
@@ -186,14 +160,8 @@ func (op *OperationPolicy) Verdict(data []byte, vars map[string]any) Completenes
 			}
 		}
 	}
-	if op.newestDayStatePath != "" {
-		partial, absent := newestDayStateVerdict(root, op.newestDayStatePath)
-		if partial {
-			return CompletenessVerdict{State: CompletenessDeclaredPartial, Reason: ReasonDegraded}
-		}
-		if absent {
-			note(ReasonDisclosureAbsent)
-		}
+	if op.newestDayStatePath != "" && newestDayStatePartial(root, op.newestDayStatePath) {
+		return CompletenessVerdict{State: CompletenessDeclaredPartial, Reason: ReasonDegraded}
 	}
 	for _, c := range operationCaps[op.Name] {
 		hit, reason := op.capReached(root, vars, c)
