@@ -694,6 +694,9 @@ func catalogOperation(op *OperationPolicy, class CallerClass, reason string) Cat
 	for _, d := range op.Disclosure {
 		entry.DisclosureFields = append(entry.DisclosureFields, d.Path)
 	}
+	if op.newestDayStatePath != "" {
+		entry.DisclosureFields = append(entry.DisclosureFields, op.newestDayStatePath)
+	}
 	for _, rule := range op.Variables {
 		if !rule.Allowed || rule.Source != SourceClient || rule.Kind == VariableKindObject {
 			continue
