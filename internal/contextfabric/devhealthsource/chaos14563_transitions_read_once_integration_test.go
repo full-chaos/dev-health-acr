@@ -27,7 +27,7 @@ const (
 	c14563Repo    = "toUUID('14563000-0000-4000-8000-000000000001')"
 	c14563Base    = "toDateTime64('2026-09-01 00:00:00', 3, 'UTC')"
 	c14563MainSHA = "e9a488c626c2" // membershipEdgeCountSQL(true) at acr main e67c4128
-	c14563NewSHA  = "e9a488c626c2"
+	c14563NewSHA  = "f0b969e82275"
 	c14563Shipped = "\nSETTINGS max_threads = 1"
 	// c14563Subjects x 3 touches = 13,974 rows: two granules (8,192 + 5,782).
 	c14563Subjects = 4658
@@ -61,10 +61,15 @@ FROM (SELECT number, %s AS n FROM numbers(15))`,
 		c14563Base, c14563Base, c14563Base, subject)
 }
 
+// c14563Layout: insideOneGranule = a small part whose keys all fall inside ONE
+// granule of the big part. mainReadRows = acr main's edge count read_rows on CH
+// 26.7 at max_threads = 1 (run 45395151455, job 138449238012): no layout takes
+// the layered path at one thread there, so main reads 9 times at every layout.
 type c14563Layout struct {
 	name             string
 	smalls           []string
 	insideOneGranule bool
+	mainReadRows     uint64
 }
 
 type c14563Run struct {
@@ -119,15 +124,15 @@ SELECT concat('linear:W-', leftPad(toString(number), 6, '0')), %s, '%s', 'w', 'o
 
 	// Subject n of the big part sits at rows 3n..3n+2; granule 1 = subjects 0..2730, granule 2 = 2731..4657.
 	layouts := []c14563Layout{
-		{"L0-big-only", nil, false},
-		{"L1-after-max-new-subjects", []string{c14563Small("W", "900000 + number")}, false},
-		{"L2-before-min-new-subjects", []string{c14563Small("A", "number")}, false},
-		{"L3-inside-granule-1", []string{c14563Small("W", "100 + number")}, true},
-		{"L4-inside-granule-2", []string{c14563Small("W", "4000 + number")}, true},
-		{"L5-across-the-granule-border", []string{c14563Small("W", "2724 + number")}, false},
-		{"L6-spread-over-both-granules", []string{c14563Small("W", "number * 300")}, false},
-		{"L7-after-max-plus-inside-granule-2", []string{c14563Small("W", "900000 + number"), c14563Small("W", "4000 + number")}, true},
-		{"L8-two-after-max", []string{c14563Small("W", "900000 + number"), c14563Small("W", "910000 + number")}, false},
+		{"L0-big-only", nil, false, 57939},
+		{"L1-after-max-new-subjects", []string{c14563Small("W", "900000 + number")}, false, 57999},
+		{"L2-before-min-new-subjects", []string{c14563Small("A", "number")}, false, 57999},
+		{"L3-inside-granule-1", []string{c14563Small("W", "100 + number")}, true, 57999},
+		{"L4-inside-granule-2", []string{c14563Small("W", "4000 + number")}, true, 57999},
+		{"L5-across-the-granule-border", []string{c14563Small("W", "2724 + number")}, false, 57999},
+		{"L6-spread-over-both-granules", []string{c14563Small("W", "number * 300")}, false, 57999},
+		{"L7-after-max-plus-inside-granule-2", []string{c14563Small("W", "900000 + number"), c14563Small("W", "4000 + number")}, true, 58059},
+		{"L8-two-after-max", []string{c14563Small("W", "900000 + number"), c14563Small("W", "910000 + number")}, false, 58059},
 	}
 	token := fmt.Sprintf("c14563-%d", time.Now().UnixNano())
 	armStatement := func(sql string) string {
@@ -211,8 +216,11 @@ SELECT concat('linear:W-', leftPad(toString(number), 6, '0')), %s, '%s', 'w', 'o
 		if now.steps > 3 {
 			t.Errorf("WANT %s: the edge count reads project_membership_transitions at most 3 times (main %d), got %d", layout.name, was.steps, now.steps)
 		}
-		if layout.insideOneGranule && now.readRows >= was.readRows {
-			t.Errorf("WANT %s: a small part inside one granule costs less than on main: read_rows %d, main %d", layout.name, now.readRows, was.readRows)
+		if was.readRows != layout.mainReadRows || was.steps != 9 || armWas.steps != 6 {
+			t.Errorf("WANT %s: acr main reads the table 9 times (transition arm 6) and %d rows (measured, pinned); got %d reads (arm %d), %d rows", layout.name, layout.mainReadRows, was.steps, armWas.steps, was.readRows)
+		}
+		if now.readRows >= was.readRows {
+			t.Errorf("WANT %s: the edge count reads fewer rows than acr main: read_rows %d, main %d", layout.name, now.readRows, was.readRows)
 		}
 	}
 	t.Logf("server %s\n%s", version, strings.Join(report, "\n"))

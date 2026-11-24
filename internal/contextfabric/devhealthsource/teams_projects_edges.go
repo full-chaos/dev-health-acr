@@ -243,16 +243,20 @@ const resolvedProjectsSubquery = `(
 //
 // IMPLEMENTATION: a two-stage window-function pass, because a single
 // leadInFrame(x, 1) cannot skip an arbitrary-length run of duplicate ADDs
-// to find the touch that actually closes an interval. Stage one
-// (`classified`) computes dup_flag/dangling_flag from each touch's
-// immediate predecessor over the FULL unfiltered touch set. Stage two
-// (`closed`) re-runs row_number/count/leadInFrame over the touch set with
-// duplicate ADDs REMOVED (`WHERE NOT dup_flag`) -- in that filtered set, by
-// construction, no is_add=1 row can ever have another is_add=1 row as its
-// immediate successor (that case was exactly what dup_flag removed), so
-// the "next touch is ANOTHER ADD" case this subquery's first version had
-// to guard against is now structurally impossible rather than merely
-// checked for.
+// to find the touch that actually closes an interval. Stage one computes
+// dup_flag/dangling_flag from each touch's immediate predecessor over the
+// FULL touch set. Stage two re-runs row_number/count/leadInFrame with
+// dup_flag in the partition key, so the dup_flag = 0 partition is exactly the
+// touch set with duplicate ADDs removed: no is_add=1 row in it can have
+// another is_add=1 row as its immediate successor. One output row per touch
+// (an interval for a kept ADD, a malformed row for a dangling REMOVE, a
+// duplicate row for a duplicate ADD; the three are disjoint).
+//
+// The arm reads the deduped transitions ONCE (CHAOS-14563): each transitions
+// row is unpivoted into its touches by ARRAY JOIN, and every stage is a
+// derived table used once. ClickHouse inlines a CTE at each reference, so
+// the earlier CTE form (two touches branches, classified at 3 references)
+// read the table 6 times, each FINAL read paying its own layered-path cost.
 //
 // CODEX/CLICKHOUSE TRAP (live-verified against ClickHouse 24.8, worth
 // recording): the two CTE-local classification columns are named
@@ -303,62 +307,42 @@ func membershipIntervalsSubquery(ingest bool, changed string) string {
 func membershipIntervalsSQL(ingestExpr string, ingested bool, changed string) string {
 	deduped := devhealthschema.DedupedMembershipTransitionsFiltered(ingested, changed)
 	return `(
-  WITH touches AS (
-    SELECT org_id, subject_kind, repo_id, subject_id, provider, to_project_id AS project_id, occurred_at, event_id, ` + ingestExpr + ` AS ingest_at, 1 AS is_add
-    FROM ` + deduped + `
-    WHERE org_id = {org_id:String} AND to_project_id != '' AND to_project_id != from_project_id
-    UNION ALL
-    SELECT org_id, subject_kind, repo_id, subject_id, provider, from_project_id AS project_id, occurred_at, event_id, ` + ingestExpr + ` AS ingest_at, 0 AS is_add
-    FROM ` + deduped + `
-    WHERE org_id = {org_id:String} AND from_project_id != '' AND from_project_id != to_project_id
-  ),
-  classified AS (
-    SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at, event_id, is_add,
-      greatest(ingest_at, lagInFrame(ingest_at, 1, ingest_at) OVER w) AS ingest_c,
-      (is_add = 1 AND lagInFrame(is_add, 1, 2) OVER w = 1) AS dup_flag,
-      (is_add = 0 AND lagInFrame(is_add, 1, 2) OVER w != 1) AS dangling_flag
-    FROM touches
-    -- lagInFrame's own default (the third argument, 2 -- an impossible
-    -- value for is_add's {0,1} domain) marks "no previous touch at all"
-    -- distinctly from an actual REMOVE (0), so the very first touch of a
-    -- (subject, project) pair is correctly classified: an ADD is never
-    -- flagged duplicate (nothing preceded it) and a REMOVE is always
-    -- flagged dangling (nothing preceded it either). See
-    -- resolvedProjectsSubquery's own ROWS BETWEEN note -- the identical
-    -- explicit frame is load-bearing here for the same reason.
-    WINDOW w AS (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
-  ),
-  closed AS (
-    SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at, event_id, is_add,
-      greatest(ingest_c, leadInFrame(ingest_c, 1, ingest_c) OVER w2) AS ingest_at,
+  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id,
+    if(is_add = 1 AND NOT dup_flag, ingest_closed, ingest_c) AS ingest_at,
+    'transition' AS source,
+    if(is_add = 1 AND NOT dup_flag AND rn < touch_count AND next_is_add = 0, next_occurred_at, NULL) AS valid_to,
+    toUInt8(dangling_flag) AS is_malformed, toUInt8(dup_flag) AS is_duplicate_add
+  FROM (
+    SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at, event_id, is_add, ingest_c, dup_flag, dangling_flag,
+      greatest(ingest_c, leadInFrame(ingest_c, 1, ingest_c) OVER w2) AS ingest_closed,
       row_number() OVER w2 AS rn,
-      count() OVER (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id) AS touch_count,
+      count() OVER (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id, dup_flag) AS touch_count,
       leadInFrame(occurred_at, 1, occurred_at) OVER w2 AS next_occurred_at,
       leadInFrame(is_add, 1, is_add) OVER w2 AS next_is_add
-    FROM classified
-    WHERE NOT dup_flag
-    WINDOW w2 AS (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+    FROM (
+      SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at, event_id, is_add,
+        greatest(ingest_at, lagInFrame(ingest_at, 1, ingest_at) OVER w) AS ingest_c,
+        (is_add = 1 AND lagInFrame(is_add, 1, 2) OVER w = 1) AS dup_flag,
+        (is_add = 0 AND lagInFrame(is_add, 1, 2) OVER w != 1) AS dangling_flag
+      FROM (
+        SELECT org_id, subject_kind, repo_id, subject_id, provider, touch.1 AS project_id, occurred_at, event_id, ` + ingestExpr + ` AS ingest_at, touch.2 AS is_add
+        FROM ` + deduped + `
+        ARRAY JOIN [(to_project_id, toUInt8(1)), (from_project_id, toUInt8(0))] AS touch
+        WHERE org_id = {org_id:String} AND touch.1 != '' AND from_project_id != to_project_id
+      )
+      -- lagInFrame's own default (the third argument, 2 -- an impossible
+      -- value for is_add's {0,1} domain) marks "no previous touch at all"
+      -- distinctly from an actual REMOVE (0), so the very first touch of a
+      -- (subject, project) pair is correctly classified: an ADD is never
+      -- flagged duplicate (nothing preceded it) and a REMOVE is always
+      -- flagged dangling (nothing preceded it either). See
+      -- resolvedProjectsSubquery's own ROWS BETWEEN note -- the identical
+      -- explicit frame is load-bearing here for the same reason.
+      WINDOW w AS (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+    )
+    WINDOW w2 AS (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id, dup_flag ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
   )
-  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id, ingest_at,
-    'transition' AS source,
-    if(rn < touch_count AND next_is_add = 0, next_occurred_at, NULL) AS valid_to,
-    0 AS is_malformed, 0 AS is_duplicate_add
-  FROM closed
-  WHERE is_add = 1
-  UNION ALL
-  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id, ingest_c AS ingest_at,
-    'transition' AS source,
-    NULL AS valid_to,
-    1 AS is_malformed, 0 AS is_duplicate_add
-  FROM classified
-  WHERE dangling_flag
-  UNION ALL
-  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id, ingest_c AS ingest_at,
-    'transition' AS source,
-    NULL AS valid_to,
-    0 AS is_malformed, 1 AS is_duplicate_add
-  FROM classified
-  WHERE dup_flag
+  WHERE (is_add = 1 AND NOT dup_flag) OR dangling_flag OR dup_flag
 )`
 }
 
