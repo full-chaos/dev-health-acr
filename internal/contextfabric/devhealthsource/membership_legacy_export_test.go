@@ -194,3 +194,20 @@ func MembershipEdgeCountMainSQLForTest(ingest bool) (current, main string) {
 	}
 	return current, strings.Replace(current, arm, legacyArm, 1)
 }
+
+// MembershipStatementMainForTest returns the producer's page statement at a
+// cursor and the same statement with acr main's transition arm (acr main
+// e67c4128 byte for byte while only that arm differs), with its bindings.
+func MembershipStatementMainForTest(orgID string, since time.Time, after string, limit int, ingest, pruned bool) (current, main string, bindings []contextpacket.ClickHouseBinding) {
+	cursor := cursorState{Since: since, After: after}
+	current = membershipStatement(cursor, ingest, pruned)
+	var changed string
+	if pruned {
+		changed, _, _ = changedMembershipFilters(cursor, ingest)
+	}
+	arm, legacyArm := membershipIntervalsSubquery(ingest, changed), legacyMembershipIntervalsSubquery(ingest, changed)
+	if strings.Count(current, arm) != 1 {
+		panic("membershipStatement no longer embeds the transition arm once")
+	}
+	return current, strings.Replace(current, arm, legacyArm, 1), rowLimitBindings(orgID, cursor, limit)
+}
