@@ -89,8 +89,8 @@ const DataCatalogUntrustedNotice = contractsv1.MCPUntrustedContentNotice
 var operationPurposes = map[string]string{
 	"acrRepositoryScopes":            "The organization's repository slugs as the ops query service knows them, for mapping a slug to a repository.",
 	"capacityCompletionDistribution": "A team's forecast completion distribution only: simulated completion days and item counts, without the dates or the target.",
-	"capacityForecast":               "An on-demand Monte Carlo forecast of when a work scope completes; each call draws a new random seed.",
-	"capacityForecasts":              "Stored capacity forecasts, as a list, with their inputs and percentile dates.",
+	"capacityForecast":               "An on-demand Monte Carlo forecast of when a work scope completes; each call draws a new random seed. A STALE or NO_ROWS backlogState answers declared_partial.",
+	"capacityForecasts":              "Stored capacity forecasts, as a list, with their inputs and percentile dates. A STALE or NO_ROWS backlogState on any row answers declared_partial.",
 	"catalogValues":                  "The distinct values of one catalogue dimension (repository, team, theme, subcategory or work type).",
 	"cognitiveLoad":                  "A team's cognitive load series over a window.",
 	"complexityTimeseries":           "Code complexity over time per repository or file, for the repositories named.",

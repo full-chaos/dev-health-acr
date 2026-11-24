@@ -608,6 +608,7 @@ func declaredPolicyFor(scoped bool) policyDeclaration {
 				AdditionalOutputs: []string{"capacityForecasts.edges[*].node.completionDistribution.days[*].value", "capacityForecasts.edges[*].node.completionDistribution.days[*].count", "capacityForecasts.edges[*].node.completionDistribution.items[*].value", "capacityForecasts.edges[*].node.completionDistribution.items[*].count"},
 				Unrestricted:      served("[ops] capacityforecast.go:398-421 apply teamId and the dates; limit has no ops clamp (:423-454; A1.1) (RM §15)"),
 				Restricted:        refusedFor("no repository scope; team aggregates ([ops] capacityforecast.go:398-421; RM §15); REFUSED until the K2 team path is read"),
+				Notes:             []string{"backlogState STALE or NO_ROWS (a missing day, not a healthy one) answers declared_partial with reason degraded, the verdict throughputForecast gets from degradedReason; MEASURED or null, a null forecast and an empty list answer as before (CHAOS-14560)"},
 			},
 			"capacityCompletionDistribution": {
 				DocumentName:      "CapacityCompletionDistribution",
@@ -653,7 +654,7 @@ func declaredPolicyFor(scoped bool) policyDeclaration {
 				},
 				Unrestricted: served("[ops] capacityforecast/clickhouse.go:47-61 apply teamId and teamIds (RM §16)"),
 				Restricted:   refusedFor("no repository scope; team aggregate with compute cost ([ops] capacityforecast/clickhouse.go:47-61; capacityforecast.go:130; RM §16); REFUSED until the K2 team path is read"),
-				Notes:        []string{"non-deterministic: a random seed per call, no seed argument (capacityforecast.go:139-148; A1.1)", "null result = no history or no target, indistinguishable (capacityforecast.go:229-260)"},
+				Notes:        []string{"non-deterministic: a random seed per call, no seed argument (capacityforecast.go:139-148; A1.1)", "null result = no history or no target, indistinguishable (capacityforecast.go:229-260)", "backlogState STALE or NO_ROWS (a missing day, not a healthy one) answers declared_partial with reason degraded, the verdict throughputForecast gets from degradedReason; MEASURED or null, a null forecast and an empty list answer as before (CHAOS-14560)"},
 			},
 		},
 		NotServed: notServed(),

@@ -78,6 +78,73 @@ var operationCaps = map[string][]capSpec{
 	"workItemTeamAttributions":       {},
 }
 
+// newestDayStatePaths names, per operation, the NewestDayState output whose
+// STALE or NO_ROWS value is a missing day, not a healthy one: declared_partial
+// with reason degraded, the verdict throughputForecast gets from degradedReason.
+// "[*]." marks a list walk: any element that fires makes the answer partial.
+// TestEveryBacklogStateOperationHasAVerdictRule holds every operation that can
+// carry backlogState to this table or to a named exemption.
+var newestDayStatePaths = map[string]string{
+	"capacityForecast":  "capacityForecast.backlogState",
+	"capacityForecasts": "capacityForecasts.edges[*].node.backlogState",
+}
+
+// newestDayStateVerdict reads a NewestDayState path. A null parent (no
+// forecast, no list) and a null or MEASURED state are not a missing day.
+func newestDayStateVerdict(root any, path string) (partial, absent bool) {
+	listPath, elemPath, isList := strings.Cut(path, "[*].")
+	if !isList {
+		return readNewestDayState(root, path)
+	}
+	list, ok := lookupScalarPath(root, listPath)
+	if !ok {
+		return false, true
+	}
+	if list == nil {
+		return false, false
+	}
+	elems, ok := list.([]any)
+	if !ok {
+		return false, true
+	}
+	for _, el := range elems {
+		p, a := readNewestDayState(el, elemPath)
+		if p {
+			return true, false
+		}
+		absent = absent || a
+	}
+	return false, absent
+}
+
+func readNewestDayState(root any, path string) (partial, absent bool) {
+	parent, field := "", path
+	if i := strings.LastIndex(path, "."); i >= 0 {
+		parent, field = path[:i], path[i+1:]
+	}
+	holder := root
+	if parent != "" {
+		v, ok := lookupScalarPath(root, parent)
+		if !ok {
+			return false, true
+		}
+		if v == nil {
+			return false, false
+		}
+		holder = v
+	}
+	obj, ok := holder.(map[string]any)
+	if !ok {
+		return false, true
+	}
+	state, ok := obj[field]
+	if !ok {
+		return false, true
+	}
+	s, _ := state.(string)
+	return s == "STALE" || s == "NO_ROWS", false
+}
+
 // Verdict is the one producer of completeness for every served operation.
 // Order: a disclosure field that fires or a list at its cap = declared_partial;
 // else a field the verdict needs but the answer lacks = unknown; else
@@ -117,6 +184,15 @@ func (op *OperationPolicy) Verdict(data []byte, vars map[string]any) Completenes
 					return CompletenessVerdict{State: CompletenessDeclaredPartial, Reason: ReasonCoverageBelowOne}
 				}
 			}
+		}
+	}
+	if op.newestDayStatePath != "" {
+		partial, absent := newestDayStateVerdict(root, op.newestDayStatePath)
+		if partial {
+			return CompletenessVerdict{State: CompletenessDeclaredPartial, Reason: ReasonDegraded}
+		}
+		if absent {
+			note(ReasonDisclosureAbsent)
 		}
 	}
 	for _, c := range operationCaps[op.Name] {

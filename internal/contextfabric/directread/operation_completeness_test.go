@@ -180,3 +180,41 @@ func TestVerdictIndexedCapAndRatioRows(t *testing.T) {
 		t.Fatalf("coverage 0.99: %+v", got)
 	}
 }
+
+// Every served operation whose document selects a backlogState field has a verdict rule for it:
+// a newestDayStatePaths row (set on its policy row at load), or a named exemption whose own
+// disclosure field says the same thing. A document that starts selecting backlogState fails here.
+func TestEveryBacklogStateOperationHasAVerdictRule(t *testing.T) {
+	exempt := map[string]string{"throughputForecast": "throughputForecast.degradedReason"}
+	cat := loadDefault(t)
+	carriers := 0
+	for name, op := range cat.byName {
+		carries := false
+		for _, out := range op.Outputs {
+			carries = carries || strings.HasSuffix(out.Path, ".backlogState")
+		}
+		if !carries {
+			if op.newestDayStatePath != "" {
+				t.Errorf("%s has a newest day state rule but selects no backlogState", name)
+			}
+			continue
+		}
+		carriers++
+		if disclosure, ok := exempt[name]; ok {
+			found := false
+			for _, d := range op.Disclosure {
+				found = found || d.Path == disclosure
+			}
+			if !found || op.newestDayStatePath != "" {
+				t.Errorf("%s is exempt through %s, which its policy row does not carry", name, disclosure)
+			}
+			continue
+		}
+		if op.newestDayStatePath == "" {
+			t.Errorf("%s selects backlogState and has neither a newestDayStatePaths row nor a named exemption", name)
+		}
+	}
+	if carriers != 3 {
+		t.Errorf("%d operations select backlogState, want capacityForecast, capacityForecasts, throughputForecast", carriers)
+	}
+}

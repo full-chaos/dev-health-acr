@@ -311,6 +311,12 @@ type OperationPolicy struct {
 	// healthier than the full one.
 	KeptLists []string `json:"kept_lists,omitempty"`
 
+	// newestDayStatePath is the output path of a NewestDayState field whose
+	// STALE or NO_ROWS value makes the verdict declared_partial (CHAOS-14560).
+	// It is set at load from newestDayStatePaths when the document selects the field, never read from or written to
+	// the artifact: unexported, so it is no contract token.
+	newestDayStatePath string
+
 	variables map[string]int
 	outputs   map[string]OutputLeaf
 	nodes     map[string]bool
@@ -569,6 +575,11 @@ func LoadCatalogue(data []byte) (*Catalogue, error) {
 		}
 		if _, dup := c.byName[op.Name]; dup {
 			return nil, loadErr("operation %q listed twice", op.Name)
+		}
+		if path, ok := newestDayStatePaths[op.Name]; ok {
+			if _, selected := op.outputs[path]; selected {
+				op.newestDayStatePath = path
+			}
 		}
 		c.byName[op.Name] = op
 	}
