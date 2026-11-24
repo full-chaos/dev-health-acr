@@ -435,13 +435,38 @@ const (
 // ageReadFailure decides what a failed age statement does to the read: the age
 // is an addition to the counts, so a failure other than the caller's own
 // cancellation leaves the age absent with a reason and a warning, and the
-// counts are still served.
+// counts are still served. The warning names the ClickHouse exception code and
+// the limit it stands for (never the exception text), so a cap or timeout that
+// cut the age is told apart from a missing table.
 func ageReadFailure(ctx context.Context, subject string, err error) error {
 	if ctx.Err() != nil {
 		return err
 	}
-	slog.WarnContext(ctx, "devhealthfacts.blocker_age_read_failed", "subject_kind", contextfabric.SanitizeLogAttr(subject), "reason", contextfabric.SanitizeLogAttr(blockerAgeStartUnavailable), "error_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", err)))
+	attrs := []any{"subject_kind", contextfabric.SanitizeLogAttr(subject), "reason", contextfabric.SanitizeLogAttr(blockerAgeStartUnavailable), "error_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", err))}
+	if code, ok := clickHouseExceptionCode(err); ok {
+		attrs = append(attrs, "clickhouse_code", int(code), "limit_class", clickHouseLimitClass(code))
+	}
+	slog.WarnContext(ctx, "devhealthfacts.blocker_age_read_failed", attrs...)
 	return nil
+}
+
+// clickHouseLimitClass names the reader limit a ClickHouse exception code
+// stands for; any other code is "other". A closed vocabulary.
+func clickHouseLimitClass(code int32) string {
+	switch code {
+	case clickHouseMemoryLimitExceededCode:
+		return "memory"
+	case 159:
+		return "execution_time"
+	case budgetRowsCode:
+		return "rows_to_read"
+	case 307:
+		return "bytes_to_read"
+	case 396:
+		return "result_rows"
+	default:
+		return "other"
+	}
 }
 
 // blockerOldestAgeOrUnavailable is blockerOldestAge, or the start_unavailable
