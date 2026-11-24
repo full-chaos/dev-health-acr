@@ -213,8 +213,9 @@ SELECT concat('linear:W-', leftPad(toString(number), 6, '0')), %s, '%s', 'w', 'o
 		if armNow.steps != 1 {
 			t.Errorf("WANT %s: the transition arm reads project_membership_transitions once, got %d reads", layout.name, armNow.steps)
 		}
-		if now.steps > 3 {
-			t.Errorf("WANT %s: the edge count reads project_membership_transitions at most 3 times (main %d), got %d", layout.name, was.steps, now.steps)
+		// main 9 reads = transition arm 6 + superseded arm 1 + the presence view 2.
+		if now.steps != was.steps-armWas.steps+1 || now.steps > 4 {
+			t.Errorf("WANT %s: the edge count reads project_membership_transitions 4 times (main %d, arm %d -> 1), got %d", layout.name, was.steps, armWas.steps, now.steps)
 		}
 		if was.readRows != layout.mainReadRows || was.steps != 9 || armWas.steps != 6 {
 			t.Errorf("WANT %s: acr main reads the table 9 times (transition arm 6) and %d rows (measured, pinned); got %d reads (arm %d), %d rows", layout.name, layout.mainReadRows, was.steps, armWas.steps, was.readRows)
