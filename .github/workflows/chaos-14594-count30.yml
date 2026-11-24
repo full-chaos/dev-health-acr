@@ -1,0 +1,44 @@
+---
+name: chaos-14594-count30
+
+"on":
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  count30:
+    name: team blocker equality cell x30
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TESTCONTAINERS_HUB_IMAGE_NAME_PREFIX: ghcr.io/${{ github.repository }}
+      TESTCONTAINERS_RYUK_DISABLED: 'true'
+      TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-count30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with: {persist-credentials: false}
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
+        with:
+          go-version: '1.27.4'
+          cache: true
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Run the cell 30 times
+        run: go test ./internal/contextfabric/devhealthfacts -run '^TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse$' -count=30 -timeout 80m -v 2>&1 | tee count30.log
+      - name: Count pass and fail
+        if: always()
+        run: |
+          echo "PASS: $(grep -c -- '^--- PASS: TestTeamBlocker' count30.log || true)"
+          echo "FAIL: $(grep -c -- '^--- FAIL: TestTeamBlocker' count30.log || true)"
+          grep -n 'differs' count30.log || true
+      - name: Remove this job's testcontainers by session id
+        if: always()
+        run: scripts/ci/reap-testcontainers-session.sh

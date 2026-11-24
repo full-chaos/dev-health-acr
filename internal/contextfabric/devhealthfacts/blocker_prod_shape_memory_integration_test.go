@@ -425,7 +425,7 @@ func TestTeamBlockerStatementsOnTheProductionShapeOnRealClickHouse(t *testing.T)
 			for _, name := range []string{"blocked_work_items_current", "blocker_dependencies_current", "blocker_dependencies_excluded_by_status_current", "blocker_dependencies_writer_unresolved_current", "project_blocked_work_items_current", "oldest_blocked_age_days"} {
 				a, b := pair.got.Facts[index].Fields[name], pair.want.Facts[index].Fields[name]
 				if (a.Integer == nil) != (b.Integer == nil) || (a.Integer != nil && *a.Integer != *b.Integer) {
-					t.Errorf("%s: team fact %d field %s differs: %s vs %s", pair.label, index, name, blockerFactValue(a, true), blockerFactValue(b, true))
+					t.Errorf("%s: team fact %d (%s) field %s differs: read-once side %s vs inside-each-statement side %s", pair.label, index, pair.got.Facts[index].Subject.CanonicalID, name, blockerFactValue(a, true), blockerFactValue(b, true))
 				}
 			}
 		}
