@@ -736,14 +736,23 @@ func TestForm14624ProbeExecutesOnTheProbeStatements(t *testing.T) {
 		label := fmt.Sprintf("S%d", i+1)
 		q, rec, code := ql[form14624Comment(label)], logged[idOf[label]], codeLogged[fmt.Sprintf("form14624_code_s%d", i+1)]
 		if q.typ != "QueryFinish" || q.code != 0 || q != rec {
-			t.Fatalf("QL %s = %+v, the recompute by query id = %+v", label, q, rec)
+			t.Errorf("QL %s = %+v, the recompute by query id = %+v", label, q, rec)
 		}
 		for k := range wantSettings {
 			// max_threads: the form sends 2, the code run the statement threads (4); a value equal to the server default logs ''.
+			// max_execution_time: the form sends 10; the code run sends int(remaining client deadline + 5) per query (clickhouse-go
+			// v2.47.0 context.go:239-240 over dev-health-go's 10 s query deadline, client.go:157-158), so 10..15, logged.
 			// The overflow modes: neither sends one; both log the server default ('').
 			threadsDefault := k == 1 && q.settings[k] == "" && serverThreads == form14624FormThreads
-			if (q.settings[k] != wantSettings[k] && !threadsDefault) || (k != 1 && q.settings[k] != code.settings[k]) {
-				t.Fatalf("SETTINGS %s key %d: form %q, code run %q, want %q", label, k, q.settings[k], code.settings[k], wantSettings[k])
+			sameAsCode := q.settings[k] == code.settings[k]
+			if k == 3 {
+				var codeSeconds int
+				_, scanErr := fmt.Sscanf(code.settings[k], "%d", &codeSeconds)
+				sameAsCode = scanErr == nil && codeSeconds >= 10 && codeSeconds <= 15
+				t.Logf("SETTINGS %s max_execution_time: form %q, code run %q (client deadline + 5)", label, q.settings[k], code.settings[k])
+			}
+			if (q.settings[k] != wantSettings[k] && !threadsDefault) || (k != 1 && !sameAsCode) {
+				t.Errorf("SETTINGS %s key %d: form %q, code run %q, want %q", label, k, q.settings[k], code.settings[k], wantSettings[k])
 			}
 		}
 		var sumRows uint64
@@ -752,13 +761,13 @@ func TestForm14624ProbeExecutesOnTheProbeStatements(t *testing.T) {
 		}
 		bound := 3*sumRows + 2*partsAll + 1
 		if q.readRows < code.readRows || q.readRows > code.readRows+c0.readRows+4*partsAll+2 || q.readRows > bound || (q.readRows < sumRows) != (code.readRows < sumRows) {
-			t.Fatalf("PASS %s %s: form read_rows %d, code read_rows %d, C0 %d, parts %d, table rows %d, work bound %d", label, st.Kind, q.readRows, code.readRows, c0.readRows, partsAll, sumRows, bound)
+			t.Errorf("PASS %s %s: form read_rows %d, code read_rows %d, C0 %d, parts %d, table rows %d, work bound %d", label, st.Kind, q.readRows, code.readRows, c0.readRows, partsAll, sumRows, bound)
 		}
 		t.Logf("PASS %s %s form read_rows %d bytes %d peak %d ms %d | code read_rows %d bytes %d peak %d ms %d | C0 %d table rows %d bound %d settings %v",
 			label, st.Kind, q.readRows, q.readBytes, q.peak, q.elapsed, code.readRows, code.readBytes, code.peak, code.elapsed, c0.readRows, sumRows, bound, q.settings)
 	}
 	if c0 != logged[idOf["C0"]] || c0.typ != "QueryFinish" {
-		t.Fatalf("QL C0 = %+v, recompute %+v", c0, logged[idOf["C0"]])
+		t.Errorf("QL C0 = %+v, recompute %+v", c0, logged[idOf["C0"]])
 	}
 
 	// The QL window holds: the same text with a past window (synthetic) reads none of these rows.
@@ -772,7 +781,7 @@ func TestForm14624ProbeExecutesOnTheProbeStatements(t *testing.T) {
 	}
 	rows.Close()
 	if pastRows != 0 {
-		t.Fatalf("MUTANT QL past window: %d rows, want 0", pastRows)
+		t.Errorf("MUTANT QL past window: %d rows, want 0", pastRows)
 	}
 
 	// 5. MUTANTS (after QL: they log under the same comments). Org: prefix B, no org, every org. Rule: the read budget and the memory
@@ -799,13 +808,13 @@ func TestForm14624ProbeExecutesOnTheProbeStatements(t *testing.T) {
 		return strings.ReplaceAll(text, from, to)
 	}
 	if v, _ := one("ORG1-all", swap(form14624CutORG1, "'"+form14624PrefixA+"'", "''")); v != 2 {
-		t.Fatalf("MUTANT ORG1 every org: orgs %d, want 2 (STOP)", v)
+		t.Errorf("MUTANT ORG1 every org: orgs %d, want 2 (STOP)", v)
 	}
 	if v, _ := one("ORG1-none", swap(form14624CutORG1, "'"+form14624PrefixA+"'", "'ffffffff'")); v != 0 {
-		t.Fatalf("MUTANT ORG1 no org: orgs %d, want 0 (STOP)", v)
+		t.Errorf("MUTANT ORG1 no org: orgs %d, want 0 (STOP)", v)
 	}
 	if v, _ := one("C0-B", swap(form14624CutC0, "'"+form14624PrefixA+"'", "'"+form14624PrefixB+"'")); v != uint64(len(form14624OrgB)) {
-		t.Fatalf("MUTANT C0 org B: %d", v)
+		t.Errorf("MUTANT C0 org B: %d", v)
 	}
 	// form_org_id's own throwIf: 0 orgs or 2 orgs under the prefix stop the statement (code 395 STOP-ORG1) before its read.
 	expectStop := func(label, text, stop string) {
@@ -831,7 +840,7 @@ func TestForm14624ProbeExecutesOnTheProbeStatements(t *testing.T) {
 		{"S-SET-threads", "[toUInt64(201326592), 2,", "[toUInt64(201326592), 1000000,", "max_threads"},
 	} {
 		if got := sset(m.label, swap(form14624CutSSET, m.from, m.to)); got[m.row] != 0 {
-			t.Fatalf("MUTANT %s: row %s ok = %d, want 0 (STOP)", m.label, m.row, got[m.row])
+			t.Errorf("MUTANT %s: row %s ok = %d, want 0 (STOP)", m.label, m.row, got[m.row])
 		}
 	}
 	var refusedIDs []string
@@ -839,7 +848,7 @@ func TestForm14624ProbeExecutesOnTheProbeStatements(t *testing.T) {
 	for i := range statements {
 		label := fmt.Sprintf("S%d", i+1)
 		if v, _ := one(label+"-B", swap(form14624Cuts[i], "'"+form14624PrefixA+"'", "'"+form14624PrefixB+"'")); v != codeB[i] {
-			t.Fatalf("MUTANT %s org B = %d, the code text on org B = %d", label, v, codeB[i])
+			t.Errorf("MUTANT %s org B = %d, the code text on org B = %d", label, v, codeB[i])
 		}
 		expectStop(label+"-none", swap(form14624Cuts[i], "'"+form14624PrefixA+"'", "'ffffffff'"), "STOP-ORG1")
 		expectStop(label+"-all", swap(form14624Cuts[i], "'"+form14624PrefixA+"'", "''"), "STOP-ORG1")
@@ -854,7 +863,7 @@ func TestForm14624ProbeExecutesOnTheProbeStatements(t *testing.T) {
 	}
 	for id, r := range form14624Logged(t, ctx, direct, "REFUSED", refusedIDs, nil) {
 		if r.code != refused[id] || !strings.HasPrefix(r.comment, "form14624_probe_s") || !strings.HasPrefix(r.typ, "Exception") {
-			t.Fatalf("REFUSED %s: query_log %+v, want an exception row with code %d under its probe comment (QL reports it)", id, r, refused[id])
+			t.Errorf("REFUSED %s: query_log %+v, want an exception row with code %d under its probe comment (QL reports it)", id, r, refused[id])
 		}
 	}
 
