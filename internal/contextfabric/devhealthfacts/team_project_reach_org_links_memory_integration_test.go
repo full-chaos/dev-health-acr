@@ -219,6 +219,9 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery
 			t.Fatalf("%s at the %s size: %d linked pull request statements measured, want %d (a linked pull request read left the measure)", axis, label, n, linkedPullRequestStatements)
 		}
 		t.Logf("COST %s: the %s read ran %d statements in %d ms", axis, label, readStatementsSince(t, ctx, direct, mark), wall.Milliseconds())
+		if size := longestStatementSince(t, ctx, direct, filters[linkedPullRequestFilter], mark); size >= maxQuerySizeBytes {
+			t.Fatalf("%s at the %s size: a linked pull request statement is %d bytes, want under max_query_size %d (the set must ride a sent table, never the text)", axis, label, size, maxQuerySizeBytes)
+		}
 		return out
 	}
 	merged := func() {
@@ -274,6 +277,23 @@ func readStatementsSince(t *testing.T, ctx context.Context, direct clickhousedri
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
   AND has(databases, currentDatabase())`, markMicros).Scan(&n); err != nil {
 		t.Fatalf("count statements: %v", err)
+	}
+	return n
+}
+
+// maxQuerySizeBytes is ClickHouse's default max_query_size, the most query text
+// the server parses.
+const maxQuerySizeBytes = 256 << 10
+
+// longestStatementSince is the longest query text among the statements filter
+// selects after the mark.
+func longestStatementSince(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, filter statementFilter, markMicros int64) uint64 {
+	t.Helper()
+	var n uint64
+	if err := direct.QueryRow(ctx, `SELECT max(length(query)) FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+  AND has(tables, concat(currentDatabase(), '.', ?)) AND position(query, ?) > 0`, markMicros, filter.Table, filter.QueryContains).Scan(&n); err != nil {
+		t.Fatalf("read statement size: %v", err)
 	}
 	return n
 }

@@ -112,7 +112,7 @@ func TeamLinkCandidatesTableForTest(ids []string) (*ext.Table, error) {
 // WithTeamLinkCandidatesForTest is the served read every team link statement
 // starts from: ok is false when no candidate is left.
 func WithTeamLinkCandidatesForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string) (bool, error) {
-	_, ok, err := withTeamLinkCandidates(ctx, client, orgID, teamIDs, factTimeBound{})
+	_, ok, err := readTeamLinkCandidateIDs(ctx, client, orgID, teamIDs, factTimeBound{})
 	return ok, err
 }
 
@@ -305,3 +305,40 @@ var BlockerStatementMaxMemoryUsage = blockerStatementMaxMemoryUsage
 
 // WorkUnitVersionKey is workUnitVersionKey for the external tests.
 const WorkUnitVersionKey = workUnitVersionKey
+
+// TeamLinkedPullRequestForTest is one sent (team, pull request) row.
+type TeamLinkedPullRequestForTest struct {
+	Team, Repo, Number string
+	Rank               uint8
+}
+
+// TeamLinkedPullRequestReadsForTest runs the three team pull request reads over
+// a sent set, as orgID, with reach as the project-reached repositories, and
+// returns the rows each one returned: reached repositories, window counts and
+// state counts.
+func TeamLinkedPullRequestReadsForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, sent []TeamLinkedPullRequestForTest, reach []string) (reached, counts, states int, err error) {
+	rows := make([]linkedSetRow, 0, len(sent))
+	for _, s := range sent {
+		rows = append(rows, linkedSetRow{team: s.Team, repo: s.Repo, number: s.Number, rank: s.Rank})
+	}
+	set := linkedPullRequestsOf(rows)
+	byTeam, err := teamProjectReachedRepositoriesOf(ctx, client, orgID, teamIDs, set)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	reachedOnly := map[string][]teamReachedRepo{}
+	for _, teamID := range teamIDs {
+		for _, repo := range reach {
+			reachedOnly[teamID] = append(reachedOnly[teamID], teamReachedRepo{key: repo})
+		}
+	}
+	window, err := teamLinkedPullRequestCounts(ctx, client, orgID, teamIDs, set, reachedOnly, resolveRollupWindow(factTimeBound{}, nil, clock()))
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	byState, err := teamLinkedPullRequestStateCounts(ctx, client, orgID, teamIDs, set, reachedOnly, factTimeBound{})
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	return reachedRepositoryCount(byTeam), len(window), len(byState), nil
+}

@@ -103,14 +103,14 @@ ORDER BY repo`
 // repository), the distinct pull requests linked to an issue of a project the
 // team owns, by state. The key is team id + blockerPairSeparator + repository
 // id, the same key teamLinkedPullRequestCounts uses.
-func teamLinkedPullRequestStateCounts(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, reachedOnly map[string][]teamReachedRepo, bound factTimeBound) (map[string]pullRequestStateCounts, error) {
+func teamLinkedPullRequestStateCounts(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, set teamLinkedPullRequests, reachedOnly map[string][]teamReachedRepo, bound factTimeBound) (map[string]pullRequestStateCounts, error) {
 	counts := map[string]pullRequestStateCounts{}
-	if reachedRepositoryCount(reachedOnly) == 0 {
+	if reachedRepositoryCount(reachedOnly) == 0 || len(set.keys) == 0 {
 		return counts, nil
 	}
-	ctx, ok, err := withTeamLinkCandidates(ctx, client, orgID, teamIDs, bound)
-	if err != nil || !ok {
-		return counts, err
+	ctx, err := withTeamLinkedPullRequests(ctx, set)
+	if err != nil {
+		return nil, err
 	}
 	err = pagedOrgScopedTeamRepoRead(ctx, client, "ReadTeamProjectLinkedPullRequestStates", orgID, teamIDs,
 		teamRepoCursor{teamExpr: "team_id", repoExpr: "repo", repoType: "String"},
@@ -119,9 +119,9 @@ func teamLinkedPullRequestStateCounts(ctx context.Context, client contextpacket.
 			return `SELECT team_id, repo, ` + statePairsExpression() + `
 FROM (
 	SELECT lr.team_id AS team_id, toString(lr.pr_repo_id) AS repo, ` + pullRequestStateExpression("lp", bound) + ` AS st, toInt64(count()) AS c
-	FROM (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM ` + teamProjectLinkRowsSQL("ids", bound) + `) AS lr
-	INNER JOIN git_pull_requests AS lp FINAL ON lp.org_id = {org_id:String} AND lp.repo_id = lr.pr_repo_id AND lp.number = lr.pr_number
-	WHERE lp.repo_id IN (SELECT toUUIDOrZero(id) FROM (SELECT arrayJoin({reach_repo_ids:Array(String)}) AS id))` + bound.neutral().ExistencePredicate("lp.created_at") + `
+	FROM git_pull_requests AS lp FINAL
+	INNER JOIN ` + teamLinkedPullRequestsSent + ` AS lr ON lp.org_id = {org_id:String} AND lp.repo_id = lr.pr_repo_id AND lp.number = lr.pr_number
+	WHERE lp.repo_id IN (SELECT toUUIDOrZero(id) FROM (SELECT arrayJoin({reach_repo_ids:Array(String)}) AS id))` + bound.neutral().ExistencePredicate("lp.created_at") + ` AND lr.team_id IN {ids:Array(String)}
 	GROUP BY team_id, repo, st
 )
 GROUP BY team_id, repo

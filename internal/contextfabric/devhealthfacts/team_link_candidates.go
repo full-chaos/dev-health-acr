@@ -76,11 +76,11 @@ var teamAmbiguousLinkHashesStatement = readers.WithSettings(`SELECT groupArray(t
 // decision: two ids can share a hash. It runs only when there is a hash.
 var teamAmbiguousLinkCandidatesStatement = readers.WithSettings(`SELECT groupArray(work_item_id) FROM (SELECT work_item_id FROM work_items WHERE org_id = {org_id:String} AND work_item_id IN `+teamLinkCandidatesSent+` AND toString(cityHash64(work_item_id)) IN {hashes:Array(String)} GROUP BY work_item_id HAVING min(repo_id) != max(repo_id))`, readers.Settings{MaxThreads: teamLinkCandidatesMaxThreads})
 
-// withTeamLinkCandidates reads the teams' link candidates once and returns ctx
-// carrying them as the external table teamProjectLinkRowsSQL reads. ok is
-// false when the set is empty: no link row of the teams can be reached, and
-// the caller skips its statement.
-func withTeamLinkCandidates(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, bound factTimeBound) (context.Context, bool, error) {
+// readTeamLinkCandidateIDs reads the teams' link candidates once, drops the
+// ambiguous ones, and returns the rest sorted and unique. ok is false when the
+// set is empty: no link row of the teams can be reached, and the caller skips
+// its statements.
+func readTeamLinkCandidateIDs(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, bound factTimeBound) ([]string, bool, error) {
 	var ids []string
 	rows := 0
 	err := readers.QueryOrgScopedNamed(ctx, client, "ReadTeamLinkCandidates", teamLinkCandidatesStatement(bound), orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
@@ -94,35 +94,29 @@ func withTeamLinkCandidates(ctx context.Context, client contextpacket.ClickHouse
 		return nil, false, fmt.Errorf("team link candidates returned %d rows, want 1", rows)
 	}
 	if rows == 1 && len(ids) == 0 {
-		return ctx, false, nil
+		return nil, false, nil
 	}
+	if len(ids) == 0 {
+		return nil, true, nil
+	}
+	ids = slices.Compact(slices.Sorted(slices.Values(ids)))
 	table, err := teamLinkCandidatesExternalTable(ids)
 	if err != nil {
 		return nil, false, err
 	}
-	sent := clickhousedriver.Context(ctx, clickhousedriver.WithExternalTable(table))
-	if len(ids) == 0 {
-		return sent, true, nil
-	}
-	ambiguous, err := readAmbiguousLinkCandidates(sent, client, orgID, teamIDs)
+	ambiguous, err := readAmbiguousLinkCandidates(clickhousedriver.Context(ctx, clickhousedriver.WithExternalTable(table)), client, orgID, teamIDs)
 	if err != nil {
 		return nil, false, err
 	}
 	if len(ambiguous) == 0 {
-		return sent, true, nil
+		return ids, true, nil
 	}
 	kept := slices.DeleteFunc(ids, func(id string) bool {
 		_, found := slices.BinarySearch(ambiguous, id)
 		return found
 	})
 	slog.Default().InfoContext(ctx, "context_fabric: team link candidates dropped", "ambiguous_links", len(ambiguous), "kept", len(kept))
-	if len(kept) == 0 {
-		return ctx, false, nil
-	}
-	if table, err = teamLinkCandidatesExternalTable(kept); err != nil {
-		return nil, false, err
-	}
-	return clickhousedriver.Context(ctx, clickhousedriver.WithExternalTable(table)), true, nil
+	return kept, len(kept) > 0, nil
 }
 
 // readAmbiguousLinkCandidates reads the sorted ids of the sent candidates with

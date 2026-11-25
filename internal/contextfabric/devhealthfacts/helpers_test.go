@@ -59,6 +59,9 @@ const projectPopulationMarker = "-- project population"
 // teamLinkCandidatesMarker is in the team link candidate statement and no other.
 const teamLinkCandidatesMarker = "SELECT cp.work_item_id AS work_item_id FROM work_items AS cp WHERE"
 
+// teamLinkedSetMarker is in the team link set statement and no other.
+const teamLinkedSetMarker = "groupArray(r), groupArray(n)"
+
 // teamAmbiguousLinkCandidatesMarker is in the two statements that find the team
 // link candidates on several work item rows, and in no other. Each is answered
 // only by a table that names its own match.
@@ -122,6 +125,17 @@ func (c *fakeClient) Query(_ context.Context, statement string, bindings []conte
 		for _, table := range c.tables {
 			if strings.Contains(table.match, teamLinkCandidatesMarker) {
 				return &fakeScanner{rows: table.rows}, nil
+			}
+		}
+		return &fakeScanner{}, nil
+	}
+	// The team link set (one row of five arrays, read a candidate chunk at a
+	// time) is answered only by a table that names its marker; a test that did
+	// not seed it reaches no linked pull request.
+	if strings.Contains(statement, teamLinkedSetMarker) {
+		for _, table := range c.tables {
+			if strings.Contains(table.match, teamLinkedSetMarker) {
+				return &fakeScanner{rows: table.rows}, table.err
 			}
 		}
 		return &fakeScanner{}, nil

@@ -152,7 +152,7 @@ func teamOwnedProjectsAsOfSQL(bound factTimeBound) string {
 // linked pull request exists). teamParam names the
 // Array(String) binding holding the team ids; the bound's bindings must ride
 // with the statement, and the statement's context must carry the teams' link
-// candidates (withTeamLinkCandidates). It is the same chain teamRepositories
+// candidates (readTeamProjectLinkedSet sends them a chunk at a time). It is the same chain teamRepositories
 // walks. The work items are read with FINAL for the candidates only (the
 // String ids keep the work item index pruning), and the link rows and the pull
 // requests joined to them for the candidates' link hashes only; the join on
@@ -232,18 +232,35 @@ func boundReaderBindings(bound factTimeBound) []readers.Binding {
 // A repository the team also owns appears here too; callers drop it with
 // reachedOnlyRepositories so it is counted once, as owned.
 func teamProjectReachedRepositories(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, bound factTimeBound) (map[string][]teamReachedRepo, error) {
+	set, err := readTeamLinkedPullRequests(ctx, client, orgID, teamIDs, bound)
+	if err != nil {
+		return nil, err
+	}
+	return teamProjectReachedRepositoriesOf(ctx, client, orgID, teamIDs, set)
+}
+
+// teamProjectReachedRepositoriesOf is teamProjectReachedRepositories over a
+// set already read. The statement joins the sent set to the organization's
+// pull requests, so a sent row names a pull request of this organization or
+// counts nowhere.
+func teamProjectReachedRepositoriesOf(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, set teamLinkedPullRequests) (map[string][]teamReachedRepo, error) {
 	reached := map[string][]teamReachedRepo{}
-	ctx, ok, err := withTeamLinkCandidates(ctx, client, orgID, teamIDs, bound)
-	if err != nil || !ok {
-		return reached, err
+	if len(set.keys) == 0 {
+		return reached, nil
+	}
+	ctx, err := withTeamLinkedPullRequests(ctx, set)
+	if err != nil {
+		return nil, err
 	}
 	err = pagedOrgScopedTeamRepoRead(ctx, client, "ReadTeamProjectReachedRepositories", orgID, teamIDs,
 		teamRepoCursor{teamExpr: "lr.team_id", repoExpr: "lr.pr_repo_id", repoType: "UUID"},
-		boundReaderBindings(bound),
+		nil,
 		func(having string, limit int) string {
 			return `SELECT lr.team_id, toString(lr.pr_repo_id), ifNull(any(r.repo), ''), toInt64(min(lr.link_rank)), toInt64(uniqExact(lr.pr_number))
-FROM ` + teamProjectLinkRowsSQL("ids", bound) + ` AS lr
+FROM git_pull_requests AS pr FINAL
+INNER JOIN ` + teamLinkedPullRequestsSent + ` AS lr ON pr.org_id = {org_id:String} AND pr.repo_id = lr.pr_repo_id AND pr.number = lr.pr_number
 LEFT JOIN repos AS r FINAL ON r.id = lr.pr_repo_id AND r.org_id = {org_id:String}
+WHERE pr.repo_id IN (SELECT pr_repo_id FROM ` + teamLinkedPullRequestsSent + `) AND lr.team_id IN {ids:Array(String)}
 GROUP BY lr.team_id, lr.pr_repo_id
 ` + having + `
 ORDER BY lr.team_id, lr.pr_repo_id
