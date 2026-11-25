@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -248,6 +249,14 @@ func TestForm14624Probe7CutsAreTheCodeTexts(t *testing.T) {
 	if !strings.HasSuffix(form14624p7CutC0, c0) || !strings.Contains(form14624p7CutC0, prefixRule) {
 		t.Fatalf("C0 is not the wrapper around length(form_org_id) at max_threads 1")
 	}
+	queryColumn := regexp.MustCompile(`(^|[^_A-Za-z])(formatted_)?query([^_A-Za-z]|$)`)
+	for label, text := range map[string]string{"stmtR": form14624p7CutstmtR, "stmtR2": form14624p7CutstmtR2, "S-SET": form14624p7CutSSET, "S-SRV": form14624p7CutSSRV,
+		"S0": form14624p7CutS0, "ORG1": form14624p7CutORG1, "C0": form14624p7CutC0, "S7T4": form14624p7CutS7T4, "S7T3": form14624p7CutS7T3, "S7T2": form14624p7CutS7T2,
+		"QL": form14624p7CutQL, "QLR": form14624p7CutQLR, "past QL": form14624p7PastQL} {
+		if m := queryColumn.FindString(text); m != "" {
+			t.Fatalf("%s names the query text column (%q): a form matches by log_comment and prints no query / formatted_query", label, m)
+		}
+	}
 	all := form14624p7CutstmtR + form14624p7CutstmtR2 + form14624p7CutSSET + form14624p7CutSSRV + form14624p7CutS0 + form14624p7CutQL + form14624p7CutQLR
 	if strings.Count(all, "hostName()") != strings.Count(all, "cityHash64(hostName()) % 1000000 AS replica_tag") {
 		t.Fatalf("a cut outputs a host name: every hostName() must be cityHash64(hostName()) %% 1000000 AS replica_tag")
@@ -284,12 +293,12 @@ func form14624p7QL(t *testing.T, label string, run func(string, string) (chdrive
 	for rows.Next() {
 		var r form14624p7LogRow
 		var eventTime string
-		var tag uint64
+		var tag uint32 // cityHash64(hostName()) % 1000000 is UInt32
 		if err := rows.Scan(&tag, &r.initial, &r.comment, &r.typ, &r.code, &r.elapsed, &r.readRows, &r.readBytes, &r.peak, &r.resultRows,
 			&r.settings[0], &r.settings[1], &r.settings[2], &r.settings[3], &r.settings[4], &r.settings[5], &r.settings[6], &r.settings[7], &eventTime); err != nil {
 			t.Fatalf("FORM %s scan: %v", label, err)
 		}
-		r.replica = strconv.FormatUint(tag, 10)
+		r.replica = strconv.FormatUint(uint64(tag), 10)
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
@@ -326,13 +335,14 @@ func form14624p7SSet(t *testing.T, label string, run func(string, string) (chdri
 	replicas := map[string]bool{}
 	k := uint64(4)
 	for rows.Next() {
-		var tag, formValue uint64
+		var tag uint32
+		var formValue uint64
 		var version, name, value string
 		var changed, okv uint8
 		if err := rows.Scan(&tag, &version, &name, &value, &changed, &formValue, &okv); err != nil {
 			t.Fatalf("FORM %s scan: %v", label, err)
 		}
-		replica := strconv.FormatUint(tag, 10)
+		replica := strconv.FormatUint(uint64(tag), 10)
 		values[replica+"/"+name] = value
 		replicas[replica] = true
 		ok[replica+"/"+name] = okv
@@ -501,7 +511,7 @@ func TestForm14624Probe7ExecutesOnOneReplica(t *testing.T) {
 	}
 	r2 := 0
 	for rows2.Next() {
-		var tag uint64
+		var tag uint32
 		var v string
 		if err := rows2.Scan(&tag, &v); err != nil {
 			t.Fatalf("FORM stmtR2 scan: %v", err)
@@ -539,7 +549,7 @@ func TestForm14624Probe7ExecutesOnOneReplica(t *testing.T) {
 		t.Logf("FORM S-SRV: %v (INFO: the card says an S-SRV error is INFO)", err)
 	} else {
 		for rows.Next() {
-			var tag uint64
+			var tag uint32
 			var name, value string
 			if err := rows.Scan(&tag, &name, &value); err != nil {
 				t.Fatalf("FORM S-SRV scan: %v", err)
@@ -633,11 +643,12 @@ func TestForm14624Probe7ExecutesOnOneReplica(t *testing.T) {
 	}
 	qlr := map[string]uint64{}
 	for rows.Next() {
-		var tag, n uint64
+		var tag uint32
+		var n uint64
 		if err := rows.Scan(&tag, &n); err != nil {
 			t.Fatalf("FORM QLR scan: %v", err)
 		}
-		qlr[strconv.FormatUint(tag, 10)] = n
+		qlr[strconv.FormatUint(uint64(tag), 10)] = n
 	}
 	rows.Close()
 	if len(qlr) != 1 || qlr[s7.replica] == 0 {
@@ -830,12 +841,12 @@ func TestForm14624Probe7FindsS7OnTheOtherReplica(t *testing.T) {
 	}
 	tags := map[string]bool{}
 	for rows2.Next() {
-		var tag uint64
+		var tag uint32
 		var v string
 		if err := rows2.Scan(&tag, &v); err != nil {
 			t.Fatalf("FORM stmtR2 scan: %v", err)
 		}
-		tags[strconv.FormatUint(tag, 10)] = true
+		tags[strconv.FormatUint(uint64(tag), 10)] = true
 	}
 	rows2.Close()
 	if len(tags) != 2 || !tags[hostOne] || !tags[hostTwo] {
@@ -854,12 +865,12 @@ func TestForm14624Probe7FindsS7OnTheOtherReplica(t *testing.T) {
 	if err == nil {
 		hosts := map[string]bool{}
 		for rows.Next() {
-			var tag uint64
+			var tag uint32
 			var name, value string
 			if err := rows.Scan(&tag, &name, &value); err != nil {
 				t.Fatalf("FORM S-SRV scan: %v", err)
 			}
-			hosts[strconv.FormatUint(tag, 10)] = true
+			hosts[strconv.FormatUint(uint64(tag), 10)] = true
 			t.Logf("FORM S-SRV %d %s = %s", tag, name, value)
 		}
 		rows.Close()
@@ -925,11 +936,12 @@ func TestForm14624Probe7FindsS7OnTheOtherReplica(t *testing.T) {
 	}
 	qlr := map[string]uint64{}
 	for rows.Next() {
-		var tag, n uint64
+		var tag uint32
+		var n uint64
 		if err := rows.Scan(&tag, &n); err != nil {
 			t.Fatalf("FORM QLR scan: %v", err)
 		}
-		qlr[strconv.FormatUint(tag, 10)] = n
+		qlr[strconv.FormatUint(uint64(tag), 10)] = n
 	}
 	rows.Close()
 	if len(qlr) != 2 || qlr[hostOne] == 0 || qlr[hostTwo] == 0 {
