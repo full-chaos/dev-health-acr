@@ -154,6 +154,25 @@ func seedLeg14668Shape(t *testing.T, ctx context.Context, direct clickhousedrive
 	return shape
 }
 
+// seedLeg14668Links gives every seeded issue one native link row to a pull
+// request of one of the seeded repositories, so the team link candidate
+// statements (team_link_candidates.go) have link rows to read.
+func seedLeg14668Links(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, orgID string, shape chaos7257Shape, units int) {
+	t.Helper()
+	batch, err := direct.PrepareBatch(ctx, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)`)
+	if err != nil {
+		t.Fatalf("prepare work_graph_issue_pr: %v", err)
+	}
+	for i := 0; i < units; i++ {
+		if err := batch.Append(repoUUID(shape.repos[i%chaos7257Repos]), fmt.Sprintf("linear:CH-%d", i), uint32(1000+i), float32(1), "native", "", shape.at, orgID); err != nil {
+			t.Fatalf("append work_graph_issue_pr: %v", err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send work_graph_issue_pr: %v", err)
+	}
+}
+
 // legKnownStatements names the statements by a text marker, so the FAIL lines
 // cite the reader. A statement not listed is reported by its first 100 chars.
 var legKnownStatements = []struct{ marker, reader string }{
@@ -168,7 +187,7 @@ var legKnownStatements = []struct{ marker, reader string }{
 	{"AS sized_unit_hashes", "investment_repo_mix.go ReadRepositoryThemeMix"},
 	{"cityHash64(cp.work_item_id) IN", "team_link_candidates.go ReadTeamLinkCandidates"},
 	{"SELECT groupArray(toString(h))", "team_link_candidates.go ReadTeamAmbiguousLinkHashes"},
-	{"FROM work_graph_issue_pr", "work_graph_issue_pr statement"},
+	{"FROM work_graph_issue_pr", "link rows over work_graph_issue_pr (team_rollup.go / issue_pull_request_link_rows.go)"},
 	{"FROM work_item_dependencies", "work_item_dependencies statement"},
 	{"FROM git_pull_requests", "git_pull_requests statement"},
 }
@@ -285,6 +304,7 @@ func TestNarrowerRequestsReadFewerRowsPerStatementAgainstRealClickHouse(t *testi
 	}
 	const orgID = "org-leg-1"
 	shape := seedLeg14668Shape(t, ctx, direct, orgID, 2*chaos7257Units)
+	seedLeg14668Links(t, ctx, direct, orgID, shape, 2*chaos7257Units)
 	var tableRows uint64
 	if err := direct.QueryRow(ctx, `SELECT count() FROM work_unit_investments WHERE org_id = ?`, orgID).Scan(&tableRows); err != nil {
 		t.Fatalf("count work_unit_investments: %v", err)
