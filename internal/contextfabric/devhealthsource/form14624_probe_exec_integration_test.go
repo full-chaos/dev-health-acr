@@ -760,7 +760,14 @@ func TestForm14624ProbeExecutesOnTheProbeStatements(t *testing.T) {
 			sumRows += sizes[name][0]
 		}
 		bound := 3*sumRows + 2*partsAll + 1
-		if q.readRows < code.readRows || q.readRows > code.readRows+c0.readRows+4*partsAll+2 || q.readRows > bound || (q.readRows < sumRows) != (code.readRows < sumRows) {
+		// The pruning parity reads the form's own read without C0: form_org_id reads repos once more, so S1 (T = repos only) reads
+		// more than the table while both of its reads prune.
+		var formOwn uint64
+		if q.readRows > c0.readRows {
+			formOwn = q.readRows - c0.readRows
+		}
+		t.Logf("PRUNE %s %s: form read_rows %d, C0 %d, form minus C0 %d, code read_rows %d, table rows %d", label, st.Kind, q.readRows, c0.readRows, formOwn, code.readRows, sumRows)
+		if q.readRows < code.readRows || q.readRows > code.readRows+c0.readRows+4*partsAll+2 || q.readRows > bound || (formOwn < sumRows) != (code.readRows < sumRows) {
 			t.Errorf("PASS %s %s: form read_rows %d, code read_rows %d, C0 %d, parts %d, table rows %d, work bound %d", label, st.Kind, q.readRows, code.readRows, c0.readRows, partsAll, sumRows, bound)
 		}
 		t.Logf("PASS %s %s form read_rows %d bytes %d peak %d ms %d | code read_rows %d bytes %d peak %d ms %d | C0 %d table rows %d bound %d settings %v",
