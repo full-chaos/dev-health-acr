@@ -64,9 +64,11 @@ fi
 start=$SECONDS
 set +e
 if [ -n "$json_out" ]; then
+  # --unbuffered (CHAOS-14593): a block-buffered jq held up to 4 KiB of test
+  # lines back from the live log, so a runner death lost the last of them.
   # shellcheck disable=SC2086
   $runner GOTEST_PKGS="$packages" GOTEST_TIMEOUT="$GOTEST_TIMEOUT" GOTEST_JSON=-json 2>&1 | tee "$out" \
-    | jq -Rj '(fromjson? // {Action: "output", Output: (. + "\n")}) | select(.Action == "output") | .Output'
+    | jq --unbuffered -Rj '(fromjson? // {Action: "output", Output: (. + "\n")}) | select(.Action == "output") | .Output'
   pipe=("${PIPESTATUS[@]}")
   if [ "${pipe[2]}" -ne 0 ]; then pipe[1]=${pipe[2]}; fi
 else
