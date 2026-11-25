@@ -23,10 +23,11 @@ const (
 	edgeThreadsSubjects = 30000
 	edgeThreadsRuns     = 5
 	// The work bounds of the shipped statement, from the PROFILE lines of a
-	// run on a hosted 4-core runner: four threads peak at 172 MB and read
-	// 379063 rows, one thread peaks at 124 MB and reads 270135 rows.
-	edgeThreadsPeakBound = 150_000_000
-	edgeThreadsReadBound = 325_000
+	// run on a hosted 4-core runner (CHAOS-14563, transition arm read once;
+	// run 45398346578, job 138463258692): four threads peak at 139 MB and read
+	// 291831 rows, one thread peaks at 107 MB and reads 210135 rows.
+	edgeThreadsPeakBound = 124_000_000
+	edgeThreadsReadBound = 250_000
 )
 
 // edgeThreadsLogged reads one finished statement of the query log and fails

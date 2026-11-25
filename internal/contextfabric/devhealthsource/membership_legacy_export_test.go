@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
 
@@ -63,7 +64,7 @@ FROM (
   SELECT m.subject_kind AS subject_kind, toString(m.repo_id) AS repo_id_str, m.subject_id AS subject_id, ifNull(r.repo, '') AS repo_slug,
     m.observed_at AS observed_at, m.event_id AS event_id, m.source AS source, m.provider AS provider, m.project_id AS project_id, p.id AS resolved_project_id, p.key_resolution_count AS key_resolution_count,
     isNotNull(m.valid_to) AS valid_to_present, ifNull(m.valid_to, toDateTime64(0, 3, 'UTC')) AS valid_to_value, m.is_malformed AS is_malformed, m.is_duplicate_add AS is_duplicate_add` + transitionIngest + `
-  FROM ` + membershipIntervalsSubquery(ingest, changedTouches) + ` AS m
+  FROM ` + legacyMembershipIntervalsSubquery(ingest, changedTouches) + ` AS m
   LEFT JOIN ` + legacyResolvedProjectsSubquery + ` AS p ON p.provider = m.provider AND p.join_key = m.project_id
   LEFT JOIN repos AS r FINAL ON r.id = m.repo_id AND r.org_id = m.org_id
   UNION ALL
@@ -101,4 +102,112 @@ func MembershipEdgeCountSQLForTest(ingest bool) (current, legacy string) {
 		panic("membershipEdgeCountSQL no longer embeds membershipRows")
 	}
 	return current, strings.Replace(current, rows, legacyMembershipRows(cursorState{}, ingest, false), 1)
+}
+
+// The transition arm as it was at acr main e67c4128 (CHAOS-14563 oracle), byte
+// for byte from membershipIntervalsSQL: it reads the deduped transitions once
+// per touches branch and runs classified again at each of its 3 references.
+func legacyMembershipIntervalsSubquery(ingest bool, changed string) string {
+	touchIngest := "occurred_at"
+	if ingest {
+		touchIngest = "ingested_at"
+	}
+	return legacyMembershipIntervalsSQL(touchIngest, ingest, changed)
+}
+
+func legacyMembershipIntervalsSQL(ingestExpr string, ingested bool, changed string) string {
+	deduped := devhealthschema.DedupedMembershipTransitionsFiltered(ingested, changed)
+	return `(
+  WITH touches AS (
+    SELECT org_id, subject_kind, repo_id, subject_id, provider, to_project_id AS project_id, occurred_at, event_id, ` + ingestExpr + ` AS ingest_at, 1 AS is_add
+    FROM ` + deduped + `
+    WHERE org_id = {org_id:String} AND to_project_id != '' AND to_project_id != from_project_id
+    UNION ALL
+    SELECT org_id, subject_kind, repo_id, subject_id, provider, from_project_id AS project_id, occurred_at, event_id, ` + ingestExpr + ` AS ingest_at, 0 AS is_add
+    FROM ` + deduped + `
+    WHERE org_id = {org_id:String} AND from_project_id != '' AND from_project_id != to_project_id
+  ),
+  classified AS (
+    SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at, event_id, is_add,
+      greatest(ingest_at, lagInFrame(ingest_at, 1, ingest_at) OVER w) AS ingest_c,
+      (is_add = 1 AND lagInFrame(is_add, 1, 2) OVER w = 1) AS dup_flag,
+      (is_add = 0 AND lagInFrame(is_add, 1, 2) OVER w != 1) AS dangling_flag
+    FROM touches
+    -- lagInFrame's own default (the third argument, 2 -- an impossible
+    -- value for is_add's {0,1} domain) marks "no previous touch at all"
+    -- distinctly from an actual REMOVE (0), so the very first touch of a
+    -- (subject, project) pair is correctly classified: an ADD is never
+    -- flagged duplicate (nothing preceded it) and a REMOVE is always
+    -- flagged dangling (nothing preceded it either). See
+    -- resolvedProjectsSubquery's own ROWS BETWEEN note -- the identical
+    -- explicit frame is load-bearing here for the same reason.
+    WINDOW w AS (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+  ),
+  closed AS (
+    SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at, event_id, is_add,
+      greatest(ingest_c, leadInFrame(ingest_c, 1, ingest_c) OVER w2) AS ingest_at,
+      row_number() OVER w2 AS rn,
+      count() OVER (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id) AS touch_count,
+      leadInFrame(occurred_at, 1, occurred_at) OVER w2 AS next_occurred_at,
+      leadInFrame(is_add, 1, is_add) OVER w2 AS next_is_add
+    FROM classified
+    WHERE NOT dup_flag
+    WINDOW w2 AS (PARTITION BY org_id, subject_kind, repo_id, subject_id, provider, project_id ORDER BY occurred_at, event_id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+  )
+  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id, ingest_at,
+    'transition' AS source,
+    if(rn < touch_count AND next_is_add = 0, next_occurred_at, NULL) AS valid_to,
+    0 AS is_malformed, 0 AS is_duplicate_add
+  FROM closed
+  WHERE is_add = 1
+  UNION ALL
+  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id, ingest_c AS ingest_at,
+    'transition' AS source,
+    NULL AS valid_to,
+    1 AS is_malformed, 0 AS is_duplicate_add
+  FROM classified
+  WHERE dangling_flag
+  UNION ALL
+  SELECT org_id, subject_kind, repo_id, subject_id, provider, project_id, occurred_at AS observed_at, event_id, ingest_c AS ingest_at,
+    'transition' AS source,
+    NULL AS valid_to,
+    0 AS is_malformed, 1 AS is_duplicate_add
+  FROM classified
+  WHERE dup_flag
+)`
+}
+
+// MembershipIntervalsSQLForTest returns the transition arm and its oracle, both
+// over every subject of the organization.
+func MembershipIntervalsSQLForTest(ingest bool) (current, legacy string) {
+	return membershipIntervalsSubquery(ingest, ""), legacyMembershipIntervalsSubquery(ingest, "")
+}
+
+// MembershipEdgeCountMainSQLForTest returns the edge count statement and the
+// same statement with acr main's transition arm: the edge count of acr main
+// e67c4128 byte for byte while only that arm differs.
+func MembershipEdgeCountMainSQLForTest(ingest bool) (current, main string) {
+	current = membershipEdgeCountSQL(ingest)
+	arm, legacyArm := membershipIntervalsSubquery(ingest, ""), legacyMembershipIntervalsSubquery(ingest, "")
+	if strings.Count(current, arm) != 1 {
+		panic("membershipEdgeCountSQL no longer embeds the transition arm once")
+	}
+	return current, strings.Replace(current, arm, legacyArm, 1)
+}
+
+// MembershipStatementMainForTest returns the producer's page statement at a
+// cursor and the same statement with acr main's transition arm (acr main
+// e67c4128 byte for byte while only that arm differs), with its bindings.
+func MembershipStatementMainForTest(orgID string, since time.Time, after string, limit int, ingest, pruned bool) (current, main string, bindings []contextpacket.ClickHouseBinding) {
+	cursor := cursorState{Since: since, After: after}
+	current = membershipStatement(cursor, ingest, pruned)
+	var changed string
+	if pruned {
+		changed, _, _ = changedMembershipFilters(cursor, ingest)
+	}
+	arm, legacyArm := membershipIntervalsSubquery(ingest, changed), legacyMembershipIntervalsSubquery(ingest, changed)
+	if strings.Count(current, arm) != 1 {
+		panic("membershipStatement no longer embeds the transition arm once")
+	}
+	return current, strings.Replace(current, arm, legacyArm, 1), rowLimitBindings(orgID, cursor, limit)
 }
