@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"fmt"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
@@ -112,7 +114,7 @@ func TeamLinkCandidatesTableForTest(ids []string) (*ext.Table, error) {
 // WithTeamLinkCandidatesForTest is the served read every team link statement
 // starts from: ok is false when no candidate is left.
 func WithTeamLinkCandidatesForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string) (bool, error) {
-	_, ok, err := withTeamLinkCandidates(ctx, client, orgID, teamIDs, factTimeBound{})
+	_, ok, err := readTeamLinkCandidateIDs(ctx, client, orgID, teamIDs, factTimeBound{})
 	return ok, err
 }
 
@@ -305,3 +307,69 @@ var BlockerStatementMaxMemoryUsage = blockerStatementMaxMemoryUsage
 
 // WorkUnitVersionKey is workUnitVersionKey for the external tests.
 const WorkUnitVersionKey = workUnitVersionKey
+
+// TeamLinkedPullRequestForTest is one sent (team, pull request) row.
+type TeamLinkedPullRequestForTest struct {
+	Team, Repo, Number string
+	Rank               uint8
+}
+
+// TeamLinkedPullRequestReadsForTest runs the three team pull request reads over
+// a sent set, as orgID, with reach as the project-reached repositories, and
+// returns the rows each one returned: the reached repositories' served names,
+// window counts and state counts.
+func TeamLinkedPullRequestReadsForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, sent []TeamLinkedPullRequestForTest, reach []string) (reached []string, counts, states int, err error) {
+	rows := make([]linkedSetRow, 0, len(sent))
+	for _, s := range sent {
+		rows = append(rows, linkedSetRow{team: s.Team, repo: s.Repo, number: s.Number, rank: s.Rank})
+	}
+	set := linkedPullRequestsOf(rows)
+	byTeam, err := teamProjectReachedRepositoriesOf(ctx, client, orgID, teamIDs, set)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	reachedOnly := map[string][]teamReachedRepo{}
+	for _, teamID := range teamIDs {
+		for _, repo := range reach {
+			reachedOnly[teamID] = append(reachedOnly[teamID], teamReachedRepo{key: repo})
+		}
+	}
+	window, err := teamLinkedPullRequestCounts(ctx, client, orgID, teamIDs, set, reachedOnly, resolveRollupWindow(factTimeBound{}, nil, clock()))
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	byState, err := teamLinkedPullRequestStateCounts(ctx, client, orgID, teamIDs, set, reachedOnly, factTimeBound{})
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	for _, teamID := range teamIDs {
+		for _, repo := range byTeam[teamID] {
+			reached = append(reached, repo.name)
+		}
+	}
+	return reached, len(window), len(byState), nil
+}
+
+// TeamLinkSetUnchunkedForTest runs the link set statement once over every
+// candidate of the teams, under the bound query's time resolves to, as one
+// unchunked statement would, and returns its row count.
+func TeamLinkSetUnchunkedForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, query contextfabric.FactQuery) (int, error) {
+	bound, _, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return 0, fmt.Errorf("unsupported time context")
+	}
+	ids, ok, err := readTeamLinkCandidateIDs(ctx, client, orgID, teamIDs, bound)
+	if err != nil || !ok {
+		return 0, err
+	}
+	table, err := teamLinkCandidatesExternalTable(ids)
+	if err != nil {
+		return 0, err
+	}
+	var repos, numbers, teams, issues []string
+	var ranks []uint8
+	err = readers.QueryOrgScopedNamed(clickhousedriver.Context(ctx, clickhousedriver.WithExternalTable(table)), client, "ReadTeamLinkedPullRequestSet", linkedPullRequestSetStatement(bound), orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
+		return row.Scan(&repos, &numbers, &teams, &issues, &ranks)
+	}, boundReaderBindings(bound)...)
+	return len(repos), err
+}

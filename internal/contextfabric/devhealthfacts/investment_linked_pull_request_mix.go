@@ -102,26 +102,9 @@ func membershipScopeExternalTable(ids []string) (*ext.Table, error) {
 }
 
 func (p *InvestmentProvider) readLinkedPullRequestSetOnce(ctx context.Context, orgID string, chunk []string, bound factTimeBound) (repos, numbers, teams []string, err error) {
-	var issues []string
-	var ranks []uint8
-	setCtx, ok, err := withTeamLinkCandidates(ctx, p.facts.client, orgID, chunk, bound)
-	if err != nil || !ok {
+	links, err := readTeamProjectLinkedSet(ctx, p.facts.client, orgID, chunk, bound)
+	if err != nil || len(links) == 0 {
 		return nil, nil, nil, err
-	}
-	rows := 0
-	err = readers.QueryOrgScopedNamed(setCtx, p.facts.client, "ReadTeamLinkedPullRequestSet", linkedPullRequestSetStatement(bound), orgID, chunk, func(row contextpacket.ClickHouseRowScanner) error {
-		rows++
-		return row.Scan(&repos, &numbers, &teams, &issues, &ranks)
-	}, boundReaderBindings(bound)...)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	if rows != 1 || len(numbers) != len(repos) || len(teams) != len(repos) || len(issues) != len(repos) || len(ranks) != len(repos) {
-		return nil, nil, nil, fmt.Errorf("team linked pull request set returned %d rows of %d/%d/%d/%d/%d values", rows, len(repos), len(numbers), len(teams), len(issues), len(ranks))
-	}
-	links := make([]linkedSetRow, len(repos))
-	for i := range repos {
-		links[i] = linkedSetRow{repo: repos[i], number: numbers[i], team: teams[i], issue: issues[i], rank: ranks[i]}
 	}
 	covered, err := p.nativeCover(ctx, orgID, links)
 	if err != nil {

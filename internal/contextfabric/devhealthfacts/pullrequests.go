@@ -222,7 +222,11 @@ func (p *PullRequestsProvider) readTeamRollup(ctx context.Context, orgID string,
 	if err != nil {
 		return outcome, err
 	}
-	reached, err := teamProjectReachedRepositories(ctx, p.facts.client, orgID, teamIDs, timeBound)
+	linked, err := readTeamLinkedPullRequests(ctx, p.facts.client, orgID, teamIDs, timeBound)
+	if err != nil {
+		return outcome, err
+	}
+	reached, err := teamProjectReachedRepositoriesOf(ctx, p.facts.client, orgID, teamIDs, linked)
 	if err != nil {
 		return outcome, err
 	}
@@ -231,7 +235,7 @@ func (p *PullRequestsProvider) readTeamRollup(ctx context.Context, orgID string,
 	byRepo := map[string]pullRequestRollupRepo{}
 	// A repository reached only through an owned project counts the project's
 	// linked pull requests alone, never the repository's whole activity.
-	reachedCounts, err := teamLinkedPullRequestCounts(ctx, p.facts.client, orgID, teamIDs, reachedOnly, window, timeBound)
+	reachedCounts, err := teamLinkedPullRequestCounts(ctx, p.facts.client, orgID, teamIDs, linked, reachedOnly, window)
 	if err != nil {
 		return outcome, err
 	}
@@ -265,7 +269,7 @@ ORDER BY repo_id`
 	if err != nil {
 		return outcome, err
 	}
-	reachedStates, err = teamLinkedPullRequestStateCounts(ctx, p.facts.client, orgID, teamIDs, reachedOnly, timeBound)
+	reachedStates, err = teamLinkedPullRequestStateCounts(ctx, p.facts.client, orgID, teamIDs, linked, reachedOnly, timeBound)
 	if err != nil {
 		return outcome, err
 	}
@@ -417,26 +421,26 @@ ORDER BY repo_id`
 // by the same opened / merged / closed-unmerged rule the owned arm applies.
 // The key is team id + blockerPairSeparator + repository id. A repository
 // whose linked pull requests have no git_pull_requests row is absent.
-func teamLinkedPullRequestCounts(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, reachedOnly map[string][]teamReachedRepo, window rollupWindow, bound factTimeBound) (map[string]pullRequestRollupRepo, error) {
+func teamLinkedPullRequestCounts(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, set teamLinkedPullRequests, reachedOnly map[string][]teamReachedRepo, window rollupWindow) (map[string]pullRequestRollupRepo, error) {
 	counts := map[string]pullRequestRollupRepo{}
-	if reachedRepositoryCount(reachedOnly) == 0 {
+	if reachedRepositoryCount(reachedOnly) == 0 || len(set.keys) == 0 {
 		return counts, nil
 	}
-	ctx, ok, err := withTeamLinkCandidates(ctx, client, orgID, teamIDs, bound)
-	if err != nil || !ok {
-		return counts, err
+	ctx, err := withTeamLinkedPullRequests(ctx, set)
+	if err != nil {
+		return nil, err
 	}
 	err = pagedOrgScopedTeamRepoRead(ctx, client, "ReadTeamProjectLinkedPullRequests", orgID, teamIDs,
 		teamRepoCursor{teamExpr: "lr.team_id", repoExpr: "lr.pr_repo_id", repoType: "UUID"},
-		append(append(window.bindings(), boundReaderBindings(bound)...), readers.Binding{Name: "reach_repo_ids", Value: reachedRepoKeys(reachedOnly)}),
+		append(window.bindings(), readers.Binding{Name: "reach_repo_ids", Value: reachedRepoKeys(reachedOnly)}),
 		func(having string, limit int) string {
 			return `SELECT lr.team_id, toString(lr.pr_repo_id),
 	toInt64(countIf(` + window.timestampExpr("pr.created_at") + `)),
 	toInt64(countIf(pr.merged_at IS NOT NULL AND ` + window.timestampExpr("pr.merged_at") + `)),
 	toInt64(countIf(pr.merged_at IS NULL AND pr.closed_at IS NOT NULL AND ` + window.timestampExpr("pr.closed_at") + `))
-FROM (SELECT DISTINCT team_id, pr_repo_id, pr_number FROM ` + teamProjectLinkRowsSQL("ids", bound) + `) AS lr
-INNER JOIN git_pull_requests AS pr FINAL ON pr.org_id = {org_id:String} AND pr.repo_id = lr.pr_repo_id AND pr.number = lr.pr_number
-WHERE pr.repo_id IN (SELECT toUUIDOrZero(id) FROM (SELECT arrayJoin({reach_repo_ids:Array(String)}) AS id))
+FROM git_pull_requests AS pr FINAL
+INNER JOIN ` + teamLinkedPullRequestsSent + ` AS lr ON pr.org_id = {org_id:String} AND pr.repo_id = lr.pr_repo_id AND pr.number = lr.pr_number
+WHERE pr.repo_id IN (SELECT toUUIDOrZero(id) FROM (SELECT arrayJoin({reach_repo_ids:Array(String)}) AS id)) AND lr.team_id IN {ids:Array(String)}
 GROUP BY lr.team_id, lr.pr_repo_id
 ` + having + `
 ORDER BY lr.team_id, lr.pr_repo_id

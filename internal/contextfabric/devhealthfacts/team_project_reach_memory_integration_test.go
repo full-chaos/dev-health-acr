@@ -162,7 +162,14 @@ SELECT `+id+`, ?, ?, 'filler', 'open', '', ?, '', 'linear', '', NULL FROM number
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: org, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
 			Time: window, Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{teamSubject(teamID)},
 		})
-		return statementMemorySince(t, ctx, direct, statementFilter{Table: "team_project_ownership", QueryContains: "work_graph_issue_pr"}, mark), result, err
+		// devhealthschema:not-a-production-replica the table names here select query_log rows of the statements under test; no schema is defined in this file
+		measured := statementMemorySince(t, ctx, direct, statementFilter{Table: "team_project_ownership", QueryContains: "work_graph_issue_pr"}, mark)
+		// The linked pull request reads join the sent link set and read no
+		// ownership row; they are measured by their own text.
+		for hash, peak := range statementMemorySince(t, ctx, direct, statementFilter{Table: "git_pull_requests", QueryContains: "lr.pr_repo_id"}, mark) {
+			measured[hash] = peak
+		}
+		return measured, result, err
 	}
 	if _, _, err := read(); err != nil {
 		t.Fatalf("warm-up ReadFacts: %v: %s", err, readFailureCause(err))

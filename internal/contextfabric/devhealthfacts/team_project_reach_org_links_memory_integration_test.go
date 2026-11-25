@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
@@ -31,12 +32,32 @@ const (
 	prodEstimatePeakBytes      = uint64(48 << 20)
 	historyFloorBytes          = uint64(2 << 20)
 	// linksInsideLargeMax bounds each statement where every link of 96k is
-	// inside the owned projects: 30% headroom under the 256 MiB API statement
-	// cap (179.2 MiB). The link-row prunes that keep the outside links out of
-	// memory cost 20 to 26% here, where they prune nothing.
-	linksInsideLargeMax   = uint64(256 << 20 * 7 / 10)
-	ownershipHistorySmall = 100
-	ownershipHistoryLarge = 1_000
+	// inside the owned projects. A link-row statement may not hold more links
+	// than one 24k read does (58.1 MB measured), whatever the link count: 64 MiB
+	// is that peak plus 15%, a quarter of the 256 MiB API statement cap.
+	linksInsideLargeMax = uint64(64 << 20)
+	// linkedReadsInsideLargeMax bounds each linked pull request read at 96k
+	// all-inside links: its first measure (33,601,449 B, CI run 45556469550)
+	// plus 15%.
+	linkedReadsInsideLargeMax = uint64(38_641_667)
+	// The work bounds at 96k all-inside links (96,001 candidates, 5 chunks) and
+	// at 24,001 candidates (2 chunks): the first measure (CI run 45562209733,
+	// the larger of the unmerged and merged reads) plus 15%, rounded up.
+	linksInsideSetReadRowsMax         = (1_635_367*115 + 99) / 100   // merged
+	linksInsideSetReadBytesMax        = (237_131_284*115 + 99) / 100 // unmerged
+	linksInsideLinkedReadRowsMax      = (685_461*115 + 99) / 100     // merged
+	linksInsideLinkedReadBytesMax     = (47_598_017*115 + 99) / 100  // merged
+	linksInsideTwoChunkSetReadRowsMax = (268_748*115 + 99) / 100     // merged
+	// linksInsideBaseStatements is what the read ran at main at both sizes (CI
+	// run 45551732249); linksInsideLargeStatements is what it runs at 96k: the
+	// link set once per 24k-candidate chunk.
+	linksInsideBaseStatements  = 10
+	linksInsideLargeStatements = 11
+	// linkedPullRequestStatements is the number of team statements that read
+	// the project-reached pull requests (reached repositories, counts, states).
+	linkedPullRequestStatements = 3
+	ownershipHistorySmall       = 100
+	ownershipHistoryLarge       = 1_000
 )
 
 // The repositories a team reaches through its owned projects are read from the
@@ -112,7 +133,7 @@ SELECT ?, concat('`+prefix+`-', repeat('x', 96), '-', toString(number)), toUInt3
 			})
 			t.Run("links inside the owned projects", func(t *testing.T) {
 				measureTeamReachAxis(t, ctx, query, statementthreads.Unbounded(rawQuery), direct, ownedLinksMemoryOrg, merged, parts, linkFiller("owned", "proj-owner", "repo-reached"),
-					"links inside the owned projects "+mode, prodLinkedIssues, 4*prodLinkedIssues, 0, axisGuard{smallMax: 56 << 20, largeMax: linksInsideLargeMax})
+					"links inside the owned projects "+mode, prodLinkedIssues-1, 4*prodLinkedIssues, 0, axisGuard{smallMax: 56 << 20, largeMax: linksInsideLargeMax, linkedLargeMax: linkedReadsInsideLargeMax, work: &readWorkGuard{smallStatementsMax: linksInsideBaseStatements, largeStatements: linksInsideLargeStatements}})
 			})
 			if merged {
 				return
@@ -181,7 +202,12 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery
 		{Table: "team_project_ownership", QueryContains: "work_graph_issue_pr"},
 		{Table: "team_project_ownership", QueryContains: "team_project_ownership"},
 		{Table: "team_repo_ownership", QueryContains: "team_repo_ownership"},
+		// The linked pull request reads, whatever tables they join: a reader
+		// that stops reading team_project_ownership still counts here.
+		{Table: "git_pull_requests", QueryContains: "lr.pr_repo_id"},
 	}
+	const linkedPullRequestFilter = 3
+	var works []labeledWork
 	read := func(label string, provider contextfabric.FactProvider) []statementMemory {
 		var active uint64
 		if err := direct.QueryRow(ctx, `SELECT count() FROM system.parts WHERE database = currentDatabase() AND table = 'work_items' AND active`).Scan(&active); err != nil {
@@ -194,9 +220,11 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery
 			t.Fatalf("%s: %d active work_items parts at the %s size, want at least %d (the unmerged state was not reached)", axis, active, label, wantParts)
 		}
 		mark := serverNowMicros(t, ctx, direct)
+		started := time.Now()
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: org, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
 			Time: window, Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{teamSubject(teamID)},
 		})
+		wall := time.Since(started)
 		if err != nil {
 			t.Fatalf("ReadFacts at the %s size of %s: %v: %s\nfailed statements:\n%s", label, axis, err, readFailureCause(err), failedStatementsSince(ctx, direct, mark))
 		}
@@ -204,6 +232,16 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery
 		var out []statementMemory
 		for _, filter := range filters {
 			out = append(out, statementMemorySince(t, ctx, direct, filter, mark))
+		}
+		if n := len(out[linkedPullRequestFilter]); n != linkedPullRequestStatements {
+			t.Fatalf("%s at the %s size: %d linked pull request statements measured, want %d (a linked pull request read left the measure)", axis, label, n, linkedPullRequestStatements)
+		}
+		work := readWorkSince(t, ctx, direct, mark)
+		t.Logf("COST %s: the %s read ran %d statements in %d ms", axis, label, work.statements, wall.Milliseconds())
+		t.Logf("WORK %s: the %s read: link set %d statement(s) read_rows %d read_bytes %d; linked pull request reads read_rows %d read_bytes %d", axis, label, work.setStatements, work.setReadRows, work.setReadBytes, work.linkedReadRows, work.linkedReadBytes)
+		works = append(works, labeledWork{label: label, work: work})
+		if size := longestStatementSince(t, ctx, direct, filters[linkedPullRequestFilter], mark); size >= maxQuerySizeBytes {
+			t.Fatalf("%s at the %s size: a linked pull request statement is %d bytes, want under max_query_size %d (the set must ride a sent table, never the text)", axis, label, size, maxQuerySizeBytes)
 		}
 		return out
 	}
@@ -225,13 +263,62 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery
 	growTo(smallSize)
 	read("warm-up", provider)
 	small := minPeaks(read("smaller", provider), read("smaller again", provider), read("smaller third", provider))
+	if guard.work != nil {
+		mark := serverNowMicros(t, ctx, direct)
+		if _, err := devhealthfacts.TeamLinkSetUnchunkedForTest(ctx, query, org, []string{teamID}, contextfabric.FactQuery{Time: window, Kind: contextfabric.FactPullRequests}); err != nil {
+			t.Fatalf("%s: unchunked link set: %v", axis, err)
+		}
+		unchunked := readWorkSince(t, ctx, direct, mark)
+		for _, w := range works {
+			if w.work.setStatements != 1 || w.work.setReadRows != unchunked.setReadRows {
+				t.Errorf("%s at the %s size: the link set ran %d statement(s) reading %d rows, want 1 reading the %d rows of one unchunked statement", axis, w.label, w.work.setStatements, w.work.setReadRows, unchunked.setReadRows)
+			}
+			if w.work.statements > guard.work.smallStatementsMax {
+				t.Errorf("%s at the %s size: %d statements, want at most %d (main)", axis, w.label, w.work.statements, guard.work.smallStatementsMax)
+			}
+		}
+		works = nil
+		// One candidate more is two chunks: the second pays its own floor.
+		growTo(smallSize + 1)
+		read("control one candidate over the chunk", provider)
+		for _, w := range works {
+			if w.work.setStatements != 2 || w.work.setReadRows > linksInsideTwoChunkSetReadRowsMax {
+				t.Errorf("%s at the %s size: the link set ran %d statement(s) reading %d rows, want 2 reading at most %d", axis, w.label, w.work.setStatements, w.work.setReadRows, linksInsideTwoChunkSetReadRowsMax)
+			}
+		}
+		works = nil
+	}
 	growTo(largeSize)
 	large := minPeaks(read("larger", provider), read("larger again", provider), read("larger third", provider))
+	if guard.work != nil {
+		for _, w := range works {
+			if w.work.statements != guard.work.largeStatements {
+				t.Errorf("%s at the %s size: %d statements, want %d", axis, w.label, w.work.statements, guard.work.largeStatements)
+			}
+			for _, c := range []struct {
+				what     string
+				got, max uint64
+			}{
+				{"link set read_rows", w.work.setReadRows, linksInsideSetReadRowsMax},
+				{"link set read_bytes", w.work.setReadBytes, linksInsideSetReadBytesMax},
+				{"linked pull request reads read_rows", w.work.linkedReadRows, linksInsideLinkedReadRowsMax},
+				{"linked pull request reads read_bytes", w.work.linkedReadBytes, linksInsideLinkedReadBytesMax},
+			} {
+				if c.got > c.max {
+					t.Errorf("%s at the %s size: %s %d, want at most %d", axis, w.label, c.what, c.got, c.max)
+				}
+			}
+		}
+	}
 	for i := range filters {
 		for hash, peak := range small[i] {
 			t.Logf("SLOPE %s: statement %d (%s) peak memory %d bytes at %d, %d at %d", axis, hash, filters[i].Table, peak, smallSize, large[i][hash], largeSize)
 		}
-		guard.assert(t, axis+" / "+filters[i].Table+" statements", small[i], large[i])
+		filterGuard := guard
+		if i == linkedPullRequestFilter && guard.linkedLargeMax > 0 {
+			filterGuard.largeMax = guard.linkedLargeMax
+		}
+		filterGuard.assert(t, axis+" / "+filters[i].Table+" statements", small[i], large[i])
 	}
 	if ceilingSize > 0 {
 		growTo(ceilingSize)
@@ -246,6 +333,57 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery
 			}
 		}
 	}
+}
+
+// readWork is what one read sent, from query_log: the SELECTs over the test
+// database that ended after the mark (finished or failed), and the rows and
+// bytes the link set statements and the linked pull request reads read.
+type readWork struct {
+	statements, setStatements       uint64
+	setReadRows, setReadBytes       uint64
+	linkedReadRows, linkedReadBytes uint64
+}
+
+type labeledWork struct {
+	label string
+	work  readWork
+}
+
+func readWorkSince(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, markMicros int64) readWork {
+	t.Helper()
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS query_log`); err != nil {
+		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
+	}
+	var w readWork
+	if err := direct.QueryRow(ctx, `SELECT count(), countIf(is_set), sumIf(read_rows, is_set), sumIf(read_bytes, is_set), sumIf(read_rows, is_linked), sumIf(read_bytes, is_linked)
+FROM (
+	SELECT read_rows, read_bytes,
+		position(query, 'groupArray(r), groupArray(n)') > 0 AS is_set,
+		has(tables, concat(currentDatabase(), '.git_pull_requests')) AND position(query, 'lr.pr_repo_id') > 0 AS is_linked
+	FROM system.query_log
+	WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+	  AND has(databases, currentDatabase())
+)`, markMicros).Scan(&w.statements, &w.setStatements, &w.setReadRows, &w.setReadBytes, &w.linkedReadRows, &w.linkedReadBytes); err != nil {
+		t.Fatalf("read the read's work: %v", err)
+	}
+	return w
+}
+
+// maxQuerySizeBytes is ClickHouse's default max_query_size, the most query text
+// the server parses.
+const maxQuerySizeBytes = 256 << 10
+
+// longestStatementSince is the longest query text among the statements filter
+// selects after the mark.
+func longestStatementSince(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, filter statementFilter, markMicros int64) uint64 {
+	t.Helper()
+	var n uint64
+	if err := direct.QueryRow(ctx, `SELECT max(length(query)) FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+  AND has(tables, concat(currentDatabase(), '.', ?)) AND position(query, ?) > 0`, markMicros, filter.Table, filter.QueryContains).Scan(&n); err != nil {
+		t.Fatalf("read statement size: %v", err)
+	}
+	return n
 }
 
 // failedStatementsSince names, after the mark, every SELECT the server ended
@@ -280,6 +418,19 @@ type axisGuard struct {
 	floor    uint64
 	smallMax uint64
 	largeMax uint64
+	// linkedLargeMax, when set, is largeMax for the linked pull request reads.
+	linkedLargeMax uint64
+	// work, when set, pins the read's work on the all-inside axis.
+	work *readWorkGuard
+}
+
+// readWorkGuard pins the work of a read on the all-inside axis, never its wall
+// time: at the smaller size (one candidate chunk) the link set runs once and
+// reads what one unchunked statement reads, in no more statements than main;
+// at the larger size the read runs a fixed number of statements.
+type readWorkGuard struct {
+	smallStatementsMax uint64
+	largeStatements    uint64
 }
 
 func (g axisGuard) assert(t *testing.T, label string, small, large statementMemory) {

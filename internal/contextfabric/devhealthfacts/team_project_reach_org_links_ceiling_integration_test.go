@@ -158,8 +158,8 @@ SELECT ?, concat('outside-', repeat('x', 96), '-', toString(number)), toUInt32(n
 				label := fmt.Sprintf("%d outside links", size)
 				read(label + " warm-up")
 				runs := []map[uint64]linkRowStatement{read(label), read(label + " again"), read(label + " third")}
-				if len(runs[0]) < 4 {
-					t.Fatalf("%s %s: %d link-row statements logged, want at least 4: the candidates and three link-row reads (the measurement did not happen)", mode, label, len(runs[0]))
+				if len(runs[0]) < 5 {
+					t.Fatalf("%s %s: %d link-row statements logged, want at least 5: the candidates, the link set and the three linked pull request reads (the measurement did not happen)", mode, label, len(runs[0]))
 				}
 				candidates := 0
 				for _, statement := range runs[0] {
@@ -204,7 +204,8 @@ SELECT ?, concat('outside-', repeat('x', 96), '-', toString(number)), toUInt32(n
 }
 
 // linkRowStatementsSince is every finished or failed SELECT after the mark
-// that reads both the team project ownership and the link rows: per
+// that reads both the team project ownership and the link rows, or that joins
+// the sent link set to the pull requests (lr.pr_repo_id): per
 // normalized query hash, its peak memory and read_bytes. Every one must have
 // run at the statement thread count.
 func linkRowStatementsSince(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, markMicros int64) map[uint64]linkRowStatement {
@@ -214,7 +215,8 @@ func linkRowStatementsSince(t *testing.T, ctx context.Context, direct clickhouse
 	}
 	rows, err := direct.Query(ctx, `SELECT normalized_query_hash, max(memory_usage), max(read_bytes), `+statementthreads.UnboundThreadsCount+`, max(position(query, ?) > 0) FROM system.query_log
 WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
-  AND has(tables, concat(currentDatabase(), '.team_project_ownership')) AND has(tables, concat(currentDatabase(), '.work_graph_issue_pr'))
+  AND ((has(tables, concat(currentDatabase(), '.team_project_ownership')) AND has(tables, concat(currentDatabase(), '.work_graph_issue_pr')))
+    OR (has(tables, concat(currentDatabase(), '.git_pull_requests')) AND position(query, 'lr.pr_repo_id') > 0))
 GROUP BY normalized_query_hash`, teamLinkCandidatesMarker, markMicros)
 	if err != nil {
 		t.Fatalf("read query_log: %v", err)

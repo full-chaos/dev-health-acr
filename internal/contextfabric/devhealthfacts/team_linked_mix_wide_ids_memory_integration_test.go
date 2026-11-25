@@ -196,8 +196,11 @@ FROM (
 )`, mark).Scan(&read.setMs, &read.mixMs, &setRuns, &mixRuns, &setReadonly, &mixReadonly); err != nil {
 			t.Fatalf("read the served statements' durations (measurement did not happen): %v", err)
 		}
-		if setRuns != 1 || mixRuns != 1 || setReadonly != "2" || mixReadonly != "2" {
-			t.Errorf("the served linked set and mix statements did not each run once under readonly=2: set %d run(s) readonly %q, mix %d run(s) readonly %q", setRuns, setReadonly, mixRuns, mixReadonly)
+		// The set statement runs twice: once for the linked mix and once for
+		// the team's project-reached repositories, which read the same link
+		// set since CHAOS-10430 (one candidate chunk at this size).
+		if setRuns != 2 || mixRuns != 1 || setReadonly != "2" || mixReadonly != "2" {
+			t.Errorf("the served linked set and mix statements did not run 2 and 1 times under readonly=2: set %d run(s) readonly %q, mix %d run(s) readonly %q", setRuns, setReadonly, mixRuns, mixReadonly)
 		}
 		out = append(out, read)
 	}
