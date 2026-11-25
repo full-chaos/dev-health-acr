@@ -17,6 +17,11 @@ import (
 
 var statusSinceNow = time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC)
 
+// transitionRow is one item's last instant holding one transition.
+func transitionRow(repo, item, from, to string, at time.Time) []any {
+	return []any{repo, item, uint64(1), []string{from}, []string{to}, at}
+}
+
 func readStatusSince(t *testing.T, statusRows, transitionRows [][]any, subjects ...contextfabric.SubjectRef) (contextfabric.FactProviderResult, *fakeClient, error) {
 	t.Helper()
 	restore := devhealthfacts.SetClockForTest(func() time.Time { return statusSinceNow })
@@ -49,7 +54,7 @@ func TestStatusSinceObservedIsDurationFromTheLatestEntry(t *testing.T) {
 	entered := statusSinceNow.Add(-90 * time.Minute)
 	result, _, err := readStatusSince(t,
 		[][]any{{"W-1", "in_progress", "repo-1", "jira"}},
-		[][]any{{"repo-1", "W-1", "in_progress", entered}},
+		[][]any{transitionRow("repo-1", "W-1", "", "in_progress", entered)},
 		workItemSubject("repo-1", "W-1"))
 	if err != nil {
 		t.Fatal(err)
@@ -76,7 +81,7 @@ func TestStatusSinceNoTransitionIsNullNotZeroNorCreation(t *testing.T) {
 func TestStatusSinceLatestTransitionWentElsewhereIsNotAnOlderMatch(t *testing.T) {
 	result, _, err := readStatusSince(t,
 		[][]any{{"W-1", "in_progress", "repo-1", "jira"}},
-		[][]any{{"repo-1", "W-1", "done", statusSinceNow.Add(-time.Hour)}},
+		[][]any{transitionRow("repo-1", "W-1", "", "done", statusSinceNow.Add(-time.Hour))},
 		workItemSubject("repo-1", "W-1"))
 	if err != nil {
 		t.Fatal(err)
@@ -89,7 +94,7 @@ func TestStatusSinceLatestTransitionWentElsewhereIsNotAnOlderMatch(t *testing.T)
 func TestStatusSinceEntryInTheFutureIsNotADuration(t *testing.T) {
 	result, _, err := readStatusSince(t,
 		[][]any{{"W-1", "in_progress", "repo-1", "jira"}},
-		[][]any{{"repo-1", "W-1", "in_progress", statusSinceNow.Add(time.Minute)}},
+		[][]any{transitionRow("repo-1", "W-1", "", "in_progress", statusSinceNow.Add(time.Minute))},
 		workItemSubject("repo-1", "W-1"))
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +107,7 @@ func TestStatusSinceEntryInTheFutureIsNotADuration(t *testing.T) {
 func TestStatusSinceEntryAtTheClockIsZeroSecondsObserved(t *testing.T) {
 	result, _, err := readStatusSince(t,
 		[][]any{{"W-1", "in_progress", "repo-1", "jira"}},
-		[][]any{{"repo-1", "W-1", "in_progress", statusSinceNow}},
+		[][]any{transitionRow("repo-1", "W-1", "", "in_progress", statusSinceNow)},
 		workItemSubject("repo-1", "W-1"))
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +120,7 @@ func TestStatusSinceEntryAtTheClockIsZeroSecondsObserved(t *testing.T) {
 func TestStatusSinceMissingStatusHasNoEntry(t *testing.T) {
 	result, _, err := readStatusSince(t,
 		[][]any{{"W-1", "", "repo-1", "jira"}},
-		[][]any{{"repo-1", "W-1", "", statusSinceNow.Add(-time.Hour)}},
+		[][]any{transitionRow("repo-1", "W-1", "", "", statusSinceNow.Add(-time.Hour))},
 		workItemSubject("repo-1", "W-1"))
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +134,7 @@ func TestStatusSinceIsKeyedByRepositoryAndItem(t *testing.T) {
 	entered := statusSinceNow.Add(-time.Hour)
 	result, _, err := readStatusSince(t,
 		[][]any{{"W-1", "in_progress", "repo-1", "jira"}},
-		[][]any{{"repo-2", "W-1", "in_progress", entered}},
+		[][]any{transitionRow("repo-2", "W-1", "", "in_progress", entered)},
 		workItemSubject("repo-1", "W-1"))
 	if err != nil {
 		t.Fatal(err)
@@ -223,7 +228,7 @@ func TestStatusSinceInconsistentItemsAreCountedInAWarnWithoutIds(t *testing.T) {
 	t.Cleanup(func() { slog.SetDefault(previous) })
 	_, _, err := readStatusSince(t,
 		[][]any{{"SECRET-ID-1", "in_progress", "repo-1", "jira"}},
-		[][]any{{"repo-1", "SECRET-ID-1", "done", statusSinceNow.Add(-time.Hour)}},
+		[][]any{transitionRow("repo-1", "SECRET-ID-1", "", "done", statusSinceNow.Add(-time.Hour))},
 		workItemSubject("repo-1", "SECRET-ID-1"))
 	if err != nil {
 		t.Fatal(err)
