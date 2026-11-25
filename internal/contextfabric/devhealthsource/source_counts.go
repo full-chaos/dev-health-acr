@@ -102,10 +102,19 @@ func countKinds(ctx context.Context, client contextpacket.ClickHouseQueryClient,
 	return counts, nil
 }
 
+// kindCountSettings runs every total count statement at 2 threads, the count
+// the prod measure was taken at (CHAOS-14624: the ci run total peaked at 35.7 %
+// of the 192 MiB projector cap at 2 threads; every total ran at 2 in the first
+// measure); the client's StatementMaxThreads 4 was never measured on prod. It
+// is appended at the call, so the statement texts stay the ones the review edge
+// count shares. A statement SETTINGS overrides the profile: where the live
+// max_threads is below 2, this runs above it.
+const kindCountSettings = "\nSETTINGS max_threads = 2"
+
 // countKind closes its rows (deferred, so a panic in Scan still closes them)
 // before the next statement opens on the same connection.
 func countKind(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, st kindCountStatement) (uint64, error) {
-	rows, err := client.Query(ctx, st.sql, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
+	rows, err := client.Query(ctx, st.sql+kindCountSettings, []contextpacket.ClickHouseBinding{{Name: "org_id", Value: orgID}})
 	if err != nil {
 		return 0, fmt.Errorf("devhealthsource: count %s: %w", st.kind, err)
 	}
