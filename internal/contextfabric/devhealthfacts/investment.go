@@ -623,7 +623,7 @@ func (p *InvestmentProvider) readInvestmentWatermark(ctx context.Context, orgID 
 		}
 		return nil
 	})
-	return watermark, err
+	return watermark, fixedScopeRead(err)
 }
 
 // Closed reason set of an empty team window.

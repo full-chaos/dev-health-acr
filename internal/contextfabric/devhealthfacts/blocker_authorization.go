@@ -44,7 +44,7 @@ func (p *BlockersProvider) blockerAuthorization(ctx context.Context, principal s
 		ids = append(ids, id)
 		return nil
 	}, bindings...); err != nil {
-		return "", nil, err
+		return "", nil, fixedScopeRead(err)
 	}
 	if len(ids) > blockerAuthorizedIDsBound {
 		logBlockerAuthorization(ctx, "in_statement", len(ids), true)

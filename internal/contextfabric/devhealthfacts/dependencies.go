@@ -859,7 +859,7 @@ WHERE `+blockerRowsWhereSQL(authorized)+current+`
 		if scanErr := readers.QueryOrgScopedNamed(ctx, p.facts.client, "ReadTeamBlockerUnlinkedItems", statement, orgID, nil, func(row readers.RowScanner) error {
 			return row.Scan(&withoutLink)
 		}, authorizationBindings...); scanErr != nil {
-			return outcome, scanErr
+			return outcome, fixedScopeRead(scanErr)
 		}
 	}
 	tables := teamRollupTablesIncluded(len(teamIDs))
