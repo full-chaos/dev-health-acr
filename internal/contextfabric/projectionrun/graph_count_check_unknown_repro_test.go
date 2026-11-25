@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,10 +34,83 @@ type totalBackend struct {
 	ownedMarked map[string]bool
 	totals      map[contextfabric.SubjectKind]int64
 	totalCalls  *atomic.Int64
+	// markerErrs scripts, per source, the error of the nth marker lookup.
+	markerErrs map[string][]error
+	rec        *recorder
+}
+
+// recorder keeps the order of the reads the check makes.
+type recorder struct {
+	mu        sync.Mutex
+	events    []string
+	calls     map[string]int
+	deadlines map[string]time.Time
+}
+
+// deadline records the deadline of the context a read ran under.
+func (r *recorder) deadline(name string, ctx context.Context) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.deadlines == nil {
+		r.deadlines = map[string]time.Time{}
+	}
+	if d, ok := ctx.Deadline(); ok {
+		r.deadlines[name] = d
+	}
+}
+
+func (r *recorder) add(event string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, event)
+	if r.calls == nil {
+		r.calls = map[string]int{}
+	}
+	r.calls[event]++
+	return r.calls[event] - 1
+}
+
+func (r *recorder) index(event string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, e := range r.events {
+		if e == event {
+			return i
+		}
+	}
+	return -1
 }
 
 func (b totalBackend) OwnedCountsKnown(_ context.Context, _, source string) (bool, error) {
+	n := b.rec.add("marker:" + source)
+	if errs := b.markerErrs[source]; n < len(errs) && errs[n] != nil {
+		return false, errs[n]
+	}
 	return b.ownedMarked[source], nil
+}
+
+func (b totalBackend) CountKind(ctx context.Context, org string, kind contextfabric.SubjectKind) (int64, error) {
+	b.rec.add("owned:" + string(kind))
+	b.rec.deadline("owned", ctx)
+	return b.countingBackend.CountKind(ctx, org, kind)
+}
+
+// scriptedSource is a counting source whose nth count read returns errs[n].
+type scriptedSource struct {
+	*countingSource
+	name string
+	errs []error
+	rec  *recorder
+}
+
+func (s *scriptedSource) ProjectionSourceCounts(ctx context.Context, org string) (map[contextfabric.SubjectKind]int64, error) {
+	n := s.rec.add("probe:" + s.name)
+	s.rec.deadline("probe", ctx)
+	if n < len(s.errs) && s.errs[n] != nil {
+		s.countingSource.callsFor.Add(1)
+		return nil, s.errs[n]
+	}
+	return s.countingSource.ProjectionSourceCounts(ctx, org)
 }
 
 func (b totalBackend) CountKindTotal(_ context.Context, _ string, kind contextfabric.SubjectKind) (int64, error) {
@@ -62,6 +136,12 @@ type prodShape struct {
 	probeInterval time.Duration
 	tickAt        []time.Duration
 	chErr         error
+	// markedBy overrides which sources carry the owned marker (default: both when
+	// marked, none otherwise); markerErrs and chErrs script per-call errors.
+	markedBy      map[string]bool
+	markerErrs    map[string][]error
+	chErrs        []error
+	rec           *recorder
 	buffer        *bytes.Buffer
 	observer      *belowObserver
 	chSource      *countingSource
@@ -91,9 +171,16 @@ func (p *prodShape) run(t *testing.T) {
 		teams = disabledCounting{p.teamsSource}
 	}
 	p.totalCalls = &atomic.Int64{}
+	p.rec = &recorder{}
+	owned := map[string]bool{"source-ch": p.marked, "source-teams": p.marked}
+	if p.markedBy != nil {
+		owned = p.markedBy
+	}
 	backend := totalBackend{
 		countingBackend: &countingBackend{fakeBackend: newFakeBackend(), graph: map[contextfabric.SubjectKind]int64{kind: p.ownedCount}},
-		ownedMarked:     map[string]bool{"source-ch": p.marked, "source-teams": p.marked},
+		ownedMarked:     owned,
+		markerErrs:      p.markerErrs,
+		rec:             p.rec,
 		totals:          map[contextfabric.SubjectKind]int64{kind: p.totalCount},
 		totalCalls:      p.totalCalls,
 	}
@@ -104,7 +191,7 @@ func (p *prodShape) run(t *testing.T) {
 	coordinator, err := projectionrun.NewCoordinator(projectionrun.Config{
 		OrgIDs: []string{"org-a"},
 		Sources: []projectionrun.SourcePair{
-			{Name: "source-ch", Source: p.chSource},
+			{Name: "source-ch", Source: &scriptedSource{countingSource: p.chSource, name: "ch", errs: p.chErrs, rec: p.rec}},
 			{Name: "source-episodes", Source: fakeSourceNoVersionCapability{inner: &fakeSource{name: "source-episodes", dormant: true}}},
 			{Name: "source-teams", Source: teams},
 		},
