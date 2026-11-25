@@ -2,9 +2,12 @@ package devhealthsource
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
+
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthschema"
@@ -88,10 +91,11 @@ func countKinds(ctx context.Context, client contextpacket.ClickHouseQueryClient,
 		return nil, fmt.Errorf("devhealthsource: organization is required")
 	}
 	counts := make(map[contextfabric.SubjectKind]int64, len(statements))
+	ctx = contextpacket.WithStatementReader(ctx, countCheckSourceReader)
 	for _, st := range statements {
 		total, err := countKind(ctx, client, orgID, st)
 		if err != nil {
-			return nil, err
+			return nil, asSourceReadFailure(err)
 		}
 		counts[st.kind] = int64(total)
 	}
@@ -180,4 +184,45 @@ func countOneKindDays(ctx context.Context, client contextpacket.ClickHouseQueryC
 		return nil, fmt.Errorf("devhealthsource: count %s per day: %w", st.kind, err)
 	}
 	return days, nil
+}
+
+// countCheckSourceReader is the log_comment system.query_log carries on every
+// source count statement of the projector's graph count check.
+const countCheckSourceReader = "projector_count_check_source_count"
+
+// countReadFailure is a count read ClickHouse refused: it carries the exception
+// code and the limit class, so a caller can log them without the exception text.
+type countReadFailure struct {
+	cause error
+	code  int32
+}
+
+func (e *countReadFailure) Error() string         { return e.cause.Error() }
+func (e *countReadFailure) Unwrap() error         { return e.cause }
+func (e *countReadFailure) ClickHouseCode() int32 { return e.code }
+func (e *countReadFailure) LimitClass() string    { return clickHouseLimitClass(e.code) }
+
+func asSourceReadFailure(err error) error {
+	var exception *clickhousedriver.Exception
+	if errors.As(err, &exception) {
+		return &countReadFailure{cause: err, code: exception.Code}
+	}
+	return err
+}
+
+func clickHouseLimitClass(code int32) string {
+	switch code {
+	case 241:
+		return "memory"
+	case 159:
+		return "execution_time"
+	case 158:
+		return "rows_to_read"
+	case 307:
+		return "bytes_to_read"
+	case 396:
+		return "result_rows"
+	default:
+		return "other"
+	}
 }

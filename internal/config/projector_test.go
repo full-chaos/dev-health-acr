@@ -4,6 +4,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestLoadProjectorDefaults binds the same class-sweep fix as acr-api's
@@ -501,5 +502,28 @@ func TestWorkItemProjectMembershipDefaultsToOff(t *testing.T) {
 	}
 	if !on.WorkItemProjectMembership {
 		t.Fatal("ACR_CONTEXT_FABRIC_PROJECT_WORK_ITEM_PROJECT_MEMBERSHIP_ENABLED=true must turn it on")
+	}
+}
+
+func TestLoadProjectorUnknownProbeInterval(t *testing.T) {
+	base := map[string]string{
+		"ACR_POSTGRES_DSN":             "postgres://configured",
+		"ACR_POSTGRES_CONNECTION_KIND": "direct",
+	}
+	for name, tc := range map[string]struct {
+		env  string
+		want time.Duration
+	}{"default": {"", time.Hour}, "override": {"15m", 15 * time.Minute}, "negative disables": {"-1s", -time.Second}} {
+		env := map[string]string{}
+		for k, v := range base {
+			env[k] = v
+		}
+		if tc.env != "" {
+			env["ACR_CONTEXT_FABRIC_PROJECTION_UNKNOWN_PROBE_INTERVAL"] = tc.env
+		}
+		cfg, err := loadProjector(mapLookup(env), requiredStoresPostgresOnly)
+		if err != nil || cfg.UnknownProbeInterval != tc.want {
+			t.Fatalf("%s: UnknownProbeInterval = %v, %v; want %v", name, cfg.UnknownProbeInterval, err, tc.want)
+		}
 	}
 }
