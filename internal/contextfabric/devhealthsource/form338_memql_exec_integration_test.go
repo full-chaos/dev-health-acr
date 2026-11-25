@@ -1,6 +1,6 @@
 package devhealthsource_test
 
-// DO NOT MERGE. Throwaway exec proof of a prod read form (FORM-338-MEMQL-1: system.query_log, the read_rows and memory of the
+// DO NOT MERGE. Throwaway exec proof of a prod read form (FORM-338-MEMQL-2: system.query_log, the read_rows and memory of the
 // membership edge count statement per statement text). The three statements are the form's run-block cuts, byte for byte, with their
 // sha256 pinned. Synthetic rows only (two fake orgs). The ClickHouse server is shared with the package's other tests, so a server-wide
 // count is a lower bound here; the exact checks run a test copy with one more conjunct, query_id IN (the ids this test sent).
@@ -29,7 +29,7 @@ import (
 const (
 	memqlCutS0SHA256    = "6a12477c4201c1e6caf2232ba69a672b94f4469bacf224037aeee00b40c3ba57"
 	memqlCutStmtRSHA256 = "428761509478f35928b8994c06684d99c4675e3f09efe66091d6c5f040efd91f"
-	memqlCutStmt0SHA256 = "42ca20f5dbcedc8be34189f0a57eb4459e18457b684525bcb4b5e0800817684f"
+	memqlCutStmt0SHA256 = "397fa3a5f009319ef356be6e7796379418b259a31e80bb0ee230424b56f1dd76"
 )
 
 const memqlCutS0 = `SELECT partition, sum(rows) AS rows, sum(bytes_on_disk) AS bytes, count() AS active_parts, toString(min(min_date)) AS min_day
@@ -50,17 +50,17 @@ SELECT toString(today()) AS day,
   toString(now(), 'UTC') AS run_at,
   countIf(type = 'QueryFinish' AND qsha = 'f0b969e82275') AS new_finished,
   maxIf(read_rows, type = 'QueryFinish' AND qsha = 'f0b969e82275') AS new_max_read_rows,
-  toUInt64(avgIf(read_rows, type = 'QueryFinish' AND qsha = 'f0b969e82275')) AS new_avg_read_rows,
+  toUInt64(ifNotFinite(avgIf(read_rows, type = 'QueryFinish' AND qsha = 'f0b969e82275'), 0)) AS new_avg_read_rows,
   maxIf(memory_usage, type = 'QueryFinish' AND qsha = 'f0b969e82275') AS new_max_memory,
-  toUInt64(avgIf(memory_usage, type = 'QueryFinish' AND qsha = 'f0b969e82275')) AS new_avg_memory,
+  toUInt64(ifNotFinite(avgIf(memory_usage, type = 'QueryFinish' AND qsha = 'f0b969e82275'), 0)) AS new_avg_memory,
   countIf(type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing') AND qsha = 'f0b969e82275') AS new_failed,
   countIf(type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing') AND exception_code = 241 AND qsha = 'f0b969e82275') AS new_failed_241,
   toString(minIf(event_time, qsha = 'f0b969e82275'), 'UTC') AS new_first,
   countIf(type = 'QueryFinish' AND qsha = 'e9a488c626c2') AS old_finished,
   maxIf(read_rows, type = 'QueryFinish' AND qsha = 'e9a488c626c2') AS old_max_read_rows,
-  toUInt64(avgIf(read_rows, type = 'QueryFinish' AND qsha = 'e9a488c626c2')) AS old_avg_read_rows,
+  toUInt64(ifNotFinite(avgIf(read_rows, type = 'QueryFinish' AND qsha = 'e9a488c626c2'), 0)) AS old_avg_read_rows,
   maxIf(memory_usage, type = 'QueryFinish' AND qsha = 'e9a488c626c2') AS old_max_memory,
-  toUInt64(avgIf(memory_usage, type = 'QueryFinish' AND qsha = 'e9a488c626c2')) AS old_avg_memory,
+  toUInt64(ifNotFinite(avgIf(memory_usage, type = 'QueryFinish' AND qsha = 'e9a488c626c2'), 0)) AS old_avg_memory,
   countIf(type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing') AND qsha = 'e9a488c626c2') AS old_failed,
   toString(maxIf(event_time, qsha = 'e9a488c626c2'), 'UTC') AS old_last,
   countIf(type = 'QueryFinish' AND qsha IN ('ff310d988be6', '7cf7c5fc685f')) AS ingest_off_finished,
@@ -139,7 +139,7 @@ type memqlWant struct {
 func (w memqlWant) cols() map[string]string {
 	avg := func(sum float64, n int) string {
 		if n == 0 {
-			return "nan"
+			return "0"
 		}
 		return fmt.Sprint(uint64(math.Trunc(sum / float64(n))))
 	}
@@ -174,7 +174,7 @@ func TestForm338MemQLExecutesOnTheEdgeCountStatements(t *testing.T) {
 	caps := []string{"> 200000000\n", "> 100000000000\n", "> 9000000,"}
 	headLit := "startsWith(query, '" + memqlHead + "')"
 	for lit, n := range map[string]int{caps[0]: 1, caps[1]: 1, caps[2]: 1, "'STOP-COST-GATE'": 1, "cost_gate = 0": 1, headLit: 1,
-		"FROM system.query_log": 2, "now() - INTERVAL 24 HOUR": 2, "'" + memqlNew + "'": 10, "'" + memqlOld + "'": 9, "'" + memqlNewF + "'": 3, "'" + memqlOldF + "'": 3} {
+		"FROM system.query_log": 2, "now() - INTERVAL 24 HOUR": 2, "'" + memqlNew + "'": 10, "'" + memqlOld + "'": 9, "'" + memqlNewF + "'": 3, "'" + memqlOldF + "'": 3, "toUInt64(ifNotFinite(avgIf(": 4, "), 0)) AS ": 4} {
 		if got := strings.Count(memqlCutStmt0, lit); got != n {
 			t.Fatalf("stmt0: %q found %d times, want %d", lit, got, n)
 		}
@@ -405,10 +405,6 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 	check := func(label string, got map[string]string, w memqlWant) {
 		t.Helper()
 		for k, v := range w.cols() {
-			if v == "nan" {
-				t.Logf("INFO %s: %s = %s with 0 matched rows (toUInt64 of an empty avgIf)", label, k, got[k])
-				continue
-			}
 			if got[k] != v {
 				t.Errorf("%s: %s = %s, want %s (Go recompute)", label, k, got[k], v)
 			}
@@ -569,6 +565,15 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 	}
 	if got := one("MUTANT old sha literal", only(strings.ReplaceAll(memqlCutStmt0, "'"+memqlOld+"'", "'e9a488c626c3'"), "oldA", "oldB")); got["old_finished"] != "0" || got["other_finished"] != "2" {
 		t.Errorf("MUTANT old sha: old_finished %s other_finished %s, want 0 / 2", got["old_finished"], got["other_finished"])
+	}
+	// 0-row avg cell: a sha literal no statement has (mutant) leaves both avg columns of that sha over 0 matched rows: WANT 0, not nan.
+	for _, c := range []struct{ lit, ids, prefix string }{{memqlNew, "newA newB", "new"}, {memqlOld, "oldA oldB", "old"}} {
+		got := one("ZERO-ROW avg "+c.prefix, only(strings.ReplaceAll(memqlCutStmt0, "'"+c.lit+"'", "'000000000000'"), strings.Fields(c.ids)...))
+		for _, k := range []string{c.prefix + "_avg_read_rows", c.prefix + "_avg_memory", c.prefix + "_finished", c.prefix + "_max_read_rows", c.prefix + "_max_memory"} {
+			if got[k] != "0" {
+				t.Errorf("ZERO-ROW avg %s: %s = %s, want 0", c.prefix, k, got[k])
+			}
+		}
 	}
 	headCut := strings.Replace(memqlCutStmt0, "AS edge_count')", "AS edge_counx')", 1)
 	if headCut == memqlCutStmt0 {
