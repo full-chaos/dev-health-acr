@@ -2,7 +2,6 @@ package devhealthfacts_test
 
 import (
 	"context"
-	"math"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -23,8 +22,9 @@ const projectMixOneChunk = uint64(1) << 40
 // prod-shaped table (stale versions, a superseded unit, units without a repo,
 // units placed in several projects) the read in chunks of 997 raw rows equals
 // the read in one chunk. Counts and the native sums are equal exactly; the
-// roll-up bugfix sum adds per-chunk partial sums, so it is equal within the
-// parity comparator's 1e-12. Also with a window that holds a quarter of the
+// roll-up bugfix sum adds per-chunk partial sums, and the roll-up theme sums are
+// one server float sum whose thread merge order changes per run, so both are
+// equal within the parity comparator's 1e-12. Also with a window that holds a quarter of the
 // units, spread over the key range, so every chunk's range holds rows the pins
 // leave out.
 func TestProjectMixChunkedReadEqualsTheOneChunkReadAgainstRealClickHouse(t *testing.T) {
@@ -73,13 +73,8 @@ WHERE org_id = ? AND cityHash64(work_unit_id) % 4 != 0`, orgID); err != nil {
 			if len(chunkedRollup) != len(oneRollup) {
 				t.Fatalf("roll-up: %d rows in chunks, %d in one chunk", len(chunkedRollup), len(oneRollup))
 			}
-			for i := range oneRollup {
-				w, g := oneRollup[i], chunkedRollup[i]
-				near := math.Abs(w.Bugfix-g.Bugfix) <= 1e-12*math.Max(1, math.Max(math.Abs(w.Bugfix), math.Abs(g.Bugfix)))
-				w.Bugfix, g.Bugfix = 0, 0
-				if w != g || !near {
-					t.Fatalf("roll-up row %d: one chunk %+v, chunks %+v (bugfix %v vs %v)", i, oneRollup[i], chunkedRollup[i], oneRollup[i].Bugfix, chunkedRollup[i].Bugfix)
-				}
+			if err := rollupRowsDiffer(oneRollup, chunkedRollup); err != nil {
+				t.Fatalf("roll-up, one chunk vs chunks: %v", err)
 			}
 			oneNative := runNativePhased(t, whole, query, orgID, ids, window, 201)
 			if len(oneNative) == 0 {
