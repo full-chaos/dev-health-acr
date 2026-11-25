@@ -219,6 +219,12 @@ func TestCHAOS10430StatementSHAs(t *testing.T) {
 // prune, as statement text.
 var accessPredicate = regexp.MustCompile(`[a-z]+\.org_id = \{org_id:String\}|[a-z]+\.repo_id IN \(SELECT toUUIDOrZero\(id\) FROM \(SELECT arrayJoin\(\{reach_repo_ids:Array\(String\)\}\) AS id\)\)`)
 
+// aliasCount counts predicate in statement as a whole clause: its alias starts
+// at a word boundary, so pr.org_id never counts as r.org_id.
+func aliasCount(statement, predicate string) int {
+	return len(regexp.MustCompile(`\b`+regexp.QuoteMeta(predicate)).FindAllStringIndex(statement, -1))
+}
+
 // Every org_id predicate and reach prune a moved reader applied at main
 // outside the link rows is in its statement now, byte for byte and as often;
 // the link rows' own predicates are in the link set statement, whose link rows
@@ -255,11 +261,11 @@ func TestCHAOS10430TheMovedReadersKeepTheirAccessPredicates(t *testing.T) {
 		tip := client.statements[i]
 		outside := strings.Replace(c.main, linkRows, "", 1)
 		for _, predicate := range accessPredicate.FindAllString(outside, -1) {
-			if got, want := strings.Count(tip, predicate), strings.Count(outside, predicate); got < want {
+			if got, want := aliasCount(tip, predicate), aliasCount(outside, predicate); got < want {
 				t.Errorf("WANT %s keeps %q %d times, got %d", c.reader, predicate, want, got)
 			}
 		}
-		if !strings.Contains(tip, c.own) {
+		if aliasCount(tip, c.own) == 0 {
 			t.Errorf("WANT %s names %q on the pull requests it joins", c.reader, c.own)
 		}
 		t.Logf("%s main (outside the link rows) %q; tip %q", c.reader, accessPredicate.FindAllString(outside, -1), accessPredicate.FindAllString(tip, -1))

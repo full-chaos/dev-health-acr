@@ -316,9 +316,9 @@ type TeamLinkedPullRequestForTest struct {
 
 // TeamLinkedPullRequestReadsForTest runs the three team pull request reads over
 // a sent set, as orgID, with reach as the project-reached repositories, and
-// returns the rows each one returned: reached repositories, window counts and
-// state counts.
-func TeamLinkedPullRequestReadsForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, sent []TeamLinkedPullRequestForTest, reach []string) (reached, counts, states int, err error) {
+// returns the rows each one returned: the reached repositories' served names,
+// window counts and state counts.
+func TeamLinkedPullRequestReadsForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, sent []TeamLinkedPullRequestForTest, reach []string) (reached []string, counts, states int, err error) {
 	rows := make([]linkedSetRow, 0, len(sent))
 	for _, s := range sent {
 		rows = append(rows, linkedSetRow{team: s.Team, repo: s.Repo, number: s.Number, rank: s.Rank})
@@ -326,7 +326,7 @@ func TeamLinkedPullRequestReadsForTest(ctx context.Context, client contextpacket
 	set := linkedPullRequestsOf(rows)
 	byTeam, err := teamProjectReachedRepositoriesOf(ctx, client, orgID, teamIDs, set)
 	if err != nil {
-		return 0, 0, 0, err
+		return nil, 0, 0, err
 	}
 	reachedOnly := map[string][]teamReachedRepo{}
 	for _, teamID := range teamIDs {
@@ -336,13 +336,18 @@ func TeamLinkedPullRequestReadsForTest(ctx context.Context, client contextpacket
 	}
 	window, err := teamLinkedPullRequestCounts(ctx, client, orgID, teamIDs, set, reachedOnly, resolveRollupWindow(factTimeBound{}, nil, clock()))
 	if err != nil {
-		return 0, 0, 0, err
+		return nil, 0, 0, err
 	}
 	byState, err := teamLinkedPullRequestStateCounts(ctx, client, orgID, teamIDs, set, reachedOnly, factTimeBound{})
 	if err != nil {
-		return 0, 0, 0, err
+		return nil, 0, 0, err
 	}
-	return reachedRepositoryCount(byTeam), len(window), len(byState), nil
+	for _, teamID := range teamIDs {
+		for _, repo := range byTeam[teamID] {
+			reached = append(reached, repo.name)
+		}
+	}
+	return reached, len(window), len(byState), nil
 }
 
 // TeamLinkSetUnchunkedForTest runs the link set statement once over every

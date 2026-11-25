@@ -2,6 +2,7 @@ package devhealthfacts_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
@@ -37,27 +38,36 @@ func TestCHAOS10430SentLinkedPullRequestsCountOnlyInTheCallerOrganizationOnRealC
 	}
 	pr(sentSetCallerOrg, "repo-caller", 8)
 	pr(sentSetOtherOrg, "repo-other", 7)
+	// The other organization holds a repos row under the caller's repository
+	// id: the reached read names a repository only from the caller's rows.
+	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?,?,?,?,?)`,
+		repoUUID("repo-caller"), sentSetOtherOrg, "acme/other-org-name", "github", at); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
 	const team = "team-caller"
 	callerRow := devhealthfacts.TeamLinkedPullRequestForTest{Team: team, Repo: repoUUID("repo-caller"), Number: "8", Rank: 3}
 	otherRow := devhealthfacts.TeamLinkedPullRequestForTest{Team: team, Repo: repoUUID("repo-other"), Number: "7", Rank: 3}
 	for _, c := range []struct {
-		name                  string
-		sent                  []devhealthfacts.TeamLinkedPullRequestForTest
-		reach                 []string
-		reached, counts, sets int
+		name         string
+		sent         []devhealthfacts.TeamLinkedPullRequestForTest
+		reach        []string
+		reached      []string
+		counts, sets int
 	}{
-		{"control_own_pull_request_counts", []devhealthfacts.TeamLinkedPullRequestForTest{callerRow}, []string{repoUUID("repo-caller")}, 1, 1, 1},
-		{"cross_org_pull_request_counts_nowhere", []devhealthfacts.TeamLinkedPullRequestForTest{otherRow}, []string{repoUUID("repo-other")}, 0, 0, 0},
-		{"outside_reach_pull_request_not_counted", []devhealthfacts.TeamLinkedPullRequestForTest{callerRow}, []string{repoUUID("repo-other")}, 1, 0, 0},
-		{"unrequested_team_row_counts_nowhere", []devhealthfacts.TeamLinkedPullRequestForTest{{Team: "team-unrequested", Repo: repoUUID("repo-caller"), Number: "8", Rank: 3}}, []string{repoUUID("repo-caller")}, 0, 0, 0},
+		{"control_own_pull_request_counts", []devhealthfacts.TeamLinkedPullRequestForTest{callerRow}, []string{repoUUID("repo-caller")}, []string{""}, 1, 1},
+		{"cross_org_pull_request_counts_nowhere", []devhealthfacts.TeamLinkedPullRequestForTest{otherRow}, []string{repoUUID("repo-other")}, nil, 0, 0},
+		{"outside_reach_pull_request_not_counted", []devhealthfacts.TeamLinkedPullRequestForTest{callerRow}, []string{repoUUID("repo-other")}, []string{""}, 0, 0},
+		{"unrequested_team_row_counts_nowhere", []devhealthfacts.TeamLinkedPullRequestForTest{{Team: "team-unrequested", Repo: repoUUID("repo-caller"), Number: "8", Rank: 3}}, []string{repoUUID("repo-caller")}, nil, 0, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			reached, counts, states, err := devhealthfacts.TeamLinkedPullRequestReadsForTest(ctx, query, sentSetCallerOrg, []string{team}, c.sent, c.reach)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if reached != c.reached || counts != c.counts || states != c.sets {
-				t.Errorf("WANT reached %d, window counts %d, state counts %d rows; got %d %d %d", c.reached, c.counts, c.sets, reached, counts, states)
+			// A reached repository's name is "" here: only the other
+			// organization holds a repos row under its id.
+			if !slices.Equal(reached, c.reached) || counts != c.counts || states != c.sets {
+				t.Errorf("WANT reached names %q, window counts %d, state counts %d rows; got %q %d %d", c.reached, c.counts, c.sets, reached, counts, states)
 			}
 		})
 	}
