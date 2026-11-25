@@ -56,3 +56,13 @@ func Form339CandidatesContextForTest(ctx context.Context, client contextpacket.C
 	}
 	return clickhousedriver.Context(ctx, clickhousedriver.WithExternalTable(table)), len(ids), nil
 }
+
+// Form339LinkedSetContextForTest returns ctx carrying sent as the external table _team_project_linked_pull_requests, through the same
+// withTeamLinkedPullRequests the moved readers use (FORM-339-LINKQL-4 leg 3, CELL2 / CONTROL).
+func Form339LinkedSetContextForTest(ctx context.Context, sent []TeamLinkedPullRequestForTest) (context.Context, error) {
+	rows := make([]linkedSetRow, 0, len(sent))
+	for _, s := range sent {
+		rows = append(rows, linkedSetRow{team: s.Team, repo: s.Repo, number: s.Number, rank: s.Rank})
+	}
+	return withTeamLinkedPullRequests(ctx, linkedPullRequestsOf(rows))
+}

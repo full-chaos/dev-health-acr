@@ -1,6 +1,6 @@
 package devhealthfacts_test
 
-// DO NOT MERGE. Throwaway exec proof of a prod read form (FORM-339-LINKQL-2: system.query_log, the acr-api team link readers of the
+// DO NOT MERGE. Throwaway exec proof of a prod read form (FORM-339-LINKQL-4: system.query_log, the acr-api team link readers of the
 // CHAOS-10430 roll, NEW (acr 7521ec7a) vs OLD (acr a47904e8) text, by reader name + head anchor + writer marker). The five statements are
 // the form's run-block cuts with the window tokens and the org prefix swapped to synthetic values; each swapped copy's sha256 is pinned.
 // Synthetic rows only (two fake orgs). A dedicated ClickHouse container: query_log holds this test's statements only. Every function here
@@ -28,14 +28,16 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/statementthreads"
 )
 
+const linkqlColsStmt0 = 37
+const linkqlColsStmt0h = 37
 const linkqlCutS0 = `SELECT partition, sum(rows) AS rows, sum(bytes_on_disk) AS bytes, count() AS active_parts, toString(min(min_date)) AS min_day
 FROM system.parts WHERE active AND database = 'system' AND table = 'query_log' AND max_date >= toDate('2026-01-01')
 GROUP BY partition ORDER BY partition;
 `
 const linkqlCutS0SHA256 = "01910358bc2a35d70049cba687457a90f3ba364b3492cb26f144829ea9ebe18f"
-const linkqlCutstmtR = `SELECT count() AS replicas, toString(version()) AS server_version FROM clusterAllReplicas('default', system.one);
+const linkqlCutstmtR = `SELECT count() AS replicas, toString(version()) AS server_version, toUInt64OrZero(extract((SELECT value FROM system.settings WHERE name = 'max_threads'), '[0-9]+')) AS server_max_threads FROM clusterAllReplicas('default', system.one);
 `
-const linkqlCutstmtRSHA256 = "428761509478f35928b8994c06684d99c4675e3f09efe66091d6c5f040efd91f"
+const linkqlCutstmtRSHA256 = "303a281ba7fde24dc8850cd1be6a3fe29f44e6acf878b95841a037d918c8cec2"
 const linkqlCutORG1 = `WITH (SELECT throwIf(
   (SELECT sum(rows) FROM system.parts WHERE active AND database = currentDatabase() AND table = 'repos') > 5000000
   OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = currentDatabase() AND table = 'repos') > 5000000000,
@@ -64,7 +66,6 @@ SELECT toString(today()) AS day,
   maxIf(memory_usage, type = 'QueryFinish' AND r_reach AND m_new AND NOT m_old) AS reach_new_max_memory,
   maxIf(read_rows, type = 'QueryFinish' AND r_reach AND m_new AND NOT m_old) AS reach_new_max_read_rows,
   maxIf(read_bytes, type = 'QueryFinish' AND r_reach AND m_new AND NOT m_old) AS reach_new_max_read_bytes,
-  maxIf(ProfileEvents['NetworkReceiveBytes'], type = 'QueryFinish' AND r_reach AND m_new AND NOT m_old) AS reach_new_max_recv_bytes,
   maxIf(toUInt64OrZero(Settings['max_threads']), type = 'QueryFinish' AND r_reach AND m_new AND NOT m_old) AS reach_new_max_threads,
   countIf(type = 'QueryFinish' AND r_reach AND m_old AND NOT m_new) AS reach_old_finished,
   countIf(type = 'QueryFinish' AND r_counts AND m_new AND NOT m_old) AS counts_new_finished,
@@ -73,7 +74,6 @@ SELECT toString(today()) AS day,
   maxIf(memory_usage, type = 'QueryFinish' AND r_counts AND m_new AND NOT m_old) AS counts_new_max_memory,
   maxIf(read_rows, type = 'QueryFinish' AND r_counts AND m_new AND NOT m_old) AS counts_new_max_read_rows,
   maxIf(read_bytes, type = 'QueryFinish' AND r_counts AND m_new AND NOT m_old) AS counts_new_max_read_bytes,
-  maxIf(ProfileEvents['NetworkReceiveBytes'], type = 'QueryFinish' AND r_counts AND m_new AND NOT m_old) AS counts_new_max_recv_bytes,
   maxIf(toUInt64OrZero(Settings['max_threads']), type = 'QueryFinish' AND r_counts AND m_new AND NOT m_old) AS counts_new_max_threads,
   countIf(type = 'QueryFinish' AND r_counts AND m_old AND NOT m_new) AS counts_old_finished,
   countIf(type = 'QueryFinish' AND r_states AND m_new AND NOT m_old) AS states_new_finished,
@@ -82,7 +82,6 @@ SELECT toString(today()) AS day,
   maxIf(memory_usage, type = 'QueryFinish' AND r_states AND m_new AND NOT m_old) AS states_new_max_memory,
   maxIf(read_rows, type = 'QueryFinish' AND r_states AND m_new AND NOT m_old) AS states_new_max_read_rows,
   maxIf(read_bytes, type = 'QueryFinish' AND r_states AND m_new AND NOT m_old) AS states_new_max_read_bytes,
-  maxIf(ProfileEvents['NetworkReceiveBytes'], type = 'QueryFinish' AND r_states AND m_new AND NOT m_old) AS states_new_max_recv_bytes,
   maxIf(toUInt64OrZero(Settings['max_threads']), type = 'QueryFinish' AND r_states AND m_new AND NOT m_old) AS states_new_max_threads,
   countIf(type = 'QueryFinish' AND r_states AND m_old AND NOT m_new) AS states_old_finished,
   countIf(type = 'QueryFinish' AND r_cand) AS cand_finished,
@@ -102,7 +101,7 @@ WHERE event_date >= toDate('2026-01-01') AND event_date <= toDate('2099-01-01') 
   AND (r_reach OR r_counts OR r_states OR r_cand OR r_lset)
   AND cost_gate = 0;
 `
-const linkqlCutstmt0SHA256 = "9454dc2b9149689582ca4d01460fac47925f672745bd1dbc70e4667fc25c8c76"
+const linkqlCutstmt0SHA256 = "afbda18c92bd4a7404ee8397b2088b38a8353905590463c36dacccec4c3bd2a4"
 const linkqlCutstmt0h = `WITH (SELECT throwIf(
   (SELECT sum(rows) FROM system.parts WHERE active AND database = 'system' AND table = 'query_log' AND max_date >= toDate('2026-01-01') AND min_date <= toDate('2099-01-01')) > 200000000
   OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = 'system' AND table = 'query_log' AND max_date >= toDate('2026-01-01') AND min_date <= toDate('2099-01-01')) > 100000000000
@@ -124,7 +123,6 @@ SELECT toString(today()) AS day,
   maxIf(memory_usage, type = 'QueryFinish' AND r_reach AND m_old AND NOT m_new) AS reach_old_max_memory,
   maxIf(read_rows, type = 'QueryFinish' AND r_reach AND m_old AND NOT m_new) AS reach_old_max_read_rows,
   maxIf(read_bytes, type = 'QueryFinish' AND r_reach AND m_old AND NOT m_new) AS reach_old_max_read_bytes,
-  maxIf(ProfileEvents['NetworkReceiveBytes'], type = 'QueryFinish' AND r_reach AND m_old AND NOT m_new) AS reach_old_max_recv_bytes,
   maxIf(toUInt64OrZero(Settings['max_threads']), type = 'QueryFinish' AND r_reach AND m_old AND NOT m_new) AS reach_old_max_threads,
   countIf(type = 'QueryFinish' AND r_reach AND m_new AND NOT m_old) AS reach_new_finished,
   countIf(type = 'QueryFinish' AND r_counts AND m_old AND NOT m_new) AS counts_old_finished,
@@ -133,7 +131,6 @@ SELECT toString(today()) AS day,
   maxIf(memory_usage, type = 'QueryFinish' AND r_counts AND m_old AND NOT m_new) AS counts_old_max_memory,
   maxIf(read_rows, type = 'QueryFinish' AND r_counts AND m_old AND NOT m_new) AS counts_old_max_read_rows,
   maxIf(read_bytes, type = 'QueryFinish' AND r_counts AND m_old AND NOT m_new) AS counts_old_max_read_bytes,
-  maxIf(ProfileEvents['NetworkReceiveBytes'], type = 'QueryFinish' AND r_counts AND m_old AND NOT m_new) AS counts_old_max_recv_bytes,
   maxIf(toUInt64OrZero(Settings['max_threads']), type = 'QueryFinish' AND r_counts AND m_old AND NOT m_new) AS counts_old_max_threads,
   countIf(type = 'QueryFinish' AND r_counts AND m_new AND NOT m_old) AS counts_new_finished,
   countIf(type = 'QueryFinish' AND r_states AND m_old AND NOT m_new) AS states_old_finished,
@@ -142,7 +139,6 @@ SELECT toString(today()) AS day,
   maxIf(memory_usage, type = 'QueryFinish' AND r_states AND m_old AND NOT m_new) AS states_old_max_memory,
   maxIf(read_rows, type = 'QueryFinish' AND r_states AND m_old AND NOT m_new) AS states_old_max_read_rows,
   maxIf(read_bytes, type = 'QueryFinish' AND r_states AND m_old AND NOT m_new) AS states_old_max_read_bytes,
-  maxIf(ProfileEvents['NetworkReceiveBytes'], type = 'QueryFinish' AND r_states AND m_old AND NOT m_new) AS states_old_max_recv_bytes,
   maxIf(toUInt64OrZero(Settings['max_threads']), type = 'QueryFinish' AND r_states AND m_old AND NOT m_new) AS states_old_max_threads,
   countIf(type = 'QueryFinish' AND r_states AND m_new AND NOT m_old) AS states_new_finished,
   countIf(type = 'QueryFinish' AND r_cand) AS cand_finished,
@@ -162,7 +158,7 @@ WHERE event_date >= toDate('2026-01-01') AND event_date <= toDate('2099-01-01') 
   AND (r_reach OR r_counts OR r_states OR r_cand OR r_lset)
   AND cost_gate = 0;
 `
-const linkqlCutstmt0hSHA256 = "6da6896d9d35e52bd39e9ff7ae4e1ac9fa13036e815a8ad5d2ba5913d8997548"
+const linkqlCutstmt0hSHA256 = "4c0c5f0552f4b1af49f67fb20894f5c49400e074ede35f55ded630eafc7920ca"
 const linkqlPaststmt0 = `WITH (SELECT throwIf(
   (SELECT sum(rows) FROM system.parts WHERE active AND database = 'system' AND table = 'query_log' AND max_date >= toDate('2025-01-01') AND min_date <= toDate('2025-01-02')) > 200000000
   OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = 'system' AND table = 'query_log' AND max_date >= toDate('2025-01-01') AND min_date <= toDate('2025-01-02')) > 100000000000
@@ -184,7 +180,6 @@ SELECT toString(today()) AS day,
   maxIf(memory_usage, type = 'QueryFinish' AND r_reach AND m_new AND NOT m_old) AS reach_new_max_memory,
   maxIf(read_rows, type = 'QueryFinish' AND r_reach AND m_new AND NOT m_old) AS reach_new_max_read_rows,
   maxIf(read_bytes, type = 'QueryFinish' AND r_reach AND m_new AND NOT m_old) AS reach_new_max_read_bytes,
-  maxIf(ProfileEvents['NetworkReceiveBytes'], type = 'QueryFinish' AND r_reach AND m_new AND NOT m_old) AS reach_new_max_recv_bytes,
   maxIf(toUInt64OrZero(Settings['max_threads']), type = 'QueryFinish' AND r_reach AND m_new AND NOT m_old) AS reach_new_max_threads,
   countIf(type = 'QueryFinish' AND r_reach AND m_old AND NOT m_new) AS reach_old_finished,
   countIf(type = 'QueryFinish' AND r_counts AND m_new AND NOT m_old) AS counts_new_finished,
@@ -193,7 +188,6 @@ SELECT toString(today()) AS day,
   maxIf(memory_usage, type = 'QueryFinish' AND r_counts AND m_new AND NOT m_old) AS counts_new_max_memory,
   maxIf(read_rows, type = 'QueryFinish' AND r_counts AND m_new AND NOT m_old) AS counts_new_max_read_rows,
   maxIf(read_bytes, type = 'QueryFinish' AND r_counts AND m_new AND NOT m_old) AS counts_new_max_read_bytes,
-  maxIf(ProfileEvents['NetworkReceiveBytes'], type = 'QueryFinish' AND r_counts AND m_new AND NOT m_old) AS counts_new_max_recv_bytes,
   maxIf(toUInt64OrZero(Settings['max_threads']), type = 'QueryFinish' AND r_counts AND m_new AND NOT m_old) AS counts_new_max_threads,
   countIf(type = 'QueryFinish' AND r_counts AND m_old AND NOT m_new) AS counts_old_finished,
   countIf(type = 'QueryFinish' AND r_states AND m_new AND NOT m_old) AS states_new_finished,
@@ -202,7 +196,6 @@ SELECT toString(today()) AS day,
   maxIf(memory_usage, type = 'QueryFinish' AND r_states AND m_new AND NOT m_old) AS states_new_max_memory,
   maxIf(read_rows, type = 'QueryFinish' AND r_states AND m_new AND NOT m_old) AS states_new_max_read_rows,
   maxIf(read_bytes, type = 'QueryFinish' AND r_states AND m_new AND NOT m_old) AS states_new_max_read_bytes,
-  maxIf(ProfileEvents['NetworkReceiveBytes'], type = 'QueryFinish' AND r_states AND m_new AND NOT m_old) AS states_new_max_recv_bytes,
   maxIf(toUInt64OrZero(Settings['max_threads']), type = 'QueryFinish' AND r_states AND m_new AND NOT m_old) AS states_new_max_threads,
   countIf(type = 'QueryFinish' AND r_states AND m_old AND NOT m_new) AS states_old_finished,
   countIf(type = 'QueryFinish' AND r_cand) AS cand_finished,
@@ -222,7 +215,7 @@ WHERE event_date >= toDate('2025-01-01') AND event_date <= toDate('2025-01-02') 
   AND (r_reach OR r_counts OR r_states OR r_cand OR r_lset)
   AND cost_gate = 0;
 `
-const linkqlPaststmt0SHA256 = "12236be48b4751915a91f8df5dfdb25c001633b792de6a1fd0ba7e85ba0f50b6"
+const linkqlPaststmt0SHA256 = "87412174bc1cc8e8d621a1f65fb10cb8369cc833b86ca5c31386ed4a2909154a"
 const linkqlPaststmt0h = `WITH (SELECT throwIf(
   (SELECT sum(rows) FROM system.parts WHERE active AND database = 'system' AND table = 'query_log' AND max_date >= toDate('2025-01-01') AND min_date <= toDate('2025-01-02')) > 200000000
   OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = 'system' AND table = 'query_log' AND max_date >= toDate('2025-01-01') AND min_date <= toDate('2025-01-02')) > 100000000000
@@ -244,7 +237,6 @@ SELECT toString(today()) AS day,
   maxIf(memory_usage, type = 'QueryFinish' AND r_reach AND m_old AND NOT m_new) AS reach_old_max_memory,
   maxIf(read_rows, type = 'QueryFinish' AND r_reach AND m_old AND NOT m_new) AS reach_old_max_read_rows,
   maxIf(read_bytes, type = 'QueryFinish' AND r_reach AND m_old AND NOT m_new) AS reach_old_max_read_bytes,
-  maxIf(ProfileEvents['NetworkReceiveBytes'], type = 'QueryFinish' AND r_reach AND m_old AND NOT m_new) AS reach_old_max_recv_bytes,
   maxIf(toUInt64OrZero(Settings['max_threads']), type = 'QueryFinish' AND r_reach AND m_old AND NOT m_new) AS reach_old_max_threads,
   countIf(type = 'QueryFinish' AND r_reach AND m_new AND NOT m_old) AS reach_new_finished,
   countIf(type = 'QueryFinish' AND r_counts AND m_old AND NOT m_new) AS counts_old_finished,
@@ -253,7 +245,6 @@ SELECT toString(today()) AS day,
   maxIf(memory_usage, type = 'QueryFinish' AND r_counts AND m_old AND NOT m_new) AS counts_old_max_memory,
   maxIf(read_rows, type = 'QueryFinish' AND r_counts AND m_old AND NOT m_new) AS counts_old_max_read_rows,
   maxIf(read_bytes, type = 'QueryFinish' AND r_counts AND m_old AND NOT m_new) AS counts_old_max_read_bytes,
-  maxIf(ProfileEvents['NetworkReceiveBytes'], type = 'QueryFinish' AND r_counts AND m_old AND NOT m_new) AS counts_old_max_recv_bytes,
   maxIf(toUInt64OrZero(Settings['max_threads']), type = 'QueryFinish' AND r_counts AND m_old AND NOT m_new) AS counts_old_max_threads,
   countIf(type = 'QueryFinish' AND r_counts AND m_new AND NOT m_old) AS counts_new_finished,
   countIf(type = 'QueryFinish' AND r_states AND m_old AND NOT m_new) AS states_old_finished,
@@ -262,7 +253,6 @@ SELECT toString(today()) AS day,
   maxIf(memory_usage, type = 'QueryFinish' AND r_states AND m_old AND NOT m_new) AS states_old_max_memory,
   maxIf(read_rows, type = 'QueryFinish' AND r_states AND m_old AND NOT m_new) AS states_old_max_read_rows,
   maxIf(read_bytes, type = 'QueryFinish' AND r_states AND m_old AND NOT m_new) AS states_old_max_read_bytes,
-  maxIf(ProfileEvents['NetworkReceiveBytes'], type = 'QueryFinish' AND r_states AND m_old AND NOT m_new) AS states_old_max_recv_bytes,
   maxIf(toUInt64OrZero(Settings['max_threads']), type = 'QueryFinish' AND r_states AND m_old AND NOT m_new) AS states_old_max_threads,
   countIf(type = 'QueryFinish' AND r_states AND m_new AND NOT m_old) AS states_new_finished,
   countIf(type = 'QueryFinish' AND r_cand) AS cand_finished,
@@ -282,7 +272,7 @@ WHERE event_date >= toDate('2025-01-01') AND event_date <= toDate('2025-01-02') 
   AND (r_reach OR r_counts OR r_states OR r_cand OR r_lset)
   AND cost_gate = 0;
 `
-const linkqlPaststmt0hSHA256 = "ca4a46e010c860dbcd4da41238b3fbdf443519fe3189e273d8ccb006e9530af6"
+const linkqlPaststmt0hSHA256 = "0cd06cb5fe9ec51571a2af2fbc96a28a16a66edfd0ceab307e6d788b71e6c36b"
 
 const (
 	linkqlOrgAPrefix = "33900000"
@@ -292,6 +282,8 @@ const (
 	linkqlMarkNew    = "_team_project_linked_pull_requests"
 	linkqlMarkOld    = "team_project_ownership"
 	linkqlAPICap80   = 214748364
+	// linkqlCellThreads is the thread count CELL1 / CELL2 send (not the StatementMaxThreads default, so query_log lists it).
+	linkqlCellThreads = 3
 )
 
 // The five readers of the form: name, head literal (its first line).
@@ -312,13 +304,20 @@ type linkqlRow struct {
 
 // linkqlRecompute reads every query_log row of the query ids (FuncDecl: it reads memory_usage from system.query_log, so it checks the
 // statement threads of the same rows, the statementthreads census rule).
-func linkqlRecompute(t *testing.T, ctx context.Context, direct chdriver.Conn, ids []string) []linkqlRow {
+func linkqlRecompute(t *testing.T, ctx context.Context, direct chdriver.Conn, ids []string, exempt map[string]bool) []linkqlRow {
 	t.Helper()
 	if len(ids) == 0 {
 		return nil
 	}
+	// The thread check covers every id but the exempt ones (the MUTANT / CONTROL statements, sent without WithMaxThreads on purpose).
+	var bound []string
+	for _, id := range ids {
+		if !exempt[id] {
+			bound = append(bound, id)
+		}
+	}
 	var unbound uint64
-	if err := direct.QueryRow(ctx, "SELECT "+statementthreads.UnboundThreadsCount+" FROM system.query_log WHERE type = 'QueryFinish' AND has(?, query_id)", ids).Scan(&unbound); err != nil {
+	if err := direct.QueryRow(ctx, "SELECT "+statementthreads.UnboundThreadsCount+" FROM system.query_log WHERE type = 'QueryFinish' AND has(?, query_id)", bound).Scan(&unbound); err != nil {
 		t.Fatalf("thread bound read: %v", err)
 	}
 	statementthreads.RequireThreadBound(t, ctx, direct, "FORM-339 test statements", unbound)
@@ -354,7 +353,7 @@ func linkqlWant(rows []linkqlRow, ver, prefix string) map[string]string {
 		return false
 	}
 	for _, rd := range linkqlReaders {
-		for _, c := range []string{"finished", "failed", "failed_241", "max_memory", "max_read_rows", "max_read_bytes", "max_recv_bytes", "max_threads"} {
+		for _, c := range []string{"finished", "failed", "failed_241", "max_memory", "max_read_rows", "max_read_bytes", "max_threads"} {
 			if rd.key == "cand" || rd.key == "lset" {
 				w[rd.key+"_"+c] = 0
 			} else {
@@ -391,7 +390,6 @@ func linkqlWant(rows []linkqlRow, ver, prefix string) map[string]string {
 				w[p+"max_memory"] = max(w[p+"max_memory"], r.memory)
 				w[p+"max_read_rows"] = max(w[p+"max_read_rows"], r.readRows)
 				w[p+"max_read_bytes"] = max(w[p+"max_read_bytes"], r.readBytes)
-				w[p+"max_recv_bytes"] = max(w[p+"max_recv_bytes"], r.recv)
 				w[p+"max_threads"] = max(w[p+"max_threads"], r.threads)
 			}
 			if isVer[ver] && failed {
@@ -427,7 +425,6 @@ func linkqlWant(rows []linkqlRow, ver, prefix string) map[string]string {
 	for _, key := range []string{"cand", "lset"} {
 		delete(w, key+"_max_read_rows")
 		delete(w, key+"_max_read_bytes")
-		delete(w, key+"_max_recv_bytes")
 	}
 	out := map[string]string{}
 	for k, v := range w {
@@ -471,6 +468,20 @@ func linkqlFirstLine(err error) string {
 		return fmt.Sprintf("code %d %s", ex.Code, strings.SplitN(ex.Message, "\n", 2)[0])
 	}
 	return strings.SplitN(err.Error(), "\n", 2)[0]
+}
+
+// linkqlRecordTB records a Fatalf instead of stopping the test: the CENSUS-GAP cell reads RequireThreadBound's verdict back.
+type linkqlRecordTB struct {
+	testing.TB
+	failed bool
+	msg    string
+}
+
+func (r *linkqlRecordTB) Helper() {}
+
+func (r *linkqlRecordTB) Fatalf(format string, args ...any) {
+	r.failed = true
+	r.msg = fmt.Sprintf(format, args...)
 }
 
 func linkqlSent(text string) string { return strings.TrimSuffix(strings.TrimRight(text, "\n"), ";") }
@@ -583,7 +594,7 @@ SELECT ?, concat('owned-', toString(number)), toUInt32(number + 1000), 1, 'nativ
 		names = append(names, rd.name)
 	}
 	groups := map[string][]string{}
-	tipRead := func(label, org string) {
+	tipReadWith := func(provider contextfabric.FactProvider, label, org string) {
 		t.Helper()
 		mark := serverNowMicros(t, ctx, direct)
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: org, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
@@ -617,6 +628,7 @@ SELECT ?, concat('owned-', toString(number)), toUInt32(number + 1000), 1, 'nativ
 			}
 		}
 	}
+	tipRead := func(label, org string) { t.Helper(); tipReadWith(provider, label, org) }
 	send := func(base context.Context, label, reader, text, org string, bindings []contextpacket.ClickHouseBinding) error {
 		t.Helper()
 		id := "linkql-" + label + "-" + uuid.NewString()[:8]
@@ -691,6 +703,47 @@ SELECT ?, concat('owned-', toString(number)), toUInt32(number + 1000), 1, 'nativ
 	// The larger sent set (cell e): 2,000 more owned links of org A, then the tip read again.
 	moreLinks(linkqlOrgA, 2000)
 	tipRead("tipA2", linkqlOrgA)
+	// LEG 3. CELL1: the real tip read through an API client that sends max_threads = linkqlCellThreads (not the default, so query_log lists
+	// it). MUTANT: the same read through a capped client WITHOUT WithMaxThreads (CELL1's WANT must fail on it). Both are named reads.
+	exempt := map[string]bool{}
+	instr := devhealthfacts.NewReadStatsInstrumentation(nil, nil, nil)
+	cell1Client := contextpacket.NewMemoryCappedQueryClient(rawQuery, contextpacket.APIStatementMaxMemoryUsage, contextpacket.WithMaxThreads(linkqlCellThreads))
+	noThreadsClient := contextpacket.NewMemoryCappedQueryClient(rawQuery, contextpacket.APIStatementMaxMemoryUsage)
+	tipReadWith(findProvider(t, devhealthfacts.NewInstrumentedProvidersWithOptions(cell1Client, instr, devhealthfacts.ProviderOptions{}), contextfabric.FactPullRequests), "cell1", linkqlOrgA)
+	tipReadWith(findProvider(t, devhealthfacts.NewInstrumentedProvidersWithOptions(noThreadsClient, instr, devhealthfacts.ProviderOptions{}), contextfabric.FactPullRequests), "mutant", linkqlOrgA)
+	for _, id := range groups["mutant"] {
+		exempt[id] = true
+	}
+	// CELL2 / CONTROL: one statement over the external table _team_project_linked_pull_requests, through the SAME withTeamLinkedPullRequests
+	// ctx the moved readers use, with the CELL1 client (CELL2) and with the client without WithMaxThreads (CONTROL).
+	setCtx, err := devhealthfacts.Form339LinkedSetContextForTest(ctx, []devhealthfacts.TeamLinkedPullRequestForTest{{Team: team, Repo: reachedRepo, Number: "1", Rank: 3}})
+	if err != nil {
+		t.Fatalf("linked set ctx: %v", err)
+	}
+	overSet := func(label string, client contextpacket.ClickHouseQueryClient) (string, string) {
+		t.Helper()
+		id := "linkql-" + label + "-" + uuid.NewString()[:8]
+		rows, err := client.Query(clickhousedriver.Context(setCtx, clickhousedriver.WithQueryID(id)), "SELECT toString(getSetting('max_threads')) AS mt, toUInt64(count()) AS n FROM _team_project_linked_pull_requests", nil)
+		if err != nil {
+			t.Fatalf("%s over the sent table: %v", label, err)
+		}
+		defer rows.Close()
+		var mt string
+		var n uint64
+		got := 0
+		for rows.Next() {
+			if err := rows.Scan(&mt, &n); err != nil {
+				t.Fatal(err)
+			}
+			got++
+		}
+		if err := rows.Err(); err != nil || got != 1 || n != 1 {
+			t.Fatalf("%s over the sent table: rows %d n %d err %v, want 1 row of n 1 (the statement read the sent table)", label, got, n, err)
+		}
+		return id, mt
+	}
+	cell2ID, cell2Setting := overSet("cell2", cell1Client)
+	controlID, controlSetting := overSet("control", noThreadsClient)
 	if err := direct.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
 		t.Fatal(err)
 	}
@@ -702,9 +755,83 @@ SELECT ?, concat('owned-', toString(number)), toUInt32(number + 1000), 1, 'nativ
 		return out
 	}
 
+	if err := direct.Exec(ctx, "SYSTEM FLUSH LOGS"); err != nil {
+		t.Fatal(err)
+	}
+	serverDefault, err := statementthreads.ServerDefaultThreads(ctx, direct)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("SERVER max_threads default %d (StatementMaxThreads %d)", serverDefault, contextpacket.StatementMaxThreads)
+	settingOf := func(id string) string {
+		t.Helper()
+		var v string
+		if err := direct.QueryRow(ctx, `SELECT Settings['max_threads'] FROM system.query_log WHERE query_id = ? AND type = 'QueryFinish'`, id).Scan(&v); err != nil {
+			t.Fatalf("Settings of %s: %v", id, err)
+		}
+		return v
+	}
+	digits := func(v string) string { return strings.TrimSuffix(strings.TrimPrefix(v, "auto("), ")") }
+	commentOf := func(id string) string {
+		t.Helper()
+		var v string
+		if err := direct.QueryRow(ctx, `SELECT log_comment FROM system.query_log WHERE query_id = ? AND type = 'QueryFinish'`, id).Scan(&v); err != nil {
+			t.Fatalf("log_comment of %s: %v", id, err)
+		}
+		return v
+	}
+	threadReaders := map[string]bool{linkqlReaders[0].name: true, linkqlReaders[1].name: true, linkqlReaders[2].name: true, linkqlReaders[4].name: true}
+	for _, c := range []struct {
+		label string
+		want  bool
+	}{{"cell1", true}, {"mutant", false}} {
+		n := 0
+		for _, id := range groups[c.label] {
+			name := commentOf(id)
+			if !threadReaders[name] {
+				continue
+			}
+			n++
+			got := settingOf(id)
+			if c.want && got != fmt.Sprint(linkqlCellThreads) {
+				t.Errorf("CELL1 %s: query_log Settings max_threads %q, want %q", name, got, fmt.Sprint(linkqlCellThreads))
+			}
+			if !c.want && got == fmt.Sprint(linkqlCellThreads) {
+				t.Errorf("MUTANT %s: query_log Settings max_threads %q: the CELL1 WANT would pass without WithMaxThreads", name, got)
+			}
+			t.Logf("%s %s: query_log Settings max_threads %q", strings.ToUpper(c.label), name, got)
+		}
+		if n != 4 {
+			t.Errorf("%s: %d statements of the 3 moved readers + lset, want 4", c.label, n)
+		}
+	}
+	if got := settingOf(cell2ID); got != fmt.Sprint(linkqlCellThreads) || digits(cell2Setting) != fmt.Sprint(linkqlCellThreads) {
+		t.Errorf("CELL2 (sent table ctx, CELL1 client): Settings %q getSetting %q, want %d / %d", got, cell2Setting, linkqlCellThreads, linkqlCellThreads)
+	} else {
+		t.Logf("CELL2 (sent table ctx, CELL1 client): Settings %q getSetting %q", got, cell2Setting)
+	}
+	controlLogged := settingOf(controlID)
+	if controlLogged != "" || digits(controlSetting) != fmt.Sprint(serverDefault) {
+		t.Errorf("CONTROL (sent table ctx, no WithMaxThreads): Settings %q getSetting %q, want %q / the server default %d", controlLogged, controlSetting, "", serverDefault)
+	} else {
+		t.Logf("CONTROL (sent table ctx, no WithMaxThreads): Settings %q getSetting %q = the server default %d", controlLogged, controlSetting, serverDefault)
+	}
+	// CENSUS-GAP: RequireThreadBound on the CONTROL statement (sent without a thread bound), read back non-fatally.
+	var controlUnbound uint64
+	if err := direct.QueryRow(ctx, "SELECT "+statementthreads.UnboundThreads+" FROM system.query_log WHERE query_id = ? AND type = 'QueryFinish'", controlID).Scan(&controlUnbound); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &linkqlRecordTB{TB: t}
+	statementthreads.RequireThreadBound(recorder, ctx, direct, "CONTROL", controlUnbound)
+	if recorder.failed {
+		t.Logf("CENSUS-GAP: RequireThreadBound caught the unbound statement (server default %d, logged Settings max_threads %q)", serverDefault, controlLogged)
+	} else {
+		t.Logf("CENSUS-GAP RED: RequireThreadBound passed an unbound statement (server default %d, logged Settings max_threads %q)", serverDefault, controlLogged)
+	}
+
 	// 5. The org rendering in the logged text (shape only) and the logged texts' markers.
 	for _, label := range []string{"tipA", "oldA"} {
-		for _, r := range linkqlRecompute(t, ctx, direct, ids(label)) {
+		for _, r := range linkqlRecompute(t, ctx, direct, ids(label), exempt) {
 			i := strings.Index(r.query, linkqlOrgA)
 			if i < 0 {
 				t.Errorf("ORG RENDER %s %s: the logged text does not hold the bound org value", label, r.comment)
@@ -758,7 +885,7 @@ SELECT ?, concat('owned-', toString(number)), toUInt32(number + 1000), 1, 'nativ
 			}
 		}
 	}
-	every := []string{"tipA", "tipB", "oldA", "oldB", "third", "later", "refused", "tipA2"}
+	every := []string{"tipA", "tipB", "oldA", "oldB", "third", "later", "refused", "tipA2", "cell1", "mutant"}
 
 	// 7. S0, stmtR, ORG1.
 	s0, _, err := linkqlQuery(ctx, direct, linkqlSent(linkqlCutS0))
@@ -771,8 +898,8 @@ SELECT ?, concat('owned-', toString(number)), toUInt32(number + 1000), 1, 'nativ
 		}
 	}
 	t.Logf("PASS S0 ROWS %v", s0)
-	if got, _, err := linkqlQuery(ctx, direct, linkqlSent(linkqlCutstmtR)); err != nil || len(got) != 1 || got[0]["replicas"] != "1" {
-		t.Errorf("stmtR: rows %v err %v, want replicas 1", got, err)
+	if got, _, err := linkqlQuery(ctx, direct, linkqlSent(linkqlCutstmtR)); err != nil || len(got) != 1 || got[0]["replicas"] != "1" || got[0]["server_max_threads"] != fmt.Sprint(serverDefault) {
+		t.Errorf("stmtR: rows %v err %v, want replicas 1 and server_max_threads = the system.settings default %d", got, err, serverDefault)
 	} else {
 		t.Logf("PASS stmtR ROW %v", got[0])
 	}
@@ -793,7 +920,22 @@ SELECT ?, concat('owned-', toString(number)), toUInt32(number + 1000), 1, 'nativ
 	passH := "linkql-passh-" + uuid.NewString()[:8]
 	clean0 := one("PASS stmt0 (server-wide)", linkqlCutstmt0, pass0)
 	cleanH := one("PASS stmt0h (server-wide)", linkqlCutstmt0h, passH)
-	all := linkqlRecompute(t, ctx, direct, ids(every...))
+	if len(clean0) != linkqlColsStmt0 || len(cleanH) != linkqlColsStmt0h {
+		t.Errorf("columns stmt0 %d stmt0h %d, want %d / %d", len(clean0), len(cleanH), linkqlColsStmt0, linkqlColsStmt0h)
+	}
+	for k := range clean0 {
+		if strings.Contains(k, "recv") {
+			t.Errorf("stmt0 column %s: the recv columns are dropped in FORM -4", k)
+		}
+	}
+	// The (t) logic at a sent count query_log lists: the CELL1 reads (max_threads = linkqlCellThreads) read that count in every column.
+	cellT := one(fmt.Sprintf("EXACT stmt0 CELL1 (the (t) logic at %d threads)", linkqlCellThreads), only(linkqlCutstmt0, "cell1"))
+	for _, k := range []string{"reach_new_max_threads", "counts_new_max_threads", "states_new_max_threads", "lset_max_threads"} {
+		if cellT[k] != fmt.Sprint(linkqlCellThreads) {
+			t.Errorf("EXACT stmt0 CELL1: %s = %s, want %d", k, cellT[k], linkqlCellThreads)
+		}
+	}
+	all := linkqlRecompute(t, ctx, direct, ids(every...), exempt)
 	check("stmt0 server-wide", clean0, linkqlWant(all, "new", linkqlOrgAPrefix))
 	check("stmt0h server-wide", cleanH, linkqlWant(all, "old", linkqlOrgAPrefix))
 	check("EXACT stmt0 all", one("EXACT stmt0 all", only(linkqlCutstmt0, every...)), linkqlWant(all, "new", linkqlOrgAPrefix))
@@ -822,14 +964,18 @@ SELECT ?, concat('owned-', toString(number)), toUInt32(number + 1000), 1, 'nativ
 				t.Errorf("%s_new_max_memory %d over 80 %% of the API cap on the CI rows", k, n)
 			}
 		}
-		if clean0[k+"_new_max_threads"] != fmt.Sprint(contextpacket.StatementMaxThreads) {
-			t.Errorf("%s_new_max_threads = %s, want %d (the client's statement thread count)", k, clean0[k+"_new_max_threads"], contextpacket.StatementMaxThreads)
+		if serverDefault != contextpacket.StatementMaxThreads {
+			if clean0[k+"_new_finished"] != "0" && clean0[k+"_new_max_threads"] != fmt.Sprint(contextpacket.StatementMaxThreads) {
+				t.Errorf("(t) %s_new_max_threads = %s, want %d (server default %d)", k, clean0[k+"_new_max_threads"], contextpacket.StatementMaxThreads, serverDefault)
+			}
+		} else {
+			t.Logf("(t) %s: NOT JUDGED (server default %d = StatementMaxThreads %d: query_log does not list a sent %d)", k, serverDefault, contextpacket.StatementMaxThreads, contextpacket.StatementMaxThreads)
 		}
 	}
 
 	// 9. The org rule: org B's statements count nowhere under A's prefix; B's prefix counts B only.
-	rowsA := linkqlRecompute(t, ctx, direct, ids("tipA", "oldA"))
-	rowsB := linkqlRecompute(t, ctx, direct, ids("tipB", "oldB"))
+	rowsA := linkqlRecompute(t, ctx, direct, ids("tipA", "oldA"), exempt)
+	rowsB := linkqlRecompute(t, ctx, direct, ids("tipB", "oldB"), exempt)
 	isZeroCounts := func(label string, got map[string]string) {
 		t.Helper()
 		for k, v := range got {
@@ -891,19 +1037,6 @@ SELECT ?, concat('owned-', toString(number)), toUInt32(number + 1000), 1, 'nativ
 	// The window: a past window holds none of the CI rows.
 	for _, c := range []struct{ label, text string }{{"MUTANT past window stmt0", linkqlPaststmt0}, {"MUTANT past window stmt0h", linkqlPaststmt0h}} {
 		isZeroCounts(c.label, one(c.label, only(c.text, every...)))
-	}
-
-	// 11. The sent set (cell e): the NEW moved readers receive more bytes with the larger set.
-	small := one("EXACT tipA (1 link)", only(linkqlCutstmt0, "tipA"))
-	large := one("EXACT tipA2 (2,001 links)", only(linkqlCutstmt0, "tipA2"))
-	for _, k := range []string{"reach", "counts", "states"} {
-		var s, l uint64
-		fmt.Sscan(small[k+"_new_max_recv_bytes"], &s)
-		fmt.Sscan(large[k+"_new_max_recv_bytes"], &l)
-		t.Logf("RECV %s: %d B at 1 link, %d B at 2,001 links", k, s, l)
-		if l <= s {
-			t.Errorf("RECV %s: %d B at 2,001 links is not above %d B at 1 link (NetworkReceiveBytes does not follow the sent set)", k, l, s)
-		}
 	}
 
 	// 12. Gate fires and the pass / fire read bounds.
