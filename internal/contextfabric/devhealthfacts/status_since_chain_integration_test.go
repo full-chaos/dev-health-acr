@@ -7,7 +7,9 @@ import (
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/devhealthfacts"
+	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
+	"github.com/full-chaos/dev-health-go/readers"
 )
 
 // Two transitions of one item at one instant are ordered by the status chain,
@@ -78,5 +80,64 @@ func TestStatusSinceOrdersSameInstantTransitionsByTheStatusChainAgainstRealClick
 				t.Fatalf("status_since = %+v, want %s", fields["status_since"], instant.Format(time.RFC3339))
 			}
 		})
+	}
+}
+
+// The transitions statement returns one row per item whatever the history
+// holds, so its result stays within the read's row bound: an item with a long
+// history and a three-transition last instant is one row that counts three.
+func TestStatusSinceReturnsOneRowPerItemWhateverTheHistoryAgainstRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	orgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	repoID := "5b1c7e0e-2f56-4a53-9d0a-7a1f0c9d0122"
+	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repoID, orgID, "rows/"+repoID, "github", now); err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	var keys, ids []string
+	for _, id := range []string{"r-long", "r-short"} {
+		keys, ids = append(keys, repoID+":"+id), append(ids, id)
+	}
+	for hour := 40; hour >= 1; hour-- {
+		if err := direct.Exec(ctx, `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, from_status, to_status, last_synced, org_id, tie_ordinal) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			repoID, "r-long", now.Add(-time.Duration(hour)*time.Hour), "a", "b", now, orgID, uint32(0)); err != nil {
+			t.Fatalf("seed history: %v", err)
+		}
+	}
+	for tie, pair := range [][2]string{{"x", "y"}, {"y", "z"}, {"z", "w"}} {
+		if err := direct.Exec(ctx, `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, from_status, to_status, last_synced, org_id, tie_ordinal) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			repoID, "r-long", now, pair[0], pair[1], now, orgID, uint32(tie)); err != nil {
+			t.Fatalf("seed last instant: %v", err)
+		}
+	}
+	if err := direct.Exec(ctx, `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, from_status, to_status, last_synced, org_id, tie_ordinal) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		repoID, "r-short", now, "todo", "done", now, orgID, uint32(0)); err != nil {
+		t.Fatalf("seed short item: %v", err)
+	}
+
+	rows, err := query.Query(ctx, devhealthfacts.StatusSinceStatementForTest(readers.Settings{}), []contextpacket.ClickHouseBinding{
+		{Name: "org_id", Value: orgID}, {Name: "ids", Value: ids}, {Name: "repo_ids", Value: []string{repoID}}, {Name: "keys", Value: keys},
+	})
+	if err != nil {
+		t.Fatalf("transitions statement: %v", err)
+	}
+	defer rows.Close()
+	counts := map[string]uint64{}
+	for rows.Next() {
+		var repoKey, itemKey string
+		var n uint64
+		var froms, tos []string
+		var at time.Time
+		if err := rows.Scan(&repoKey, &itemKey, &n, &froms, &tos, &at); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		counts[itemKey] = n
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(counts) != 2 || counts["r-long"] != 3 || counts["r-short"] != 1 {
+		t.Fatalf("rows per item = %v, want r-long:3 and r-short:1, one row each", counts)
 	}
 }

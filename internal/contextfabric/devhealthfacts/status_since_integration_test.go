@@ -104,9 +104,11 @@ func TestStatusSinceStatementRunsAgainstRealClickHouse(t *testing.T) {
 			t.Fatalf("settings=%s: server rejected the statement: %v\n%s", name, err, statement)
 		}
 		for rows.Next() {
-			var a, b, c string
+			var a, b string
+			var n uint64
+			var froms, tos []string
 			var d time.Time
-			if scanErr := rows.Scan(&a, &b, &c, &d); scanErr != nil {
+			if scanErr := rows.Scan(&a, &b, &n, &froms, &tos, &d); scanErr != nil {
 				t.Errorf("settings=%s: scan: %v", name, scanErr)
 			}
 		}

@@ -26,6 +26,17 @@ func StatusSinceStatementForTest(settings readers.Settings) string {
 	return statusSinceStatement(settings)
 }
 
+// LastToStatusOfInstantForTest is lastToStatusOfInstant over (from, to) pairs.
+func LastToStatusOfInstantForTest(pairs [][2]string) string {
+	transitions := make([]instantTransition, len(pairs))
+	for i, pair := range pairs {
+		transitions[i] = instantTransition{from: pair[0], to: pair[1]}
+	}
+	return lastToStatusOfInstant(transitions)
+}
+
+const StatusSinceInstantCapForTest = statusSinceInstantCap
+
 // RelationCurrentProbeForTest is the relation end rule as one statement over
 // every blocker row of orgID: source, target, whether the provider still
 // reports the row, and whether its writer could not be derived.
