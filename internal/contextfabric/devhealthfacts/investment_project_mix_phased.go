@@ -1012,7 +1012,7 @@ func readProjectMixInputs(ctx context.Context, client contextpacket.ClickHouseQu
 		}
 		return row.Scan(dest...)
 	})
-	return digests, err
+	return digests, fixedScopeRead(err)
 }
 
 // readProjectMixPinnedMissing reports how many of scope's pinned pairs are no

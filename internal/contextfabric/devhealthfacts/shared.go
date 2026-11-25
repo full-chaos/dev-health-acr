@@ -1485,13 +1485,19 @@ import (
 // order), the row a merge keeps. An answer saved under v290 may hold an
 // arbitrary pick of two versions stored in the same millisecond.
 //
+// v292 -> v293: a read stopped at the budget by a statement that reads the whole
+// organization or the caller's whole grant is served without advice to narrow
+// the window or the subject, and a contended read is served as one that did not
+// complete because the system was busy. An answer saved under v292 holds the
+// old wording and must not be reused.
+//
 // v291 -> v292: a pull request reached from a project carries a link tier only
 // at the strongest tier its issue holds across every pull request (an issue's
 // native link covers its lower-tier link to another pull request), as the pull
 // request side already covered. The prod link writer stores no such row, so
 // served answers move only for a store that holds one. An answer saved under
 // v291 holds a lower-tier link its issue's native link covers.
-const QueryVersion = "devhealthfacts.clickhouse.v292"
+const QueryVersion = "devhealthfacts.clickhouse.v293"
 
 // repositoryFromOpsVersionSuffix marks the version of a deployment that reads
 // the repository investment mix from ops (CHAOS-12690): the numbers differ for
@@ -1739,13 +1745,16 @@ func mixReadFailure(action string, err error) error {
 }
 
 func readFailure(action string, err error) error {
+	var fixed *fixedScopeReadError
+	fixedScope := errors.As(err, &fixed)
 	var budget *BudgetExceededError
 	if errors.As(err, &budget) {
 		return &contextfabric.FactReadFailure{
-			State:  contextfabric.SourceUnavailable,
-			Reason: budgetRefusalReason(action, budget),
-			Class:  contextfabric.FactReadFailureBudgetExceeded,
-			Cause:  err,
+			State:      contextfabric.SourceUnavailable,
+			Reason:     budgetRefusalReason(action, budget),
+			Class:      contextfabric.FactReadFailureBudgetExceeded,
+			Cause:      err,
+			FixedScope: fixedScope,
 		}
 	}
 	// The served reason is closed; the cause stays on the error for tests and
@@ -1766,7 +1775,25 @@ func readFailure(action string, err error) error {
 		Class:      contextfabric.FactReadFailureReadFailed,
 		Cause:      err,
 		SourceCode: code,
+		FixedScope: fixedScope,
 	}
+}
+
+// fixedScopeReadError marks an error from a statement the request's window and
+// subject do not bound (one that reads the whole organization or the caller's
+// whole grant). It is set where the statement is built, so a budget stop of it
+// is not served with advice to narrow the window or the subject.
+type fixedScopeReadError struct{ err error }
+
+func (e *fixedScopeReadError) Error() string { return e.err.Error() }
+
+func (e *fixedScopeReadError) Unwrap() error { return e.err }
+
+func fixedScopeRead(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &fixedScopeReadError{err: err}
 }
 
 // clickHouseMemoryLimitExceededCode is the exception code of a statement that

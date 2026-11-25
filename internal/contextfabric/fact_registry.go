@@ -521,6 +521,10 @@ type FactReadFailure struct {
 	// Cause is the error the read failed with. It is for logs and tests only:
 	// Error() returns Reason alone, so a served answer never carries it.
 	Cause error
+	// FixedScope marks a failure of a statement that reads the whole
+	// organization (or the caller's whole grant): the request's window and
+	// subject do not bound it, so no advice to narrow them is true.
+	FixedScope bool
 	// SourceCode is the numeric ClickHouse exception code of Cause, 0 when it
 	// carries none. The read-failed log line carries it as clickhouse_code.
 	SourceCode int32
@@ -2284,10 +2288,10 @@ func classifyFactReadError(kind FactKind, err error) (SourceState, string) {
 		// never on the provider's wording: the Reason, the numbers and the
 		// cause stay in the log.
 		switch {
-		case failure.Class == FactReadFailureBudgetExceeded, failure.SourceCode == clickHouseBytesToReadCode:
+		case (failure.Class == FactReadFailureBudgetExceeded || failure.SourceCode == clickHouseBytesToReadCode) && !failure.FixedScope:
 			return failure.State, "The " + label + " read needed more data than one answer may read; narrow the window or the subject; the facts for it are not shown."
 		case failure.Class == FactReadFailureContended:
-			return failure.State, "The " + label + " read did not run because the system was busy; try again later; the facts for it are not shown."
+			return failure.State, "The " + label + " read did not complete because the system was busy; try again later; the facts for it are not shown."
 		case failure.SourceCode == clickHouseTimeoutExceededCode:
 			return failure.State, "The " + label + " read timed out; the facts for it are not shown."
 		}
