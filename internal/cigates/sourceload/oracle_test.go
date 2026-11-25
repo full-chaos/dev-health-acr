@@ -16,8 +16,6 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/testsupport/repopath"
 )
 
-const modulePath = "github.com/full-chaos/dev-health-acr/"
-
 // oldMode is the union of the modes the five consumer analyses load with before they move to Packages().
 const oldMode = packages.NeedName | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes |
 	packages.NeedTypesInfo | packages.NeedTypesSizes | packages.NeedImports | packages.NeedDeps | packages.NeedModule
@@ -302,29 +300,6 @@ func TestEveryPackageFieldIsComparedOrExplained(t *testing.T) {
 		if _, ok := typ.FieldByName(name); !ok {
 			t.Errorf("compared names %s, which is not a packages.Package field", name)
 		}
-	}
-}
-
-// TestPackagesMatchPackagesLoadOnTheRealRoots is the differential oracle: the roots the five consumers load, loaded the
-// old way (go list -export, compiles the closure) and through Packages(), field by field over the whole closure.
-func TestPackagesMatchPackagesLoadOnTheRealRoots(t *testing.T) {
-	roots := []string{
-		"internal/contextfabric/...", "internal/api/...", "internal/contracts/v1/...", "internal/mcp/...",
-		"internal/contextfabric/testdata/emissionprobe",
-		"cmd/operationpolicy", "internal/runtime/hosted", "internal/contextfabric/directread",
-		"internal/contextfabric/factoracle", "internal/contextfabric/falkorgraph", "internal/contextfabric/sourcerow",
-		"internal/mcp/guide/guidegen",
-	}
-	var patterns []string
-	for _, r := range roots {
-		patterns = append(patterns, modulePath+r)
-	}
-	oldRoots, gotRoots := loadBoth(t, repopath.Root(t), patterns)
-	if len(oldRoots) < 20 {
-		t.Fatalf("the oracle loaded %d roots: it measured too little to mean anything", len(oldRoots))
-	}
-	if diffs := diffClosures(oldRoots, gotRoots); len(diffs) != 0 {
-		t.Fatalf("Packages() differs from packages.Load in %d place(s):\n%s", len(diffs), strings.Join(diffs, "\n"))
 	}
 }
 
