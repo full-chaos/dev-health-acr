@@ -564,6 +564,9 @@ var ProductionColumns = map[string][]Column{
 		{Name: "to_status", Type: "String"},
 		{Name: "last_synced", Type: "DateTime64(3)"},
 		{Name: "org_id", Type: "String"},
+		// ops migration 170_work_item_transitions_tie_ordinal.sql: the sorting
+		// key ends with it, so a CREATE TABLE cannot omit it.
+		{Name: "tie_ordinal", Type: "UInt32"},
 	},
 	"work_item_dependencies": {
 		{Name: "source_work_item_id", Type: "String"},
@@ -1009,7 +1012,7 @@ var EngineFull = map[string]string{
 	"teams":                                 "ReplacingMergeTree(updated_at) ORDER BY (org_id, id) SETTINGS index_granularity = 8192",
 	"work_graph_issue_pr":                   "ReplacingMergeTree(version_rank) ORDER BY (org_id, repo_id, work_item_id, pr_number) SETTINGS index_granularity = 8192",
 	"work_graph_deployment_incident_edges":  "ReplacingMergeTree(version_rank) ORDER BY (org_id, ifNull(repo_id, toUUID('00000000-0000-0000-0000-000000000000')), deployment_id, incident_id) SETTINGS index_granularity = 8192",
-	"work_item_transitions":                 "ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, work_item_id, occurred_at) SETTINGS index_granularity = 8192",
+	"work_item_transitions":                 "ReplacingMergeTree(last_synced) PRIMARY KEY (org_id, repo_id, work_item_id, occurred_at) ORDER BY (org_id, repo_id, work_item_id, occurred_at, tie_ordinal) SETTINGS index_granularity = 8192",
 	"work_item_dependencies":                "ReplacingMergeTree(last_synced) ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
 	"work_item_relations_read":              "ReplacingMergeTree(relations_read_at) ORDER BY (org_id, work_item_id) SETTINGS index_granularity = 8192",
 	"work_item_dependency_first_seen":       "AggregatingMergeTree ORDER BY (org_id, source_work_item_id, target_work_item_id, relationship_type) SETTINGS index_granularity = 8192",
