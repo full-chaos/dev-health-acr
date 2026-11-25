@@ -1,7 +1,10 @@
 package devhealthfacts_test
 
 import (
+	"bytes"
 	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -122,5 +125,46 @@ func TestStatusSinceOneTransitionPerInstantIsUnchanged(t *testing.T) {
 	// The work of the read: the status read and one transitions statement.
 	if len(client.queries) != 2 {
 		t.Fatalf("statements = %d, want 2 (status read, one transitions read)", len(client.queries))
+	}
+}
+
+// The warn line says which items were capped: an item whose last instant holds
+// more transitions than the cap and an item whose status simply differs both
+// answer transition_inconsistent, and the counts must tell them apart.
+func TestStatusSinceCappedInstantsAreCountedSeparatelyInTheWarn(t *testing.T) {
+	var buf bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	rows := devhealthfacts.StatusSinceInstantCapForTest + 1
+	froms, tos := make([]string, 0, rows), make([]string, 0, rows)
+	for i := 0; i < rows; i++ {
+		froms = append(froms, fmt.Sprintf("s%02d", i))
+		tos = append(tos, fmt.Sprintf("s%02d", i+1))
+	}
+	_, _, err := readStatusSince(t,
+		[][]any{{"W-1", "s17", "repo-1", "jira"}},
+		[][]any{{"repo-1", "W-1", uint64(rows), froms, tos, statusSinceNow.Add(-time.Hour)}},
+		workItemSubject("repo-1", "W-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "inconsistent_items=1") || !strings.Contains(out, "capped_items=1") {
+		t.Fatalf("the warn line does not count the capped item apart: %q", out)
+	}
+}
+
+// The served answer of a same-instant chain changed (the chain is walked, not
+// last_synced). An answer saved under the version before it holds the old
+// null/null and must not be reused: v292 is the version before this change on
+// its own, v293 the one before it when the failed-read wording change merged
+// first.
+func TestQueryVersionMovedPastTheStatusSinceChainPick(t *testing.T) {
+	t.Parallel()
+	for _, before := range []string{"devhealthfacts.clickhouse.v292", "devhealthfacts.clickhouse.v293"} {
+		if devhealthfacts.QueryVersion == before {
+			t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved under it may hold a status_since the chain pick now corrects and must not be reused", devhealthfacts.QueryVersion, before)
+		}
 	}
 }
