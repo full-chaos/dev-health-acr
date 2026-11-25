@@ -2,6 +2,7 @@ package devhealthfacts
 
 import (
 	"context"
+	"fmt"
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/relationcurrent"
 	"strings"
 	"time"
@@ -9,6 +10,7 @@ import (
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/ext"
 
+	"github.com/full-chaos/dev-health-acr/internal/contextfabric"
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 	"github.com/full-chaos/dev-health-acr/internal/storage"
 	"github.com/full-chaos/dev-health-go/readers"
@@ -341,4 +343,28 @@ func TeamLinkedPullRequestReadsForTest(ctx context.Context, client contextpacket
 		return 0, 0, 0, err
 	}
 	return reachedRepositoryCount(byTeam), len(window), len(byState), nil
+}
+
+// TeamLinkSetUnchunkedForTest runs the link set statement once over every
+// candidate of the teams, under the bound query's time resolves to, as one
+// unchunked statement would, and returns its row count.
+func TeamLinkSetUnchunkedForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string, query contextfabric.FactQuery) (int, error) {
+	bound, _, unsupported := resolveTimeBound(query)
+	if unsupported {
+		return 0, fmt.Errorf("unsupported time context")
+	}
+	ids, ok, err := readTeamLinkCandidateIDs(ctx, client, orgID, teamIDs, bound)
+	if err != nil || !ok {
+		return 0, err
+	}
+	table, err := teamLinkCandidatesExternalTable(ids)
+	if err != nil {
+		return 0, err
+	}
+	var repos, numbers, teams, issues []string
+	var ranks []uint8
+	err = readers.QueryOrgScopedNamed(clickhousedriver.Context(ctx, clickhousedriver.WithExternalTable(table)), client, "ReadTeamLinkedPullRequestSet", linkedPullRequestSetStatement(bound), orgID, teamIDs, func(row contextpacket.ClickHouseRowScanner) error {
+		return row.Scan(&repos, &numbers, &teams, &issues, &ranks)
+	}, boundReaderBindings(bound)...)
+	return len(repos), err
 }
