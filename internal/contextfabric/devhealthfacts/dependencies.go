@@ -442,11 +442,11 @@ func ageReadFailure(ctx context.Context, subject string, err error) error {
 	if ctx.Err() != nil {
 		return err
 	}
-	attrs := []any{"subject_kind", contextfabric.SanitizeLogAttr(subject), "reason", contextfabric.SanitizeLogAttr(blockerAgeStartUnavailable), "error_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", err))}
 	if code, ok := clickHouseExceptionCode(err); ok {
-		attrs = append(attrs, "clickhouse_code", int(code), "limit_class", clickHouseLimitClass(code))
+		slog.WarnContext(ctx, "devhealthfacts.blocker_age_read_failed", "subject_kind", contextfabric.SanitizeLogAttr(subject), "reason", contextfabric.SanitizeLogAttr(blockerAgeStartUnavailable), "error_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", err)), "clickhouse_code", int(code), "limit_class", contextfabric.SanitizeLogAttr(clickHouseLimitClass(code)))
+		return nil
 	}
-	slog.WarnContext(ctx, "devhealthfacts.blocker_age_read_failed", attrs...)
+	slog.WarnContext(ctx, "devhealthfacts.blocker_age_read_failed", "subject_kind", contextfabric.SanitizeLogAttr(subject), "reason", contextfabric.SanitizeLogAttr(blockerAgeStartUnavailable), "error_type", contextfabric.SanitizeLogAttr(fmt.Sprintf("%T", err)))
 	return nil
 }
 
