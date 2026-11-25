@@ -503,9 +503,14 @@ func TestForm14624Probe4ExecutesS7AtFourThreads(t *testing.T) {
 	}
 	wantSettings := [5]string{fmt.Sprint(form14624p4ProjectorMemoryCap), fmt.Sprint(contextpacket.StatementMaxThreads), fmt.Sprint(config.DefaultClickHouseMaxBytesToRead), fmt.Sprint(form14624p4MaxExecutionTime), fmt.Sprint(form14624p4MaxResultRows)}
 	for k := range wantSettings {
-		// max_threads 4 equal to the server default logs ''. max_execution_time: the code run sends its client deadline + 5 (10..15).
+		// max_threads: the form's SETTINGS clause logs '4'; the client's 4 at the server default (4) logs ''. Each side is checked on its own
+		// (the code side is also checked by RequireThreadBound). max_execution_time: the code run sends its client deadline + 5 (10..15).
 		threadsDefault := k == 1 && q.settings[k] == "" && serverThreads == contextpacket.StatementMaxThreads
 		sameAsCode := q.settings[k] == code.settings[k]
+		if k == 1 {
+			sameAsCode = code.settings[k] == wantSettings[k] || (code.settings[k] == "" && serverThreads == contextpacket.StatementMaxThreads)
+			t.Logf("SETTINGS S7 max_threads: form %q, code run %q, server default %d", q.settings[k], code.settings[k], serverThreads)
+		}
 		if k == 3 {
 			var codeSeconds int
 			_, scanErr := fmt.Sscanf(code.settings[k], "%d", &codeSeconds)
