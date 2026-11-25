@@ -27,7 +27,7 @@ import (
 // falkordbImage is pinned by digest, matching
 // internal/contextfabric/falkorgraph's own live tests and
 // deploy/compose/acr.compose.yml -- see docs/design/context-fabric-falkordb-adapter.md §1.1.
-const falkordbImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3"
+const falkordbImage = "falkordb/falkordb@sha256:4dfe286fe175f3d1ef0166f8910b867f36bca4b530b295abb2f6852f6230f1bd"
 
 // TestOpenRuntimeProjectsIntoRealFalkorDBAndRetrievalReadsItBack is the
 // CHAOS-3771 live acceptance proof for the runtime composition change: it

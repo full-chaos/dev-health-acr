@@ -11,7 +11,7 @@ import (
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/embedprovider"
 )
 
-const vectorLiveTestImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3"
+const vectorLiveTestImage = "falkordb/falkordb@sha256:4dfe286fe175f3d1ef0166f8910b867f36bca4b530b295abb2f6852f6230f1bd"
 
 // axisEmbedder is a DETERMINISTIC stand-in for a real embedding model: each
 // text is mapped to a fixed unit vector chosen by a keyword it contains.

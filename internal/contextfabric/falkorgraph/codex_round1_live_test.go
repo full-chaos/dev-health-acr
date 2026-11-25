@@ -19,7 +19,7 @@ import (
 // package and is not visible from here -- this file needs white-box access
 // to unexported helpers like graphKey/nodeByKindID/edgesOfNode/
 // fulltextSearchNodes, so it cannot itself live in that package).
-const codexRoundFalkordbImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3"
+const codexRoundFalkordbImage = "falkordb/falkordb@sha256:4dfe286fe175f3d1ef0166f8910b867f36bca4b530b295abb2f6852f6230f1bd"
 
 func newLiveFalkorAdapter(t *testing.T, ctx context.Context) (*Adapter, string) {
 	t.Helper()

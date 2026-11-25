@@ -18,7 +18,7 @@ import (
 // adapter was developed and verified against (FalkorDB 4.20.2, module ver
 // 42002, Redis 8.6.3) -- see docs/design/context-fabric-falkordb-adapter.md
 // §1.1. Update deliberately, not silently, if the pin ever moves.
-const falkordbImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3"
+const falkordbImage = "falkordb/falkordb@sha256:4dfe286fe175f3d1ef0166f8910b867f36bca4b530b295abb2f6852f6230f1bd"
 
 // newLiveAdapter starts a real FalkorDB container (no env gate, no skip --
 // this repository's established testcontainers convention, matching

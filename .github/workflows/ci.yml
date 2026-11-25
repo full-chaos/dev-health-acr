@@ -179,6 +179,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Verify every mirrored image is resolvable before any job pulls one
         run: scripts/ci/verify-mirrored-images.sh "${{ github.repository }}"
+      - name: Report the stack tools the pinned FalkorDB image ships
+        run: docker run --rm --entrypoint sh "ghcr.io/${{ github.repository }}/falkordb/falkordb@sha256:4dfe286fe175f3d1ef0166f8910b867f36bca4b530b295abb2f6852f6230f1bd" -c 'echo "gdb: $(command -v gdb || echo absent)"; echo "eu-stack: $(command -v eu-stack || echo absent)"; true'
 
   # The one Go module cache of the run. setup-go keys
   # one cache on go.sum and the first job to finish saves it, so the saved

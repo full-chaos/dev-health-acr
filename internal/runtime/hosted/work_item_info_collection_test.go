@@ -71,7 +71,7 @@ func TestWorkItemHostedInfoCollection(t *testing.T) {
 	if _, err = runner.Apply(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	graph := falkorfixture.Start(ctx, t, "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3")
+	graph := falkorfixture.Start(ctx, t, "falkordb/falkordb@sha256:4dfe286fe175f3d1ef0166f8910b867f36bca4b530b295abb2f6852f6230f1bd")
 	host, err := graph.Host(ctx)
 	if err != nil {
 		t.Fatal(err)

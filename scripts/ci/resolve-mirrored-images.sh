@@ -64,7 +64,7 @@ buildkit_ref="$(grep -oE 'moby/buildkit:[^[:space:]]+@sha256:[0-9a-f]{64}' .gith
 # digest-agreement contract test (scripts/ci/test-workflow-contract.sh) keep
 # the rest honest.
 falkordb_ref="$(grep -rhoE 'falkordb/falkordb@sha256:[0-9a-f]{64}' \
-  cmd/acr-projector internal/contextfabric/falkorgraph deploy/compose | sort -u | head -n1)" \
+  cmd/acr-projector internal/contextfabric/falkorgraph | sort -u | head -n1)" \
   || die "could not resolve the falkordb image from any test/compose source"
 # testcontainers-go's own hardcoded reaper default (internal/config.
 # ReaperDefaultImage in the pinned module version) -- not declared anywhere

@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	falkordbImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3"
+	falkordbImage = "falkordb/falkordb@sha256:4dfe286fe175f3d1ef0166f8910b867f36bca4b530b295abb2f6852f6230f1bd"
 	orgGone       = "aaaaaaaa-0000-4000-8000-000000000001"
 	orgKept       = "bbbbbbbb-0000-4000-8000-000000000002"
 	orgBroken     = "cccccccc-0000-4000-8000-000000000003"

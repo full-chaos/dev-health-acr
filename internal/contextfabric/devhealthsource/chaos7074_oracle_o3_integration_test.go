@@ -52,7 +52,7 @@ import (
 // keyset of ">=" (repeats); P3 a LIMIT without the +1 probe (the walk ends
 // early); P4 the in/out arms swapped.
 
-const chaos7074FalkorImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3"
+const chaos7074FalkorImage = "falkordb/falkordb@sha256:4dfe286fe175f3d1ef0166f8910b867f36bca4b530b295abb2f6852f6230f1bd"
 
 func chaos7074FalkorAdapter(t *testing.T, ctx context.Context) *falkorgraph.Adapter {
 	t.Helper()

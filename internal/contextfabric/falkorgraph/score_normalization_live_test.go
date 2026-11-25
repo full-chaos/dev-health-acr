@@ -17,7 +17,7 @@ import (
 // blackbox `package falkorgraph_test` file, even in the same test binary) --
 // see that constant's doc comment for the pin rationale; update both
 // together if the pin ever moves.
-const scoreLiveTestImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3"
+const scoreLiveTestImage = "falkordb/falkordb@sha256:4dfe286fe175f3d1ef0166f8910b867f36bca4b530b295abb2f6852f6230f1bd"
 
 // TestLiveFulltextSearchNormalizesRealRediSearchScores is the live half of
 // the AC-3778-0 probe: adapter_live_integration_test.go already proves the

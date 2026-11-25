@@ -18,7 +18,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 )
 
-const stallFalkordbImage = "falkordb/falkordb@sha256:ad09d5051bbda1cfee8cef9d7f41ffe1bcb1c5327b82c442c989e84ab8cc33d3"
+const stallFalkordbImage = "falkordb/falkordb@sha256:4dfe286fe175f3d1ef0166f8910b867f36bca4b530b295abb2f6852f6230f1bd"
 
 // proxiedTarget is the real container with its mapped address swapped for a local proxy.
 type proxiedTarget struct {
