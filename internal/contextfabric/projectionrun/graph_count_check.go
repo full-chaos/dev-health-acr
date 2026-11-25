@@ -705,17 +705,19 @@ func (c *Coordinator) checkUnknownSource(ctx context.Context, orgID, hash, sourc
 	if runs >= graphCountUnknownWarnAfter || probe.failed > 0 {
 		level = slog.LevelWarn
 	}
-	attrs := []any{"check", "graph_count_owned_marker_absent", "reason", "owned_marker_absent",
-		"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", contextfabric.SanitizeLogAttr(hash), "unknown_passes", runs,
-		"probe", contextfabric.SanitizeLogAttr(probe.state), "basis", contextfabric.SanitizeLogAttr(basis), "coverage", contextfabric.SanitizeLogAttr(coverage), "lower_bound_kinds", probe.compared, "lower_bound_gap_kinds", probe.gapKinds, "probe_failed_reads", probe.failed}
+	failureClass, limitClass, code := "", "", 0
 	if probe.cause != nil {
-		attrs = append(attrs, "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(probe.cause)))
+		failureClass = classifyOutcomeError(probe.cause)
 		var failure contextfabric.SourceReadFailure
 		if errors.As(probe.cause, &failure) {
-			attrs = append(attrs, "clickhouse_code", int(failure.ClickHouseCode()), "limit_class", contextfabric.SanitizeLogAttr(failure.LimitClass()))
+			code, limitClass = int(failure.ClickHouseCode()), failure.LimitClass()
 		}
 	}
-	c.logger.Log(ctx, level, "context_fabric: graph_count_owned_marker_absent", attrs...)
+	c.logger.Log(ctx, level, "context_fabric: graph_count_owned_marker_absent", "check", "graph_count_owned_marker_absent", "reason", "owned_marker_absent",
+		"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", contextfabric.SanitizeLogAttr(hash), "unknown_passes", runs,
+		"probe", contextfabric.SanitizeLogAttr(probe.state), "basis", contextfabric.SanitizeLogAttr(basis), "coverage", contextfabric.SanitizeLogAttr(coverage),
+		"lower_bound_kinds", probe.compared, "lower_bound_gap_kinds", probe.gapKinds, "probe_failed_reads", probe.failed,
+		"failure_class", contextfabric.SanitizeLogAttr(failureClass), "clickhouse_code", code, "limit_class", contextfabric.SanitizeLogAttr(limitClass))
 }
 
 func (c *Coordinator) compareAgainstTotals(ctx context.Context, orgID, hash, source string, counter contextfabric.ProjectionSourceCounts, totalGraph contextfabric.ProjectionGraphTotalCounts, totals *kindTotals, result *GraphCountCheck) unknownProbe {
