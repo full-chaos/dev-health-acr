@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
@@ -31,12 +32,15 @@ const (
 	prodEstimatePeakBytes      = uint64(48 << 20)
 	historyFloorBytes          = uint64(2 << 20)
 	// linksInsideLargeMax bounds each statement where every link of 96k is
-	// inside the owned projects: 30% headroom under the 256 MiB API statement
-	// cap (179.2 MiB). The link-row prunes that keep the outside links out of
-	// memory cost 20 to 26% here, where they prune nothing.
-	linksInsideLargeMax   = uint64(256 << 20 * 7 / 10)
-	ownershipHistorySmall = 100
-	ownershipHistoryLarge = 1_000
+	// inside the owned projects. A link-row statement may not hold more links
+	// than one 24k read does (58.1 MB measured), whatever the link count: 64 MiB
+	// is that peak plus 15%, a quarter of the 256 MiB API statement cap.
+	linksInsideLargeMax = uint64(64 << 20)
+	// linkedPullRequestStatements is the number of team statements that read
+	// the project-reached pull requests (reached repositories, counts, states).
+	linkedPullRequestStatements = 3
+	ownershipHistorySmall       = 100
+	ownershipHistoryLarge       = 1_000
 )
 
 // The repositories a team reaches through its owned projects are read from the
@@ -181,7 +185,11 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery
 		{Table: "team_project_ownership", QueryContains: "work_graph_issue_pr"},
 		{Table: "team_project_ownership", QueryContains: "team_project_ownership"},
 		{Table: "team_repo_ownership", QueryContains: "team_repo_ownership"},
+		// The linked pull request reads, whatever tables they join: a reader
+		// that stops reading team_project_ownership still counts here.
+		{Table: "git_pull_requests", QueryContains: "lr.pr_repo_id"},
 	}
+	const linkedPullRequestFilter = 3
 	read := func(label string, provider contextfabric.FactProvider) []statementMemory {
 		var active uint64
 		if err := direct.QueryRow(ctx, `SELECT count() FROM system.parts WHERE database = currentDatabase() AND table = 'work_items' AND active`).Scan(&active); err != nil {
@@ -194,9 +202,11 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery
 			t.Fatalf("%s: %d active work_items parts at the %s size, want at least %d (the unmerged state was not reached)", axis, active, label, wantParts)
 		}
 		mark := serverNowMicros(t, ctx, direct)
+		started := time.Now()
 		result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: org, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
 			Time: window, Kind: contextfabric.FactPullRequests, Subjects: []contextfabric.SubjectRef{teamSubject(teamID)},
 		})
+		wall := time.Since(started)
 		if err != nil {
 			t.Fatalf("ReadFacts at the %s size of %s: %v: %s\nfailed statements:\n%s", label, axis, err, readFailureCause(err), failedStatementsSince(ctx, direct, mark))
 		}
@@ -205,6 +215,10 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery
 		for _, filter := range filters {
 			out = append(out, statementMemorySince(t, ctx, direct, filter, mark))
 		}
+		if n := len(out[linkedPullRequestFilter]); n != linkedPullRequestStatements {
+			t.Fatalf("%s at the %s size: %d linked pull request statements measured, want %d (a linked pull request read left the measure)", axis, label, n, linkedPullRequestStatements)
+		}
+		t.Logf("COST %s: the %s read ran %d statements in %d ms", axis, label, readStatementsSince(t, ctx, direct, mark), wall.Milliseconds())
 		return out
 	}
 	merged := func() {
@@ -246,6 +260,22 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery
 			}
 		}
 	}
+}
+
+// readStatementsSince counts the SELECTs over the test database that ended
+// after the mark, finished or failed: the statements one read sent.
+func readStatementsSince(t *testing.T, ctx context.Context, direct clickhousedriver.Conn, markMicros int64) uint64 {
+	t.Helper()
+	if err := direct.Exec(ctx, `SYSTEM FLUSH LOGS query_log`); err != nil {
+		t.Fatalf("flush logs (query_log unavailable, measurement did not happen): %v", err)
+	}
+	var n uint64
+	if err := direct.QueryRow(ctx, `SELECT count() FROM system.query_log
+WHERE `+queryLogSinceMark+` AND type IN ('QueryFinish', 'ExceptionBeforeStart', 'ExceptionWhileProcessing') AND query_kind = 'Select'
+  AND has(databases, currentDatabase())`, markMicros).Scan(&n); err != nil {
+		t.Fatalf("count statements: %v", err)
+	}
+	return n
 }
 
 // failedStatementsSince names, after the mark, every SELECT the server ended
