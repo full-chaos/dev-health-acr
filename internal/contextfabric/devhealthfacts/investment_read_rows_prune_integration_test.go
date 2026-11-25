@@ -433,3 +433,56 @@ func TestNarrowerRequestsReadFewerRowsPerStatementAgainstRealClickHouse(t *testi
 		}
 	}
 }
+
+// The served status_since is the instant the item entered its status. The
+// transition's occurred_at is a DateTime64(3); the served string is RFC3339
+// without a fraction, so it is up to 999 ms earlier than the stored instant
+// (and the duration is measured from the stored one). Not parallel: it sets
+// the package clock.
+func TestStatusSinceServesTheStoredInstantToTheMillisecondAgainstRealClickHouse(t *testing.T) {
+	ctx := context.Background()
+	orgID := sharedTestOrgID(t)
+	query, direct := sharedClickHouseFixture(t)
+	occurred := time.Date(2026, 11, 25, 9, 0, 0, 900_000_000, time.UTC)
+	now := time.Date(2026, 11, 25, 10, 0, 0, 100_000_000, time.UTC)
+	restore := devhealthfacts.SetClockForTest(func() time.Time { return now })
+	defer restore()
+	const repoID = "5b1c7e0e-2f56-4a53-9d0a-7a1f0c9d0151"
+	if err := direct.Exec(ctx, `INSERT INTO repos (id, org_id, repo, provider, last_synced) VALUES (?, ?, ?, ?, ?)`, repoID, orgID, "ms/"+repoID, "github", now); err != nil {
+		t.Fatalf("seed repository: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO work_items (work_item_id, repo_id, org_id, provider, title, status, created_at, updated_at, last_synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"ms-item", repoID, orgID, "jira", "t", "in_progress", now, now, now); err != nil {
+		t.Fatalf("seed work item: %v", err)
+	}
+	if err := direct.Exec(ctx, `INSERT INTO work_item_transitions (repo_id, work_item_id, occurred_at, to_status, last_synced, org_id) VALUES (?, ?, ?, ?, ?, ?)`,
+		repoID, "ms-item", occurred, "in_progress", now, orgID); err != nil {
+		t.Fatalf("seed transition: %v", err)
+	}
+	provider := findProvider(t, devhealthfacts.NewProviders(query), contextfabric.FactStatus)
+	result, err := provider.ReadFacts(ctx, storage.Principal{OrgID: orgID, RepositoryScopes: []string{"*"}}, contextfabric.FactQuery{
+		Time: contextfabric.TimeContext{Axis: contextfabric.TemporalCurrent}, Kind: contextfabric.FactStatus,
+		Subjects: []contextfabric.SubjectRef{workItemSubject(repoID, "ms-item")},
+	})
+	if err != nil {
+		t.Fatalf("ReadFacts: %v", err)
+	}
+	if len(result.Facts) != 1 {
+		t.Fatalf("facts = %d, want 1 (state %s)", len(result.Facts), result.State)
+	}
+	fields := result.Facts[0].Fields
+	if basis := fields["status_since_basis"].String; basis == nil || *basis != "transition_observed" {
+		t.Fatalf("status_since_basis = %+v, want transition_observed (the cell would prove nothing)", fields["status_since_basis"])
+	}
+	since := fields["status_since"].String
+	if since == nil {
+		t.Fatalf("status_since is null")
+	}
+	got, err := time.Parse(time.RFC3339Nano, *since)
+	if err != nil {
+		t.Fatalf("status_since %q: %v", *since, err)
+	}
+	if !got.Equal(occurred) {
+		t.Errorf("status_since = %s, but the transition happened at %s: the served entry time is %d ms early", *since, occurred.Format(time.RFC3339Nano), occurred.Sub(got).Milliseconds())
+	}
+}
