@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextfabric/projectionrun"
 )
@@ -80,8 +81,8 @@ func TestGraphCountCheckDisabledSourceMarkerErrorIsSilent(t *testing.T) {
 	}
 }
 
-// (O2) The probes run under their own bounded context, created after the marked
-// sources' reads: its deadline is later than the one those reads ran under.
+// (O2) The probes run under their own bounded context, not the node phase's: its
+// deadline (10 s) is earlier than the one the marked sources' reads ran under (30 s).
 func TestGraphCountCheckUnknownMarkerAbsentProbeHasItsOwnDeadline(t *testing.T) {
 	t.Parallel()
 	p := &prodShape{sourceCount: 100, ownedCount: 100, totalCount: 100, ticks: 1,
@@ -92,8 +93,8 @@ func TestGraphCountCheckUnknownMarkerAbsentProbeHasItsOwnDeadline(t *testing.T) 
 	if !okProbe || !okOwned {
 		t.Fatalf("both reads must run under a bounded context: probe %v owned %v", okProbe, okOwned)
 	}
-	if !probe.After(owned) {
-		t.Fatalf("the probe ran under the marked sources' node deadline (%v), want its own later one (%v)", owned, probe)
+	if !probe.Before(owned) {
+		t.Fatalf("the probe ran under the node deadline (%v), want its own earlier one (%v)", owned, probe)
 	}
 }
 
@@ -117,5 +118,35 @@ func TestGraphCountCheckUnknownMarkerAbsentProbeTimeoutIsAFailedProbeNotACancell
 		if lines[0][key] != want {
 			t.Fatalf("line %s = %v, want %v; line %v", key, lines[0][key], want, lines[0])
 		}
+	}
+}
+
+// A source its configuration switched off, whose graph still carries the owned
+// marker, takes the known path as it did before the marker-absent change: its
+// count read returns nothing to compare and the check completes.
+func TestGraphCountCheckDisabledSourceWithMarkerIsCheckedAsBefore(t *testing.T) {
+	t.Parallel()
+	p := &prodShape{marked: true, sourceCount: 100, ownedCount: 100, totalCount: 100, disableTeams: true, ticks: 1}
+	p.run(t)
+	check := p.checks[0]
+	if check.Outcome != projectionrun.GraphCountCheckCompleted || check.SourcesChecked != 2 || check.SourcesUnknown != 0 {
+		t.Fatalf("check = %+v, want completed with both sources checked and none unknown", check)
+	}
+}
+
+// The marker-absent probes of one check share a 10 s deadline (the check holds
+// the org lock, so they must stay short); the node phase keeps its 30 s.
+func TestGraphCountCheckUnknownMarkerAbsentProbeDeadlineIsShort(t *testing.T) {
+	t.Parallel()
+	p := &prodShape{sourceCount: 100, ownedCount: 100, totalCount: 100, ticks: 1,
+		markedBy: map[string]bool{"source-ch": false, "source-teams": true}}
+	started := time.Now()
+	p.run(t)
+	probe, ok := p.rec.deadlines["probe"]
+	if !ok {
+		t.Fatal("the probe ran without a deadline")
+	}
+	if span := probe.Sub(started); span > 15*time.Second || span <= 0 {
+		t.Fatalf("probe deadline is %v after the start, want at most 10 s plus slack", span)
 	}
 }

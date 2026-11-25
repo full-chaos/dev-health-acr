@@ -24,9 +24,14 @@ const (
 	// items, in-batch duplicates) and rows landing between the two reads.
 	graphCountToleranceFloor   = 3
 	graphCountToleranceDivisor = 50
-	// graphCountCheckTimeout bounds the whole check for one organization. It runs
-	// under the org lock, so a slow count read must not hold the tick longer.
+	// Each phase of a check has its own timeout: node reads 30 s, edge reads 30 s
+	// and the optional marker-absent probes 10 s (once an hour per source). The
+	// check runs under the org lock, which skips that organization's drain for
+	// those polls and holds the next poll of every organization, so a slow count
+	// read must not hold the tick longer.
 	graphCountCheckTimeout = 30 * time.Second
+	// graphCountProbeTimeout bounds the marker-absent probes of one check.
+	graphCountProbeTimeout = 10 * time.Second
 	// graphCountUnknownWarnAfter is the number of checks in a row a source may read
 	// unknown (no owned marker) before its marker-absent line is a Warn.
 	graphCountUnknownWarnAfter = 3
@@ -429,7 +434,7 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 	// The marker-absent reads are optional: they run after every measurement the
 	// check owes, under their own deadline, so a slow one costs nothing else.
 	if len(pending) > 0 && ctx.Err() == nil {
-		probeCtx, cancelProbes := context.WithTimeout(ctx, graphCountCheckTimeout)
+		probeCtx, cancelProbes := context.WithTimeout(ctx, graphCountProbeTimeout)
 		defer cancelProbes()
 		totals := &kindTotals{}
 		for _, source := range pending {
@@ -460,18 +465,17 @@ func (c *Coordinator) checkNodeCounts(ctx context.Context, orgID, hash string, g
 		if !ok {
 			continue
 		}
-		// A source its configuration switched off writes no watermark by design:
-		// it reads unknown and says nothing, not even about a failed marker read.
-		if enablement, ok := c.sources[source].(contextfabric.ProjectionSourceEnablement); ok && !enablement.Enabled() {
-			c.graphCounts.resetUnknown(pairKey(orgID, source))
-			result.SourcesUnknown++
-			continue
-		}
 		// CHAOS-12649: the graph counts owned-marked nodes only, so a source no walk
 		// from zero has marked yet would read as one large gap. It reads unknown.
 		known, err := graph.OwnedCountsKnown(ctx, orgID, source)
 		if err != nil {
 			c.graphCounts.resetUnknown(pairKey(orgID, source))
+			// A source its configuration switched off writes no watermark by design:
+			// a failed marker read for it says nothing and reads unknown.
+			if enablement, ok := c.sources[source].(contextfabric.ProjectionSourceEnablement); ok && !enablement.Enabled() {
+				result.SourcesUnknown++
+				continue
+			}
 			result.SourcesChecked++
 			result.Errors++
 			c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "owned_marker",
