@@ -136,7 +136,7 @@ func readProjectMixChunkBounds(ctx context.Context, client contextpacket.ClickHo
 	err := readers.QueryOrgScopedNamed(ctx, client, "ReadProjectMixChunkBounds", projectMixChunkBoundsStatement, orgID, ids, func(row contextpacket.ClickHouseRowScanner) error {
 		return row.Scan(&bounds)
 	}, readers.Binding{Name: "single_statement_rows", Value: c.singleStatementRows}, readers.Binding{Name: "chunk_rows", Value: c.chunkRows})
-	return bounds, err
+	return bounds, fixedScopeRead(err)
 }
 
 // projectMixChunk is one chunk of the pins: its pins and the key range from its

@@ -210,7 +210,7 @@ FactInvestment
     leak rebound_func_value   0
     leak no_body              0
     leak unresolvable         12
-    calls followed            1563
+    calls followed            1564
     calls accounted           34
     calls not_a_call          78
     calls excluded_by_design  1143
