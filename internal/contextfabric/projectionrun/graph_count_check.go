@@ -205,6 +205,18 @@ func (g *graphCountState) confirmLowerBound(key string) bool {
 	return false
 }
 
+// retainLowerBound drops every lower-bound suspect of one (org, source) that the
+// probe did not measure short: a failed probe measured nothing, so it drops all.
+func (g *graphCountState) retainLowerBound(prefix string, keep map[string]bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for key := range g.lowerBoundSuspects {
+		if strings.HasPrefix(key, prefix) && !keep[key] {
+			delete(g.lowerBoundSuspects, key)
+		}
+	}
+}
+
 func (g *graphCountState) clearLowerBound(key string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -397,8 +409,9 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 	// Each phase has its own timeout: the edge read walks a full history and
 	// must not starve the node read, nor the other way round.
 	nodeCtx, cancelNodes := context.WithTimeout(ctx, graphCountCheckTimeout)
+	var pending []unknownSource
 	if hasNodeCounts {
-		c.checkNodeCounts(nodeCtx, orgID, hash, nodeGraph, &result)
+		pending = c.checkNodeCounts(nodeCtx, orgID, hash, nodeGraph, &result)
 	} else if c.anySourceReadsNodeCounts() {
 		result.Errors++
 		c.logger.WarnContext(nodeCtx, "context_fabric: graph_count_unmeasured", "check", "graph_count_unmeasured", "scope", "node", "reason", "backend_no_node_counts",
@@ -413,6 +426,22 @@ func (c *Coordinator) checkGraphCounts(ctx context.Context, orgID string) {
 	defer cancelEdges()
 	c.checkEdgeCounts(edgeCtx, orgID, hash, &result)
 	cancelled = cancelled || edgeCtx.Err() != nil
+	// The marker-absent reads are optional: they run after every measurement the
+	// check owes, under their own deadline, so a slow one costs nothing else.
+	if len(pending) > 0 && ctx.Err() == nil {
+		probeCtx, cancelProbes := context.WithTimeout(ctx, graphCountCheckTimeout)
+		defer cancelProbes()
+		totals := &kindTotals{}
+		for _, source := range pending {
+			c.checkUnknownSource(probeCtx, orgID, hash, source.name, source.counter, nodeGraph, totals, &result)
+		}
+	}
+}
+
+// unknownSource is a source whose owned marker is absent, waiting for its probe.
+type unknownSource struct {
+	name    string
+	counter contextfabric.ProjectionSourceCounts
 }
 
 func (c *Coordinator) anySourceReadsNodeCounts() bool {
@@ -424,17 +453,25 @@ func (c *Coordinator) anySourceReadsNodeCounts() bool {
 	return false
 }
 
-func (c *Coordinator) checkNodeCounts(ctx context.Context, orgID, hash string, graph contextfabric.ProjectionGraphCounts, result *GraphCountCheck) {
-	totals := &kindTotals{}
+func (c *Coordinator) checkNodeCounts(ctx context.Context, orgID, hash string, graph contextfabric.ProjectionGraphCounts, result *GraphCountCheck) []unknownSource {
+	var pending []unknownSource
 	for _, source := range c.sourceNames {
 		counter, ok := c.sources[source].(contextfabric.ProjectionSourceCounts)
 		if !ok {
+			continue
+		}
+		// A source its configuration switched off writes no watermark by design:
+		// it reads unknown and says nothing, not even about a failed marker read.
+		if enablement, ok := c.sources[source].(contextfabric.ProjectionSourceEnablement); ok && !enablement.Enabled() {
+			c.graphCounts.resetUnknown(pairKey(orgID, source))
+			result.SourcesUnknown++
 			continue
 		}
 		// CHAOS-12649: the graph counts owned-marked nodes only, so a source no walk
 		// from zero has marked yet would read as one large gap. It reads unknown.
 		known, err := graph.OwnedCountsKnown(ctx, orgID, source)
 		if err != nil {
+			c.graphCounts.resetUnknown(pairKey(orgID, source))
 			result.SourcesChecked++
 			result.Errors++
 			c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "owned_marker",
@@ -443,7 +480,7 @@ func (c *Coordinator) checkNodeCounts(ctx context.Context, orgID, hash string, g
 		}
 		if !known {
 			result.SourcesUnknown++
-			c.checkUnknownSource(ctx, orgID, hash, source, counter, graph, totals, result)
+			pending = append(pending, unknownSource{name: source, counter: counter})
 			continue
 		}
 		c.graphCounts.resetUnknown(pairKey(orgID, source))
@@ -490,6 +527,7 @@ func (c *Coordinator) checkNodeCounts(ctx context.Context, orgID, hash string, g
 		}
 		c.checkDayCounts(ctx, orgID, hash, source, result)
 	}
+	return pending
 }
 
 // checkDayCounts (CHAOS-12649) compares, per stamped kind and per UTC day of the
@@ -709,8 +747,11 @@ func (c *Coordinator) checkUnknownSource(ctx context.Context, orgID, hash, sourc
 	if probe.cause != nil {
 		failureClass = classifyOutcomeError(probe.cause)
 		var failure contextfabric.SourceReadFailure
-		if errors.As(probe.cause, &failure) {
+		switch {
+		case errors.As(probe.cause, &failure):
 			code, limitClass = int(failure.ClickHouseCode()), failure.LimitClass()
+		case errors.Is(probe.cause, context.DeadlineExceeded):
+			limitClass = "execution_time"
 		}
 	}
 	c.logger.Log(ctx, level, "context_fabric: graph_count_owned_marker_absent", "check", "graph_count_owned_marker_absent", "reason", "owned_marker_absent",
@@ -722,6 +763,8 @@ func (c *Coordinator) checkUnknownSource(ctx context.Context, orgID, hash, sourc
 
 func (c *Coordinator) compareAgainstTotals(ctx context.Context, orgID, hash, source string, counter contextfabric.ProjectionSourceCounts, totalGraph contextfabric.ProjectionGraphTotalCounts, totals *kindTotals, result *GraphCountCheck) unknownProbe {
 	probe := unknownProbe{state: "ran"}
+	short := map[string]bool{}
+	defer c.graphCounts.retainLowerBound(pairKey(orgID, source)+"\x00", short)
 	sourceCounts, err := counter.ProjectionSourceCounts(ctx, orgID)
 	if err != nil {
 		probe.state, probe.failed, probe.cause = "failed", 1, err
@@ -753,6 +796,7 @@ func (c *Coordinator) compareAgainstTotals(ctx context.Context, orgID, hash, sou
 			c.graphCounts.clearLowerBound(gapKey)
 			continue
 		}
+		short[gapKey] = true
 		if !c.graphCounts.confirmLowerBound(gapKey) {
 			continue
 		}
