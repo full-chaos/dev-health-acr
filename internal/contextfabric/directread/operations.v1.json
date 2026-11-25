@@ -575,7 +575,8 @@
       "disclosure": [],
       "notes": [
         "non-deterministic: a random seed per call, no seed argument (capacityforecast.go:139-148; A1.1)",
-        "null result = no history or no target, indistinguishable (capacityforecast.go:229-260)"
+        "null result = no history or no target, indistinguishable (capacityforecast.go:229-260)",
+        "backlogState STALE or NO_ROWS (a missing day, not a healthy one) answers declared_partial with reason degraded, the verdict throughputForecast gets from degradedReason; MEASURED or null, a null forecast and an empty list answer as before (CHAOS-14560)"
       ]
     },
     {
@@ -872,7 +873,10 @@
         }
       ],
       "withheld_outputs": [],
-      "disclosure": []
+      "disclosure": [],
+      "notes": [
+        "backlogState STALE or NO_ROWS (a missing day, not a healthy one) answers declared_partial with reason degraded, the verdict throughputForecast gets from degradedReason; MEASURED or null, a null forecast and an empty list answer as before (CHAOS-14560)"
+      ]
     },
     {
       "name": "catalogValues",

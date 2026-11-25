@@ -37,6 +37,20 @@ func TestVerdictRows(t *testing.T) {
 		{"forecast no backlog rows", "throughputForecast", `{"throughputForecast":{"insufficientHistory":false,"backlogState":"NO_ROWS","degradedReason":"NO_ROWS"}}`, `{}`, CompletenessVerdict{CompletenessDeclaredPartial, ReasonDegraded}},
 		{"forecast short history and stale backlog", "throughputForecast", `{"throughputForecast":{"insufficientHistory":true,"degradedReason":"STALE"}}`, `{}`, CompletenessVerdict{CompletenessDeclaredPartial, ReasonInsufficientHistory}},
 		{"forecast degradedReason not selected", "throughputForecast", `{"throughputForecast":{"insufficientHistory":false}}`, `{}`, CompletenessVerdict{CompletenessUnknown, ReasonDisclosureAbsent}},
+		{"capacity stale backlog", "capacityForecast", `{"capacityForecast":{"backlogState":"STALE"}}`, `{}`, CompletenessVerdict{CompletenessDeclaredPartial, ReasonDegraded}},
+		{"capacity no backlog rows", "capacityForecast", `{"capacityForecast":{"backlogState":"NO_ROWS"}}`, `{}`, CompletenessVerdict{CompletenessDeclaredPartial, ReasonDegraded}},
+		{"capacity measured backlog", "capacityForecast", `{"capacityForecast":{"backlogState":"MEASURED"}}`, `{}`, CompletenessVerdict{State: CompletenessDeclaredComplete}},
+		{"capacity null state", "capacityForecast", `{"capacityForecast":{"backlogState":null}}`, `{}`, CompletenessVerdict{State: CompletenessDeclaredComplete}},
+		{"capacity null forecast", "capacityForecast", `{"capacityForecast":null}`, `{}`, CompletenessVerdict{State: CompletenessDeclaredComplete}},
+		{"capacity state not selected", "capacityForecast", `{"capacityForecast":{"forecastId":"f"}}`, `{}`, CompletenessVerdict{State: CompletenessDeclaredComplete}},
+		{"capacities state not selected", "capacityForecasts", `{"capacityForecasts":{"edges":[{"node":{"forecastId":"f"}}]}}`, `{"filters":{"limit":5}}`, CompletenessVerdict{State: CompletenessDeclaredComplete}},
+		{"capacities stale first edge", "capacityForecasts", `{"capacityForecasts":{"edges":[{"node":{"backlogState":"STALE"}}]}}`, `{"filters":{"limit":5}}`, CompletenessVerdict{CompletenessDeclaredPartial, ReasonDegraded}},
+		{"capacities stale second edge", "capacityForecasts", `{"capacityForecasts":{"edges":[{"node":{"backlogState":"MEASURED"}},{"node":{"backlogState":"STALE"}}]}}`, `{"filters":{"limit":5}}`, CompletenessVerdict{CompletenessDeclaredPartial, ReasonDegraded}},
+		{"capacities no rows second edge", "capacityForecasts", `{"capacityForecasts":{"edges":[{"node":{"backlogState":null}},{"node":{"backlogState":"NO_ROWS"}}]}}`, `{"filters":{"limit":5}}`, CompletenessVerdict{CompletenessDeclaredPartial, ReasonDegraded}},
+		{"capacities measured and null", "capacityForecasts", `{"capacityForecasts":{"edges":[{"node":{"backlogState":"MEASURED"}},{"node":{"backlogState":null}}]}}`, `{"filters":{"limit":5}}`, CompletenessVerdict{State: CompletenessDeclaredComplete}},
+		{"capacities empty edges", "capacityForecasts", `{"capacityForecasts":{"edges":[]}}`, `{"filters":{"limit":5}}`, CompletenessVerdict{State: CompletenessDeclaredComplete}},
+		{"capacities null list", "capacityForecasts", `{"capacityForecasts":null}`, `{"filters":{"limit":5}}`, CompletenessVerdict{CompletenessUnknown, ReasonDisclosureAbsent}},
+		{"capacities stale and at cap", "capacityForecasts", `{"capacityForecasts":{"edges":[{"node":{"backlogState":"STALE"}}]}}`, `{"filters":{"limit":1}}`, CompletenessVerdict{CompletenessDeclaredPartial, ReasonDegraded}},
 		{"full coverage low", "investmentFull", `{"analytics":{"sankey":{"coverage":{"teamCoverage":0.4,"repoCoverage":1}},"breakdowns":[]}}`, `{}`, CompletenessVerdict{CompletenessDeclaredPartial, ReasonCoverageBelowOne}},
 		{"full sankey null", "investmentFull", `{"analytics":{"sankey":null}}`, `{}`, CompletenessVerdict{CompletenessUnknown, ReasonDisclosureAbsent}},
 		{"hotspots no limit sent", "hotspots", `{"hotspots":{"rows":[{}]}}`, `{}`, CompletenessVerdict{CompletenessUnknown, ReasonLimitNotSent}},
@@ -165,5 +179,43 @@ func TestVerdictIndexedCapAndRatioRows(t *testing.T) {
 	}
 	if got := full.Verdict(body("0.99"), dec(`{}`)); got.State != CompletenessDeclaredPartial || got.Reason != ReasonCoverageBelowOne {
 		t.Fatalf("coverage 0.99: %+v", got)
+	}
+}
+
+// Every served operation whose document selects a backlogState field has a verdict rule for it:
+// a newestDayStatePaths row (set on its policy row at load), or a named exemption whose own
+// disclosure field says the same thing. A document that starts selecting backlogState fails here.
+func TestEveryBacklogStateOperationHasAVerdictRule(t *testing.T) {
+	exempt := map[string]string{"throughputForecast": "throughputForecast.degradedReason"}
+	cat := loadDefault(t)
+	carriers := 0
+	for name, op := range cat.byName {
+		carries := false
+		for _, out := range op.Outputs {
+			carries = carries || strings.HasSuffix(out.Path, ".backlogState")
+		}
+		if !carries {
+			if op.newestDayStatePath != "" {
+				t.Errorf("%s has a newest day state rule but selects no backlogState", name)
+			}
+			continue
+		}
+		carriers++
+		if disclosure, ok := exempt[name]; ok {
+			found := false
+			for _, d := range op.Disclosure {
+				found = found || d.Path == disclosure
+			}
+			if !found || op.newestDayStatePath != "" {
+				t.Errorf("%s is exempt through %s, which its policy row does not carry", name, disclosure)
+			}
+			continue
+		}
+		if op.newestDayStatePath == "" {
+			t.Errorf("%s selects backlogState and has neither a newestDayStatePaths row nor a named exemption", name)
+		}
+	}
+	if carriers != 3 {
+		t.Errorf("%d operations select backlogState, want capacityForecast, capacityForecasts, throughputForecast", carriers)
 	}
 }

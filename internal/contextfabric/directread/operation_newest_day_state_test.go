@@ -186,17 +186,17 @@ func TestTestopsRiskTeamIdsIsCarriedBySchemaTextOnly(t *testing.T) {
 	}
 }
 
-// Repro of today's behavior, not a statement that it is right: a STALE newest day of the backlog is served
-// declared_complete for capacityForecast and capacityForecasts (the policy has no disclosure rule for the
-// field), while throughputForecast declares the same STALE backlog partial through degradedReason.
-func TestAStaleBacklogDayIsServedDeclaredCompleteForCapacityForecasts(t *testing.T) {
+// A STALE newest day of the backlog is a missing day, not a healthy one: capacityForecast and
+// capacityForecasts serve it declared_partial with reason degraded, as throughputForecast does
+// through degradedReason (CHAOS-14560).
+func TestAStaleBacklogDayIsServedDeclaredPartialForCapacityForecasts(t *testing.T) {
 	for _, tc := range []struct {
 		operation string
 		set       map[string]any
 		want      directread.Completeness
 	}{
-		{"capacityForecast", map[string]any{"capacityForecast.backlogState": "STALE"}, directread.CompletenessDeclaredComplete},
-		{"capacityForecasts", map[string]any{"capacityForecasts.edges[*].node.backlogState": "STALE"}, directread.CompletenessDeclaredComplete},
+		{"capacityForecast", map[string]any{"capacityForecast.backlogState": "STALE"}, directread.CompletenessDeclaredPartial},
+		{"capacityForecasts", map[string]any{"capacityForecasts.edges[*].node.backlogState": "STALE"}, directread.CompletenessDeclaredPartial},
 		{"throughputForecast", map[string]any{"throughputForecast.backlogState": "STALE", "throughputForecast.degradedReason": "STALE", "throughputForecast.insufficientHistory": false}, directread.CompletenessDeclaredPartial},
 	} {
 		t.Run(tc.operation, func(t *testing.T) {
@@ -215,7 +215,7 @@ func TestAStaleBacklogDayIsServedDeclaredCompleteForCapacityForecasts(t *testing
 			body, _ := json.Marshal(map[string]any{"data": answer})
 			h := newOpHarness(t, func(opRecorded) (int, string) { return 200, string(body) }, opHarnessOptions{})
 			resp := h.run(t, opUnrestricted(opOrgA), tc.operation, opMinimalVariables(t, op))
-			if resp.Call != directread.CallServed || resp.Completeness != tc.want {
+			if resp.Call != directread.CallServed || resp.Completeness != tc.want || (tc.want == directread.CompletenessDeclaredPartial && resp.CompletenessReason != directread.ReasonDegraded) {
 				t.Fatalf("%s with a STALE backlog: call %s, completeness %s (reason %s), want served and %s", tc.operation, resp.Call, resp.Completeness, resp.CompletenessReason, tc.want)
 			}
 		})

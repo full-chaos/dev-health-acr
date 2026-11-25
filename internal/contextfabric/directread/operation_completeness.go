@@ -78,6 +78,47 @@ var operationCaps = map[string][]capSpec{
 	"workItemTeamAttributions":       {},
 }
 
+// newestDayStatePaths names, per operation, the NewestDayState output whose
+// STALE or NO_ROWS value is a missing day, not a healthy one: declared_partial
+// with reason degraded, the verdict throughputForecast gets from degradedReason.
+// "[*]." marks a list walk: any element that fires makes the answer partial.
+// TestEveryBacklogStateOperationHasAVerdictRule holds every operation that can
+// carry backlogState to this table or to a named exemption.
+var newestDayStatePaths = map[string]string{
+	"capacityForecast":  "capacityForecast.backlogState",
+	"capacityForecasts": "capacityForecasts.edges[*].node.backlogState",
+}
+
+// newestDayStatePartial reads a NewestDayState path. Only a STALE or NO_ROWS value is a
+// missing day: a null parent (no forecast, no list), a null or MEASURED state and a state the
+// answer does not select all leave the verdict as it was.
+func newestDayStatePartial(root any, path string) bool {
+	listPath, elemPath, isList := strings.Cut(path, "[*].")
+	if !isList {
+		return readNewestDayState(root, path)
+	}
+	list, _ := lookupScalarPath(root, listPath)
+	elems, _ := list.([]any)
+	for _, el := range elems {
+		if readNewestDayState(el, elemPath) {
+			return true
+		}
+	}
+	return false
+}
+
+func readNewestDayState(root any, path string) bool {
+	holder := root
+	field := path
+	if i := strings.LastIndex(path, "."); i >= 0 {
+		holder, _ = lookupScalarPath(root, path[:i])
+		field = path[i+1:]
+	}
+	obj, _ := holder.(map[string]any)
+	state, _ := obj[field].(string)
+	return state == "STALE" || state == "NO_ROWS"
+}
+
 // Verdict is the one producer of completeness for every served operation.
 // Order: a disclosure field that fires or a list at its cap = declared_partial;
 // else a field the verdict needs but the answer lacks = unknown; else
@@ -118,6 +159,9 @@ func (op *OperationPolicy) Verdict(data []byte, vars map[string]any) Completenes
 				}
 			}
 		}
+	}
+	if op.newestDayStatePath != "" && newestDayStatePartial(root, op.newestDayStatePath) {
+		return CompletenessVerdict{State: CompletenessDeclaredPartial, Reason: ReasonDegraded}
 	}
 	for _, c := range operationCaps[op.Name] {
 		hit, reason := op.capReached(root, vars, c)
