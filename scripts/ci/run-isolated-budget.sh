@@ -43,12 +43,32 @@ else
   out="$(mktemp)"
   trap 'rm -f "$out"' EXIT
 fi
+# RESOURCE_SAMPLER_SECS (optional, CHAOS-14593): when > 0, resource-sampler.sh
+# runs in the background for the test run and writes its CPU/load/memory/
+# docker lines straight to this script's stdout (the live step log), not
+# through the go test pipe below. It never changes this script's rc.
+sampler_pid=""
+stop_sampler() {
+  if [ -n "$sampler_pid" ]; then
+    kill "$sampler_pid" 2>/dev/null || true
+    wait "$sampler_pid" 2>/dev/null || true
+    sampler_pid=""
+  fi
+}
+sampler_secs="${RESOURCE_SAMPLER_SECS:-0}"
+case "$sampler_secs" in '' | *[!0-9]*) sampler_secs=0 ;; esac
+if [ "$sampler_secs" -gt 0 ]; then
+  "$here/resource-sampler.sh" "$sampler_secs" &
+  sampler_pid=$!
+fi
 start=$SECONDS
 set +e
 if [ -n "$json_out" ]; then
+  # --unbuffered (CHAOS-14593): a block-buffered jq held up to 4 KiB of test
+  # lines back from the live log, so a runner death lost the last of them.
   # shellcheck disable=SC2086
   $runner GOTEST_PKGS="$packages" GOTEST_TIMEOUT="$GOTEST_TIMEOUT" GOTEST_JSON=-json 2>&1 | tee "$out" \
-    | jq -Rj '(fromjson? // {Action: "output", Output: (. + "\n")}) | select(.Action == "output") | .Output'
+    | jq --unbuffered -Rj '(fromjson? // {Action: "output", Output: (. + "\n")}) | select(.Action == "output") | .Output'
   pipe=("${PIPESTATUS[@]}")
   if [ "${pipe[2]}" -ne 0 ]; then pipe[1]=${pipe[2]}; fi
 else
@@ -56,6 +76,7 @@ else
   $runner GOTEST_PKGS="$packages" GOTEST_TIMEOUT="$GOTEST_TIMEOUT" 2>&1 | tee "$out"
   pipe=("${PIPESTATUS[@]}")
 fi
+stop_sampler
 set -e
 status=${pipe[0]}
 if [ "$status" -eq 0 ] && [ "${pipe[1]}" -ne 0 ]; then

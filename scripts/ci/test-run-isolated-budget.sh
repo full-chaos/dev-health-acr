@@ -47,6 +47,30 @@ expect test-failure-fails 1 'printed FAIL' 600 "$tmp/testfail.sh"
 stub badrc 3 $'ok  \texample/pkg\t10.0s'
 expect runner-status-wins 3 'top 5 packages' 600 "$tmp/badrc.sh"
 
+# CHAOS-14593: the resource sampler prints into the live output, never
+# changes the rc (a pass stays 0, a runner rc 3 stays 3), stops with the
+# script, and is off unless RESOURCE_SAMPLER_SECS is set.
+stub slow 0 $'ok  \texample/pkg\t505.6s'
+{ printf '#!/usr/bin/env bash\nsleep 2\n'; tail -n +2 "$tmp/slow.sh"; } >"$tmp/slow2.sh"; chmod +x "$tmp/slow2.sh"
+stub slowbad 3 $'ok  \texample/pkg\t10.0s'
+{ printf '#!/usr/bin/env bash\nsleep 2\n'; tail -n +2 "$tmp/slowbad.sh"; } >"$tmp/slowbad2.sh"; chmod +x "$tmp/slowbad2.sh"
+for row in "0 $tmp/slow2.sh" "3 $tmp/slowbad2.sh"; do
+  want="${row%% *}"; r="${row#* }"; rc=0
+  RESOURCE_SAMPLER_SECS=1 RUNNER="$r" GOTEST_TIMEOUT=600s "$here/run-isolated-budget.sh" t example/pkg >"$tmp/s.out" 2>&1 || rc=$?
+  if [ "$rc" -eq "$want" ] && grep -q '^resource-start nproc=' "$tmp/s.out" && grep -q '^resource-sample [0-9:]*Z cpu\[[^]]*\] load\[[^]]*\] mem\[' "$tmp/s.out" && grep -q 'top 5 packages' "$tmp/s.out"; then
+    echo "ok   sampler-prints-and-keeps-rc-$want"
+  else
+    echo "FAIL sampler rc=$rc want=$want"; cat "$tmp/s.out"; fails=$((fails + 1))
+  fi
+done
+n1="$(grep -c '^resource-sample' "$tmp/s.out")"
+sleep 2
+n2="$(grep -c '^resource-sample' "$tmp/s.out")"
+if [ "$n1" = "$n2" ]; then echo "ok   sampler-stops-with-the-script"; else echo "FAIL sampler still writing after exit ($n1 -> $n2)"; fails=$((fails + 1)); fi
+rc=0
+RUNNER="$tmp/real.sh" GOTEST_TIMEOUT=600s "$here/run-isolated-budget.sh" t example/pkg >"$tmp/s0.out" 2>&1 || rc=$?
+if [ "$rc" -eq 0 ] && ! grep -q '^resource-sample' "$tmp/s0.out"; then echo "ok   sampler-off-by-default"; else echo "FAIL sampler-off rc=$rc"; fails=$((fails + 1)); fi
+
 rc=0
 GOTEST_TIMEOUT=20m RUNNER="$tmp/real.sh" "$here/run-isolated-budget.sh" t example/pkg >"$tmp/m.out" 2>&1 || rc=$?
 if [ "$rc" -eq 0 ] && grep -q 'budget 1200s' "$tmp/m.out"; then echo "ok   minutes-budget"; else echo "FAIL minutes-budget rc=$rc"; fails=$((fails + 1)); fi

@@ -546,6 +546,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -650,6 +654,10 @@ jobs:
             10) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts unit-mid)"; split_pkg=devhealthfacts; heavy_half="mid half" ;;
           esac
           case '${{ matrix.shard }}' in 5 | 6 | 7 | 8 | 9 | 10) scripts/ci/race-split.sh "$split_pkg" verify; scripts/ci/race-split.sh "$split_pkg" partition ;; esac
+          # CHAOS-14593: CPU/load/memory/docker samples every 15 s, written
+          # straight to this step's log; stopped below, never changes status.
+          scripts/ci/resource-sampler.sh 15 &
+          sampler_pid=$!
           set +e
           if [ -n "$isolated_timeout" ]; then
             make test-coverage GOTEST_PKGS="$packages" GOTEST_PLAIN_TIMEOUT="$isolated_timeout"
@@ -657,6 +665,8 @@ jobs:
             make test-coverage GOTEST_PKGS="$packages"
           fi
           status=$?
+          kill "$sampler_pid" 2>/dev/null
+          wait "$sampler_pid" 2>/dev/null
           set -e
           # gotestsum names the suite after the package, and the reports merge
           # refuses one suite name in two shards. The heavy half holds
@@ -711,6 +721,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -835,6 +858,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -939,6 +966,10 @@ jobs:
             10) export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts unit-mid)"; split_pkg=devhealthfacts; heavy_half="mid half" ;;
           esac
           case '${{ matrix.shard }}' in 5 | 6 | 7 | 8 | 9 | 10) scripts/ci/race-split.sh "$split_pkg" verify; scripts/ci/race-split.sh "$split_pkg" partition ;; esac
+          # CHAOS-14593: CPU/load/memory/docker samples every 15 s, written
+          # straight to this step's log; stopped below, never changes status.
+          scripts/ci/resource-sampler.sh 15 &
+          sampler_pid=$!
           set +e
           if [ -n "$isolated_timeout" ]; then
             make test-coverage GOTEST_PKGS="$packages" GOTEST_PLAIN_TIMEOUT="$isolated_timeout"
@@ -946,6 +977,8 @@ jobs:
             make test-coverage GOTEST_PKGS="$packages"
           fi
           status=$?
+          kill "$sampler_pid" 2>/dev/null
+          wait "$sampler_pid" 2>/dev/null
           set -e
           # gotestsum names the suite after the package, and the reports merge
           # refuses one suite name in two shards. The heavy half holds
@@ -1000,6 +1033,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -1036,6 +1082,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       # actions/checkout v7.0.0
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
@@ -1098,6 +1148,7 @@ jobs:
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh ${{ matrix.shard }} 4)"
           printf 'shard %s/4 packages:\n%s\n' '${{ matrix.shard }}' "$packages"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$(make -s print-gotest-timeout)" scripts/ci/run-isolated-budget.sh 'shard ${{ matrix.shard }} of 4' "$packages"
       # Keeps this shard's test2json events so the per-test cost of each shard
       # package under -race can be read (the text output prints package totals
@@ -1111,6 +1162,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -1144,6 +1208,10 @@ jobs:
     if: needs.plan.outputs.heavy == 'true' && !contains(fromJSON(needs.plan.outputs.skip_jobs), 'race-devhealthschema')
     runs-on: ubuntu-latest
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1162,6 +1230,7 @@ jobs:
           set -euo pipefail
           packages="$(scripts/ci/test-shard.sh isolated-shared)"
           printf 'isolated (shared) packages:\n%s\n' "$packages"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=900s scripts/ci/run-isolated-budget.sh 'devhealthschema (isolated scope)' "$packages"
       # Keeps this job's test2json events so per-test cost under -race can be
       # read. if: always() so a timed-out or failing job still leaves them.
@@ -1235,6 +1304,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1274,6 +1347,7 @@ jobs:
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthfacts race-rest)"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (rest half)' "$packages"
       # Keeps this job's test2json events for unit-dedup-plan and verify
       # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
@@ -1287,6 +1361,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -1312,6 +1399,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1349,6 +1440,7 @@ jobs:
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts race-heavy)"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (heavy half)' "$packages"
       # Keeps this job's test2json events for unit-dedup-plan and verify
       # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
@@ -1362,6 +1454,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -1387,6 +1492,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1424,6 +1533,7 @@ jobs:
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts race-mid)"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (mid third)' "$packages"
       # Keeps this job's test2json events for unit-dedup-plan and verify
       # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
@@ -1437,6 +1547,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -1462,6 +1585,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1499,6 +1626,7 @@ jobs:
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts race-fourth)"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (fourth quarter)' "$packages"
       # Keeps this job's test2json events for unit-dedup-plan and verify
       # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
@@ -1512,6 +1640,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -1537,6 +1678,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1574,6 +1719,7 @@ jobs:
           packages="$(scripts/ci/test-shard.sh isolated-dedicated devhealthfacts)"
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthfacts race-fifth)"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT=20m scripts/ci/run-isolated-budget.sh 'devhealthfacts (fifth leg)' "$packages"
       # Keeps this job's test2json events for unit-dedup-plan and verify
       # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
@@ -1587,6 +1733,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -1630,6 +1789,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1668,6 +1831,7 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh devhealthsource race-rest)"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'devhealthsource (rest half)' "$packages"
       # Keeps this job's test2json events for unit-dedup-plan and verify
       # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
@@ -1681,6 +1845,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -1705,6 +1882,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1745,6 +1926,7 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource race-heavy)"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'devhealthsource (heavy half)' "$packages"
       # Keeps this job's test2json events for unit-dedup-plan and verify
       # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
@@ -1758,6 +1940,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -1782,6 +1977,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1820,6 +2019,7 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource race-mid)"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'devhealthsource (mid half)' "$packages"
       # Keeps this job's test2json events for unit-dedup-plan and verify
       # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
@@ -1833,6 +2033,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -1862,6 +2075,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1900,6 +2117,7 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh devhealthsource race-fourth)"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'devhealthsource (fourth job)' "$packages"
       # Keeps this job's test2json events for unit-dedup-plan and verify
       # (scripts/ci/observed-race-dedup.sh). if: always() so a failing job still
@@ -1913,6 +2131,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -1942,6 +2173,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -1972,6 +2207,7 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh factoracle rest)"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'factoracle (rest half)' "$packages"
       # Keeps this job's test2json events so per-test cost under -race can be
       # read. if: always() so a timed-out or failing job still leaves them.
@@ -1984,6 +2220,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -2006,6 +2255,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -2034,6 +2287,7 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'mcp (isolated scope)' "$packages"
       # Keeps this job's test2json events so per-test cost under -race can be
       # read. if: always() so a timed-out or failing job still leaves them.
@@ -2046,6 +2300,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -2068,6 +2335,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -2096,6 +2367,7 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'contracts/v1 (isolated scope)' "$packages"
       # Keeps this job's test2json events so per-test cost under -race can be
       # read. if: always() so a timed-out or failing job still leaves them.
@@ -2108,6 +2380,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -2137,6 +2422,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -2175,6 +2464,7 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -skip=$(scripts/ci/race-split.sh api rest)"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'api (rest half)' "$packages"
       # Keeps this job's test2json events so per-test cost under -race can be
       # read. if: always() so a timed-out or failing job still leaves them.
@@ -2187,6 +2477,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -2212,6 +2515,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -2252,6 +2559,7 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh api heavy)"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'api (heavy half)' "$packages"
       # Keeps this job's test2json events so per-test cost under -race can be
       # read. if: always() so a timed-out or failing job still leaves them.
@@ -2264,6 +2572,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
@@ -2283,6 +2604,10 @@ jobs:
       TESTCONTAINERS_RYUK_DISABLED: 'true'
       TESTCONTAINERS_SESSION_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${{ strategy.job-index }}
     steps:
+      # CHAOS-14593: logs the runner's cores; a budget red on this job
+      # quotes this output.
+      - name: Log runner cores
+        run: nproc; lscpu | head -20; free -m || true
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with: {persist-credentials: false}
       # actions/setup-go v6.5.0
@@ -2315,6 +2640,7 @@ jobs:
           printf 'isolated (dedicated) packages:\n%s\n' "$packages"
           timeout="$(make -s isolated-timeout PKG="$packages")"
           export GOFLAGS="-trimpath -run=$(scripts/ci/race-split.sh factoracle heavy)"
+          export RESOURCE_SAMPLER_SECS=15
           RACE_JSON_OUT=.tmp/race-json/race.json GOTEST_TIMEOUT="$timeout" scripts/ci/run-isolated-budget.sh 'factoracle (heavy half)' "$packages"
       # Keeps this job's test2json events so per-test cost under -race can be
       # read. if: always() so a timed-out or failing job still leaves them.
@@ -2327,6 +2653,19 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
+      # CHAOS-14593: logs the image digests this job's tests ran on. After
+      # the tests (testcontainers start inside the test step), before the
+      # reap; every command is || true, so it never fails the job.
+      - name: Log container image digests
+        if: always()
+        run: |
+          docker ps -a --no-trunc --format '{{.Image}} {{.ID}}' || true
+          docker image ls --digests --no-trunc --format '{{.Repository}}:{{.Tag}} {{.Digest}} {{.ID}}' || true
+          for img in $(docker image ls -q --no-trunc | sort -u); do
+            docker image inspect --format '{{.RepoTags}} {{.RepoDigests}} {{.Id}}' "$img" || true
+          done
+          free -m || true
+          docker stats --no-stream --format '{{.Name}} {{.MemUsage}} {{.MemPerc}} {{.CPUPerc}}' || true
       - name: Remove this job's testcontainers by session id
         if: always()
         run: scripts/ci/reap-testcontainers-session.sh
