@@ -36,6 +36,10 @@ const (
 	// than one 24k read does (58.1 MB measured), whatever the link count: 64 MiB
 	// is that peak plus 15%, a quarter of the 256 MiB API statement cap.
 	linksInsideLargeMax = uint64(64 << 20)
+	// linkedReadsInsideLargeMax bounds each linked pull request read at 96k
+	// all-inside links: its first measure (33,601,449 B, CI run 45556469550)
+	// plus 15%.
+	linkedReadsInsideLargeMax = uint64(38_641_667)
 	// linkedPullRequestStatements is the number of team statements that read
 	// the project-reached pull requests (reached repositories, counts, states).
 	linkedPullRequestStatements = 3
@@ -116,7 +120,7 @@ SELECT ?, concat('`+prefix+`-', repeat('x', 96), '-', toString(number)), toUInt3
 			})
 			t.Run("links inside the owned projects", func(t *testing.T) {
 				measureTeamReachAxis(t, ctx, query, statementthreads.Unbounded(rawQuery), direct, ownedLinksMemoryOrg, merged, parts, linkFiller("owned", "proj-owner", "repo-reached"),
-					"links inside the owned projects "+mode, prodLinkedIssues, 4*prodLinkedIssues, 0, axisGuard{smallMax: 56 << 20, largeMax: linksInsideLargeMax})
+					"links inside the owned projects "+mode, prodLinkedIssues, 4*prodLinkedIssues, 0, axisGuard{smallMax: 56 << 20, largeMax: linksInsideLargeMax, linkedLargeMax: linkedReadsInsideLargeMax})
 			})
 			if merged {
 				return
@@ -248,7 +252,11 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery
 		for hash, peak := range small[i] {
 			t.Logf("SLOPE %s: statement %d (%s) peak memory %d bytes at %d, %d at %d", axis, hash, filters[i].Table, peak, smallSize, large[i][hash], largeSize)
 		}
-		guard.assert(t, axis+" / "+filters[i].Table+" statements", small[i], large[i])
+		filterGuard := guard
+		if i == linkedPullRequestFilter && guard.linkedLargeMax > 0 {
+			filterGuard.largeMax = guard.linkedLargeMax
+		}
+		filterGuard.assert(t, axis+" / "+filters[i].Table+" statements", small[i], large[i])
 	}
 	if ceilingSize > 0 {
 		growTo(ceilingSize)
@@ -330,6 +338,8 @@ type axisGuard struct {
 	floor    uint64
 	smallMax uint64
 	largeMax uint64
+	// linkedLargeMax, when set, is largeMax for the linked pull request reads.
+	linkedLargeMax uint64
 }
 
 func (g axisGuard) assert(t *testing.T, label string, small, large statementMemory) {
