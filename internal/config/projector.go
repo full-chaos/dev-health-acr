@@ -21,6 +21,7 @@ const (
 	defaultProjectionConcurrency  = 4
 	defaultProjectionDrainBudget  = 500
 	defaultProjectionCountCheck   = 10 * time.Minute
+	defaultProjectionUnknownProbe = time.Hour
 	defaultProjectorPingTimeout   = 5 * time.Second
 	envContextFabricProjection    = "ACR_CONTEXT_FABRIC_PROJECTION_ENABLED"
 	envContextFabricProjectorOrgs = "ACR_CONTEXT_FABRIC_PROJECTOR_ORG_IDS"
@@ -46,6 +47,7 @@ const (
 	envContextFabricConcurrency        = "ACR_CONTEXT_FABRIC_PROJECTION_CONCURRENCY"
 	envContextFabricDrainBudget        = "ACR_CONTEXT_FABRIC_PROJECTION_DRAIN_BATCH_BUDGET"
 	envContextFabricCountCheck         = "ACR_CONTEXT_FABRIC_PROJECTION_COUNT_CHECK_INTERVAL"
+	envContextFabricUnknownProbe       = "ACR_CONTEXT_FABRIC_PROJECTION_UNKNOWN_PROBE_INTERVAL"
 	envContextFabricTeamsProjects      = "ACR_CONTEXT_FABRIC_PROJECT_TEAMS_PROJECTS_ENABLED"
 	envContextFabricWorkItemMembership = "ACR_CONTEXT_FABRIC_PROJECT_WORK_ITEM_PROJECT_MEMBERSHIP_ENABLED"
 	envEpisodeWriteback                = "ACR_ENABLE_EPISODE_WRITEBACK"
@@ -150,7 +152,11 @@ type ProjectorConfig struct {
 	DrainBatchBudget int
 	// CountCheckInterval is the minimum gap between per-organization
 	// source-vs-graph count checks; negative disables them.
-	CountCheckInterval   time.Duration
+	CountCheckInterval time.Duration
+	// UnknownProbeInterval is the minimum gap between the source and graph count
+	// reads the count check makes for a source whose owned marker is absent
+	// (default 1h); negative disables them.
+	UnknownProbeInterval time.Duration
 	TeamsProjectsEnabled bool
 	// WorkItemProjectMembership
 	// (ACR_CONTEXT_FABRIC_PROJECT_WORK_ITEM_PROJECT_MEMBERSHIP_ENABLED,
@@ -309,6 +315,9 @@ func loadProjector(lookup lookupEnv, required requiredStores) (ProjectorConfig, 
 		return ProjectorConfig{}, err
 	}
 	if cfg.CountCheckInterval, err = durationValue(lookup, envContextFabricCountCheck, defaultProjectionCountCheck); err != nil {
+		return ProjectorConfig{}, err
+	}
+	if cfg.UnknownProbeInterval, err = durationValue(lookup, envContextFabricUnknownProbe, defaultProjectionUnknownProbe); err != nil {
 		return ProjectorConfig{}, err
 	}
 	// Defaults to true as of CHAOS-3802 (was false). The old default existed

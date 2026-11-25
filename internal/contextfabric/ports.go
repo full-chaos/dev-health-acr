@@ -1474,6 +1474,17 @@ type ProjectionGraphCounts interface {
 	OwnedCountsKnown(ctx context.Context, orgID, source string) (bool, error)
 }
 
+// SourceReadFailure is an OPTIONAL shape of an error a ProjectionSource returns
+// from a count read that ClickHouse refused: the exception code and the limit it
+// stands for (memory, execution_time, rows_to_read, bytes_to_read, result_rows or
+// other), never the exception text. A caller logs both to tell a cap from a
+// missing table.
+type SourceReadFailure interface {
+	error
+	ClickHouseCode() int32
+	LimitClass() string
+}
+
 // ProjectionGraphTotalCounts is an OPTIONAL capability a ProjectionBackend
 // implements beside ProjectionGraphCounts: the nodes of one kind the organization
 // holds in its ACTIVE graph WITHOUT the owned filter, stubs included. It is at

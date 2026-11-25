@@ -51,12 +51,17 @@ type disabledCounting struct{ *countingSource }
 func (disabledCounting) Enabled() bool { return false }
 
 type prodShape struct {
-	marked        bool
-	sourceCount   int64
-	ownedCount    int64
-	totalCount    int64
-	disableTeams  bool
-	ticks         int
+	marked       bool
+	sourceCount  int64
+	ownedCount   int64
+	totalCount   int64
+	disableTeams bool
+	ticks        int
+	// probeInterval defaults to a minute (every check probes); tickAt, when set,
+	// gives each tick's offset from testStart (else one minute apart).
+	probeInterval time.Duration
+	tickAt        []time.Duration
+	chErr         error
 	buffer        *bytes.Buffer
 	observer      *belowObserver
 	chSource      *countingSource
@@ -77,6 +82,10 @@ func (p *prodShape) run(t *testing.T) {
 		return &countingSource{fakeSource: &fakeSource{name: name, dormant: true}, counts: map[contextfabric.SubjectKind]int64{kind: p.sourceCount}}
 	}
 	p.chSource, p.teamsSource = newCounting("source-ch"), newCounting("source-teams")
+	p.chSource.err = p.chErr
+	if p.probeInterval == 0 {
+		p.probeInterval = time.Minute
+	}
 	var teams contextfabric.ProjectionSource = p.teamsSource
 	if p.disableTeams {
 		teams = disabledCounting{p.teamsSource}
@@ -99,24 +108,32 @@ func (p *prodShape) run(t *testing.T) {
 			{Name: "source-episodes", Source: fakeSourceNoVersionCapability{inner: &fakeSource{name: "source-episodes", dormant: true}}},
 			{Name: "source-teams", Source: teams},
 		},
-		Backend:                 backend,
-		Checkpoints:             newFakeCheckpointStore(),
-		RebuildMarkers:          newFakeRebuildMarker(),
-		Observer:                p.observer,
-		Logger:                  logger,
-		GraphCountCheckInterval: time.Minute,
-		Now:                     func() time.Time { return *clock.Load() },
+		Backend:                        backend,
+		Checkpoints:                    newFakeCheckpointStore(),
+		RebuildMarkers:                 newFakeRebuildMarker(),
+		Observer:                       p.observer,
+		Logger:                         logger,
+		GraphCountCheckInterval:        time.Minute,
+		GraphCountUnknownProbeInterval: p.probeInterval,
+		Now:                            func() time.Time { return *clock.Load() },
 	})
 	if err != nil {
 		t.Fatalf("new coordinator: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
+	if len(p.tickAt) > 0 {
+		p.ticks = len(p.tickAt)
+	}
 	if p.ticks == 0 {
 		p.ticks = 2
 	}
 	for i := 0; i < p.ticks; i++ {
-		now := testStart.Add(time.Duration(i) * time.Minute)
+		offset := time.Duration(i) * time.Minute
+		if len(p.tickAt) > 0 {
+			offset = p.tickAt[i]
+		}
+		now := testStart.Add(offset)
 		clock.Store(&now)
 		coordinator.Tick(ctx)
 	}

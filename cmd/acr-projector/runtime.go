@@ -215,7 +215,7 @@ func openRuntime(ctx context.Context, cfg config.ProjectorConfig, logger *slog.L
 		Sources:          projectionSources(clickhouseSource, episodesSource, teamsProjectsSource),
 		Backend:          backend, Checkpoints: checkpoints, RebuildMarkers: rebuildMarkers, PurgeMarkers: purgeMarkers, Locker: locker,
 		ReuseInvalidator: reuseInvalidator,
-		PollInterval:     cfg.PollInterval, Concurrency: cfg.Concurrency, DrainBatchBudget: cfg.DrainBatchBudget, GraphCountCheckInterval: cfg.CountCheckInterval, Logger: logger,
+		PollInterval:     cfg.PollInterval, Concurrency: cfg.Concurrency, DrainBatchBudget: cfg.DrainBatchBudget, GraphCountCheckInterval: cfg.CountCheckInterval, GraphCountUnknownProbeInterval: cfg.UnknownProbeInterval, Logger: logger,
 		// Codex round-3 F2: a real observer, not the no-op default. A tick
 		// that fails and holds its checkpoint is correct behavior, but only
 		// safe behavior if it is visible.
