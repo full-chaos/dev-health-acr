@@ -189,6 +189,7 @@ func newContextFabricModelRuntime(ctx context.Context, lookup func(string) (stri
 			logger.Warn("context fabric model tuning variable set without a provider; ignoring",
 				"variables", ignored)
 		}
+		logger.Warn("context fabric model runtime not configured; interpretation and synthesis answer 503 unless an organization has its own model")
 		return nil, nil
 	}
 	if retired := modelprovider.RetiredVariables(lookup); len(retired) > 0 {
