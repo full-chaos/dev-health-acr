@@ -1484,13 +1484,21 @@ import (
 // order), the row a merge keeps. An answer saved under v290 may hold an
 // arbitrary pick of two versions stored in the same millisecond.
 //
+// v292 -> v294: the status_since of a work item whose last instant holds more than
+// one transition is the status the chain of that instant ends on (as the ops
+// readers order it), not the transition with the latest last_synced; an item
+// whose last instant holds more than 16 transitions answers
+// transition_inconsistent. v293 is the failed-read wording change that merges
+// before it. An answer saved under v292 or v293 may hold the old status_since
+// and must not be reused.
+//
 // v291 -> v292: a pull request reached from a project carries a link tier only
 // at the strongest tier its issue holds across every pull request (an issue's
 // native link covers its lower-tier link to another pull request), as the pull
 // request side already covered. The prod link writer stores no such row, so
 // served answers move only for a store that holds one. An answer saved under
 // v291 holds a lower-tier link its issue's native link covers.
-const QueryVersion = "devhealthfacts.clickhouse.v292"
+const QueryVersion = "devhealthfacts.clickhouse.v294"
 
 // repositoryFromOpsVersionSuffix marks the version of a deployment that reads
 // the repository investment mix from ops (CHAOS-12690): the numbers differ for

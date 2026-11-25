@@ -74,6 +74,7 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	}
 	now := clock()
 	sinceBasisCounts := map[string]int{}
+	cappedItems := 0
 	for _, row := range rows {
 		subject, ok := bySubject[row.RepoID+":"+row.ID]
 		if !ok {
@@ -95,6 +96,9 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 		fields["status_duration_seconds"] = since.seconds
 		fields["status_since_basis"] = contextfabric.StringFactValue(since.basis)
 		sinceBasisCounts[since.basis]++
+		if since.capped {
+			cappedItems++
+		}
 		facts = append(facts, contextfabric.CanonicalFact{
 			Kind: contextfabric.FactStatus, Subject: subject,
 			Fields:         fields,
@@ -105,6 +109,7 @@ func (p *StatusProvider) ReadFacts(ctx context.Context, principal storage.Princi
 	if n := sinceBasisCounts[statusSinceBasisInconsistent]; n > 0 {
 		slog.WarnContext(ctx, "devhealthfacts.status_since_inconsistent",
 			"inconsistent_items", n,
+			"capped_items", cappedItems,
 			"observed_items", sinceBasisCounts[statusSinceBasisObserved],
 			"no_transition_items", sinceBasisCounts[statusSinceBasisNone])
 	}

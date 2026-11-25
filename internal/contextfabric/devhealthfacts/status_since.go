@@ -86,10 +86,11 @@ type instantTransition struct{ from, to string }
 // The one difference from ops: ops starts the walk of an instant at the status
 // the previous instant ended on. That needs the whole history of the item, so
 // this read does not have it and starts with no prior (ops' known = false
-// branch). The two orders differ only when the last instant has no chain head
-// (a cycle) or several heads AND the previous status would have decided
-// between them. entered_at is the same for every transition of the instant, so
-// a different pick can only turn transition_observed into
+// branch). The two orders can differ whenever the previous instant's final
+// status is the from_status of a transition of this instant that is not its
+// chain head: a cycle, several heads, or a chain entered in the middle (an
+// inconsistent history). entered_at is the same for every transition of the
+// instant, so a different pick can only turn transition_observed into
 // transition_inconsistent or back; it never moves the time.
 func lastToStatusOfInstant(transitions []instantTransition) string {
 	remaining := append([]instantTransition(nil), transitions...)
@@ -190,6 +191,9 @@ func (p *StatusProvider) readStatusEntries(ctx context.Context, orgID string, pa
 type statusSinceResult struct {
 	since, seconds contextfabric.FactValue
 	basis          string
+	// capped: the answer is transition_inconsistent because the item's last
+	// instant holds more transitions than the cap, not because its status differs.
+	capped bool
 }
 
 func statusSinceFields(currentStatus string, entry statusEntry, found bool, now time.Time) statusSinceResult {
@@ -199,7 +203,12 @@ func statusSinceFields(currentStatus string, entry statusEntry, found bool, now 
 	if !found || currentStatus == "" {
 		return absent(statusSinceBasisNone)
 	}
-	if entry.capped || entry.toStatus != currentStatus || entry.enteredAt.IsZero() || entry.enteredAt.After(now) {
+	if entry.capped {
+		capped := absent(statusSinceBasisInconsistent)
+		capped.capped = true
+		return capped
+	}
+	if entry.toStatus != currentStatus || entry.enteredAt.IsZero() || entry.enteredAt.After(now) {
 		return absent(statusSinceBasisInconsistent)
 	}
 	return statusSinceResult{
