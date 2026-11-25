@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -211,5 +212,56 @@ func TestCHAOS10430StatementSHAs(t *testing.T) {
 		if got := statementSHA(c.statement); got != c.want {
 			t.Errorf("WANT %s statement_sha unchanged %s, got %s", reader, c.want, got)
 		}
+	}
+}
+
+// accessPredicate is an org_id predicate or the project-reached repository
+// prune, as statement text.
+var accessPredicate = regexp.MustCompile(`[a-z]+\.org_id = \{org_id:String\}|[a-z]+\.repo_id IN \(SELECT toUUIDOrZero\(id\) FROM \(SELECT arrayJoin\(\{reach_repo_ids:Array\(String\)\}\) AS id\)\)`)
+
+// Every org_id predicate and reach prune a moved reader applied at main
+// outside the link rows is in its statement now, byte for byte and as often;
+// the link rows' own predicates are in the link set statement, whose link rows
+// are teamProjectLinkRowsSQL unchanged. Each moved statement names org_id
+// itself on the pull requests it joins.
+func TestCHAOS10430TheMovedReadersKeepTheirAccessPredicates(t *testing.T) {
+	bound := factTimeBound{}
+	window := resolveRollupWindow(bound, nil, clock())
+	client := &chunkRecordingClient{}
+	set := teamLinkedPullRequests{keys: []teamLinkedPullRequestKey{{"t1", "00000000-0000-4000-8000-000000000042", "1"}}, ranks: []uint8{3}}
+	reached := map[string][]teamReachedRepo{"t1": {{key: "00000000-0000-4000-8000-000000000042"}}}
+	ctx := context.Background()
+	if _, err := teamProjectReachedRepositoriesOf(ctx, client, "org-1", []string{"t1"}, set); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := teamLinkedPullRequestCounts(ctx, client, "org-1", []string{"t1"}, set, reached, window); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := teamLinkedPullRequestStateCounts(ctx, client, "org-1", []string{"t1"}, set, reached, bound); err != nil {
+		t.Fatal(err)
+	}
+	linkRows := teamProjectLinkRowsSQL("ids", bound)
+	if !strings.Contains(linkedPullRequestSetStatement(bound), linkRows) {
+		t.Fatal("the link set statement no longer reads teamProjectLinkRowsSQL unchanged")
+	}
+	limit := teamReadPageRows + 1
+	for i, c := range []struct {
+		reader, main, own string
+	}{
+		{"ReadTeamProjectReachedRepositories", mainReachedStatement(bound, "", limit), "pr.org_id = {org_id:String}"},
+		{"ReadTeamProjectLinkedPullRequests", mainCountsStatement(window, bound, "", limit), "pr.org_id = {org_id:String}"},
+		{"ReadTeamProjectLinkedPullRequestStates", mainStatesStatement(bound, "", limit), "lp.org_id = {org_id:String}"},
+	} {
+		tip := client.statements[i]
+		outside := strings.Replace(c.main, linkRows, "", 1)
+		for _, predicate := range accessPredicate.FindAllString(outside, -1) {
+			if got, want := strings.Count(tip, predicate), strings.Count(outside, predicate); got < want {
+				t.Errorf("WANT %s keeps %q %d times, got %d", c.reader, predicate, want, got)
+			}
+		}
+		if !strings.Contains(tip, c.own) {
+			t.Errorf("WANT %s names %q on the pull requests it joins", c.reader, c.own)
+		}
+		t.Logf("%s main (outside the link rows) %q; tip %q", c.reader, accessPredicate.FindAllString(outside, -1), accessPredicate.FindAllString(tip, -1))
 	}
 }
