@@ -49,6 +49,7 @@ func TestCHAOS10430SentLinkedPullRequestsCountOnlyInTheCallerOrganizationOnRealC
 		{"control: the caller's own pull request counts", []devhealthfacts.TeamLinkedPullRequestForTest{callerRow}, []string{repoUUID("repo-caller")}, 1, 1, 1},
 		{"cross-org: another organization's pull request counts nowhere", []devhealthfacts.TeamLinkedPullRequestForTest{otherRow}, []string{repoUUID("repo-other")}, 0, 0, 0},
 		{"reach: a pull request outside the reached repositories is not counted", []devhealthfacts.TeamLinkedPullRequestForTest{callerRow}, []string{repoUUID("repo-other")}, 1, 0, 0},
+		{"team: a row of a team the read did not request counts nowhere", []devhealthfacts.TeamLinkedPullRequestForTest{{Team: "team-unrequested", Repo: repoUUID("repo-caller"), Number: "8", Rank: 3}}, []string{repoUUID("repo-caller")}, 0, 0, 0},
 	} {
 		reached, counts, states, err := devhealthfacts.TeamLinkedPullRequestReadsForTest(ctx, query, sentSetCallerOrg, []string{team}, c.sent, c.reach)
 		if err != nil {
