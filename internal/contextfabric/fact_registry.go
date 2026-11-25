@@ -466,6 +466,13 @@ type FactPrerequisiteLoader interface {
 // its memory limit, not as a generic failure (CHAOS-13003).
 const FactReadMemoryLimitReason = "canonical fact read stopped at the memory limit"
 
+// clickHouseTimeoutExceededCode (TIMEOUT_EXCEEDED) and clickHouseBytesToReadCode
+// (TOO_MANY_BYTES) are the server codes a failed read is served by.
+const (
+	clickHouseTimeoutExceededCode int32 = 159
+	clickHouseBytesToReadCode     int32 = 307
+)
+
 // factReadTimedOutReason is the registry's own wording of a provider read that
 // ran past its deadline; classifyFactReadError turns it into the served sentence.
 const factReadTimedOutReason = "canonical fact capability timed out"
@@ -2272,6 +2279,17 @@ func classifyFactReadError(kind FactKind, err error) (SourceState, string) {
 			return failure.State, "The " + label + " read timed out; the facts for it are not shown."
 		case FactReadMemoryLimitReason:
 			return failure.State, "The " + label + " read stopped at its memory limit; the facts for it are not shown."
+		}
+		// The served sentence is keyed on the closed class and ClickHouse code,
+		// never on the provider's wording: the Reason, the numbers and the
+		// cause stay in the log.
+		switch {
+		case failure.Class == FactReadFailureBudgetExceeded, failure.SourceCode == clickHouseBytesToReadCode:
+			return failure.State, "The " + label + " read needed more data than one answer may read; narrow the window or the subject; the facts for it are not shown."
+		case failure.Class == FactReadFailureContended:
+			return failure.State, "The " + label + " read did not run because the system was busy; try again later; the facts for it are not shown."
+		case failure.SourceCode == clickHouseTimeoutExceededCode:
+			return failure.State, "The " + label + " read timed out; the facts for it are not shown."
 		}
 		return failure.State, "The " + label + " read failed; the facts for it are not shown."
 	}

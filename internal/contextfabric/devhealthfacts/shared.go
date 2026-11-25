@@ -607,11 +607,12 @@ import (
 // reused.
 //
 // v124 -> v125: an investment read that exceeds the ClickHouse read budget is
-// refused with "exceeded the read budget (...); narrow the window or the
-// subject" instead of "failed". A candidate saved under v124 for an investment
-// question may hold the bare failure text that answer reuse serves for Partial
-// and Degraded results too, and must not be reused. The rows the statements
-// return are unchanged.
+// refused with its own failure class instead of "failed". The refusal text
+// (budgetRefusalReason) is log-only: the registry serves a fixed sentence by
+// class and code (classifyFactReadError) with no numbers. A candidate saved
+// under v124 for an investment question may hold the bare failure text that
+// answer reuse serves for Partial and Degraded results too, and must not be
+// reused. The rows the statements return are unchanged.
 //
 // v125 -> v126: project metrics and project investment for a past window count a
 // team's ownership of the project when it has not ended before the window
