@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +27,9 @@ const (
 	// graphCountCheckTimeout bounds the whole check for one organization. It runs
 	// under the org lock, so a slow count read must not hold the tick longer.
 	graphCountCheckTimeout = 30 * time.Second
+	// graphCountUnknownWarnAfter is the number of checks in a row a source may read
+	// unknown (no owned marker) before its marker-absent line is a Warn.
+	graphCountUnknownWarnAfter = 3
 )
 
 // GraphCountObserver is an OPTIONAL Observer extension: when the configured
@@ -80,6 +84,10 @@ type GraphCountCheck struct {
 	// graph_below_source_on_day gaps among them (CHAOS-12649).
 	DaysCompared int
 	DayGaps      int
+	// LowerBoundGaps counts the confirmed graph_below_source_lower_bound gaps this
+	// check reported for sources whose owned counts cannot be compared: the source
+	// holds more rows than the graph holds nodes of that kind, stubs included.
+	LowerBoundGaps int
 	// Errors counts the source or graph count reads that failed this check, and
 	// every measurement the check could not make at all (a source or backend with
 	// node counts and no edge counts).
@@ -152,6 +160,25 @@ type graphCountState struct {
 	seen     map[string]bool
 	passes   map[string]int
 	instance string
+	// unknownRuns counts, per (org, source), the checks in a row that read the
+	// source unknown because its owned marker is absent.
+	unknownRuns map[string]int
+}
+
+func (g *graphCountState) noteUnknown(key string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.unknownRuns == nil {
+		g.unknownRuns = map[string]int{}
+	}
+	g.unknownRuns[key]++
+	return g.unknownRuns[key]
+}
+
+func (g *graphCountState) resetUnknown(key string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.unknownRuns, key)
 }
 
 // instanceID is a random per-process identifier: every replica numbers its own
@@ -352,6 +379,7 @@ func (c *Coordinator) anySourceReadsNodeCounts() bool {
 }
 
 func (c *Coordinator) checkNodeCounts(ctx context.Context, orgID, hash string, graph contextfabric.ProjectionGraphCounts, result *GraphCountCheck) {
+	totals := &kindTotals{}
 	for _, source := range c.sourceNames {
 		counter, ok := c.sources[source].(contextfabric.ProjectionSourceCounts)
 		if !ok {
@@ -369,8 +397,10 @@ func (c *Coordinator) checkNodeCounts(ctx context.Context, orgID, hash string, g
 		}
 		if !known {
 			result.SourcesUnknown++
+			c.checkUnknownSource(ctx, orgID, hash, source, counter, graph, totals, result)
 			continue
 		}
+		c.graphCounts.resetUnknown(pairKey(orgID, source))
 		sourceCounts, err := counter.ProjectionSourceCounts(ctx, orgID)
 		result.SourcesChecked++
 		if err != nil {
@@ -576,4 +606,88 @@ func (c *Coordinator) checkEdgeCounts(ctx context.Context, orgID, hash string, r
 			}
 		}
 	}
+}
+
+// kindTotals memoizes the graph's total node count per kind for one check: the
+// total does not depend on the source, so sources sharing a kind read it once.
+type kindTotals struct {
+	counts map[contextfabric.SubjectKind]int64
+}
+
+// checkUnknownSource is the node phase for a source whose owned marker is absent.
+// The owned counts cannot be compared, so the check reads outcome unknown; what it
+// can still say is read against the graph's total kind count (stubs included): a
+// source above it is a gap whatever the marker says, a lower bound only. A source
+// its configuration switched off has no watermark by design and says nothing.
+// Cost per check: one source count read per enabled unknown source and one graph
+// scalar per distinct kind across them.
+func (c *Coordinator) checkUnknownSource(ctx context.Context, orgID, hash, source string, counter contextfabric.ProjectionSourceCounts, graph contextfabric.ProjectionGraphCounts, totals *kindTotals, result *GraphCountCheck) {
+	key := pairKey(orgID, source)
+	if enablement, ok := c.sources[source].(contextfabric.ProjectionSourceEnablement); ok && !enablement.Enabled() {
+		c.graphCounts.resetUnknown(key)
+		return
+	}
+	runs := c.graphCounts.noteUnknown(key)
+	basis, coverage := "none", "none"
+	var compared, gapKinds int
+	if totalGraph, ok := graph.(contextfabric.ProjectionGraphTotalCounts); ok {
+		basis, coverage = "total_kind_count", "lower_bound"
+		compared, gapKinds = c.compareAgainstTotals(ctx, orgID, hash, source, counter, totalGraph, totals, result)
+	}
+	level := slog.LevelInfo
+	if runs >= graphCountUnknownWarnAfter {
+		level = slog.LevelWarn
+	}
+	c.logger.Log(ctx, level, "context_fabric: graph_count_owned_marker_absent", "check", "graph_count_owned_marker_absent", "reason", "owned_marker_absent",
+		"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", contextfabric.SanitizeLogAttr(hash), "unknown_passes", runs,
+		"basis", basis, "coverage", coverage, "lower_bound_kinds", compared, "lower_bound_gap_kinds", gapKinds)
+}
+
+func (c *Coordinator) compareAgainstTotals(ctx context.Context, orgID, hash, source string, counter contextfabric.ProjectionSourceCounts, totalGraph contextfabric.ProjectionGraphTotalCounts, totals *kindTotals, result *GraphCountCheck) (compared, gapKinds int) {
+	sourceCounts, err := counter.ProjectionSourceCounts(ctx, orgID)
+	if err != nil {
+		result.Errors++
+		c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "source_count",
+			"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", contextfabric.SanitizeLogAttr(hash), "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
+		return 0, 0
+	}
+	kinds := make([]contextfabric.SubjectKind, 0, len(sourceCounts))
+	for kind := range sourceCounts {
+		kinds = append(kinds, kind)
+	}
+	sort.Slice(kinds, func(i, j int) bool { return kinds[i] < kinds[j] })
+	for _, kind := range kinds {
+		total, seen := totals.counts[kind]
+		if !seen {
+			total, err = totalGraph.CountKindTotal(ctx, orgID, kind)
+			if err != nil {
+				result.Errors++
+				c.logger.WarnContext(ctx, "context_fabric: projection count check failed", "check", "graph_count", "stage", "graph_total_count",
+					"source", contextfabric.SanitizeLogAttr(source), "kind", contextfabric.SanitizeLogAttr(string(kind)), "org_id_hash", contextfabric.SanitizeLogAttr(hash),
+					"failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(err)))
+				continue
+			}
+			if totals.counts == nil {
+				totals.counts = map[contextfabric.SubjectKind]int64{}
+			}
+			totals.counts[kind] = total
+		}
+		compared++
+		sourceCount := sourceCounts[kind]
+		tolerance := graphCountTolerance(sourceCount, total)
+		gapKey := pairKey(orgID, source) + "\x00" + string(kind) + "\x00lower_bound"
+		if sourceCount-total <= tolerance {
+			c.graphCounts.clearGap(gapKey)
+			continue
+		}
+		if !c.graphCounts.confirmGap(gapKey) {
+			continue
+		}
+		c.logger.WarnContext(ctx, "context_fabric: graph_below_source_lower_bound", "check", "graph_below_source_lower_bound",
+			"source", contextfabric.SanitizeLogAttr(source), "kind", contextfabric.SanitizeLogAttr(string(kind)), "org_id_hash", contextfabric.SanitizeLogAttr(hash),
+			"source_count", sourceCount, "graph_total_count", total, "tolerance", tolerance, "basis", "total_kind_count", "coverage", "lower_bound")
+		result.LowerBoundGaps++
+		gapKinds++
+	}
+	return compared, gapKinds
 }
