@@ -874,6 +874,18 @@ func TestForm14624ProbeExecutesOnTheProbeStatements(t *testing.T) {
 		label := fmt.Sprintf("S%d", i+1)
 		fires = append(fires, fire{label + "-rows", form14624Cuts[i], form14624RowsCap, "> 0\n"}, fire{label + "-bytes", form14624Cuts[i], form14624BytesCap, "> 0,\n"})
 	}
+	// serverSecond is the server clock (UTC, seconds) after a 1.1 s pause, so a window edge at it splits the rows before and after.
+	serverSecond := func() string {
+		t.Helper()
+		time.Sleep(1100 * time.Millisecond)
+		var at string
+		if err := direct.QueryRow(ctx, "SELECT toString(now(), 'UTC')").Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(1100 * time.Millisecond)
+		return at
+	}
+	fireStart := serverSecond()
 	fired := map[string]string{}
 	var firedIDs []string
 	for _, f := range fires {
@@ -927,4 +939,51 @@ func TestForm14624ProbeExecutesOnTheProbeStatements(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("GATE %d caps fired at 0: code 395, ExceptionBeforeStart, read_rows <= 2 x %d parts + 1", len(firedIDs), partsAll)
+
+	// 7. QL over the gate-fired statements (the card's "STOP-COST-GATE = not measured, go on" + "QL row missing = STOP"): each fired
+	// C0 / S<n> logs an ExceptionBeforeStart row with query_kind Select and its probe comment, so QL reports it. A window from after
+	// the fires reads none of them (the T_R edge).
+	qlFrom := func(label, from string) []form14624LogRow {
+		t.Helper()
+		text := swap(swap(form14624CutQL, "toDateTime('2026-01-01 00:00:00', 'UTC')", "toDateTime('"+from+"', 'UTC')"), "toDate('2026-01-01')", "toDate('"+from[:10]+"')")
+		rows, _, err := run(label, text)
+		if err != nil {
+			t.Fatalf("FORM %s: %v", label, err)
+		}
+		defer rows.Close()
+		var out []form14624LogRow
+		for rows.Next() {
+			var r form14624LogRow
+			var eventTime string
+			if err := rows.Scan(&r.comment, &r.typ, &r.code, &r.elapsed, &r.readRows, &r.readBytes, &r.peak, &r.resultRows,
+				&r.settings[0], &r.settings[1], &r.settings[2], &r.settings[3], &r.settings[4], &r.settings[5], &r.settings[6], &r.settings[7], &eventTime); err != nil {
+				t.Fatalf("FORM %s scan: %v", label, err)
+			}
+			out = append(out, r)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("FORM %s rows: %v", label, err)
+		}
+		return out
+	}
+	fireEnd := serverSecond()
+	perComment := map[string]int{}
+	for _, r := range qlFrom("QL-fired", fireStart) {
+		if r.typ != "ExceptionBeforeStart" || r.code != 395 {
+			t.Fatalf("QL-fired %s: type %s code %d, want ExceptionBeforeStart 395 (a gate-fired statement)", r.comment, r.typ, r.code)
+		}
+		perComment[r.comment]++
+	}
+	for _, label := range []string{"C0", "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9"} {
+		if n := perComment[form14624Comment(label)]; n != 2 {
+			t.Fatalf("QL-fired %s: %d rows, want 2 (its rows cap and bytes cap fired): %v", label, n, perComment)
+		}
+	}
+	if len(perComment) != 10 {
+		t.Fatalf("QL-fired: rows for %d comments, want 10: %v", len(perComment), perComment)
+	}
+	if after := qlFrom("QL-after", fireEnd); len(after) != 0 {
+		t.Fatalf("QL with T_R after the fires: %d rows, want 0", len(after))
+	}
+	t.Logf("QL-fired 20 rows (2 per C0 / S1..S9), ExceptionBeforeStart 395; QL from %s (after the fires) 0 rows", fireEnd)
 }
