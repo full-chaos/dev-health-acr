@@ -108,3 +108,24 @@ func TestASubjectBoundStatementStoppedAtTheBudgetStillSaysToNarrow(t *testing.T)
 	want := "The blockers read needed more data than one answer may read; " + budgetAdvice + "; the facts for it are not shown."
 	assertServedEndsWith(t, got, want)
 }
+
+// ReadProjectMixChunkBounds lists the organization's work unit ids to cut the
+// project mix into chunks: it binds the organization and two numeric caps, no
+// requested subject and no window. The cell asserts the injected stop fired.
+func TestTheProjectMixChunkBoundsStatementStoppedAtTheBudgetGivesNoNarrowingAdvice(t *testing.T) {
+	const marker = "AS chunk_bounds"
+	tables := append([]fakeTable{{match: marker, err: budgetStop()}}, nativePhasedTables(nativeMixUnits("a", 1))...)
+	client := &fakeClient{tables: tables}
+	provider := findProvider(t, devhealthfacts.NewProviders(client), contextfabric.FactInvestment)
+	got := servedFactReadReason(t, provider, storage.Principal{OrgID: "org-1"}, contextfabric.FactInvestment, projectSubject("linear", "a"))
+	fired := 0
+	for _, query := range client.queries {
+		if strings.Contains(query.statement, marker) {
+			fired++
+		}
+	}
+	if fired == 0 {
+		t.Fatalf("the chunk bounds statement never ran, so the injected stop did not fire; the cell proves nothing")
+	}
+	assertServedEndsWith(t, got, genericFailedRead(contextfabric.FactInvestment))
+}
