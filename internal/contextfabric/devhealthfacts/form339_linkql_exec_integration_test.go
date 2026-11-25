@@ -617,10 +617,10 @@ SELECT ?, concat('owned-', toString(number)), toUInt32(number + 1000), 1, 'nativ
 			}
 		}
 	}
-	send := func(label, reader, text, org string, bindings []contextpacket.ClickHouseBinding) error {
+	send := func(base context.Context, label, reader, text, org string, bindings []contextpacket.ClickHouseBinding) error {
 		t.Helper()
 		id := "linkql-" + label + "-" + uuid.NewString()[:8]
-		qctx := clickhousedriver.Context(contextpacket.WithStatementReader(ctx, reader), clickhousedriver.WithQueryID(id))
+		qctx := clickhousedriver.Context(contextpacket.WithStatementReader(base, reader), clickhousedriver.WithQueryID(id))
 		rows, err := query.Query(qctx, text, append([]contextpacket.ClickHouseBinding{{Name: "org_id", Value: org}}, bindings...))
 		groups[label] = append(groups[label], id)
 		if err != nil {
@@ -639,9 +639,20 @@ SELECT ?, concat('owned-', toString(number)), toUInt32(number + 1000), 1, 'nativ
 	}
 	tipRead("tipA", linkqlOrgA)
 	tipRead("tipB", linkqlOrgB)
+	// The a47904e8 texts read the candidate ids from the external table _team_link_candidates (withTeamLinkCandidates at a47904e8):
+	// each org's old texts are sent with that table, built from the same candidate ids its tip read reads.
+	candidates := map[string]context.Context{}
+	for _, org := range []string{linkqlOrgA, linkqlOrgB} {
+		cctx, n, err := devhealthfacts.Form339CandidatesContextForTest(ctx, rawQuery, org, []string{team})
+		if err != nil {
+			t.Fatalf("candidates of %s: %v", org[:8], err)
+		}
+		t.Logf("CANDIDATES org %s: %d id(s) in _team_link_candidates", org[:8], n)
+		candidates[org] = cctx
+	}
 	for _, org := range []struct{ label, id string }{{"oldA", linkqlOrgA}, {"oldB", linkqlOrgB}} {
 		for _, o := range olds {
-			if err := send(org.label, o.Reader, o.Text, org.id, o.Bindings); err != nil {
+			if err := send(candidates[org.id], org.label, o.Reader, o.Text, org.id, o.Bindings); err != nil {
 				t.Fatalf("SENT %s %s: %v", org.label, o.Reader, err)
 			}
 		}
@@ -651,19 +662,19 @@ SELECT ?, concat('owned-', toString(number)), toUInt32(number + 1000), 1, 'nativ
 	if third == olds[0].Text || !strings.HasPrefix(third, linkqlReaders[0].head) || !strings.Contains(third, linkqlMarkNew) || !strings.Contains(third, linkqlMarkOld) {
 		t.Fatal("no third text")
 	}
-	if err := send("third", olds[0].Reader, third, linkqlOrgA, olds[0].Bindings); err != nil {
+	if err := send(candidates[linkqlOrgA], "third", olds[0].Reader, third, linkqlOrgA, olds[0].Bindings); err != nil {
 		t.Fatalf("SENT third: %v", err)
 	}
 	// A statement under the counts reader's name that holds the counts head LATER and the OLD marker (marker, no head at the start).
 	later := "SELECT 9 AS lead, '" + linkqlReaders[1].head + "' AS h, '" + linkqlMarkOld + "' AS m, {org_id:String} AS o"
-	if err := send("later", linkqlReaders[1].name, later, linkqlOrgA, nil); err != nil {
+	if err := send(ctx, "later", linkqlReaders[1].name, later, linkqlOrgA, nil); err != nil {
 		t.Fatalf("SENT later: %v", err)
 	}
 	// A refusal at the statement's own cap (code 241) of the OLD reach text, under its name.
 	tiny := statementthreads.Capped(rawQuery, 1)
 	{
 		id := "linkql-refused-" + uuid.NewString()[:8]
-		qctx := clickhousedriver.Context(contextpacket.WithStatementReader(ctx, olds[0].Reader), clickhousedriver.WithQueryID(id))
+		qctx := clickhousedriver.Context(contextpacket.WithStatementReader(candidates[linkqlOrgA], olds[0].Reader), clickhousedriver.WithQueryID(id))
 		groups["refused"] = append(groups["refused"], id)
 		rows, err := tiny.Query(qctx, olds[0].Text, append([]contextpacket.ClickHouseBinding{{Name: "org_id", Value: linkqlOrgA}}, olds[0].Bindings...))
 		if err == nil {

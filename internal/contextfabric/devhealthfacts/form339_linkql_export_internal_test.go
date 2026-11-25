@@ -5,7 +5,11 @@ package devhealthfacts
 // the bindings each one names, so the form test can send the OLD texts through the API client stack under each reader's name.
 
 import (
+	"context"
+	"fmt"
 	"time"
+
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/full-chaos/dev-health-acr/internal/contextpacket"
 )
@@ -33,4 +37,22 @@ func Form339MainTextsForTest(teamIDs, reachRepoIDs []string, start, end time.Tim
 		{"ReadTeamProjectLinkedPullRequests", mainCountsStatement(window, bound, "", limit), append([]contextpacket.ClickHouseBinding{ids, reach}, windowBindings...)},
 		{"ReadTeamProjectLinkedPullRequestStates", mainStatesStatement(bound, "", limit), []contextpacket.ClickHouseBinding{ids, reach}},
 	}
+}
+
+// Form339CandidatesContextForTest attaches the external table _team_link_candidates the a47904e8 texts read (team_link_candidates.go
+// withTeamLinkCandidates at a47904e8: the same teamLinkCandidatesExternalTable at both pins), built from the candidate ids the tip read
+// itself reads for the teams (readTeamLinkCandidateIDs, sent unnamed through client), and returns how many ids it holds.
+func Form339CandidatesContextForTest(ctx context.Context, client contextpacket.ClickHouseQueryClient, orgID string, teamIDs []string) (context.Context, int, error) {
+	ids, ok, err := readTeamLinkCandidateIDs(ctx, client, orgID, teamIDs, factTimeBound{})
+	if err != nil {
+		return nil, 0, err
+	}
+	if !ok || len(ids) == 0 {
+		return nil, 0, fmt.Errorf("no link candidates for the teams")
+	}
+	table, err := teamLinkCandidatesExternalTable(ids)
+	if err != nil {
+		return nil, 0, err
+	}
+	return clickhousedriver.Context(ctx, clickhousedriver.WithExternalTable(table)), len(ids), nil
 }
