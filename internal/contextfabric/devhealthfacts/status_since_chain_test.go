@@ -168,3 +168,25 @@ func TestQueryVersionMovedPastTheStatusSinceChainPick(t *testing.T) {
 		}
 	}
 }
+
+// Order of record: an item with no status answers no_transition_recorded
+// whatever its transitions hold, a capped last instant included. The blank arm
+// wins over the cap.
+func TestStatusSinceBlankStatusWinsOverTheCap(t *testing.T) {
+	rows := devhealthfacts.StatusSinceInstantCapForTest + 1
+	froms, tos := make([]string, 0, rows), make([]string, 0, rows)
+	for i := 0; i < rows; i++ {
+		froms = append(froms, fmt.Sprintf("s%02d", i))
+		tos = append(tos, fmt.Sprintf("s%02d", i+1))
+	}
+	result, _, err := readStatusSince(t,
+		[][]any{{"W-1", "", "repo-1", "jira"}},
+		[][]any{{"repo-1", "W-1", uint64(rows), froms, tos, statusSinceNow.Add(-time.Hour)}},
+		workItemSubject("repo-1", "W-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, secs, basis, _, _ := statusSinceFields(t, result, 0); basis != "no_transition_recorded" || secs != nil {
+		t.Fatalf("secs=%v basis=%q, want no_transition_recorded: the blank arm wins over the cap", secs, basis)
+	}
+}
