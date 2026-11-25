@@ -707,7 +707,7 @@ func (c *Coordinator) checkUnknownSource(ctx context.Context, orgID, hash, sourc
 	}
 	attrs := []any{"check", "graph_count_owned_marker_absent", "reason", "owned_marker_absent",
 		"source", contextfabric.SanitizeLogAttr(source), "org_id_hash", contextfabric.SanitizeLogAttr(hash), "unknown_passes", runs,
-		"probe", probe.state, "basis", basis, "coverage", coverage, "lower_bound_kinds", probe.compared, "lower_bound_gap_kinds", probe.gapKinds, "probe_failed_reads", probe.failed}
+		"probe", contextfabric.SanitizeLogAttr(probe.state), "basis", contextfabric.SanitizeLogAttr(basis), "coverage", contextfabric.SanitizeLogAttr(coverage), "lower_bound_kinds", probe.compared, "lower_bound_gap_kinds", probe.gapKinds, "probe_failed_reads", probe.failed}
 	if probe.cause != nil {
 		attrs = append(attrs, "failure_class", contextfabric.SanitizeLogAttr(classifyOutcomeError(probe.cause)))
 		var failure contextfabric.SourceReadFailure
