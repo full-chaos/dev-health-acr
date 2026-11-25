@@ -788,3 +788,14 @@ func TestQueryVersionMovedPastTheRefusalFallback(t *testing.T) {
 		t.Fatalf("QueryVersion = %q, want v251 or later -- an answer saved when a fallback model served a question the primary model refused must not be reused", devhealthfacts.QueryVersion)
 	}
 }
+
+// The wording of a failed fact read changed (a budget stop of a whole-organization
+// statement gives no advice to narrow; a contended read did not complete). An
+// answer saved under v292 holds the old wording and must not be reused.
+func TestQueryVersionMovedPastTheFailedReadWording(t *testing.T) {
+	t.Parallel()
+	const versionBeforeTheWordingMoved = "devhealthfacts.clickhouse.v292"
+	if devhealthfacts.QueryVersion == versionBeforeTheWordingMoved {
+		t.Fatalf("QueryVersion = %q, want it moved past %q -- an answer saved under it holds the old failed-read wording and must not be reused", devhealthfacts.QueryVersion, versionBeforeTheWordingMoved)
+	}
+}

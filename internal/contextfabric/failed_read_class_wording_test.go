@@ -13,7 +13,7 @@ const (
 	failedReadTimedOut  = "The blockers read timed out; the facts for it are not shown."
 	failedReadMemory    = "The blockers read stopped at its memory limit; the facts for it are not shown."
 	failedReadBudget    = "The blockers read needed more data than one answer may read; narrow the window or the subject; the facts for it are not shown."
-	failedReadContended = "The blockers read did not run because the system was busy; try again later; the facts for it are not shown."
+	failedReadContended = "The blockers read did not complete because the system was busy; try again later; the facts for it are not shown."
 	failedReadRejected  = "canonical fact provider returned a result that was rejected"
 
 	failedReadProviderReason = "devhealthfacts: query team blockers exceeded the read budget (limit 134217728 bytes; the server had read 1000 rows and 2000 bytes); narrow the window or the subject"
@@ -30,7 +30,6 @@ func failedReadCases() []struct {
 		want    string
 	}{
 		{"budget class 307", &FactReadFailure{State: SourceUnavailable, Reason: failedReadProviderReason, Class: FactReadFailureBudgetExceeded}, failedReadBudget},
-		{"budget class 158", &FactReadFailure{State: SourceUnavailable, Reason: failedReadProviderReason, Class: FactReadFailureBudgetExceeded}, failedReadBudget},
 		{"read failed code 307", &FactReadFailure{State: SourceUnavailable, Reason: "devhealthfacts: query team blockers failed", Class: FactReadFailureReadFailed, SourceCode: 307}, failedReadBudget},
 		{"read failed code 159", &FactReadFailure{State: SourceUnavailable, Reason: "devhealthfacts: query team blockers failed", Class: FactReadFailureReadFailed, SourceCode: 159}, failedReadTimedOut},
 		{"contended", &FactReadFailure{State: SourceUnavailable, Reason: "devhealthfacts: query project mix contended: its inputs changed during every read attempt; retry", Class: FactReadFailureContended}, failedReadContended},
