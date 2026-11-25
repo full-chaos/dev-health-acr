@@ -1,9 +1,11 @@
 package devhealthsource_test
 
-// DO NOT MERGE. Throwaway exec proof of a prod read form (FORM-338-MEMQL-2: system.query_log, the read_rows and memory of the
+// DO NOT MERGE. Throwaway exec proof of a prod read form (FORM-338-MEMQL-3: system.query_log, the read_rows and memory of the
 // membership edge count statement per statement text). The three statements are the form's run-block cuts, byte for byte, with their
 // sha256 pinned. Synthetic rows only (two fake orgs). The ClickHouse server is shared with the package's other tests, so a server-wide
 // count is a lower bound here; the exact checks run a test copy with one more conjunct, query_id IN (the ids this test sent).
+// Leg 1 (acr #2208, job 139001226621): its "Guard unit shard package budget" step failed only on this test's package FAIL line
+// (devhealthsource 347.2 s = 57.9 % of the 600 s budget; the guard fails at 85 % or on any FAIL line). No budget row is needed.
 
 import (
 	"context"
@@ -13,7 +15,6 @@ import (
 	"fmt"
 	"math"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ import (
 const (
 	memqlCutS0SHA256    = "6a12477c4201c1e6caf2232ba69a672b94f4469bacf224037aeee00b40c3ba57"
 	memqlCutStmtRSHA256 = "428761509478f35928b8994c06684d99c4675e3f09efe66091d6c5f040efd91f"
-	memqlCutStmt0SHA256 = "397fa3a5f009319ef356be6e7796379418b259a31e80bb0ee230424b56f1dd76"
+	memqlCutStmt0SHA256 = "efc407e149e38208fad4be4e270f9a704417ec0211658331792c163e524ea737"
 )
 
 const memqlCutS0 = `SELECT partition, sum(rows) AS rows, sum(bytes_on_disk) AS bytes, count() AS active_parts, toString(min(min_date)) AS min_day
@@ -45,27 +46,28 @@ const memqlCutStmt0 = `WITH (SELECT throwIf(
   OR (SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database = 'system' AND table = 'query_log' AND max_date >= yesterday()) > 100000000000
   OR (SELECT count() FROM system.query_log WHERE event_date >= yesterday() AND event_time >= now() - INTERVAL 24 HOUR) > 9000000,
   'STOP-COST-GATE')) AS cost_gate,
-  substring(lower(hex(SHA256(query))), 1, 12) AS qsha
+  position(query, 'ARRAY JOIN [(to_project_id, toUInt8(1)), (from_project_id, toUInt8(0))] AS touch') > 0 AS m_new,
+  position(query, 'WITH touches AS (') > 0 AS m_old,
+  position(query, 'ingested_at') > 0 AS m_ing
 SELECT toString(today()) AS day,
   toString(now(), 'UTC') AS run_at,
-  countIf(type = 'QueryFinish' AND qsha = 'f0b969e82275') AS new_finished,
-  maxIf(read_rows, type = 'QueryFinish' AND qsha = 'f0b969e82275') AS new_max_read_rows,
-  toUInt64(ifNotFinite(avgIf(read_rows, type = 'QueryFinish' AND qsha = 'f0b969e82275'), 0)) AS new_avg_read_rows,
-  maxIf(memory_usage, type = 'QueryFinish' AND qsha = 'f0b969e82275') AS new_max_memory,
-  toUInt64(ifNotFinite(avgIf(memory_usage, type = 'QueryFinish' AND qsha = 'f0b969e82275'), 0)) AS new_avg_memory,
-  countIf(type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing') AND qsha = 'f0b969e82275') AS new_failed,
-  countIf(type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing') AND exception_code = 241 AND qsha = 'f0b969e82275') AS new_failed_241,
-  toString(minIf(event_time, qsha = 'f0b969e82275'), 'UTC') AS new_first,
-  countIf(type = 'QueryFinish' AND qsha = 'e9a488c626c2') AS old_finished,
-  maxIf(read_rows, type = 'QueryFinish' AND qsha = 'e9a488c626c2') AS old_max_read_rows,
-  toUInt64(ifNotFinite(avgIf(read_rows, type = 'QueryFinish' AND qsha = 'e9a488c626c2'), 0)) AS old_avg_read_rows,
-  maxIf(memory_usage, type = 'QueryFinish' AND qsha = 'e9a488c626c2') AS old_max_memory,
-  toUInt64(ifNotFinite(avgIf(memory_usage, type = 'QueryFinish' AND qsha = 'e9a488c626c2'), 0)) AS old_avg_memory,
-  countIf(type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing') AND qsha = 'e9a488c626c2') AS old_failed,
-  toString(maxIf(event_time, qsha = 'e9a488c626c2'), 'UTC') AS old_last,
-  countIf(type = 'QueryFinish' AND qsha IN ('ff310d988be6', '7cf7c5fc685f')) AS ingest_off_finished,
-  countIf(type = 'QueryFinish' AND qsha NOT IN ('f0b969e82275', 'e9a488c626c2', 'ff310d988be6', '7cf7c5fc685f')) AS other_finished,
-  arraySort(groupUniqArrayIf(3)(substring(qsha, 1, 8), type = 'QueryFinish' AND qsha NOT IN ('f0b969e82275', 'e9a488c626c2', 'ff310d988be6', '7cf7c5fc685f'))) AS other_sha8
+  countIf(type = 'QueryFinish' AND m_new AND NOT m_old AND m_ing) AS new_finished,
+  maxIf(read_rows, type = 'QueryFinish' AND m_new AND NOT m_old AND m_ing) AS new_max_read_rows,
+  toUInt64(ifNotFinite(avgIf(read_rows, type = 'QueryFinish' AND m_new AND NOT m_old AND m_ing), 0)) AS new_avg_read_rows,
+  maxIf(memory_usage, type = 'QueryFinish' AND m_new AND NOT m_old AND m_ing) AS new_max_memory,
+  toUInt64(ifNotFinite(avgIf(memory_usage, type = 'QueryFinish' AND m_new AND NOT m_old AND m_ing), 0)) AS new_avg_memory,
+  countIf(type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing') AND m_new AND NOT m_old AND m_ing) AS new_failed,
+  countIf(type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing') AND exception_code = 241 AND m_new AND NOT m_old AND m_ing) AS new_failed_241,
+  toString(minIf(event_time, m_new AND NOT m_old AND m_ing), 'UTC') AS new_first,
+  countIf(type = 'QueryFinish' AND m_old AND NOT m_new AND m_ing) AS old_finished,
+  maxIf(read_rows, type = 'QueryFinish' AND m_old AND NOT m_new AND m_ing) AS old_max_read_rows,
+  toUInt64(ifNotFinite(avgIf(read_rows, type = 'QueryFinish' AND m_old AND NOT m_new AND m_ing), 0)) AS old_avg_read_rows,
+  maxIf(memory_usage, type = 'QueryFinish' AND m_old AND NOT m_new AND m_ing) AS old_max_memory,
+  toUInt64(ifNotFinite(avgIf(memory_usage, type = 'QueryFinish' AND m_old AND NOT m_new AND m_ing), 0)) AS old_avg_memory,
+  countIf(type IN ('ExceptionBeforeStart', 'ExceptionWhileProcessing') AND m_old AND NOT m_new AND m_ing) AS old_failed,
+  toString(maxIf(event_time, m_old AND NOT m_new AND m_ing), 'UTC') AS old_last,
+  countIf(type = 'QueryFinish' AND (m_new OR m_old) AND NOT m_ing) AS ingest_off_finished,
+  countIf(type = 'QueryFinish' AND m_new = m_old) AS other_finished
 FROM system.query_log
 WHERE event_date >= yesterday() AND event_time >= now() - INTERVAL 24 HOUR
   AND type != 'QueryStart' AND query_kind = 'Select'
@@ -82,6 +84,10 @@ const (
 	memqlOld  = "e9a488c626c2"
 	memqlNewF = "ff310d988be6"
 	memqlOldF = "7cf7c5fc685f"
+	// The writer markers of FORM -3 (teams_projects_edges.go membershipIntervalsSQL at a47904e8 / at e67c4128; the ingest column).
+	memqlMarkNew = "ARRAY JOIN [(to_project_id, toUInt8(1)), (from_project_id, toUInt8(0))] AS touch"
+	memqlMarkOld = "WITH touches AS ("
+	memqlMarkIng = "ingested_at"
 	// The projector's statement cap (cmd/acr-projector/runtime.go projectorStatementMaxMemoryUsage).
 	memqlProjectorCap = 192 << 20
 )
@@ -133,7 +139,6 @@ type memqlWant struct {
 	newFinished, newFailed, newFailed241, oldFinished, oldFailed, offFinished, otherFinished int
 	newMaxRead, newMaxMem, oldMaxRead, oldMaxMem                                             uint64
 	newSumRead, newSumMem, oldSumRead, oldSumMem                                             float64
-	other8                                                                                   []string
 }
 
 func (w memqlWant) cols() map[string]string {
@@ -143,11 +148,6 @@ func (w memqlWant) cols() map[string]string {
 		}
 		return fmt.Sprint(uint64(math.Trunc(sum / float64(n))))
 	}
-	other := append([]string(nil), w.other8...)
-	sort.Strings(other)
-	if len(other) > 3 {
-		other = nil // groupUniqArrayIf(3) keeps any 3: not compared
-	}
 	m := map[string]string{
 		"new_finished": fmt.Sprint(w.newFinished), "new_failed": fmt.Sprint(w.newFailed), "new_failed_241": fmt.Sprint(w.newFailed241),
 		"old_finished": fmt.Sprint(w.oldFinished), "old_failed": fmt.Sprint(w.oldFailed), "ingest_off_finished": fmt.Sprint(w.offFinished),
@@ -155,9 +155,6 @@ func (w memqlWant) cols() map[string]string {
 		"old_max_read_rows": fmt.Sprint(w.oldMaxRead), "old_max_memory": fmt.Sprint(w.oldMaxMem),
 		"new_avg_read_rows": avg(w.newSumRead, w.newFinished), "new_avg_memory": avg(w.newSumMem, w.newFinished),
 		"old_avg_read_rows": avg(w.oldSumRead, w.oldFinished), "old_avg_memory": avg(w.oldSumMem, w.oldFinished),
-	}
-	if other != nil {
-		m["other_sha8"] = fmt.Sprint(other)
 	}
 	return m
 }
@@ -174,7 +171,9 @@ func TestForm338MemQLExecutesOnTheEdgeCountStatements(t *testing.T) {
 	caps := []string{"> 200000000\n", "> 100000000000\n", "> 9000000,"}
 	headLit := "startsWith(query, '" + memqlHead + "')"
 	for lit, n := range map[string]int{caps[0]: 1, caps[1]: 1, caps[2]: 1, "'STOP-COST-GATE'": 1, "cost_gate = 0": 1, headLit: 1,
-		"FROM system.query_log": 2, "now() - INTERVAL 24 HOUR": 2, "'" + memqlNew + "'": 10, "'" + memqlOld + "'": 9, "'" + memqlNewF + "'": 3, "'" + memqlOldF + "'": 3, "toUInt64(ifNotFinite(avgIf(": 4, "), 0)) AS ": 4} {
+		"FROM system.query_log": 2, "now() - INTERVAL 24 HOUR": 2, "position(query, '" + memqlMarkNew + "') > 0 AS m_new": 1, "position(query, '" + memqlMarkOld + "') > 0 AS m_old": 1,
+		"position(query, '" + memqlMarkIng + "') > 0 AS m_ing": 1, "m_new AND NOT m_old AND m_ing": 8, "m_old AND NOT m_new AND m_ing": 7,
+		"(m_new OR m_old) AND NOT m_ing": 1, "m_new = m_old": 1, "SHA256": 0, "toUInt64(ifNotFinite(avgIf(": 4, "), 0)) AS ": 4} {
 		if got := strings.Count(memqlCutStmt0, lit); got != n {
 			t.Fatalf("stmt0: %q found %d times, want %d", lit, got, n)
 		}
@@ -186,8 +185,9 @@ func TestForm338MemQLExecutesOnTheEdgeCountStatements(t *testing.T) {
 		t.Fatalf("stmtR: %q", memqlCutStmtR)
 	}
 
-	// 2. The statement texts and their shas (Go side): the shipped text (acr a47904e8) and acr main e67c4128's text, byte for byte
-	// (MembershipEdgeCountMainSQLForTest), ingest on and off. Each starts with the form's head literal.
+	// 2. The statement texts (Go side): the shipped text (acr a47904e8) and acr main e67c4128's text, byte for byte
+	// (MembershipEdgeCountMainSQLForTest), ingest on and off. Each starts with the form's head literal and holds the markers of its build.
+	// INFO: the Go text shas (the near-cap statement_sha ids; query_log holds the bound org value, so they are not the logged shas).
 	newOn, oldOn := devhealthsource.MembershipEdgeCountMainSQLForTest(true)
 	newOff, oldOff := devhealthsource.MembershipEdgeCountMainSQLForTest(false)
 	_, legacyOn := devhealthsource.MembershipEdgeCountSQLForTest(true)
@@ -195,13 +195,28 @@ func TestForm338MemQLExecutesOnTheEdgeCountStatements(t *testing.T) {
 	for _, c := range []struct{ label, text, want string }{{"new ingest=true", newOn, memqlNew}, {"old ingest=true (e67c4128)", oldOn, memqlOld},
 		{"new ingest=false", newOff, memqlNewF}, {"old ingest=false (e67c4128)", oldOff, memqlOldF}} {
 		got := memqlSHA12(c.text)
-		t.Logf("SHA12 %s = %s (want %s) bytes %d", c.label, got, c.want, len(c.text))
-		if got != c.want {
-			t.Errorf("SHA12 %s = %s, want %s", c.label, got, c.want)
-		}
+		t.Logf("INFO SHA12 %s = %s (near-cap id %s: equal %v) bytes %d", c.label, got, c.want, got == c.want, len(c.text))
 		if !strings.HasPrefix(c.text, memqlHead) {
 			t.Errorf("%s does not start with the form's head literal", c.label)
 		}
+		isNew, ing := strings.HasPrefix(c.label, "new"), strings.Contains(c.label, "ingest=true")
+		mn, mo, mi := strings.Count(c.text, memqlMarkNew), strings.Count(c.text, memqlMarkOld), strings.Count(c.text, memqlMarkIng)
+		t.Logf("MARKERS %s: new %d old %d ingested_at %d", c.label, mn, mo, mi)
+		if (mn > 0) != isNew || (mo > 0) == isNew || (mi > 0) != ing {
+			t.Errorf("MARKERS %s: new %d old %d ingested_at %d, want new>0=%v old>0=%v ingested_at>0=%v", c.label, mn, mo, mi, isNew, !isNew, ing)
+		}
+	}
+	// The producer page statements read the same transition arm: they hold a marker but do not start with the head (marker uniqueness).
+	pageNew, pageOld, pageBindings := devhealthsource.MembershipStatementMainForTest(memqlOrgA, time.Time{}, "", 1000, true, false)
+	legacyPage, legacyBindings := devhealthsource.LegacyMembershipStatementForTest(memqlOrgA, time.Time{}, "", 1000, true, false)
+	for _, c := range []struct {
+		label, text string
+		mark        string
+	}{{"page new", pageNew, memqlMarkNew}, {"page e67c4128", pageOld, memqlMarkOld}, {"legacy oracle page", legacyPage, memqlMarkIng}} {
+		if strings.HasPrefix(c.text, memqlHead) || !strings.Contains(c.text, c.mark) || !strings.Contains(c.text, memqlMarkIng) {
+			t.Errorf("%s: want a text that holds %q and %q and does not start with the head", c.label, c.mark, memqlMarkIng)
+		}
+		t.Logf("MARKERS %s: new %d old %d ingested_at %d starts-with-head %v", c.label, strings.Count(c.text, memqlMarkNew), strings.Count(c.text, memqlMarkOld), strings.Count(c.text, memqlMarkIng), strings.HasPrefix(c.text, memqlHead))
 	}
 	if t.Failed() {
 		t.FailNow()
@@ -299,7 +314,8 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 			t.Fatalf("RUN %s: %v", c.name, err)
 		}
 	}
-	third := strings.Replace(newOn, "SETTINGS max_threads = 1", "SETTINGS max_threads = 1, max_block_size = 65505", 1)
+	// The third text: the head and BOTH build markers (the old marker in a log_comment literal) = other_finished.
+	third := strings.Replace(newOn, "SETTINGS max_threads = 1", "SETTINGS max_threads = 1, log_comment = '"+memqlMarkOld+"'", 1)
 	if third == newOn || !strings.HasPrefix(third, memqlHead) {
 		t.Fatal("no third text")
 	}
@@ -310,6 +326,26 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 	if err := direct.QueryRow(clickhousedriver.Context(ctx, clickhousedriver.WithQueryID(ids["later"])), "SELECT 1 AS x, '"+memqlHead+"' AS y").Scan(new(uint8), new(string)); err != nil {
 		t.Fatalf("RUN later: %v", err)
 	}
+	runWith := func(name, statement string, bindings []contextpacket.ClickHouseBinding) {
+		t.Helper()
+		ids[name] = "memql-" + name + "-" + uuid.NewString()[:8]
+		rows, err := capped.Query(clickhousedriver.Context(ctx, clickhousedriver.WithQueryID(ids[name])), statement, bindings)
+		if err != nil {
+			t.Fatalf("RUN %s: %v", name, err)
+		}
+		defer rows.Close()
+		n := 0
+		for rows.Next() {
+			n++
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatalf("RUN %s: %v", name, err)
+		}
+		t.Logf("RUN %s rows %d", name, n)
+	}
+	runWith("pageNew", pageNew, pageBindings)
+	runWith("pageOld", pageOld, pageBindings)
+	runWith("legacyPage", legacyPage, legacyBindings)
 	refusedErr := run("refused", tiny, newOn, memqlOrgA)
 	if refusedErr == nil {
 		t.Fatalf("RUN refused: no error, want a memory-limit refusal at a 1-byte cap")
@@ -339,31 +375,36 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 				if !inWindow || kind != "Select" || !strings.HasPrefix(text, memqlHead) {
 					continue
 				}
-				s := memqlSHA12(text)
+				mn, mo, mi := strings.Contains(text, memqlMarkNew), strings.Contains(text, memqlMarkOld), strings.Contains(text, memqlMarkIng)
+				finish := typ == "QueryFinish"
 				failed := typ == "ExceptionBeforeStart" || typ == "ExceptionWhileProcessing"
-				switch {
-				case s == memqlNew && typ == "QueryFinish":
+				isNew, isOld := mn && !mo && mi, mo && !mn && mi
+				if finish && isNew {
 					w.newFinished++
 					w.newSumRead += float64(read)
 					w.newSumMem += float64(mem)
 					w.newMaxRead, w.newMaxMem = max(w.newMaxRead, read), max(w.newMaxMem, mem)
-				case s == memqlNew && failed:
+				}
+				if failed && isNew {
 					w.newFailed++
 					if code == 241 {
 						w.newFailed241++
 					}
-				case s == memqlOld && typ == "QueryFinish":
+				}
+				if finish && isOld {
 					w.oldFinished++
 					w.oldSumRead += float64(read)
 					w.oldSumMem += float64(mem)
 					w.oldMaxRead, w.oldMaxMem = max(w.oldMaxRead, read), max(w.oldMaxMem, mem)
-				case s == memqlOld && failed:
+				}
+				if failed && isOld {
 					w.oldFailed++
-				case (s == memqlNewF || s == memqlOldF) && typ == "QueryFinish":
+				}
+				if finish && (mn || mo) && !mi {
 					w.offFinished++
-				case s != memqlNew && s != memqlOld && s != memqlNewF && s != memqlOldF && typ == "QueryFinish":
+				}
+				if finish && mn == mo {
 					w.otherFinished++
-					w.other8 = append(w.other8, s[:8])
 				}
 			}
 			if err := rows.Err(); err != nil {
@@ -396,8 +437,16 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 		if err != nil || len(got) != 1 {
 			t.Fatalf("%s: err %v rows %d", label, err, len(got))
 		}
-		if len(types) != 20 {
-			t.Errorf("%s: %d columns %v, want 20", label, len(types), types)
+		if len(types) != 19 {
+			t.Errorf("%s: %d columns %v, want 19", label, len(types), types)
+		}
+		// Output content: no column holds the bound org value or any query text.
+		for k, v := range got[0] {
+			for _, bad := range []string{memqlOrgA, memqlOrgB, "uniqExact(subject_kind", "SELECT", memqlMarkOld, "to_project_id", memqlMarkIng} {
+				if strings.Contains(v, bad) {
+					t.Errorf("%s: column %s holds %q", label, k, bad)
+				}
+			}
 		}
 		t.Logf("%s ROW %v TYPES %v", label, got[0], types)
 		return got[0]
@@ -508,8 +557,8 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 	}
 	passComment := "memql-pass-" + uuid.NewString()[:8]
 	clean := one("PASS stmt0 (server-wide)", memqlCutStmt0, passComment)
-	all := recompute("newA", "newB", "oldA", "oldB", "newOff", "oldOff", "third", "later", "refused")
-	for _, name := range []string{"newA", "newB", "oldA", "oldB", "newOff", "oldOff", "third", "later", "refused"} {
+	all := recompute("newA", "newB", "oldA", "oldB", "newOff", "oldOff", "third", "later", "refused", "pageNew", "pageOld", "legacyPage")
+	for _, name := range []string{"newA", "newB", "oldA", "oldB", "newOff", "oldOff", "third", "later", "refused", "pageNew", "pageOld", "legacyPage"} {
 		rows, err := admin.Query(ctx, `SELECT toString(type), substring(lower(hex(SHA256(query))), 1, 12), exception_code, toString(query_kind) FROM system.query_log WHERE query_id = ? AND type != 'QueryStart'`, ids[name])
 		if err != nil {
 			t.Fatal(err)
@@ -536,14 +585,14 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 	if clean["run_at"] < clean["new_first"] || clean["old_last"] > clean["run_at"] {
 		t.Errorf("INFO times out of order: new_first %s old_last %s run_at %s", clean["new_first"], clean["old_last"], clean["run_at"])
 	}
-	every := []string{"newA", "newB", "oldA", "oldB", "newOff", "oldOff", "third", "later", "refused"}
+	every := []string{"newA", "newB", "oldA", "oldB", "newOff", "oldOff", "third", "later", "refused", "pageNew", "pageOld", "legacyPage"}
 	check("EXACT all", one("EXACT all", only(memqlCutStmt0, every...)), all)
 	check("EXACT org A + org B new (the form is org-blind)", one("EXACT orgs", only(memqlCutStmt0, "newA", "newB")), recompute("newA", "newB"))
 	check("EXACT old only", one("EXACT old only", only(memqlCutStmt0, "oldA", "oldB")), recompute("oldA", "oldB"))
 	check("EXACT ingest off", one("EXACT ingest off", only(memqlCutStmt0, "newOff", "oldOff")), recompute("newOff", "oldOff"))
 	check("EXACT refused", one("EXACT refused", only(memqlCutStmt0, "refused")), recompute("refused"))
-	if got := one("EXACT third", only(memqlCutStmt0, "third")); got["other_finished"] != "1" || got["other_sha8"] != "["+memqlSHA12(third)[:8]+"]" {
-		t.Errorf("EXACT third: other_finished %s other_sha8 %s, want 1 [%s]", got["other_finished"], got["other_sha8"], memqlSHA12(third)[:8])
+	if got := one("EXACT third", only(memqlCutStmt0, "third")); got["other_finished"] != "1" || got["new_finished"] != "0" || got["old_finished"] != "0" {
+		t.Errorf("EXACT third (head + both markers): other_finished %s new %s old %s, want 1 / 0 / 0", got["other_finished"], got["new_finished"], got["old_finished"])
 	}
 	zero := map[string]string{"new_finished": "0", "old_finished": "0", "ingest_off_finished": "0", "other_finished": "0", "new_failed": "0", "old_failed": "0"}
 	isZero := func(label string, got map[string]string) {
@@ -558,17 +607,40 @@ SELECT ?, NULL, toUUID(?), 'work_item', concat('linear:H-', toString(number)), '
 	if w := recompute("later"); w.otherFinished != 0 {
 		t.Errorf("the later recompute counts it: %+v", w)
 	}
+	// Marker uniqueness: the real producer page statements (a marker + ingested_at, not the head) count 0 in every column; the head
+	// anchor is the guard: a copy without the startsWith conjunct counts them.
+	pages := []string{"pageNew", "pageOld", "legacyPage"}
+	isZero("EXACT producer pages (marker, no head)", one("EXACT pages", only(memqlCutStmt0, pages...)))
+	if w := recompute(pages...); w != (memqlWant{}) {
+		t.Errorf("the page recompute counts them: %+v", w)
+	}
+	noAnchor := strings.Replace(memqlCutStmt0, "\n  AND "+headLit+"\n", "\n", 1)
+	if noAnchor == memqlCutStmt0 {
+		t.Fatal("no head anchor line to drop")
+	}
+	if got := one("MUTANT no head anchor", only(noAnchor, pages...)); got["new_finished"] == "0" || got["old_finished"] == "0" {
+		t.Errorf("MUTANT no head anchor: new_finished %s old_finished %s, want both > 0 (the page statements are counted)", got["new_finished"], got["old_finished"])
+	}
 
 	// 7. Mutants: each test copy changes ONE rule; the count it gives must differ from the clean form's.
-	if got := one("MUTANT new sha literal", only(strings.ReplaceAll(memqlCutStmt0, "'"+memqlNew+"'", "'f0b969e82276'"), "newA", "newB")); got["new_finished"] != "0" || got["other_finished"] != "2" {
-		t.Errorf("MUTANT new sha: new_finished %s other_finished %s, want 0 / 2", got["new_finished"], got["other_finished"])
+	markNewCut := strings.Replace(memqlCutStmt0, "AS touch') > 0 AS m_new", "AS toucx') > 0 AS m_new", 1)
+	markOldCut := strings.Replace(memqlCutStmt0, "'WITH touches AS (')", "'WITH touchez AS (')", 1)
+	markIngCut := strings.Replace(memqlCutStmt0, "'ingested_at') > 0 AS m_ing", "'ingested_ax') > 0 AS m_ing", 1)
+	if markNewCut == memqlCutStmt0 || markOldCut == memqlCutStmt0 || markIngCut == memqlCutStmt0 {
+		t.Fatal("a marker literal to mutate is missing")
 	}
-	if got := one("MUTANT old sha literal", only(strings.ReplaceAll(memqlCutStmt0, "'"+memqlOld+"'", "'e9a488c626c3'"), "oldA", "oldB")); got["old_finished"] != "0" || got["other_finished"] != "2" {
-		t.Errorf("MUTANT old sha: old_finished %s other_finished %s, want 0 / 2", got["old_finished"], got["other_finished"])
+	if got := one("MUTANT new marker literal", only(markNewCut, "newA", "newB")); got["new_finished"] != "0" || got["other_finished"] != "2" {
+		t.Errorf("MUTANT new marker: new_finished %s other_finished %s, want 0 / 2", got["new_finished"], got["other_finished"])
 	}
-	// 0-row avg cell: a sha literal no statement has (mutant) leaves both avg columns of that sha over 0 matched rows: WANT 0, not nan.
-	for _, c := range []struct{ lit, ids, prefix string }{{memqlNew, "newA newB", "new"}, {memqlOld, "oldA oldB", "old"}} {
-		got := one("ZERO-ROW avg "+c.prefix, only(strings.ReplaceAll(memqlCutStmt0, "'"+c.lit+"'", "'000000000000'"), strings.Fields(c.ids)...))
+	if got := one("MUTANT old marker literal", only(markOldCut, "oldA", "oldB")); got["old_finished"] != "0" || got["other_finished"] != "2" {
+		t.Errorf("MUTANT old marker: old_finished %s other_finished %s, want 0 / 2", got["old_finished"], got["other_finished"])
+	}
+	if got := one("MUTANT ingest marker literal", only(markIngCut, "newA")); got["new_finished"] != "0" || got["ingest_off_finished"] != "1" {
+		t.Errorf("MUTANT ingest marker: new_finished %s ingest_off_finished %s, want 0 / 1", got["new_finished"], got["ingest_off_finished"])
+	}
+	// 0-row avg cell: a marker mutant leaves both avg columns of that build over 0 matched rows: WANT 0, not nan.
+	for _, c := range []struct{ text, ids, prefix string }{{markNewCut, "newA newB", "new"}, {markOldCut, "oldA oldB", "old"}} {
+		got := one("ZERO-ROW avg "+c.prefix, only(c.text, strings.Fields(c.ids)...))
 		for _, k := range []string{c.prefix + "_avg_read_rows", c.prefix + "_avg_memory", c.prefix + "_finished", c.prefix + "_max_read_rows", c.prefix + "_max_memory"} {
 			if got[k] != "0" {
 				t.Errorf("ZERO-ROW avg %s: %s = %s, want 0", c.prefix, k, got[k])
