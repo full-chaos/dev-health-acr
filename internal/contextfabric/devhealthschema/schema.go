@@ -561,6 +561,7 @@ var ProductionColumns = map[string][]Column{
 		{Name: "repo_id", Type: "UUID"},
 		{Name: "work_item_id", Type: "String"},
 		{Name: "occurred_at", Type: "DateTime64(3)"},
+		{Name: "from_status", Type: "String"},
 		{Name: "to_status", Type: "String"},
 		{Name: "last_synced", Type: "DateTime64(3)"},
 		{Name: "org_id", Type: "String"},
