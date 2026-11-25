@@ -40,6 +40,14 @@ const (
 	// all-inside links: its first measure (33,601,449 B, CI run 45556469550)
 	// plus 15%.
 	linkedReadsInsideLargeMax = uint64(38_641_667)
+	// The work bounds at 96k all-inside links (96,001 candidates, 5 chunks) and
+	// at 24,001 candidates (2 chunks): the first measure (CI run 45562209733,
+	// the larger of the unmerged and merged reads) plus 15%, rounded up.
+	linksInsideSetReadRowsMax         = (1_635_367*115 + 99) / 100   // merged
+	linksInsideSetReadBytesMax        = (237_131_284*115 + 99) / 100 // unmerged
+	linksInsideLinkedReadRowsMax      = (685_461*115 + 99) / 100     // merged
+	linksInsideLinkedReadBytesMax     = (47_598_017*115 + 99) / 100  // merged
+	linksInsideTwoChunkSetReadRowsMax = (268_748*115 + 99) / 100     // merged
 	// linksInsideBaseStatements is what the read ran at main at both sizes (CI
 	// run 45551732249); linksInsideLargeStatements is what it runs at 96k: the
 	// link set once per 24k-candidate chunk.
@@ -125,7 +133,7 @@ SELECT ?, concat('`+prefix+`-', repeat('x', 96), '-', toString(number)), toUInt3
 			})
 			t.Run("links inside the owned projects", func(t *testing.T) {
 				measureTeamReachAxis(t, ctx, query, statementthreads.Unbounded(rawQuery), direct, ownedLinksMemoryOrg, merged, parts, linkFiller("owned", "proj-owner", "repo-reached"),
-					"links inside the owned projects "+mode, prodLinkedIssues, 4*prodLinkedIssues, 0, axisGuard{smallMax: 56 << 20, largeMax: linksInsideLargeMax, linkedLargeMax: linkedReadsInsideLargeMax, work: &readWorkGuard{smallStatementsMax: linksInsideBaseStatements, largeStatements: linksInsideLargeStatements}})
+					"links inside the owned projects "+mode, prodLinkedIssues-1, 4*prodLinkedIssues, 0, axisGuard{smallMax: 56 << 20, largeMax: linksInsideLargeMax, linkedLargeMax: linkedReadsInsideLargeMax, work: &readWorkGuard{smallStatementsMax: linksInsideBaseStatements, largeStatements: linksInsideLargeStatements}})
 			})
 			if merged {
 				return
@@ -270,6 +278,15 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery
 			}
 		}
 		works = nil
+		// One candidate more is two chunks: the second pays its own floor.
+		growTo(smallSize + 1)
+		read("control one candidate over the chunk", provider)
+		for _, w := range works {
+			if w.work.setStatements != 2 || w.work.setReadRows > linksInsideTwoChunkSetReadRowsMax {
+				t.Errorf("%s at the %s size: the link set ran %d statement(s) reading %d rows, want 2 reading at most %d", axis, w.label, w.work.setStatements, w.work.setReadRows, linksInsideTwoChunkSetReadRowsMax)
+			}
+		}
+		works = nil
 	}
 	growTo(largeSize)
 	large := minPeaks(read("larger", provider), read("larger again", provider), read("larger third", provider))
@@ -277,6 +294,19 @@ func measureTeamReachAxis(t *testing.T, ctx context.Context, query, ceilingQuery
 		for _, w := range works {
 			if w.work.statements != guard.work.largeStatements {
 				t.Errorf("%s at the %s size: %d statements, want %d", axis, w.label, w.work.statements, guard.work.largeStatements)
+			}
+			for _, c := range []struct {
+				what     string
+				got, max uint64
+			}{
+				{"link set read_rows", w.work.setReadRows, linksInsideSetReadRowsMax},
+				{"link set read_bytes", w.work.setReadBytes, linksInsideSetReadBytesMax},
+				{"linked pull request reads read_rows", w.work.linkedReadRows, linksInsideLinkedReadRowsMax},
+				{"linked pull request reads read_bytes", w.work.linkedReadBytes, linksInsideLinkedReadBytesMax},
+			} {
+				if c.got > c.max {
+					t.Errorf("%s at the %s size: %s %d, want at most %d", axis, w.label, c.what, c.got, c.max)
+				}
 			}
 		}
 	}
