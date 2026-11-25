@@ -607,11 +607,12 @@ import (
 // reused.
 //
 // v124 -> v125: an investment read that exceeds the ClickHouse read budget is
-// refused with "exceeded the read budget (...); narrow the window or the
-// subject" instead of "failed". A candidate saved under v124 for an investment
-// question may hold the bare failure text that answer reuse serves for Partial
-// and Degraded results too, and must not be reused. The rows the statements
-// return are unchanged.
+// refused with its own failure class instead of "failed". The refusal text
+// (budgetRefusalReason) is log-only: the registry serves a fixed sentence by
+// class and code (classifyFactReadError) with no numbers. A candidate saved
+// under v124 for an investment question may hold the bare failure text that
+// answer reuse serves for Partial and Degraded results too, and must not be
+// reused. The rows the statements return are unchanged.
 //
 // v125 -> v126: project metrics and project investment for a past window count a
 // team's ownership of the project when it has not ended before the window
@@ -1492,6 +1493,12 @@ import (
 // before it. An answer saved under v292 or v293 may hold the old status_since
 // and must not be reused.
 //
+// v292 -> v293: a read stopped at the budget by a statement that reads the whole
+// organization or the caller's whole grant is served without advice to narrow
+// the window or the subject, and a contended read is served as one that did not
+// complete because the system was busy. An answer saved under v292 holds the
+// old wording and must not be reused.
+//
 // v291 -> v292: a pull request reached from a project carries a link tier only
 // at the strongest tier its issue holds across every pull request (an issue's
 // native link covers its lower-tier link to another pull request), as the pull
@@ -1746,13 +1753,16 @@ func mixReadFailure(action string, err error) error {
 }
 
 func readFailure(action string, err error) error {
+	var fixed *fixedScopeReadError
+	fixedScope := errors.As(err, &fixed)
 	var budget *BudgetExceededError
 	if errors.As(err, &budget) {
 		return &contextfabric.FactReadFailure{
-			State:  contextfabric.SourceUnavailable,
-			Reason: budgetRefusalReason(action, budget),
-			Class:  contextfabric.FactReadFailureBudgetExceeded,
-			Cause:  err,
+			State:      contextfabric.SourceUnavailable,
+			Reason:     budgetRefusalReason(action, budget),
+			Class:      contextfabric.FactReadFailureBudgetExceeded,
+			Cause:      err,
+			FixedScope: fixedScope,
 		}
 	}
 	// The served reason is closed; the cause stays on the error for tests and
@@ -1773,7 +1783,25 @@ func readFailure(action string, err error) error {
 		Class:      contextfabric.FactReadFailureReadFailed,
 		Cause:      err,
 		SourceCode: code,
+		FixedScope: fixedScope,
 	}
+}
+
+// fixedScopeReadError marks an error from a statement the request's window and
+// subject do not bound (one that reads the whole organization or the caller's
+// whole grant). It is set where the statement is built, so a budget stop of it
+// is not served with advice to narrow the window or the subject.
+type fixedScopeReadError struct{ err error }
+
+func (e *fixedScopeReadError) Error() string { return e.err.Error() }
+
+func (e *fixedScopeReadError) Unwrap() error { return e.err }
+
+func fixedScopeRead(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &fixedScopeReadError{err: err}
 }
 
 // clickHouseMemoryLimitExceededCode is the exception code of a statement that
