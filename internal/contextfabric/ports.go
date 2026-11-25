@@ -1474,6 +1474,26 @@ type ProjectionGraphCounts interface {
 	OwnedCountsKnown(ctx context.Context, orgID, source string) (bool, error)
 }
 
+// SourceReadFailure is an OPTIONAL shape of an error a ProjectionSource returns
+// from a count read that ClickHouse refused: the exception code and the limit it
+// stands for (memory, execution_time, rows_to_read, bytes_to_read, result_rows or
+// other), never the exception text. A caller logs both to tell a cap from a
+// missing table.
+type SourceReadFailure interface {
+	error
+	ClickHouseCode() int32
+	LimitClass() string
+}
+
+// ProjectionGraphTotalCounts is an OPTIONAL capability a ProjectionBackend
+// implements beside ProjectionGraphCounts: the nodes of one kind the organization
+// holds in its ACTIVE graph WITHOUT the owned filter, stubs included. It is at
+// least CountKind, so a source count above it is a gap whatever the marker says
+// (a lower bound: stubs can hide a gap, never invent one). Read-only.
+type ProjectionGraphTotalCounts interface {
+	CountKindTotal(ctx context.Context, orgID string, kind SubjectKind) (int64, error)
+}
+
 // ProjectionSyncedAtProperty (CHAOS-12649) is the entity property a producer
 // sets to the row's sync stamp (last_synced, the column the walk pages on), in
 // Unix nanoseconds. The walk loses contiguous ranges of that stamp, so the count

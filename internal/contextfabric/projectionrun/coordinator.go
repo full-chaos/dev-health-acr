@@ -413,6 +413,11 @@ type Config struct {
 	GraphCountCheckInterval time.Duration
 	Now                     func() time.Time
 	Logger                  *slog.Logger
+
+	// GraphCountUnknownProbeInterval is the minimum gap between the source and
+	// graph count reads made for a source whose owned marker is absent. 0
+	// defaults to 1h; negative disables them.
+	GraphCountUnknownProbeInterval time.Duration
 }
 
 // RetireScheduler drives due per-epoch retirements to completion --
@@ -528,6 +533,8 @@ type Coordinator struct {
 	// the field, which is a known, accepted gap -- the lifecycle state
 	// machine itself (BeginBuild/Flip/durable progress rows) is unaffected.
 	buildStarted sync.Map // orgID -> time.Time
+
+	unknownProbeInterval time.Duration
 }
 
 // defaultGraceWindow is design brief D11's operator-set retention window,
@@ -999,6 +1006,12 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	case cfg.GraphCountCheckInterval < 0:
 		cfg.GraphCountCheckInterval = 0
 	}
+	switch {
+	case cfg.GraphCountUnknownProbeInterval == 0:
+		cfg.GraphCountUnknownProbeInterval = defaultGraphCountUnknownProbeInterval
+	case cfg.GraphCountUnknownProbeInterval < 0:
+		cfg.GraphCountUnknownProbeInterval = 0
+	}
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
@@ -1066,7 +1079,7 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 		lifecycle: cfg.Lifecycle, epochCheckpoints: cfg.EpochCheckpoints, retireScheduler: cfg.RetireScheduler,
 		lifecycleTelem: cfg.LifecycleTelemetry, epochInvalidator: cfg.EpochResolverInvalidator, graceWindow: cfg.GraceWindow,
 		poll: cfg.PollInterval, concurrency: cfg.Concurrency,
-		maxBackoff: cfg.MaxBackoff, maxRefusedBuilds: cfg.MaxRefusedBuilds, refusedBuilds: make(map[string]*refusedBuildState), drainBudget: cfg.DrainBatchBudget, graphCountInterval: cfg.GraphCountCheckInterval, now: cfg.Now, logger: cfg.Logger, backoff: make(map[string]*pairBackoff),
+		maxBackoff: cfg.MaxBackoff, maxRefusedBuilds: cfg.MaxRefusedBuilds, refusedBuilds: make(map[string]*refusedBuildState), drainBudget: cfg.DrainBatchBudget, graphCountInterval: cfg.GraphCountCheckInterval, unknownProbeInterval: cfg.GraphCountUnknownProbeInterval, now: cfg.Now, logger: cfg.Logger, backoff: make(map[string]*pairBackoff),
 	}, nil
 }
 
