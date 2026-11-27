@@ -146,6 +146,21 @@ func (f *fakeTasksAPI) set(submissionID string, state contractsv1.ContextFabricS
 	}
 }
 
+// updatedAt is the submission's last update: its admission until it moves.
+func (f *fakeTasksAPI) updatedAt(submissionID string) time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.subs[submissionID].status.UpdatedAt
+}
+
+// discard drops a submission the way acr-api's retention does: every later
+// read answers not_found.
+func (f *fakeTasksAPI) discard(submissionID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.subs, submissionID)
+}
+
 func (f *fakeTasksAPI) createCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
