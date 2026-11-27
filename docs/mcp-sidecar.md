@@ -677,7 +677,9 @@ The text is generated from the ACR registries by `go generate ./internal/mcp/gui
 
 ## Skills
 
-The server can serve MCP skills (the Skills extension, `io.modelcontextprotocol/skills`). It declares the extension in its capabilities (`server/discover` on the hosted endpoint, `initialize` on STDIO) only when at least one skill is registered; with none, the capabilities and every list stay as they were. The release build registers no skill yet.
+The server can serve MCP skills (the Skills extension, `io.modelcontextprotocol/skills`). It declares the extension in its capabilities (`server/discover` on the hosted endpoint, `initialize` on STDIO) only when at least one skill is registered; with none, the capabilities and every list stay as they were.
+
+The hosted endpoint serves one skill, `skill://dev-health/SKILL.md`: the public Dev Health skill text, vendored byte for byte from `full-chaos/context-fabric-agents` (`skills/dev-health/`) at the commit `ci/context-fabric-agents.pin` names. The Claude Code plugin ships the same bytes, so the two copies read as one skill. CI fails when the vendored copy differs from that commit or from the sha256 digests pinned in `internal/mcp/skills_vendored.go`. To change the text, edit it in `context-fabric-agents`, then re-vendor and move the pin and the digests in one change. The STDIO sidecar serves no skill.
 
 - `skills/list` answers every skill in one page: per skill the `SKILL.md` URI, its frontmatter unchanged, and the full file manifest (`uri`, `sha256:` digest and byte size of each file, computed from the bytes served). `skills/get` answers one entry by its `SKILL.md` URI. Both carry `resultType: "complete"`, `ttlMs` and `cacheScope` (hosted: `0` and `private`, as every hosted answer; STDIO: `0` and `public`).
 - Each file is read with `resources/read` at `skill://<name>/<path>`. An unknown skill or file answers `-32602`. `directoryRead` is not declared, so `resources/directory/read` is not served.

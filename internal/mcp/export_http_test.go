@@ -52,8 +52,13 @@ func ServeHTTPOnForTest(ctx context.Context, listener net.Listener, sidecarCfg s
 }
 
 // SetSkillsForTest makes a process configuration serve the skills in fsys,
-// one top-level directory per skill.
+// one top-level directory per skill, in place of the vendored ones; nil
+// serves none.
 func SetSkillsForTest(cfg *ProcessConfig, fsys fs.FS) error {
+	if fsys == nil {
+		cfg.skills = nil
+		return nil
+	}
 	set, err := newSkillSet(fsys)
 	if err != nil {
 		return err

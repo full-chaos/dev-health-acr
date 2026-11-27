@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -41,10 +42,12 @@ func newSkillsStack(t *testing.T, withSkills bool) *skillsStack {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var skills fs.FS
 	if withSkills {
-		if err := acrmcp.SetSkillsForTest(cfg, os.DirFS("testdata/skills")); err != nil {
-			t.Fatal(err)
-		}
+		skills = os.DirFS("testdata/skills")
+	}
+	if err := acrmcp.SetSkillsForTest(cfg, skills); err != nil {
+		t.Fatal(err)
 	}
 	handler, err := acrmcp.NewHTTPHandler(cfg, acrmcp.HTTPHandlerOptions{BasePath: "/mcp", Identity: testIdentity, MaxRequestBodyBytes: 1 << 20, ResolveTimeout: 5 * time.Second})
 	if err != nil {
