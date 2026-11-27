@@ -42,6 +42,11 @@ type ProcessConfig struct {
 	// hosted transport (ACR_MCP_TASKS_ENABLED, default off).
 	tasksEnabled bool
 
+	// skills is the set of MCP skills this process serves (static public
+	// text, the same for every caller); nil serves none and declares no
+	// skills extension.
+	skills *skillSet
+
 	diagnostics *slog.Logger
 	// metrics counts tool calls and delivered answers; nil records nothing.
 	metrics *hostedmetrics.Instruments

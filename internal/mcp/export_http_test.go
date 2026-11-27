@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 
@@ -48,6 +49,17 @@ func ServeHTTPOnForTest(ctx context.Context, listener net.Listener, sidecarCfg s
 		return err
 	}
 	return serveHTTPOn(ctx, listener, cfg, identity, opts)
+}
+
+// SetSkillsForTest makes a process configuration serve the skills in fsys,
+// one top-level directory per skill.
+func SetSkillsForTest(cfg *ProcessConfig, fsys fs.FS) error {
+	set, err := newSkillSet(fsys)
+	if err != nil {
+		return err
+	}
+	cfg.skills = set
+	return nil
 }
 
 // EnableTasksForTest turns MCP Tasks on for a hosted process configuration,
