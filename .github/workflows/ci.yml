@@ -2931,6 +2931,33 @@ jobs:
       # pinned ops commit's files: a pin bump and a re-vendor are one change.
       - name: Verify the vendored lifecycle contract against the pinned ops contract
         run: scripts/ci/check-vendored-ops-contract.sh .ops-contract
+      # The hosted MCP server serves the Dev Health skill vendored under
+      # internal/mcp/skills from the public full-chaos/context-fabric-agents
+      # at the commit ci/context-fabric-agents.pin names (the Claude Code
+      # plugin ships the same bytes). The pin must be a full SHA, and the
+      # vendored copy must equal that commit's skills/<name> byte for byte.
+      - name: Read the pinned context-fabric-agents commit
+        id: cfa-pin
+        run: |
+          set -euo pipefail
+          sha="$(tr -d '[:space:]' < ci/context-fabric-agents.pin)"
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "ci/context-fabric-agents.pin must name a full 40-character lowercase commit SHA, not a branch or tag. It holds: $sha" >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      # actions/checkout v7.0.0 -- public repo, no token needed.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: full-chaos/context-fabric-agents
+          ref: ${{ steps.cfa-pin.outputs.sha }}
+          path: .cfa-skills
+          persist-credentials: false
+          sparse-checkout: |
+            skills/
+          sparse-checkout-cone-mode: false
+      - name: Verify the vendored skills against the pinned context-fabric-agents commit
+        run: scripts/ci/check-vendored-skills.sh .cfa-skills
   # CHAOS-12607: the completion distribution's differential oracle. ACR's
   # completionBins is a copy of ops' read-time binsToModel, so the two are
   # compared by EXECUTING the ops function at the commit

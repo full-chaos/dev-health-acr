@@ -81,6 +81,7 @@ func NewProcessConfig(cfg sidecar.Config, identity version.Info, diagnostics io.
 		Config:      cfg,
 		transport:   TransportHTTP,
 		diagnostics: newDiagnosticsLogger(diagnostics, cfg.LogLevel),
+		skills:      hostedSkills(),
 	}
 }
 

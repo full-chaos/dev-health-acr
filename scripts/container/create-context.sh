@@ -30,6 +30,11 @@ copy_source "${source_root}/go.sum"
 
 find "${source_root}/cmd" -type f -name '*.go' -print0 >"$file_list"
 find "${source_root}/internal" -type f \( -name '*.go' -o -name '*.json' \) -print0 >>"$file_list"
+# The vendored MCP skills acr-mcp embeds (internal/mcp/skills_vendored.go);
+# a tree without them fails the Go build on its embed, not here.
+if [[ -d "${source_root}/internal/mcp/skills" ]]; then
+  find "${source_root}/internal/mcp/skills" -type f ! -name '*.go' ! -name '*.json' -print0 >>"$file_list"
+fi
 find "${source_root}/migrations" -type f \( -name '*.go' -o -name '*.sql' \) -print0 >>"$file_list"
 
 while IFS= read -r -d '' source; do
