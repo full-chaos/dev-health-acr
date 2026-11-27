@@ -397,8 +397,8 @@ func TestTasksPollToCompletedEqualsSync(t *testing.T) {
 	s.fake.set(submissionOf(task.TaskID), contractsv1.ContextFabricSubmissionDone, contractsv1.ContextFabricStageValidating,
 		&contractsv1.ContextFabricSubmissionTerminal{Kind: contractsv1.ContextFabricSubmissionTerminalResult})
 	done := decodeTask(t, s.getTask(t, s.caller.token, task.TaskID))
-	if done.Status != "completed" || done.CreatedAt != task.CreatedAt || done.TTLMs != nil {
-		t.Fatalf("final poll %+v, want completed with the create's createdAt and a null ttl", done)
+	if done.Status != "completed" || done.CreatedAt != task.CreatedAt || done.TTLMs == nil || *done.TTLMs != 86400000 {
+		t.Fatalf("final poll %+v, want completed with the create's createdAt and a 24-hour ttl", done)
 	}
 	if got, want := toolResultJSON(t, done.Result), s.syncAnswer(t, args); got != want {
 		t.Fatalf("completed result differs from the synchronous answer\ngot  %s\nwant %s", got, want)
