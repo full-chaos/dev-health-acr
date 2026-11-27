@@ -578,6 +578,9 @@ func (h *HTTPHandler) serveMCP(w http.ResponseWriter, r *http.Request) {
 		line.gateReason = HTTPGateReasonVerifiedOverBudget
 	}
 
+	if refuseTaskSubscriptionWithoutExtension(recorder, r, h.cfg, h.opts.MaxRequestBodyBytes) {
+		return
+	}
 	server := NewServerForCaller(h.cfg, caller, h.opts.Identity.Version)
 	server.AddReceivingMiddleware(recordMiddleware(record))
 	h.mcp.ServeHTTP(recorder, r.WithContext(context.WithValue(r.Context(), requestServerKey{}, server)))
