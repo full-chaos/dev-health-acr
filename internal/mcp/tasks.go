@@ -274,8 +274,12 @@ func taskProtocolError(code int64, message string) *jsonrpc.Error {
 
 var (
 	errTaskUnknown           = taskProtocolError(jsonrpc.CodeInvalidParams, "Failed to retrieve task: Task not found")
-	errTaskCapabilityMissing = taskProtocolError(codeMissingRequiredClientCapability, "Missing required client capability: "+tasksExtension)
-	errTaskInternal          = taskProtocolError(jsonrpc.CodeInternalError, "The task could not be read")
+	errTaskCapabilityMissing = &jsonrpc.Error{
+		Code:    codeMissingRequiredClientCapability,
+		Message: "Missing required client capability: " + tasksExtension,
+		Data:    json.RawMessage(`{"requiredCapabilities":{"extensions":{"` + tasksExtension + `":{}}}}`),
+	}
+	errTaskInternal = taskProtocolError(jsonrpc.CodeInternalError, "The task could not be read")
 )
 
 // The outcomes of a declared investigate_question call (the closed
