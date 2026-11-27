@@ -237,11 +237,11 @@ func NewHTTPHandler(cfg *ProcessConfig, opts HTTPHandlerOptions) (*HTTPHandler, 
 		now:    opts.Now,
 		refKey: key,
 	}
-	h.mcp = mcpsdk.NewStreamableHTTPHandler(serverFromRequest, &mcpsdk.StreamableHTTPOptions{
+	h.mcp = taskNameHeaderHandler(cfg, opts.MaxRequestBodyBytes, mcpsdk.NewStreamableHTTPHandler(serverFromRequest, &mcpsdk.StreamableHTTPOptions{
 		Stateless:           true,
 		Logger:              h.logger,
 		MaxRequestBodyBytes: opts.MaxRequestBodyBytes,
-	})
+	}))
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+HealthPath, h.serveHealth)
 	mux.HandleFunc("GET "+ReadyPath, h.serveReady)
