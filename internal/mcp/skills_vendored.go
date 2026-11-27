@@ -14,12 +14,12 @@ import (
 // ci/context-fabric-agents.pin names), the same bytes the Claude Code plugin
 // ships. Edit the source there, re-vendor, and move the pin, the rev and the
 // digests in one change; CI fails when they disagree.
-const vendoredSkillsRev = "328c9568e48c3a7aa47f402f323fc52bd0133f69"
+const vendoredSkillsRev = "7a7f17c05bf02d329b53ffb30a41b195a01b0ee3"
 
 // vendoredSkillDigests is the sha256 of every vendored file at the pinned
 // rev, keyed by its path under skills/.
 var vendoredSkillDigests = map[string]string{
-	"dev-health/SKILL.md": "sha256:3ab66de8655b25b87eeb69d6632479718f0c57a69975c1a5cbb61781f2984354",
+	"dev-health/SKILL.md": "sha256:99ed41d1c4b35b779f1b8acc3abf534313ff2e008e418b8942b2e698897c0d23",
 }
 
 //go:embed skills
