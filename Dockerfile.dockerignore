@@ -8,5 +8,6 @@
 !cmd/**/*.go
 !internal/**/*.go
 !internal/**/*.json
+!internal/mcp/skills/**
 !migrations/**/*.go
 !migrations/**/*.sql

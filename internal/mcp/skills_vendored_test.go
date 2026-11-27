@@ -40,6 +40,15 @@ func TestVendoredSkillsMatchThePinnedDigests(t *testing.T) {
 	if len(vendoredSkillDigests) == 0 {
 		t.Fatal("no vendored skill is pinned")
 	}
+	embedded := vendoredCopy(t)
+	if len(embedded) != len(vendoredSkillDigests) {
+		t.Fatalf("the binary embeds %d skill files, the pin names %d", len(embedded), len(vendoredSkillDigests))
+	}
+	for p, file := range embedded {
+		if len(file.Data) == 0 {
+			t.Fatalf("embedded skill file %s is empty", p)
+		}
+	}
 	for p := range vendoredSkillDigests {
 		changed := vendoredCopy(t)
 		data := append([]byte(nil), changed[p].Data...)

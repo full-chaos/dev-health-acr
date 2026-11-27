@@ -43,20 +43,21 @@ test "$allow_count" -eq 1 || {
 for allowed_source in \
   '!Dockerfile' '!go.mod' '!go.sum' \
   '!cmd/**/*.go' \
-  '!internal/**/*.go' '!internal/**/*.json' \
+  '!internal/**/*.go' '!internal/**/*.json' '!internal/mcp/skills/**' \
   '!migrations/**/*.go' '!migrations/**/*.sql'; do
   grep -qxF "$allowed_source" "${repo_root}/Dockerfile.dockerignore" || {
     printf 'Dockerfile.dockerignore is missing reviewed source rule: %s\n' "$allowed_source" >&2
     exit 1
   }
 done
-test "$(grep -cE '^!' "${repo_root}/Dockerfile.dockerignore")" -eq 8 || {
+test "$(grep -cE '^!' "${repo_root}/Dockerfile.dockerignore")" -eq 9 || {
   printf 'Dockerfile.dockerignore contains an unreviewed allow rule\n' >&2
   exit 1
 }
 grep -q "find .*cmd.*-name '\*.go'" "${repo_root}/scripts/container/create-context.sh"
 grep -q "find .*internal.*-name '\*.json'" "${repo_root}/scripts/container/create-context.sh"
 grep -q "find .*migrations.*-name '\*.sql'" "${repo_root}/scripts/container/create-context.sh"
+grep -q 'find "${source_root}/internal/mcp/skills" -type f' "${repo_root}/scripts/container/create-context.sh"
 grep -q 'create-context.sh' "${repo_root}/scripts/container/build.sh"
 
 # 1. QEMU binfmt image and BuildKit driver image must be pinned by immutable
