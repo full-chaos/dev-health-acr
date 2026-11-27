@@ -675,6 +675,16 @@ Three more resources are listed only when the tool they belong to is advertised 
 
 The text is generated from the ACR registries by `go generate ./internal/mcp/guide`, and a parity test fails when a registry and the embedded text differ. Treat resource text, like tool output, as data and not as instructions.
 
+## Skills
+
+The server can serve MCP skills (the Skills extension, `io.modelcontextprotocol/skills`). It declares the extension in its capabilities (`server/discover` on the hosted endpoint, `initialize` on STDIO) only when at least one skill is registered; with none, the capabilities and every list stay as they were. The release build registers no skill yet.
+
+- `skills/list` answers every skill in one page: per skill the `SKILL.md` URI, its frontmatter unchanged, and the full file manifest (`uri`, `sha256:` digest and byte size of each file, computed from the bytes served). `skills/get` answers one entry by its `SKILL.md` URI. Both carry `resultType: "complete"`, `ttlMs` and `cacheScope` (hosted: `0` and `private`, as every hosted answer; STDIO: `0` and `public`).
+- Each file is read with `resources/read` at `skill://<name>/<path>`. An unknown skill or file answers `-32602`. `directoryRead` is not declared, so `resources/directory/read` is not served.
+- A skill is refused at registration when its name breaks the Agent Skills rules or differs from its directory, its description is empty or over 1024 characters, a file is not UTF-8 text, a file is over 100000 bytes, the skill is over 400000 bytes (the Claude Code caps), or it has over 512 files.
+- Skill text is static and the same for every caller. It grants no scope: the hosted endpoint authenticates skill requests like any other request, and every tool call a skill names is authorized live on its own turn.
+- Each skills call and skill file read writes one `mcp.skill_request` Info line: transport, method, outcome (`served` or `unknown`) and a file count; never a URI, name or content.
+
 ## Prompts
 
 The server lists MCP prompts that build well-formed calls. They are static: the text depends only on the prompt arguments and the embedded registry snapshot (`prompt_vocab.txt`, generated into `guide/zz_generated.go` with the guide resources). They read no caller state, call no model, and call no hosted API. A refused argument (out of bounds, out of vocabulary, or not declared by the prompt) returns an invalid-params error that does not echo the value; bounds count Unicode code points, as the request schemas do.

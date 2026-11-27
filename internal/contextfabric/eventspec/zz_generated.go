@@ -214,6 +214,7 @@ var ByID = map[string]Event{
 	"mcp.http_readiness":                                               MCPHTTPReadiness,
 	"mcp.http_request":                                                 MCPHTTPRequest,
 	"mcp.http_serving":                                                 MCPHTTPServing,
+	"mcp.skill_request":                                                MCPSkillRequest,
 	"mcp.task_outcome":                                                 MCPTaskOutcome,
 	"process.otel_export":                                              OTelExport,
 	"projectionrun.graph_count_check_finished":                         GraphCountCheckFinished,
@@ -14013,6 +14014,56 @@ func (f MCPHTTPServingFields) SlogArgs() []any {
 		"max_body_bytes", f.MaxBodyBytes,
 		"trusted_proxy_networks", f.TrustedProxyNetworks,
 		"trusted_proxy_exclusions", f.TrustedProxyExclusions,
+	}
+}
+
+// MCPSkillRequestFields is mcp.skill_request's generated typed construction interface
+// (CHAOS-5516): one Go field per Field MCPSkillRequest.Fields declares in spec.go.
+type MCPSkillRequestFields struct {
+	Transport string
+	Method    string
+	Outcome   string
+	Files     int
+	// constructed (CHAOS-5516 r1 fix): an UNEXPORTED marker, generated on
+	// every MCPSkillRequestFields uniformly, set ONLY by NewMCPSkillRequestFields below. A caller
+	// outside this package cannot set an unexported field via a composite
+	// literal -- not partially (one exported field set, the rest at their
+	// Go zero value) and not even by hand-setting every EXPORTED field --
+	// so this is the class fix for "a caller still assembles that event's
+	// field list": no composite literal built outside eventspec, complete or
+	// partial, can ever read as constructed.
+	constructed bool
+}
+
+// NewMCPSkillRequestFields is the generated constructor for MCPSkillRequestFields -- every
+// field MCPSkillRequest.Fields declares is a required parameter.
+func NewMCPSkillRequestFields(transport string, method string, outcome string, files int) MCPSkillRequestFields {
+	return MCPSkillRequestFields{
+		Transport:   transport,
+		Method:      method,
+		Outcome:     outcome,
+		Files:       files,
+		constructed: true,
+	}
+}
+
+// IsConstructed reports whether f was built by NewMCPSkillRequestFields -- the ONE
+// exported way to read the unexported "constructed" marker from outside
+// this package. false for the Go zero value and for ANY composite literal
+// assembled elsewhere, complete or partial.
+func (f MCPSkillRequestFields) IsConstructed() bool { return f.constructed }
+
+// SlogArgs returns MCPSkillRequest's own declared fields as alternating slog
+// key/value pairs, in the SAME order spec.go declares them. Every
+// free-text string/[]string value is sanitized HERE, at its own
+// construction site inside this function's body -- the shape CHAOS-5544's
+// own instrument (TestNoUnsanitizedLogAttributeInContextFabric) requires.
+func (f MCPSkillRequestFields) SlogArgs() []any {
+	return []any{
+		"transport", contextfabric.SanitizeLogAttr(f.Transport),
+		"method", contextfabric.SanitizeLogAttr(f.Method),
+		"outcome", contextfabric.SanitizeLogAttr(f.Outcome),
+		"files", f.Files,
 	}
 }
 

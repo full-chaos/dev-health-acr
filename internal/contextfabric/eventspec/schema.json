@@ -19459,6 +19459,8 @@
           "tasks/get",
           "tasks/update",
           "tasks/cancel",
+          "skills/list",
+          "skills/get",
           "other"
         ]
       },
@@ -19666,6 +19668,52 @@
       },
       {
         "key": "trusted_proxy_exclusions",
+        "type": "int",
+        "presence": "required"
+      }
+    ]
+  },
+  {
+    "id": "mcp.skill_request",
+    "msg": "mcp skill request",
+    "level": "info",
+    "multiplicity": "zero_or_one_per_request",
+    "attribution": [
+      "method",
+      "outcome"
+    ],
+    "bounded_aggregation": "one line per skills/list, skills/get or skill file resources/read; a process that serves no skill emits none",
+    "fields": [
+      {
+        "key": "transport",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "stdio",
+          "http"
+        ]
+      },
+      {
+        "key": "method",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "skills/list",
+          "skills/get",
+          "resources/read"
+        ]
+      },
+      {
+        "key": "outcome",
+        "type": "string",
+        "presence": "required",
+        "closed_vocabulary": [
+          "served",
+          "unknown"
+        ]
+      },
+      {
+        "key": "files",
         "type": "int",
         "presence": "required"
       }

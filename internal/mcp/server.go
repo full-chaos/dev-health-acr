@@ -145,8 +145,16 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 			Resources: &mcpsdk.ResourceCapabilities{},
 		}
 		if cfg.tasksEnabled {
-			options.Capabilities.Extensions = map[string]any{tasksExtension: map[string]any{}}
+			options.Capabilities.AddExtension(tasksExtension, map[string]any{})
 		}
+		if !cfg.skills.empty() {
+			options.Capabilities.AddExtension(skillsExtension, skillsCapability())
+		}
+	} else if !cfg.skills.empty() {
+		// Logging is the SDK default when Capabilities is nil; every other
+		// capability is still inferred from what is registered.
+		options.Capabilities = &mcpsdk.ServerCapabilities{Logging: &mcpsdk.LoggingCapabilities{}}
+		options.Capabilities.AddExtension(skillsExtension, skillsCapability())
 	}
 	server := mcpsdk.NewServer(impl, options)
 	if cfg.Transport() == TransportHTTP && cfg.tasksEnabled {
@@ -231,6 +239,9 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 	registerInterpretPrompt(server, cfg, caller, serverVersion)
 	registerInterpretResources(server, cfg, caller, serverVersion)
 	registerSynthesizePrompt(server, cfg, caller, serverVersion)
+	if err := registerSkills(server, cfg); err != nil {
+		panic("mcp: skills/* collide with a standard method: " + err.Error())
+	}
 	if recordEpisodeEnabled(cfg, caller) {
 		server.AddTool(
 			buildWritebackTool(toolRecordEpisode, "Record episode", recordEpisodeRequestSchemaFile, recordEpisodeResponseSchemaFile),
