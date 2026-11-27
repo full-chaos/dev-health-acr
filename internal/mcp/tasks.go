@@ -47,10 +47,17 @@ const (
 	taskIDMaxBytes = 128
 )
 
+// taskTTLMs is a task's time to live from createdAt: the retention-0 window
+// of an acr-api submission with no thread (a task's submission has none).
+// With Ask Dev retention on, acr-api reads the submission as unknown from its
+// admission plus this window; createdAt is minted before the admission, so
+// the TTL never ends after that. With retention off acr-api keeps it longer,
+// which the TTL allows.
+var taskTTLMs = contractsv1.ContextFabricThreadRetentionDay.Window().Milliseconds()
+
 // taskResult is CreateTaskResult (resultType "task") and GetTaskResult
 // (resultType "complete"): the Task fields plus, on a terminal state, the
-// result or the JSON-RPC error. ttlMs is always null: acr-api keeps a
-// submission to its own expiry and answers an expired one as unknown.
+// result or the JSON-RPC error. ttlMs is taskTTLMs on every answer.
 type taskResult struct {
 	mcpsdk.ResultBase
 	ResultType     string                 `json:"resultType"`
@@ -364,7 +371,7 @@ func tasksMiddleware(cfg *ProcessConfig) mcpsdk.Middleware {
 			logTaskOutcome(ctx, cfg, taskOutcomeTask, input.Budget)
 			return &taskResult{
 				ResultType: "task", TaskID: raw, Status: taskStatusWorking,
-				CreatedAt: taskTime(id.createdAt), LastUpdatedAt: taskTime(status.UpdatedAt), PollIntervalMs: tasksPollIntervalMs,
+				CreatedAt: taskTime(id.createdAt), LastUpdatedAt: taskTime(status.UpdatedAt), TTLMs: &taskTTLMs, PollIntervalMs: tasksPollIntervalMs,
 			}, nil
 		}
 	}
@@ -489,7 +496,7 @@ func getTask(ctx context.Context, cfg *ProcessConfig, params *taskIDParams) (*ta
 	}
 	task := &taskResult{
 		ResultType: "complete", TaskID: params.TaskID, Status: taskStatusWorking,
-		CreatedAt: taskTime(id.createdAt), LastUpdatedAt: taskTime(status.UpdatedAt), PollIntervalMs: tasksPollIntervalMs,
+		CreatedAt: taskTime(id.createdAt), LastUpdatedAt: taskTime(status.UpdatedAt), TTLMs: &taskTTLMs, PollIntervalMs: tasksPollIntervalMs,
 	}
 	// A final record whose run log holds no end yet is still working: the
 	// delivery can end in an error after the record is final.

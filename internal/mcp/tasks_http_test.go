@@ -146,6 +146,21 @@ func (f *fakeTasksAPI) set(submissionID string, state contractsv1.ContextFabricS
 	}
 }
 
+// updatedAt is the submission's last update: its admission until it moves.
+func (f *fakeTasksAPI) updatedAt(submissionID string) time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.subs[submissionID].status.UpdatedAt
+}
+
+// discard drops a submission the way acr-api's retention does: every later
+// read answers not_found.
+func (f *fakeTasksAPI) discard(submissionID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.subs, submissionID)
+}
+
 func (f *fakeTasksAPI) createCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -382,8 +397,8 @@ func TestTasksPollToCompletedEqualsSync(t *testing.T) {
 	s.fake.set(submissionOf(task.TaskID), contractsv1.ContextFabricSubmissionDone, contractsv1.ContextFabricStageValidating,
 		&contractsv1.ContextFabricSubmissionTerminal{Kind: contractsv1.ContextFabricSubmissionTerminalResult})
 	done := decodeTask(t, s.getTask(t, s.caller.token, task.TaskID))
-	if done.Status != "completed" || done.CreatedAt != task.CreatedAt || done.TTLMs != nil {
-		t.Fatalf("final poll %+v, want completed with the create's createdAt and a null ttl", done)
+	if done.Status != "completed" || done.CreatedAt != task.CreatedAt || done.TTLMs == nil || *done.TTLMs != 86400000 {
+		t.Fatalf("final poll %+v, want completed with the create's createdAt and a 24-hour ttl", done)
 	}
 	if got, want := toolResultJSON(t, done.Result), s.syncAnswer(t, args); got != want {
 		t.Fatalf("completed result differs from the synchronous answer\ngot  %s\nwant %s", got, want)
