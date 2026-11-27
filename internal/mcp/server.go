@@ -168,6 +168,7 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 	server.AddReceivingMiddleware(callerMiddleware(caller))
 	server.AddReceivingMiddleware(unlistedToolMiddleware(cfg, caller))
 	server.AddReceivingMiddleware(integerArgumentsMiddleware(cfg))
+	server.AddReceivingMiddleware(appViewMiddleware())
 
 	server.AddTool(
 		buildTool(toolContextForTask, "Context for task", contextForTaskRequestSchemaFile, contextForTaskResponseSchemaFile),
@@ -238,6 +239,7 @@ func newServer(cfg *ProcessConfig, caller *CallerContext, serverVersion string, 
 	registerInvestigatePrompts(server, caller)
 	registerInterpretPrompt(server, cfg, caller, serverVersion)
 	registerInterpretResources(server, cfg, caller, serverVersion)
+	registerAppView(server, cfg, caller)
 	registerSynthesizePrompt(server, cfg, caller, serverVersion)
 	if err := registerSkills(server, cfg); err != nil {
 		panic("mcp: skills/* collide with a standard method: " + err.Error())
