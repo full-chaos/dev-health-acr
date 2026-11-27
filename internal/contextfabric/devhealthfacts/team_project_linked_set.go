@@ -3,6 +3,7 @@ package devhealthfacts
 import (
 	"cmp"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"slices"
 
@@ -137,7 +138,7 @@ func withTeamLinkedPullRequests(ctx context.Context, set teamLinkedPullRequests)
 	}
 	size := 0
 	for i, key := range set.keys {
-		size += len(key.team) + len(key.repo) + len(key.number) + 1
+		size += nativeStringBytes(key.team) + nativeStringBytes(key.repo) + nativeStringBytes(key.number) + 1
 		if size > teamLinkedPullRequestsMaxBytes {
 			return nil, fmt.Errorf("devhealthfacts: the team linked pull request set holds over %d bytes, the most one sent table carries", teamLinkedPullRequestsMaxBytes)
 		}
@@ -146,4 +147,10 @@ func withTeamLinkedPullRequests(ctx context.Context, set teamLinkedPullRequests)
 		}
 	}
 	return clickhousedriver.Context(ctx, clickhousedriver.WithExternalTable(table)), nil
+}
+
+// nativeStringBytes is the size of one String in the native format: a uvarint
+// length prefix plus the bytes.
+func nativeStringBytes(s string) int {
+	return binary.PutUvarint(make([]byte, binary.MaxVarintLen64), uint64(len(s))) + len(s)
 }
