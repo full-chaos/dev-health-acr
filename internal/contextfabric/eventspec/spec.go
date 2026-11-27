@@ -6190,6 +6190,7 @@ var All = []Event{
 	AnchorBindingTransition,
 	MCPHostedContextScope,
 	MCPTaskOutcome,
+	MCPSkillRequest,
 	MCPElicitationOutcome,
 	MCPHTTPRequest,
 	MCPHTTPServing,
@@ -6601,6 +6602,25 @@ var MCPTaskOutcome = Event{
 		{Key: "tool", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"investigate_question"}},
 		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"task", "fallback_stream_unavailable", "sync_ineligible", "create_refused", "task_id_failed"}},
 		{Key: "budget_fields", Type: FieldInt, Presence: PresenceRequired},
+	},
+}
+
+// MCPSkillRequest records one MCP Skills extension request on either
+// transport: a skills/list or skills/get call, or a resources/read of a skill
+// file. outcome is served, or unknown for a skills/get of a URI no skill is
+// served at and a skills/list with a cursor this server never issued. files
+// counts the files the answer described (skills/list, skills/get) or returned
+// (resources/read, always 1); 0 when unknown. Never a URI, skill name or file
+// content. A process that serves no skill emits none.
+var MCPSkillRequest = Event{
+	ID: "mcp.skill_request", Msg: "mcp skill request", Level: LevelInfo,
+	Multiplicity: MultiplicityZeroOrOnePerRequest, Attribution: []string{"method", "outcome"},
+	BoundedAggregation: "one line per skills/list, skills/get or skill file resources/read; a process that serves no skill emits none",
+	Fields: []Field{
+		{Key: "transport", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: MCPTransportVocabulary()},
+		{Key: "method", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"skills/list", "skills/get", "resources/read"}},
+		{Key: "outcome", Type: FieldString, Presence: PresenceRequired, ClosedVocabulary: []string{"served", "unknown"}},
+		{Key: "files", Type: FieldInt, Presence: PresenceRequired},
 	},
 }
 

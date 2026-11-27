@@ -157,7 +157,8 @@ func MCPHTTPMethodVocabulary() []string {
 		MCPHTTPValueNone, "server/discover", "initialize", "notifications/initialized", "ping",
 		"tools/list", "tools/call", "prompts/list", "prompts/get", "resources/list",
 		"resources/templates/list", "resources/read", "completion/complete", "logging/setLevel",
-		"subscriptions/listen", "notifications/cancelled", "tasks/get", "tasks/update", "tasks/cancel", MCPHTTPValueOther,
+		"subscriptions/listen", "notifications/cancelled", "tasks/get", "tasks/update", "tasks/cancel",
+		"skills/list", "skills/get", MCPHTTPValueOther,
 	}
 }
 
