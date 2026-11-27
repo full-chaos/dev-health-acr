@@ -35,6 +35,10 @@ find "${source_root}/internal" -type f \( -name '*.go' -o -name '*.json' \) -pri
 if [[ -d "${source_root}/internal/mcp/skills" ]]; then
   find "${source_root}/internal/mcp/skills" -type f ! -name '*.go' ! -name '*.json' -print0 >>"$file_list"
 fi
+# The MCP App view acr-mcp embeds (internal/mcp/app_view.go).
+if [[ -d "${source_root}/internal/mcp/appview" ]]; then
+  find "${source_root}/internal/mcp/appview" -type f -name '*.html' -print0 >>"$file_list"
+fi
 find "${source_root}/migrations" -type f \( -name '*.go' -o -name '*.sql' \) -print0 >>"$file_list"
 
 while IFS= read -r -d '' source; do

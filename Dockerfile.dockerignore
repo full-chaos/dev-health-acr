@@ -9,5 +9,6 @@
 !internal/**/*.go
 !internal/**/*.json
 !internal/mcp/skills/**
+!internal/mcp/appview/*.html
 !migrations/**/*.go
 !migrations/**/*.sql

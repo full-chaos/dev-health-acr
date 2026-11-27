@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
 
 	contractsv1 "github.com/full-chaos/dev-health-acr/internal/contracts/v1"
+	"github.com/full-chaos/dev-health-acr/internal/sidecar"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -21,6 +24,33 @@ const (
 	appViewTestURI       = "ui://dev-health/investigate-answer"
 	appViewTestHTMLFile  = "appview/answer.html"
 )
+
+// appViewBootstrap serves the investigation routes and a capabilities answer
+// that advertises investigate_question, so the live re-read on resources/read
+// sees the tool.
+func appViewBootstrap(t *testing.T) *Bootstrap {
+	t.Helper()
+	result := parityResult()
+	caps := validCapabilitiesFixture()
+	caps.EnabledTools = append(caps.EnabledTools, toolInvestigateQuestion, toolInvestigationResult)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/agent-context/capabilities":
+			writeJSONFixture(t, w, http.StatusOK, caps)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/context-fabric/investigations":
+			writeJSONFixture(t, w, http.StatusOK, result)
+		default:
+			writeErrorFixture(t, w, http.StatusNotFound, "not_found", false)
+		}
+	}))
+	t.Cleanup(server.Close)
+	cfg := fixtureConfig(t, server)
+	client, err := sidecar.NewClient(cfg, fixedCredentialSource(fixtureToken(0xAB)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &Bootstrap{Config: cfg, Client: client, Capabilities: caps}
+}
 
 func appViewClientCaps(mimeTypes ...string) *mcpsdk.ClientCapabilities {
 	caps := &mcpsdk.ClientCapabilities{}
@@ -97,7 +127,7 @@ func assertAppViewMetaOnlyOnInvestigate(t *testing.T, label string, tools map[st
 }
 
 func TestAppViewToolsListMetaOnlyInvestigate(t *testing.T) {
-	boot := answerFixtureBootstrap(t, parityResult(), nil)
+	boot := appViewBootstrap(t)
 
 	session := appViewSession(t, boot, appViewClientCaps(appViewTestMIME))
 	assertAppViewMetaOnlyOnInvestigate(t, "initialize capabilities", appViewListedTools(t, session, nil))
@@ -111,7 +141,7 @@ func TestAppViewToolsListMetaOnlyInvestigate(t *testing.T) {
 }
 
 func TestAppViewNoMetaWithoutAppsMIME(t *testing.T) {
-	boot := answerFixtureBootstrap(t, parityResult(), nil)
+	boot := appViewBootstrap(t)
 	for label, caps := range map[string]*mcpsdk.ClientCapabilities{
 		"no extension":          nil,
 		"extension, other mime": appViewClientCaps("text/html"),
@@ -143,7 +173,7 @@ func TestAppViewResourceReadMIME(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read %s: %v", appViewTestHTMLFile, err)
 	}
-	boot := answerFixtureBootstrap(t, parityResult(), nil)
+	boot := appViewBootstrap(t)
 	session := appViewSession(t, boot, appViewClientCaps(appViewTestMIME))
 
 	resources, err := session.ListResources(context.Background(), nil)
@@ -182,7 +212,7 @@ func TestAppViewResourceReadMIME(t *testing.T) {
 }
 
 func TestAppViewFallbackGoldenUnchanged(t *testing.T) {
-	boot := answerFixtureBootstrap(t, parityResult(), nil)
+	boot := appViewBootstrap(t)
 	input, err := json.Marshal(contractsv1.MCPInvestigateQuestionRequest{Question: "Which teams need attention on Ask Dev, and why?"})
 	if err != nil {
 		t.Fatal(err)
