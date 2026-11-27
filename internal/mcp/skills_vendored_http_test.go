@@ -16,8 +16,8 @@ const (
 	devHealthSkillURI  = "skill://dev-health/SKILL.md"
 	devHealthSkillPath = "skills/dev-health/SKILL.md"
 	// sha256 and size of skills/dev-health/SKILL.md at the pinned rev.
-	devHealthSkillDigest = "sha256:3ab66de8655b25b87eeb69d6632479718f0c57a69975c1a5cbb61781f2984354"
-	devHealthSkillSize   = 5306
+	devHealthSkillDigest = "sha256:99ed41d1c4b35b779f1b8acc3abf534313ff2e008e418b8942b2e698897c0d23"
+	devHealthSkillSize   = 5580
 )
 
 func TestHostedServesTheVendoredDevHealthSkill(t *testing.T) {

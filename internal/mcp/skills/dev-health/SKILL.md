@@ -36,7 +36,7 @@ If you are a model, you can plan the reads yourself and do the comparison, ranki
 3. Call `read_facts` with `kinds` and `subjects` (1 to 25 objects, each `{"kind", "canonical_id"}` copied from `find_subjects`, never a bare id string) and an optional `window`. Call `read_relationships` with one `subject` (`kind` and `canonical_id` from `find_subjects`) and optional `types`, `direction`, `depth` (1 or 2), `as_of`, `limit`.
 4. A `cursor` or `next_cursor` is opaque. Send it back unchanged with the same other fields. Never build or parse it.
 5. Restricted callers get counts, not rows, for what they may not read: read counters such as `edges_not_visible` and `rows_withheld`. A subject you may not read looks the same as one that does not exist.
-6. `run_operation` is not served yet. It will need the `data:read` scope.
+6. `run_operation` runs one allowlisted operation by name (product analytics and lists), with its `variables`. `graphql_query` runs one GraphQL query over the allowed schema (the `data_catalog` section `schema`), selecting exactly the fields you need; queries only, never send `orgId`. Both appear only for a credential with the `data:read` scope.
 7. The server serves no person-level data. Do not rank persons. A relation is not a cause. Missing is not healthy and not zero; do not fill gaps in a series.
 
 Read `acr://guide/data` before you plan reads.
