@@ -59,7 +59,7 @@
     "path": "batch.breakdowns[*].dimension",
     "value": "TEAM",
     "code": "basis_dependent_shape",
-    "reason": "team and repository investment comes from read_facts (kind investment)"
+    "reason": "team and repository investment comes from read_facts (if listed), kind investment"
    }
   ]
  },
