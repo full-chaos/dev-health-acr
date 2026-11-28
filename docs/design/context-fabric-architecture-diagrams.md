@@ -473,7 +473,7 @@ harness measures directly. Follow-up ticket (not built here): "Turn-1
 commit under interpretation kind authority requires kindInsensitivityProof
 wiring" (CF, Medium, related 4417/3972).
 
-**Whole-candidate proof (CHAOS-14389, in-process only):** phase 4 of
+**Whole-candidate proof (in-process only):** phase 4 of
 `resolveFromMergedCandidatesWithAnchorSlot` records `CandidatesUncut` (the
 offered subjects) only when no search was truncated, no retrieval way failed
 and the candidate budget cut nothing; the offer-pool exclusion is an offer
