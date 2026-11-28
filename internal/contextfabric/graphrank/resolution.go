@@ -1501,7 +1501,8 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 			})
 		}
 	}
-	if max > 0 && len(ordered) > max {
+	budgetCut := max > 0 && len(ordered) > max
+	if budgetCut {
 		retained := make([]contextfabric.SubjectCandidate, 0, max)
 		for i, candidate := range ordered {
 			if keptIndex[i] {
@@ -1690,6 +1691,13 @@ func resolveFromMergedCandidatesWithAnchorSlot(candidatesBySubject map[string]co
 		})
 	}
 	resolution.Candidates = offered
+	// CHAOS-14389: the pass offers every subject its searches found only when
+	// no search was truncated, no retrieval way failed and the budget cut
+	// nothing. The offer-pool exclusion above is a rule about what may be
+	// offered, not a cut, so it does not void the claim.
+	if !searchTruncated && !retrievalDegraded && !budgetCut && len(resolution.Committed) == 0 {
+		resolution.CandidatesUncut = contractsv1.ContextFabricSubjectRefsOf(offered)
+	}
 	// Codex round-4 finding 1: the clarification prompt must be built from
 	// the RETAINED (post-truncation) candidate set, not the full set --
 	// naming a subject in the prompt that Phase 4 truncation already

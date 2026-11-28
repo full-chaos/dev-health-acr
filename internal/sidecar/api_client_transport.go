@@ -37,12 +37,19 @@ func (c *Client) call(ctx context.Context, method, subPath string, requestBody [
 // endpoint-specific request headers or need to distinguish successful status
 // codes. Security-sensitive headers remain owned by this transport.
 func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, requestBody []byte, decodeInto any, headers http.Header) (int, error) {
+	status, _, err := c.callReadingHeaders(ctx, method, subPath, requestBody, decodeInto, headers)
+	return status, err
+}
+
+// callReadingHeaders is callWithHeaders that also hands back the response
+// headers of a 2xx answer; they are nil on every error.
+func (c *Client) callReadingHeaders(ctx context.Context, method, subPath string, requestBody []byte, decodeInto any, headers http.Header) (int, http.Header, error) {
 	if int64(len(requestBody)) > c.cfg.MaxRequestBodyBytes {
-		return 0, fmt.Errorf("%w: %d bytes exceeds the configured limit of %d", ErrRequestTooLarge, len(requestBody), c.cfg.MaxRequestBodyBytes)
+		return 0, nil, fmt.Errorf("%w: %d bytes exceeds the configured limit of %d", ErrRequestTooLarge, len(requestBody), c.cfg.MaxRequestBodyBytes)
 	}
 	credential, err := c.credential()
 	if err != nil {
-		return 0, fmt.Errorf("load ACR credential: %w", err)
+		return 0, nil, fmt.Errorf("load ACR credential: %w", err)
 	}
 	// Last-mile guard: no matter which CredentialSource produced this
 	// value (LoadCredential's own precedence chain, or a caller-supplied
@@ -51,11 +58,11 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 	// key or any other non-ACR credential from ever reaching the wire,
 	// independent of how it was loaded.
 	if !auth.IsTokenShapeValid(credential.Token) {
-		return 0, ErrCredentialShapeInvalid
+		return 0, nil, ErrCredentialShapeInvalid
 	}
 	requestURL, err := c.buildURL(subPath)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
@@ -67,7 +74,7 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 	}
 	req, err := http.NewRequestWithContext(callCtx, method, requestURL.String(), bodyReader)
 	if err != nil {
-		return 0, fmt.Errorf("build hosted API request: %w", err)
+		return 0, nil, fmt.Errorf("build hosted API request: %w", err)
 	}
 	for name, values := range headers {
 		for _, value := range values {
@@ -92,7 +99,7 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 	if c.cfg.HopTokenFile != "" {
 		hop, err := readHopToken(c.cfg.HopTokenFile)
 		if err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 		req.Header.Set(auth.MCPHopHeader, hop)
 	}
@@ -113,9 +120,9 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 		// the raw net/http error, whose text can contain the configured
 		// host, a resolved IP, or proxy details.
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return 0, fmt.Errorf("hosted API request failed: %w", err)
+			return 0, nil, fmt.Errorf("hosted API request failed: %w", err)
 		}
-		return 0, newTransportUnavailableError()
+		return 0, nil, newTransportUnavailableError()
 	}
 	defer resp.Body.Close()
 
@@ -123,7 +130,7 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, redirectDrainBytes))
-		return resp.StatusCode, &APIError{
+		return resp.StatusCode, nil, &APIError{
 			HTTPStatus: resp.StatusCode,
 			Message:    "hosted API returned an unexpected redirect, which the client does not follow",
 			RequestID:  sanitizeMessage(requestID),
@@ -143,12 +150,12 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 		// raw net/http error, whose text can contain partial response body
 		// bytes.
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return resp.StatusCode, fmt.Errorf("read hosted API response: %w", err)
+			return resp.StatusCode, nil, fmt.Errorf("read hosted API response: %w", err)
 		}
-		return resp.StatusCode, newTransportUnavailableError()
+		return resp.StatusCode, nil, newTransportUnavailableError()
 	}
 	if truncated {
-		return resp.StatusCode, &APIError{
+		return resp.StatusCode, nil, &APIError{
 			HTTPStatus: resp.StatusCode,
 			Message:    "hosted API response exceeded the configured size limit",
 			RequestID:  sanitizeMessage(requestID),
@@ -157,19 +164,19 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 	}
 
 	if resp.StatusCode/100 != 2 {
-		return resp.StatusCode, decodeAPIError(resp.StatusCode, requestID, resp.Header.Get("Retry-After"), data)
+		return resp.StatusCode, nil, decodeAPIError(resp.StatusCode, requestID, resp.Header.Get("Retry-After"), data)
 	}
 	if resp.StatusCode == http.StatusNoContent {
 		if len(data) != 0 {
-			return resp.StatusCode, fmt.Errorf("%w: no-content response included a body", ErrInvalidResponse)
+			return resp.StatusCode, nil, fmt.Errorf("%w: no-content response included a body", ErrInvalidResponse)
 		}
-		return resp.StatusCode, nil
+		return resp.StatusCode, resp.Header, nil
 	}
 	if decodeInto == nil {
-		return resp.StatusCode, nil
+		return resp.StatusCode, resp.Header, nil
 	}
 	if err := decodeTolerant(data, decodeInto); err != nil {
-		return resp.StatusCode, fmt.Errorf("%w: decode hosted API response: %w", ErrInvalidResponse, err)
+		return resp.StatusCode, nil, fmt.Errorf("%w: decode hosted API response: %w", ErrInvalidResponse, err)
 	}
 	// decodeExact alone cannot require any particular field to be present:
 	// it only rejects unknown fields and trailing content, and once a
@@ -178,9 +185,9 @@ func (c *Client) callWithHeaders(ctx context.Context, method, subPath string, re
 	// zero value. requiredFieldsPresent (api_client_presence.go) closes
 	// that gap before this typed contract is ever returned to a caller.
 	if err := requiredFieldsPresent(data, decodeInto); err != nil {
-		return resp.StatusCode, fmt.Errorf("%w: %s", ErrInvalidResponse, err)
+		return resp.StatusCode, nil, fmt.Errorf("%w: %s", ErrInvalidResponse, err)
 	}
-	return resp.StatusCode, nil
+	return resp.StatusCode, resp.Header, nil
 }
 
 // buildURL joins a fixed sub-path (a literal, or a fixed prefix plus one

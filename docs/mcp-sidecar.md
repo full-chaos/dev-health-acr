@@ -564,6 +564,16 @@ admits both; a v2 result is never narrowed to v1.
 `subject_receipts` in the response bind a follow-up turn to the subjects this
 answer resolved: pass them back as `prior_subject_receipts`.
 
+The hosted API sets the response header `X-ACR-Subject-Candidates-Complete:
+true` on a fresh `clarification_required` answer only when its subject
+candidates are every subject the searches found for the caller: no search was
+truncated, no retrieval way failed, the candidate budget cut nothing, and
+nothing changed the list after that. Its only value is `true`. It is absent on
+a reused answer, a projection, a result read by id and every other answer;
+absent means not proven, never "incomplete". The header is not in any
+published schema and is not exposed to browsers; this server reads it on the
+investigation call only.
+
 Every structured response carries `untrusted_content`: a machine-readable
 declaration with `untrusted: true`, a notice, and `fields` enumerating by path
 exactly which members hold model- or source-derived text. Treat those as data,

@@ -3648,6 +3648,9 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	// computed and then deliberately left unused beyond that.
 	var coverageCandidates []contextfabric.SubjectCandidate
 	var coverageFloorDegraded bool
+	// offerSearchTruncated is read only by wholeCandidates: an offer-only
+	// search that was cut may have missed a subject of the kind it looked for.
+	var offerSearchTruncated bool
 	if confirmedKind == nil {
 		// CHAOS-4271: this call used to pass an aliasLookupTrustworthy flag
 		// (deps.AliasLookup != nil && aliasIdentityComplete) that excluded
@@ -3676,6 +3679,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 		}
 		coverageCandidates = added
 		coverageFloorDegraded = coverageDegraded
+		offerSearchTruncated = coverageTruncated
 		traversalDegraded += coverageTraversalDegraded
 		subjectCandidatesAuthzDropped += coverageAuthzDropped
 		// CHAOS-4086: the floor's own OBSERVATION event, emitted on its own
@@ -4163,6 +4167,7 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 			}
 			if semantic.ran {
 				kindScopedSemanticCandidates = semantic.candidates
+				offerSearchTruncated = offerSearchTruncated || semantic.truncated
 				resolution.RetrievalDegraded = resolution.RetrievalDegraded || semantic.degraded || semantic.traversalDegraded > 0
 				if semantic.traversalDegraded > 0 && deps.TraversalDegraded != nil {
 					deps.TraversalDegraded(ctx, principal.OrgID, semantic.traversalDegraded)
@@ -4673,7 +4678,40 @@ func resolveSubjects(ctx context.Context, principal storage.Principal, request c
 	resolution.OutsideRequestedRepositories = len(deps.outsideRequested)
 	resolution.WorkItemLinkLimitation = workItemLinkLimitation(principal, request, deps, handleRound, resolution)
 	resolution.WorkItemLinkScopeUnread = handleRound.linkScopeUnread && !committedWorkItem(resolution)
+	resolution.WholeCandidates = wholeCandidates(resolution, searchTruncated || offerSearchTruncated || stalledForCensus, coverageCandidates)
 	return resolution, offerMaterial, nil
+}
+
+// wholeCandidates is the resolution's proof that its candidates are every
+// subject its searches found for the caller (CHAOS-14389), or nil. The last
+// ranking pass must have cut nothing (CandidatesUncut), and nothing after it
+// may have changed the membership. A truncated search anywhere, a census round,
+// a failed retrieval way, a limitation sentence, or an offer-only find the list
+// does not hold each void it: the list may then miss the subject the caller
+// means. Only resolveSubjects' final return sets it, so every early return
+// stays unproven.
+func wholeCandidates(resolution contextfabric.SubjectResolution, cut bool, offerOnly []contextfabric.SubjectCandidate) []contextfabric.SubjectRef {
+	if cut || resolution.RetrievalDegraded || resolution.GraphNotProjected ||
+		resolution.OutsideRequestedRepositories != 0 || resolution.WorkItemLinkLimitation != "" || resolution.WorkItemLinkScopeUnread ||
+		resolution.CensusLimitation != "" || resolution.NamedRepositoryLinkLimitation != "" || len(resolution.CaseTwinReadingLimitations) != 0 ||
+		resolution.UnansweredHandlesLimitation != "" || resolution.ExactLabelKind != "" {
+		return nil
+	}
+	proof := resolution
+	proof.WholeCandidates = resolution.CandidatesUncut
+	if !proof.CandidateSetProvenWhole() {
+		return nil
+	}
+	listed := make(map[string]bool, len(resolution.Candidates))
+	for _, candidate := range resolution.Candidates {
+		listed[SubjectKey(candidate.Subject)] = true
+	}
+	for _, candidate := range offerOnly {
+		if !listed[SubjectKey(candidate.Subject)] {
+			return nil
+		}
+	}
+	return resolution.CandidatesUncut
 }
 
 // committedScopeAnchorShadowsHandle is true when the question binds exactly

@@ -473,6 +473,21 @@ harness measures directly. Follow-up ticket (not built here): "Turn-1
 commit under interpretation kind authority requires kindInsensitivityProof
 wiring" (CF, Medium, related 4417/3972).
 
+**Whole-candidate proof (CHAOS-14389, in-process only):** phase 4 of
+`resolveFromMergedCandidatesWithAnchorSlot` records `CandidatesUncut` (the
+offered subjects) only when no search was truncated, no retrieval way failed
+and the candidate budget cut nothing; the offer-pool exclusion is an offer
+rule, not a cut. `wholeCandidates` (`resolve.go`), at `resolveSubjects`' final
+return only, turns it into `WholeCandidates` when nothing committed, no
+offer-only search was truncated, no census round ran, no limitation sentence
+is owed and every offer-only find (`coverageCandidates`) is already listed.
+`CandidateSetProvenWhole` re-checks the membership against the served
+candidates, so a later change to the list voids it. Neither field is
+serialized: the hosted API states the proof to the MCP server as the
+`X-ACR-Subject-Candidates-Complete: true` header on a fresh clarification
+only (`serveContextFabricInvestigationResult`), and the sidecar rebuilds it
+from that header (`InvestigateWithSynthesisInput`).
+
 **In-flight fix (not yet merged as of this writing):** the project-subject work stream
 (branch `the subject-pool reachability fix-project-team-pool`) is building two new search arms
 scoped to repository/project/team (`graphrank/chaos4348_reachability.go`,

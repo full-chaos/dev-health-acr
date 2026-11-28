@@ -84,7 +84,8 @@ func (c *Client) InvestigateWithSynthesisInput(ctx context.Context, request cont
 	if c.cfg.InvestigationWait > 0 {
 		headers.Set(contractsv1.ContextFabricWaitBudgetHeader, strconv.Itoa(int(c.cfg.InvestigationWait/time.Second)))
 	}
-	if _, err := c.callWithHeaders(ctx, http.MethodPost, investigationsPath, encoded, &response, headers); err != nil {
+	_, answered, err := c.callReadingHeaders(ctx, http.MethodPost, investigationsPath, encoded, &response, headers)
+	if err != nil {
 		return contractsv1.ContextFabricInvestigationResponse{}, requestID, err
 	}
 	// Lenient, even though this is the "fresh answer" call: with CHAOS-3782
@@ -98,6 +99,11 @@ func (c *Client) InvestigateWithSynthesisInput(ctx context.Context, request cont
 		if err := response.SynthesisInput.Validate(); err != nil {
 			return contractsv1.ContextFabricInvestigationResponse{}, requestID, fmt.Errorf("invalid synthesis input from the hosted service: %w", err)
 		}
+	}
+	// CHAOS-14389: the hosted API states the whole-candidate proof only in
+	// this header, so it is rebuilt here from the candidates it was sent with.
+	if answered.Get(contractsv1.ContextFabricSubjectCandidatesCompleteHeader) == contractsv1.ContextFabricSubjectCandidatesCompleteValue {
+		response.SubjectResolution.WholeCandidates = contractsv1.ContextFabricSubjectRefsOf(response.SubjectResolution.Candidates)
 	}
 	return response, requestID, nil
 }

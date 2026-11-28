@@ -451,6 +451,11 @@ func (a *App) serveContextFabricInvestigationResult(w http.ResponseWriter, r *ht
 	a.logVocabularyLabelsShed(r, wordsTier, "investigation_create", wordsBound)
 	a.logContextFabricResponseBudgetMeasured(r, contractsv1.ContextFabricPlannedItemCeiling(result, a.config.MaxItems), measuredBytes, maximumBytes, estimatedTokens, itemCounts, "synthesis_input_bytes", synthesisInputBytes, "projected", projected != nil, "served_bytes", servedBytes, "caller_max_serialized_bytes", callerBytes)
 	a.recordReadAudit(r.Context(), principal, "context_fabric_investigation_completed", "context_fabric_investigation", result.ResultID, "success", map[string]any{"investigation_status": result.Status})
+	// CHAOS-14389: only a fresh canonical body can carry the in-process proof;
+	// a reused answer or a projection never states it.
+	if projected == nil && !result.Reused && result.Status == contractsv1.ContextFabricInvestigationClarificationRequired && result.SubjectResolution.CandidateSetProvenWhole() {
+		w.Header().Set(contractsv1.ContextFabricSubjectCandidatesCompleteHeader, contractsv1.ContextFabricSubjectCandidatesCompleteValue)
+	}
 	writeEncodedJSON(w, http.StatusOK, encoded)
 	return string(result.Status)
 }
