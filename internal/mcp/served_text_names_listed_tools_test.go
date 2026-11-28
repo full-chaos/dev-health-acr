@@ -103,6 +103,7 @@ func TestServedTextNamesOnlyToolsTheCallerCanList(t *testing.T) {
 		{"data tools only", []string{toolDataCatalog, toolFindSubjects, toolReadFacts, toolReadRelationships, toolRunOperation}},
 		{"interpretation without question", []string{toolDataCatalog, toolFindSubjects, toolReadFacts, toolInvestigateWithInterpretation}},
 		{"no data catalog", []string{toolFindSubjects, toolReadFacts, toolInvestigateWithInterpretation, toolInvestigationResult}},
+		{"graphql_query without data_catalog", []string{toolGraphQLQuery}},
 		{"everything", []string{toolDataCatalog, toolFindSubjects, toolReadFacts, toolReadRelationships, toolRunOperation, toolGraphQLQuery, toolInvestigateQuestion, toolInvestigateWithInterpretation, toolInvestigationResult}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -136,6 +137,17 @@ func TestServedTextNamesOnlyToolsTheCallerCanList(t *testing.T) {
 			require.Empty(t, strings.Join(bad, "\n"))
 		})
 	}
+}
+
+func TestGraphQLInstructionNamesDataCatalogOnlyWhenTheCallerHasIt(t *testing.T) {
+	cfg, caller := servedTextCaller(t, toolGraphQLQuery)
+	without := connectedClientForCaller(t, cfg, caller).InitializeResult().Instructions
+	require.Contains(t, without, "- graphql_query: one GraphQL query over the allowed schema, selecting exactly the fields you need.")
+	require.NotContains(t, without, "data_catalog")
+
+	cfg, caller = servedTextCaller(t, toolGraphQLQuery, toolDataCatalog)
+	with := connectedClientForCaller(t, cfg, caller).InitializeResult().Instructions
+	require.Contains(t, with, "(data_catalog section schema)")
 }
 
 func TestServedInstructionsListTheModelFreeReadToolsInTheMainFlow(t *testing.T) {
