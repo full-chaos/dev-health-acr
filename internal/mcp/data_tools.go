@@ -102,7 +102,11 @@ func dataToolsInstructions(caller *CallerContext, ownModelRoute bool) string {
 		b.WriteString("- run_operation: product analytics and lists, by allowlisted operation name.\n")
 	}
 	if gql {
-		b.WriteString("- graphql_query: one GraphQL query over the allowed schema (data_catalog section schema), selecting exactly the fields you need. Queries only; never send orgId.\n")
+		schema := ""
+		if catalog {
+			schema = " (data_catalog section schema)"
+		}
+		b.WriteString("- graphql_query: one GraphQL query over the allowed schema" + schema + ", selecting exactly the fields you need. Queries only; never send orgId.\n")
 	}
 	b.WriteString("More data tools are planned.\n")
 	if hostedToolEnabled(caller, toolInvestigateQuestion) {

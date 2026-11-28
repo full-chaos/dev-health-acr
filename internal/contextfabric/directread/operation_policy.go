@@ -113,7 +113,7 @@ import (
 const OperationCatalogueContract = "acr.mcp.operations.v1"
 
 // BasisDependentShapeText is the fixed refusal text of table K14-A.
-const BasisDependentShapeText = "team and repository investment comes from read_facts (kind investment)"
+const BasisDependentShapeText = "team and repository investment comes from read_facts (if listed), kind investment"
 
 //go:embed operations.v1.json
 var embeddedCatalogue []byte
