@@ -80,7 +80,10 @@ func handleInvestigateQuestion(ctx context.Context, cfg *ProcessConfig, req *mcp
 		return toolErrorResult(&classifiedError{category: "validation", message: "investigate_question arguments failed schema validation"}), nil
 	}
 	input.EvidenceWindow = chooseWindow(ctx, cfg, req, input)
-	return investigateAndRender(ctx, cfg, caller, toolInvestigateQuestion, input, nil, nil)
+	pick := func(result contractsv1.ContextFabricInvestigationResult) (contractsv1.MCPInvestigateQuestionRequest, bool) {
+		return chooseSubject(ctx, cfg, newElicitTransport(cfg, req), input, result)
+	}
+	return investigateAndRenderPicking(ctx, cfg, caller, toolInvestigateQuestion, input, nil, nil, pick)
 }
 
 // normalizedInvestigationArgs expands bare receipt ids in the raw arguments
@@ -114,13 +117,30 @@ const clientSynthesisFlowLine = "\n\nThe service wrote no answer text on this tu
 // A non-nil supplied interpretation and supplied synthesis are the only
 // differences between the tools that call it.
 func investigateAndRender(ctx context.Context, cfg *ProcessConfig, caller *CallerContext, surface string, input contractsv1.MCPInvestigateQuestionRequest, supplied *contractsv1.ContextFabricSuppliedInterpretation, suppliedSynthesis *contractsv1.ContextFabricSuppliedSynthesis) (*mcpsdk.CallToolResult, error) {
-	hosted := investigationHostedRequest(caller, input)
-	hosted.SuppliedInterpretation = supplied
-	hosted.SuppliedSynthesis = suppliedSynthesis
+	return investigateAndRenderPicking(ctx, cfg, caller, surface, input, supplied, suppliedSynthesis, nil)
+}
 
-	hostedResponse, currentRequestID, err := caller.client.InvestigateWithSynthesisInput(ctx, hosted)
+// investigateAndRenderPicking is investigateAndRender with an optional pick:
+// given the first answer, it may name a follow-up request, and then only the
+// follow-up's answer is rendered (one answer, one Answer metric). A follow-up
+// that fails renders the first answer, as without the pick.
+func investigateAndRenderPicking(ctx context.Context, cfg *ProcessConfig, caller *CallerContext, surface string, input contractsv1.MCPInvestigateQuestionRequest, supplied *contractsv1.ContextFabricSuppliedInterpretation, suppliedSynthesis *contractsv1.ContextFabricSuppliedSynthesis, pick func(contractsv1.ContextFabricInvestigationResult) (contractsv1.MCPInvestigateQuestionRequest, bool)) (*mcpsdk.CallToolResult, error) {
+	investigate := func(input contractsv1.MCPInvestigateQuestionRequest) (contractsv1.ContextFabricInvestigationResponse, string, error) {
+		hosted := investigationHostedRequest(caller, input)
+		hosted.SuppliedInterpretation = supplied
+		hosted.SuppliedSynthesis = suppliedSynthesis
+		return caller.client.InvestigateWithSynthesisInput(ctx, hosted)
+	}
+	hostedResponse, currentRequestID, err := investigate(input)
 	if err != nil {
 		return writeBackAwareErrorResult(err), nil
+	}
+	if pick != nil {
+		if followUp, ok := pick(hostedResponse.ContextFabricInvestigationResult); ok {
+			if picked, pickedRequestID, pickErr := investigate(followUp); pickErr == nil {
+				input, hostedResponse, currentRequestID = followUp, picked, pickedRequestID
+			}
+		}
 	}
 	return renderInvestigationAnswer(ctx, cfg, caller, surface, input, hostedResponse.ContextFabricInvestigationResult, hostedResponse.SynthesisInput, currentRequestID)
 }
