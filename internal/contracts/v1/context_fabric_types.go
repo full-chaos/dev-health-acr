@@ -1478,6 +1478,16 @@ type ContextFabricSubjectResolution struct {
 	// not answer for them. "" otherwise. The sentence is the only form that leaves
 	// the process.
 	UnansweredHandlesLimitation string `json:"-"`
+	// CandidatesUncut (CHAOS-14389) is the subject set one ranking pass
+	// offered when no search was truncated, no retrieval way failed and the
+	// candidate budget cut nothing. nil when any of those happened. In-process
+	// only; WholeCandidates is the resolution-wide claim built from it.
+	CandidatesUncut []ContextFabricSubjectRef `json:"-"`
+	// WholeCandidates (CHAOS-14389) is the candidate set the resolution proved
+	// is every subject its searches found for the caller. nil means not proven.
+	// In-process only: the hosted API states it to the MCP server with
+	// ContextFabricSubjectCandidatesCompleteHeader, never in a body.
+	WholeCandidates []ContextFabricSubjectRef `json:"-"`
 	// CommitDecisionDigests (CHAOS-4087) is a small, closed-vocabulary
 	// summary of WHICH MECHANISM committed each subject in Committed --
 	// persisted so a wrong commit discovered later from a STORED result
