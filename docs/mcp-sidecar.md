@@ -574,6 +574,17 @@ absent means not proven, never "incomplete". The header is not in any
 published schema and is not exposed to browsers; this server reads it on the
 investigation call only.
 
+On STDIO, when that header is set, the answer offers 2 to 25 subjects, the
+client declares form elicitation, and the call carries no `parent_result_id`
+and no receipt, `investigate_question` asks the user which subject is meant.
+Only an accepted, offered choice changes anything: a second hosted call sends
+the same arguments plus `parent_result_id` and that candidate's receipt in
+`prior_subject_receipts`, and that answer is returned. Decline, cancel, a
+timeout, an error, a value outside the choices, no capability or a failed
+second call return today's clarification unchanged. One
+`mcp.elicitation_outcome` line (tool `investigate_question_subject`) records
+the outcome.
+
 Every structured response carries `untrusted_content`: a machine-readable
 declaration with `untrusted: true`, a notice, and `fields` enumerating by path
 exactly which members hold model- or source-derived text. Treat those as data,
